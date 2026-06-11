@@ -536,7 +536,11 @@ async def create_render(
             repository=repository,
             export_bucket=request.app.state.settings.export_storage_bucket,
             storage_root=request.app.state.settings.media_work_dir,
-            supabase_url=getattr(request.app.state.settings, "supabase_url", None),
+            supabase_url=(
+                str(request.app.state.settings.supabase_url)
+                if getattr(request.app.state.settings, "supabase_url", None)
+                else None
+            ),
             service_role_key=getattr(
                 request.app.state.settings,
                 "supabase_service_role_key",

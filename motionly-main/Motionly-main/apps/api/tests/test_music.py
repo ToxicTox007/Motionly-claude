@@ -1,6 +1,7 @@
 import asyncio
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 
 from app.api.dependencies import Actor
@@ -16,7 +17,7 @@ from app.schemas.music import MusicSelectRequest
 from app.schemas.plans import BrollDensity, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
 from app.services.edit_planner import FixtureEditPlannerProvider
-from app.services.music import FixtureMusicProvider
+from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
 from app.services.queue import MusicQueue, PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
@@ -217,3 +218,41 @@ def test_select_music_rejects_cross_workspace_access() -> None:
         )
 
     assert exc_info.value.status_code in {403, 404}
+
+
+def test_licensed_catalog_provider_returns_real_audio_metadata(monkeypatch) -> None:
+    def fake_get(*_args, **_kwargs):
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "provider_track_id": "catalog-clean-1",
+                    "title": "Licensed Clean Bed",
+                    "license": "motionly_catalog_standard",
+                    "duration_ms": 60_000,
+                    "mood_tags": ["clean", "confident"],
+                    "bpm": 92,
+                    "energy": 0.55,
+                    "vocals": False,
+                    "loopable": True,
+                    "beat_map": [0, 650, 1300],
+                    "audio_bucket": "licensed-music",
+                    "audio_path": "clean/catalog-clean-1.m4a",
+                    "raw_metadata": {"catalog": "internal"},
+                    "active": True,
+                }
+            ],
+        )
+
+    monkeypatch.setattr("app.services.music.httpx.get", fake_get)
+    provider = LicensedCatalogMusicProvider(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+
+    tracks = provider.search(mood="clean confident")
+
+    assert tracks[0].provider_track_id == "catalog-clean-1"
+    assert tracks[0].provider == "licensed_catalog"
+    assert tracks[0].raw_metadata["audio_bucket"] == "licensed-music"
+    assert tracks[0].raw_metadata["audio_path"] == "clean/catalog-clean-1.m4a"

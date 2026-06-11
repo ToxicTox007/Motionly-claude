@@ -105,7 +105,7 @@ async def create_plan(
         schema_hash=PLANNER_SCHEMA_HASH,
         latency_ms=result.latency_ms,
         cost_estimate_usd=result.cost_estimate_usd,
-        validation_errors=[],
+        validation_errors=result.validation_errors,
         summary=summarize_plan(plan),
         plan=plan,
     )

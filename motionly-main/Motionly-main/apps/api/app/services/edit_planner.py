@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -23,15 +24,20 @@ from app.schemas.plans import (
     ZoomMoment,
 )
 
+logger = logging.getLogger(__name__)
+
 PLANNER_SCHEMA_HASH = hashlib.sha256(
     json.dumps(EditPlan.model_json_schema(), sort_keys=True).encode("utf-8")
 ).hexdigest()
 
 SYSTEM_PROMPT = (
     "You are an expert short-form video editor for Instagram Reels, TikTok, and YouTube Shorts. "
-    "Convert transcript, metadata, user intent, and selected style into strict JSON matching the "
-    "provided schema. Output JSON only. Preserve meaning. Do not invent timestamps outside video "
-    "duration. Do not overuse effects."
+    "Return exactly one JSON object and no Markdown, prose, comments, or code fences. "
+    "The object must match the provided JSON schema exactly. Required top-level keys are "
+    "schema_version, style, target_duration_s, cuts, caption_highlights, broll_requests, "
+    "zoom_moments, music_mood, effects, color_grade, and risk_flags. Use only enum values from "
+    "the schema. Use integer millisecond timestamps inside the source duration. Keep every cut "
+    "and B-roll range with end_ms greater than start_ms. Preserve meaning. Do not overuse effects."
 )
 
 
@@ -159,6 +165,7 @@ class HttpEditPlannerProvider:
                 },
             ],
             "response_format": {"type": "json_object"},
+            "temperature": 0.2,
         }
         response = httpx.post(
             self.endpoint,
@@ -170,15 +177,28 @@ class HttpEditPlannerProvider:
             raise ApiError(502, "planner_provider_failed", "The edit planner provider failed.")
         data = response.json()
         content = _extract_content(data)
+        validation_errors: list[str] = []
         try:
             raw_plan = json.loads(_extract_json_object(content))
-            plan = EditPlan.model_validate(raw_plan)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            raise ApiError(
-                502,
-                "planner_validation_failed",
-                "The edit plan was not valid.",
-            ) from exc
+        except json.JSONDecodeError as exc:
+            validation_errors = [f"json_decode: {exc.msg} at line {exc.lineno} column {exc.colno}"]
+            logger.warning(
+                "edit_planner_json_decode_failed",
+                extra={"validation_errors": validation_errors, "provider": self.provider_name},
+            )
+            plan = _fallback_plan(
+                transcript=transcript,
+                payload=payload,
+                video_duration_ms=video_duration_ms,
+            )
+        else:
+            plan, validation_errors = _validate_or_repair_plan(
+                raw_plan=raw_plan,
+                transcript=transcript,
+                payload=payload,
+                video_duration_ms=video_duration_ms,
+                provider_name=self.provider_name,
+            )
         plan = normalize_plan(plan=plan, words=transcript.words, duration_ms=video_duration_ms)
         usage = data.get("usage") if isinstance(data, dict) else None
         tokens = int(usage.get("total_tokens") or 0) if isinstance(usage, dict) else 0
@@ -190,7 +210,12 @@ class HttpEditPlannerProvider:
             model=self.model,
             latency_ms=round((time.perf_counter() - started) * 1000),
             cost_estimate_usd=cost_estimate_usd,
-            raw_payload={"usage": usage or {}},
+            validation_errors=validation_errors,
+            raw_payload={
+                "usage": usage or {},
+                "validation_errors": validation_errors,
+                "fallback_used": bool(validation_errors),
+            },
         )
 
 
@@ -546,3 +571,271 @@ def _extract_json_object(content: str) -> str:
     if start != -1 and end > start:
         return stripped[start : end + 1]
     return stripped
+
+
+def _validate_or_repair_plan(
+    *,
+    raw_plan: object,
+    transcript: TranscriptRecord,
+    payload: PlanCreateRequest,
+    video_duration_ms: int,
+    provider_name: str,
+) -> tuple[EditPlan, list[str]]:
+    try:
+        return EditPlan.model_validate(raw_plan), []
+    except ValidationError as first_error:
+        first_errors = _validation_error_messages(first_error)
+
+    repaired = _repair_plan_payload(
+        raw_plan=raw_plan,
+        transcript=transcript,
+        payload=payload,
+        video_duration_ms=video_duration_ms,
+    )
+    try:
+        plan = EditPlan.model_validate(repaired)
+    except ValidationError as second_error:
+        validation_errors = [
+            *first_errors,
+            *[f"after_repair: {message}" for message in _validation_error_messages(second_error)],
+            "fallback_used: deterministic_fixture_plan",
+        ]
+        logger.warning(
+            "edit_planner_validation_failed",
+            extra={"validation_errors": validation_errors, "provider": provider_name},
+        )
+        return (
+            _fallback_plan(
+                transcript=transcript,
+                payload=payload,
+                video_duration_ms=video_duration_ms,
+            ),
+            validation_errors,
+        )
+
+    validation_errors = [
+        *first_errors,
+        "repair_used: coerced_provider_plan",
+    ]
+    logger.warning(
+        "edit_planner_validation_repaired",
+        extra={"validation_errors": validation_errors, "provider": provider_name},
+    )
+    return plan, validation_errors
+
+
+def _repair_plan_payload(
+    *,
+    raw_plan: object,
+    transcript: TranscriptRecord,
+    payload: PlanCreateRequest,
+    video_duration_ms: int,
+) -> dict[str, object]:
+    source = raw_plan if isinstance(raw_plan, dict) else {}
+    nested_plan = source.get("plan")
+    if isinstance(nested_plan, dict):
+        source = nested_plan
+
+    words = transcript.words
+    duration_ms = max(1000, video_duration_ms or transcript.duration_ms or _last_word_end(words))
+    fallback = _fallback_plan(
+        transcript=transcript,
+        payload=payload,
+        video_duration_ms=duration_ms,
+    )
+    fallback_payload = fallback.model_dump(mode="json")
+
+    repaired: dict[str, object] = {
+        "schema_version": 1,
+        "style": _coerce_choice(source.get("style"), {item.value for item in EditPlanStyle}, payload.style.value),
+        "target_duration_s": _coerce_int(
+            source.get("target_duration_s") or source.get("duration_s"),
+            default=max(10, min(90, payload.target_duration_s)),
+            minimum=10,
+            maximum=90,
+        ),
+        "cuts": _repair_cuts(source.get("cuts"), fallback_payload["cuts"], duration_ms),
+        "caption_highlights": _repair_highlights(
+            source.get("caption_highlights") or source.get("highlights"),
+            fallback_payload["caption_highlights"],
+            duration_ms,
+        ),
+        "broll_requests": _repair_broll_requests(
+            source.get("broll_requests") or source.get("b_roll_requests"),
+            fallback_payload["broll_requests"],
+            duration_ms,
+        ),
+        "zoom_moments": _repair_zoom_moments(
+            source.get("zoom_moments") or source.get("zooms"),
+            fallback_payload["zoom_moments"],
+            duration_ms,
+        ),
+        "music_mood": _coerce_text(source.get("music_mood"), fallback_payload["music_mood"]),
+        "effects": _repair_string_list(source.get("effects"), fallback_payload["effects"], limit=8),
+        "color_grade": _coerce_text(source.get("color_grade"), fallback_payload["color_grade"]),
+        "risk_flags": _repair_string_list(source.get("risk_flags"), fallback_payload["risk_flags"], limit=10),
+    }
+    return repaired
+
+
+def _fallback_plan(
+    *,
+    transcript: TranscriptRecord,
+    payload: PlanCreateRequest,
+    video_duration_ms: int,
+) -> EditPlan:
+    return FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=payload,
+        video_duration_ms=video_duration_ms,
+    ).plan
+
+
+def _repair_cuts(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:
+    items = value if isinstance(value, list) else fallback
+    repaired = []
+    for index, item in enumerate(items if isinstance(items, list) else []):
+        if not isinstance(item, dict):
+            continue
+        start_ms = _coerce_int(item.get("start_ms"), default=0, minimum=0, maximum=duration_ms)
+        end_ms = _coerce_int(
+            item.get("end_ms"),
+            default=min(duration_ms, start_ms + 1200),
+            minimum=start_ms + 1,
+            maximum=duration_ms,
+        )
+        if end_ms <= start_ms:
+            continue
+        repaired.append(
+            {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "reason": _coerce_text(item.get("reason"), f"keep_segment_{index + 1}")[:120],
+            }
+        )
+    return repaired or list(fallback if isinstance(fallback, list) else [])
+
+
+def _repair_highlights(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:
+    effect_choices = {"pulse", "underline", "color_pop", "scale", "none"}
+    effect_aliases = {"color": "color_pop", "highlight": "color_pop", "pop": "pulse"}
+    items = value if isinstance(value, list) else fallback
+    repaired = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        raw_effect = str(item.get("effect") or "pulse").lower()
+        effect = effect_aliases.get(raw_effect, raw_effect)
+        repaired.append(
+            {
+                "timestamp_ms": _coerce_int(
+                    item.get("timestamp_ms") or item.get("start_ms"),
+                    default=0,
+                    minimum=0,
+                    maximum=duration_ms,
+                ),
+                "word": _coerce_text(item.get("word") or item.get("text"), "moment")[:80],
+                "effect": effect if effect in effect_choices else "pulse",
+            }
+        )
+    return repaired[:12] or list(fallback if isinstance(fallback, list) else [])
+
+
+def _repair_broll_requests(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:
+    items = value if isinstance(value, list) else fallback
+    repaired = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        start_ms = _coerce_int(item.get("start_ms"), default=0, minimum=0, maximum=duration_ms)
+        end_ms = _coerce_int(
+            item.get("end_ms"),
+            default=min(duration_ms, start_ms + 1500),
+            minimum=start_ms + 1,
+            maximum=duration_ms,
+        )
+        keywords = item.get("keywords")
+        if isinstance(keywords, str):
+            keywords = [keywords]
+        keywords = _repair_string_list(keywords, ["brand moment"], limit=5)
+        if end_ms <= start_ms:
+            continue
+        repaired.append(
+            {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "keywords": keywords or ["brand moment"],
+                "priority": _coerce_float(item.get("priority"), default=0.7, minimum=0, maximum=1),
+            }
+        )
+    return repaired[:12] or list(fallback if isinstance(fallback, list) else [])
+
+
+def _repair_zoom_moments(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:
+    items = value if isinstance(value, list) else fallback
+    repaired = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        repaired.append(
+            {
+                "timestamp_ms": _coerce_int(
+                    item.get("timestamp_ms") or item.get("start_ms"),
+                    default=0,
+                    minimum=0,
+                    maximum=duration_ms,
+                ),
+                "intensity": _coerce_float(item.get("intensity"), default=1.12, minimum=1.0, maximum=1.5),
+                "reason": _coerce_text(item.get("reason"), "emphasize key moment")[:120],
+            }
+        )
+    return repaired[:12] or list(fallback if isinstance(fallback, list) else [])
+
+
+def _repair_string_list(value: object, fallback: object, *, limit: int) -> list[str]:
+    if isinstance(value, str):
+        items: object = [value]
+    else:
+        items = value
+    if not isinstance(items, list):
+        items = fallback
+    cleaned = [str(item).strip()[:120] for item in items if str(item).strip()]
+    return cleaned[:limit]
+
+
+def _coerce_choice(value: object, choices: set[str], default: str) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in choices else default
+
+
+def _coerce_text(value: object, default: object) -> str:
+    text = str(value or "").strip()
+    return text or str(default)
+
+
+def _coerce_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(round(float(value)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        number = default
+    return min(max(number, minimum), maximum)
+
+
+def _coerce_float(value: object, *, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        number = default
+    return min(max(number, minimum), maximum)
+
+
+def _validation_error_messages(error: ValidationError) -> list[str]:
+    messages = []
+    for item in error.errors():
+        location = ".".join(str(part) for part in item.get("loc", ())) or "root"
+        messages.append(f"{location}: {item.get('msg', 'invalid value')}")
+    return messages
+
+
+def _last_word_end(words: list[TranscriptWord]) -> int:
+    return max((word.end_ms for word in words), default=1000)

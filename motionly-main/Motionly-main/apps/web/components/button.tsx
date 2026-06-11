@@ -1,5 +1,5 @@
-import Link from "next/link";
-import type { ComponentPropsWithoutRef } from "react";
+import Link, { type LinkProps } from "next/link";
+import type { AnchorHTMLAttributes, ComponentPropsWithoutRef } from "react";
 import { cn } from "@/lib/utils";
 
 type ButtonProps = ComponentPropsWithoutRef<"button"> & {
@@ -28,7 +28,8 @@ export function Button({
   );
 }
 
-type ButtonLinkProps = ComponentPropsWithoutRef<typeof Link> & {
+type ButtonLinkProps = LinkProps &
+  Omit<AnchorHTMLAttributes<HTMLAnchorElement>, keyof LinkProps> & {
   variant?: "primary" | "secondary" | "ghost";
 };
 

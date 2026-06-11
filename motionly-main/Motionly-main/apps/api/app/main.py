@@ -36,9 +36,10 @@ from app.repositories.renders import InMemoryRenderRepository, SupabaseRenderRep
 from app.repositories.uploads import InMemoryUploadRepository, SupabaseUploadRepository
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
-from app.services.music import FixtureMusicProvider
+from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
 from app.services.queue import (
     BrollQueue,
+    BullMQQueueRegistry,
     EffectsQueue,
     MusicQueue,
     PlanQueue,
@@ -47,7 +48,6 @@ from app.services.queue import (
     RegenerationQueue,
     RenderQueue,
     TranscriptionQueue,
-    UpstashQueueRegistry,
 )
 from app.services.stock_video import (
     FixtureStockVideoProvider,
@@ -171,15 +171,15 @@ def create_app() -> FastAPI:
         service_role_key=settings.supabase_service_role_key,
     )
     app.state.rate_limiter = InMemoryRateLimiter()
-    if settings.upstash_redis_rest_url and settings.upstash_redis_rest_token:
-        app.state.queue_registry = UpstashQueueRegistry(
-            rest_url=settings.upstash_redis_rest_url,
-            token=settings.upstash_redis_rest_token,
+    if settings.redis_url:
+        app.state.queue_registry = BullMQQueueRegistry(
+            redis_url=settings.redis_url,
+            bridge_path=settings.bullmq_bridge_path,
+            node_command=settings.bullmq_node_command,
+            job_attempts=settings.job_attempts,
         )
     elif settings.app_env == "production":
-        raise RuntimeError(
-            "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required in production"
-        )
+        raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
     else:
         app.state.queue_registry = QueueRegistry()
     app.state.preprocess_queue = PreprocessQueue(app.state.queue_registry)
@@ -216,11 +216,22 @@ def create_app() -> FastAPI:
     if settings.app_env != "production" or settings.allow_fixture_providers:
         stock_video_providers.append(FixtureStockVideoProvider())
     app.state.stock_video_providers = stock_video_providers
-    app.state.music_providers = (
-        []
-        if settings.app_env == "production" and not settings.allow_fixture_providers
-        else [FixtureMusicProvider()]
-    )
+    music_providers = []
+    if (
+        settings.music_provider == "licensed_catalog"
+        and settings.supabase_url
+        and settings.supabase_service_role_key
+    ):
+        music_providers.append(
+            LicensedCatalogMusicProvider(
+                supabase_url=str(settings.supabase_url),
+                service_role_key=settings.supabase_service_role_key,
+                table_name=settings.licensed_music_catalog_table,
+            )
+        )
+    if settings.app_env != "production" or settings.allow_fixture_providers:
+        music_providers.append(FixtureMusicProvider())
+    app.state.music_providers = music_providers
     app.state.music_queue = MusicQueue(app.state.queue_registry)
     app.state.effects_queue = EffectsQueue(app.state.queue_registry)
     app.state.regeneration_queue = RegenerationQueue(app.state.queue_registry)
@@ -284,6 +295,8 @@ def _validate_production_settings(settings) -> None:
         raise RuntimeError("ADMIN_API_TOKEN is required in production for worker access")
     if not settings.render_execute_ffmpeg:
         raise RuntimeError("RENDER_EXECUTE_FFMPEG must be true in production")
+    if not settings.redis_url:
+        raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
 
     if settings.billing_enabled and (
         not settings.stripe_secret_key or not settings.stripe_webhook_secret
@@ -301,6 +314,14 @@ def _validate_production_settings(settings) -> None:
         raise RuntimeError("EDIT_PLANNER_PROVIDER cannot be fixture in production")
     if settings.edit_planner_provider == "openrouter" and not settings.openrouter_api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required when EDIT_PLANNER_PROVIDER=openrouter")
+    if settings.music_provider == "fixture":
+        raise RuntimeError("MUSIC_PROVIDER cannot be fixture in production")
+    if settings.music_provider == "licensed_catalog" and (
+        not settings.supabase_url or not settings.supabase_service_role_key
+    ):
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for licensed music catalog"
+        )
     stock_video_provider = settings.stock_video_provider.replace(",", "_")
     if stock_video_provider == "fixture":
         raise RuntimeError("STOCK_VIDEO_PROVIDER cannot be fixture in production")

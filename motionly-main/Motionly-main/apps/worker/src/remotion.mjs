@@ -144,16 +144,41 @@ async function assembleRenderProps(renderProps) {
   ).filter(Boolean);
 
   // --- Music selection ---
-  // Drop the music selection entirely if the track URL is fixture-based,
-  // since there is no real audio file to embed.
+  // Resolve production catalog music from response fields or raw metadata.
   let resolvedMusic = renderProps.musicSelection ?? null;
   if (resolvedMusic?.track) {
     const trackUrl =
+      resolvedMusic.track.raw_metadata?.audio_url ||
+      resolvedMusic.track.raw_metadata?.download_url ||
+      resolvedMusic.track.raw_metadata?.src ||
+      (resolvedMusic.track.raw_metadata?.audio_bucket &&
+      resolvedMusic.track.raw_metadata?.audio_path
+        ? `supabase://${resolvedMusic.track.raw_metadata.audio_bucket}/${resolvedMusic.track.raw_metadata.audio_path}`
+        : "") ||
       resolvedMusic.track.full_track_url ||
       resolvedMusic.track.preview_url ||
       "";
     if (trackUrl.startsWith("fixture://") || !trackUrl.startsWith("http")) {
-      resolvedMusic = null; // silently drop fixture music
+      if (trackUrl.startsWith("supabase://")) {
+        const signedTrackUrl = await resolveSrc(trackUrl);
+        resolvedMusic = {
+          ...resolvedMusic,
+          track: {
+            ...resolvedMusic.track,
+            full_track_url: signedTrackUrl,
+          },
+        };
+      } else {
+        resolvedMusic = null;
+      }
+    } else {
+      resolvedMusic = {
+        ...resolvedMusic,
+        track: {
+          ...resolvedMusic.track,
+          full_track_url: trackUrl,
+        },
+      };
     }
   }
 
@@ -305,6 +330,36 @@ async function reportComplete(
   return response.json();
 }
 
+async function reportProgress(
+  apiBaseUrl,
+  workerToken,
+  renderJobId,
+  workspaceId,
+  projectId,
+  { progressPct, message, eventType = "worker_progress", metadata = {} },
+) {
+  const response = await fetch(`${apiBaseUrl}/internal/renders/${renderJobId}/progress`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-motionly-worker-token": workerToken,
+    },
+    body: JSON.stringify({
+      workspace_id: workspaceId,
+      project_id: projectId,
+      status: "rendering",
+      progress_pct: progressPct,
+      message,
+      event_type: eventType,
+      metadata,
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`progress API call failed (${response.status}): ${body.slice(0, 400)}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -312,10 +367,10 @@ async function reportComplete(
 /**
  * Called by worker.mjs when job.render_engine === "remotion_premium".
  *
- * @param {object} job - The queue job record (from Upstash)
+ * @param {object} job - The queue job record (from BullMQ)
  * @param {object} ctx - { apiBaseUrl: string, workerToken: string }
  */
-export async function runRemotionJob(job, { apiBaseUrl, workerToken }) {
+export async function runRemotionJob(job, { apiBaseUrl, workerToken, onProgress = null }) {
   const renderJobId = String(job.resource_id);
   const workspaceId = String(job.workspace_id);
   const projectId = String(job.project_id);
@@ -326,8 +381,17 @@ export async function runRemotionJob(job, { apiBaseUrl, workerToken }) {
   const exportStoragePath = `workspaces/${workspaceId}/projects/${projectId}/exports/${renderJobId}.mp4`;
 
   const started = Date.now();
+  const progress = async (progressPct, message, eventType, metadata = {}) => {
+    const payload = { progressPct, message, eventType, metadata };
+    if (onProgress) {
+      await onProgress(payload);
+      return;
+    }
+    await reportProgress(apiBaseUrl, workerToken, renderJobId, workspaceId, projectId, payload);
+  };
 
   try {
+    await progress(20, "Preparing premium render manifest.", "remotion_prepare");
     // 1. Fetch the full render job manifest from the API
     const manifestRes = await fetch(
       `${apiBaseUrl}/internal/renders/${renderJobId}` +
@@ -349,12 +413,14 @@ export async function runRemotionJob(job, { apiBaseUrl, workerToken }) {
     }
 
     // 2. Resolve all media references to signed / real URLs
+    await progress(30, "Resolving render media assets.", "remotion_assets");
     const resolvedProps = await assembleRenderProps(renderProps);
 
     // 3. Write props to temp file
     await writeFile(propsPath, JSON.stringify(resolvedProps, null, 2));
 
     // 4. Spawn render-cli.ts
+    await progress(45, "Rendering premium video composition.", "remotion_rendering");
     await spawnRenderer(propsPath, outputPath);
 
     // 5. Read render metadata
@@ -362,6 +428,7 @@ export async function runRemotionJob(job, { apiBaseUrl, workerToken }) {
     const benchmarkMs = Date.now() - started;
 
     // 6. Upload rendered MP4 to Supabase Storage
+    await progress(88, "Uploading premium export.", "remotion_uploading");
     await uploadToStorage(outputPath, exportBucket, exportStoragePath);
 
     // 7. Report completion to API

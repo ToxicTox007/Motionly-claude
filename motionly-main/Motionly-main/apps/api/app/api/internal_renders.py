@@ -99,6 +99,114 @@ class RemotionCompleteResponse(BaseModel):
     benchmark_ms: int
 
 
+class RenderProgressRequest(BaseModel):
+    workspace_id: UUID
+    project_id: UUID
+    status: RenderJobStatus = RenderJobStatus.RENDERING
+    progress_pct: int = Field(ge=0, le=100)
+    message: str
+    event_type: str = Field(default="worker_progress")
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class RenderFailureRequest(BaseModel):
+    workspace_id: UUID
+    project_id: UUID
+    error_code: str = Field(default="render_worker_failed")
+    error_message: str
+    retrying: bool = False
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class RenderStateResponse(BaseModel):
+    render_job_id: UUID
+    status: RenderJobStatus
+    progress_pct: int
+
+
+@router.post("/{render_job_id}/progress", response_model=RenderStateResponse)
+async def update_render_progress(
+    render_job_id: UUID,
+    payload: RenderProgressRequest,
+    request: Request,
+    x_motionly_worker_token: str | None = Header(default=None),
+) -> RenderStateResponse:
+    await _require_worker_token(request, x_motionly_worker_token)
+    repository: InMemoryRenderRepository = request.app.state.render_repository
+    job = repository.get_render_job(
+        project_id=payload.project_id,
+        render_job_id=render_job_id,
+        workspace_id=payload.workspace_id,
+    )
+    if job.status in {RenderJobStatus.COMPLETE, RenderJobStatus.CANCELED, RenderJobStatus.FAILED}:
+        return RenderStateResponse(
+            render_job_id=job.id,
+            status=job.status,
+            progress_pct=job.progress_pct,
+        )
+    updated = repository.transition_job(
+        job=job,
+        status=payload.status,
+        progress_pct=max(job.progress_pct, payload.progress_pct),
+        message=payload.message,
+        event_type=payload.event_type,
+        metadata=payload.metadata,
+    )
+    return RenderStateResponse(
+        render_job_id=updated.id,
+        status=updated.status,
+        progress_pct=updated.progress_pct,
+    )
+
+
+@router.post("/{render_job_id}/failed", response_model=RenderStateResponse)
+async def fail_render_job(
+    render_job_id: UUID,
+    payload: RenderFailureRequest,
+    request: Request,
+    x_motionly_worker_token: str | None = Header(default=None),
+) -> RenderStateResponse:
+    await _require_worker_token(request, x_motionly_worker_token)
+    repository: InMemoryRenderRepository = request.app.state.render_repository
+    job = repository.get_render_job(
+        project_id=payload.project_id,
+        render_job_id=render_job_id,
+        workspace_id=payload.workspace_id,
+    )
+    if job.status in {RenderJobStatus.COMPLETE, RenderJobStatus.CANCELED}:
+        return RenderStateResponse(
+            render_job_id=job.id,
+            status=job.status,
+            progress_pct=job.progress_pct,
+        )
+    next_status = RenderJobStatus.QUEUED if payload.retrying else RenderJobStatus.FAILED
+    next_progress = 5 if payload.retrying else job.progress_pct
+    job.logs = [
+        *(job.logs or []),
+        f"{'retryable_' if payload.retrying else ''}worker_failure:{payload.error_code}",
+        payload.error_message[:500],
+    ]
+    updated = repository.transition_job(
+        job=job,
+        status=next_status,
+        progress_pct=next_progress,
+        message=(
+            "Render worker failed; BullMQ will retry."
+            if payload.retrying
+            else payload.error_message
+        ),
+        event_type="worker_retrying" if payload.retrying else "worker_failed",
+        error_code=None if payload.retrying else payload.error_code,
+        error_message=None if payload.retrying else payload.error_message,
+        metadata=payload.metadata,
+    )
+    return RenderStateResponse(
+        render_job_id=updated.id,
+        status=updated.status,
+        progress_pct=updated.progress_pct,
+    )
+
+
 @router.post("/{render_job_id}/complete", response_model=RemotionCompleteResponse)
 async def complete_remotion_job(
     render_job_id: UUID,

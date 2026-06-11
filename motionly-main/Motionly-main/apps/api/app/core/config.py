@@ -35,8 +35,13 @@ class Settings(BaseSettings):
     upload_sync_processing: bool = Field(default=False, alias="UPLOAD_SYNC_PROCESSING")
     render_sync_completion: bool = Field(default=False, alias="RENDER_SYNC_COMPLETION")
     render_execute_ffmpeg: bool = Field(default=True, alias="RENDER_EXECUTE_FFMPEG")
-    upstash_redis_rest_url: str | None = Field(default=None, alias="UPSTASH_REDIS_REST_URL")
-    upstash_redis_rest_token: str | None = Field(default=None, alias="UPSTASH_REDIS_REST_TOKEN")
+    redis_url: str | None = Field(default=None, alias="REDIS_URL")
+    bullmq_bridge_path: str | None = Field(default=None, alias="BULLMQ_BRIDGE_PATH")
+    bullmq_node_command: str = Field(default="node", alias="BULLMQ_NODE_COMMAND")
+    job_attempts: int = Field(default=3, alias="JOB_ATTEMPTS")
+    job_backoff_ms: int = Field(default=30000, alias="JOB_BACKOFF_MS")
+    worker_concurrency: int = Field(default=3, alias="WORKER_CONCURRENCY")
+    render_worker_concurrency: int = Field(default=1, alias="RENDER_WORKER_CONCURRENCY")
     rate_limit_per_minute: int = Field(default=120, alias="RATE_LIMIT_PER_MINUTE")
     admin_api_token: str | None = Field(default=None, alias="ADMIN_API_TOKEN")
     admin_workspace_ids: str = Field(default="", alias="ADMIN_WORKSPACE_IDS")
@@ -48,6 +53,11 @@ class Settings(BaseSettings):
         alias="TRANSCRIPTION_DEBUG_RETAIN_AUDIO",
     )
     allow_fixture_providers: bool = Field(default=False, alias="ALLOW_FIXTURE_PROVIDERS")
+    music_provider: str = Field(default="licensed_catalog", alias="MUSIC_PROVIDER")
+    licensed_music_catalog_table: str = Field(
+        default="licensed_music_tracks",
+        alias="LICENSED_MUSIC_CATALOG_TABLE",
+    )
     edit_planner_provider: str = Field(default="openrouter", alias="EDIT_PLANNER_PROVIDER")
     edit_planner_model: str = Field(default="openrouter/free", alias="EDIT_PLANNER_MODEL")
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")

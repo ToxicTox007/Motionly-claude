@@ -24,7 +24,7 @@ export async function getWorkspaceApiContext() {
   } = await supabase.auth.getSession();
 
   if (!user || !session?.access_token) {
-    redirect("/login");
+    return null;
   }
 
   const { data: membership } = await supabase

@@ -21,7 +21,9 @@ export default async function SignupPage({
         <h1 className="mt-2 text-3xl font-black">Start your workspace</h1>
         {params.error ? (
           <p className="mt-4 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
-            We could not create that account. Check the details and try again.
+            {params.error === "rate_limited"
+              ? "Email confirmation is temporarily rate limited. Wait a minute, then try again or log in if your account already exists."
+              : "We could not create that account. Check the details and try again."}
           </p>
         ) : null}
         <label className="mt-6 block text-sm font-medium" htmlFor="name">

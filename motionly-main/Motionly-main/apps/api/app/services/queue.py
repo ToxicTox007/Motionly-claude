@@ -1,7 +1,10 @@
 import json
-from dataclasses import asdict, dataclass, field
+import os
+import subprocess
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 from uuid import UUID
 
 
@@ -222,25 +225,32 @@ class QueueRegistry:
         )
 
 
-class UpstashQueueRegistry:
-    index_key = "motionly:queue:jobs"
-
-    def __init__(self, *, rest_url: str, token: str) -> None:
-        self.rest_url = rest_url.rstrip("/")
-        self.headers = {"authorization": f"Bearer {token}"}
+class BullMQQueueRegistry:
+    def __init__(
+        self,
+        *,
+        redis_url: str,
+        bridge_path: str | None = None,
+        node_command: str = "node",
+        job_attempts: int = 3,
+    ) -> None:
+        self.redis_url = redis_url
+        self.bridge_path = bridge_path or str(
+            Path(__file__).resolve().parents[4] / "apps" / "worker" / "src" / "queue-bridge.mjs"
+        )
+        self.node_command = node_command
+        self.job_attempts = job_attempts
 
     @property
     def jobs(self) -> dict[str, EnqueuedJob]:
-        job_ids = self._command("SMEMBERS", self.index_key)
-        if not isinstance(job_ids, list):
+        records = self._bridge("jobs", {})
+        if not isinstance(records, list):
             return {}
         jobs: dict[str, EnqueuedJob] = {}
-        for job_id in sorted(str(item) for item in job_ids):
-            payload = self._command("GET", self._job_key(job_id))
-            if not isinstance(payload, str):
-                continue
-            job = self._deserialize_job(payload)
-            jobs[job.id] = job
+        for record in records:
+            if isinstance(record, dict):
+                job = self._job_from_bridge(record)
+                jobs[job.id] = job
         return jobs
 
     def enqueue(
@@ -256,126 +266,44 @@ class UpstashQueueRegistry:
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
-        existing = self._command("GET", self._job_key(job_id))
-        if isinstance(existing, str):
-            return self._deserialize_job(existing)
-        job = EnqueuedJob(
-            id=job_id,
-            kind=kind,
-            queue_name=queue_name,
-            priority=priority,
-            max_attempts=max_attempts,
-            workspace_id=workspace_id,
-            project_id=project_id,
-            resource_id=resource_id,
-            render_engine=render_engine,
-        )
-        self._store_job(job)
-        return job
+        payload = {
+            "id": job_id,
+            "kind": kind,
+            "queue_name": queue_name,
+            "priority": priority,
+            "workspace_id": str(workspace_id) if workspace_id else None,
+            "project_id": str(project_id) if project_id else None,
+            "resource_id": str(resource_id) if resource_id else None,
+            "max_attempts": max_attempts or self.job_attempts,
+            "render_engine": render_engine,
+        }
+        return self._job_from_bridge(self._bridge("enqueue", payload))
 
     def retry(self, job_id: str) -> EnqueuedJob:
-        job = self._get_job(job_id)
-        attempts = job.attempts + 1
-        status = (
-            QueueJobStatus.DEAD_LETTER
-            if attempts >= job.max_attempts
-            else QueueJobStatus.QUEUED
-        )
-        retried = EnqueuedJob(
-            id=job.id,
-            kind=job.kind,
-            queue_name=job.queue_name,
-            priority=job.priority,
-            attempts=attempts,
-            max_attempts=job.max_attempts,
-            status=status,
-            enqueued_at=datetime.now(UTC),
-            workspace_id=job.workspace_id,
-            project_id=job.project_id,
-            resource_id=job.resource_id,
-            render_engine=job.render_engine,
-        )
-        self._store_job(retried)
-        return retried
+        return self._job_from_bridge(self._bridge("retry", {"id": job_id}))
 
     def start(self, job_id: str) -> EnqueuedJob:
-        job = self._get_job(job_id)
-        started = self._copy_job(job, status=QueueJobStatus.RUNNING)
-        self._store_job(started)
-        return started
+        job = self.jobs[job_id]
+        return self._copy_job(job, status=QueueJobStatus.RUNNING)
 
     def complete(self, job_id: str) -> EnqueuedJob:
-        job = self._get_job(job_id)
-        completed = self._copy_job(job, status=QueueJobStatus.SUCCEEDED)
-        self._store_job(completed)
-        return completed
+        job = self.jobs[job_id]
+        return self._copy_job(job, status=QueueJobStatus.SUCCEEDED)
 
     def fail(self, job_id: str) -> EnqueuedJob:
-        job = self._get_job(job_id)
-        attempts = job.attempts + 1
+        job = self.jobs[job_id]
         status = (
             QueueJobStatus.DEAD_LETTER
-            if attempts >= job.max_attempts
-            else QueueJobStatus.QUEUED
+            if job.attempts + 1 >= job.max_attempts
+            else QueueJobStatus.FAILED
         )
-        failed = EnqueuedJob(
-            id=job.id,
-            kind=job.kind,
-            queue_name=job.queue_name,
-            priority=job.priority,
-            attempts=attempts,
-            max_attempts=job.max_attempts,
-            status=status,
-            enqueued_at=datetime.now(UTC),
-            workspace_id=job.workspace_id,
-            project_id=job.project_id,
-            resource_id=job.resource_id,
-        )
-        self._store_job(failed)
-        return failed
+        return self._copy_job(job, status=status)
 
     def cancel(self, job_id: str) -> EnqueuedJob:
-        job = self._get_job(job_id)
-        canceled = EnqueuedJob(
-            id=job.id,
-            kind=job.kind,
-            queue_name=job.queue_name,
-            priority=job.priority,
-            attempts=job.attempts,
-            max_attempts=job.max_attempts,
-            status=QueueJobStatus.CANCELED,
-            enqueued_at=job.enqueued_at,
-            workspace_id=job.workspace_id,
-            project_id=job.project_id,
-            resource_id=job.resource_id,
-        )
-        self._store_job(canceled)
-        return canceled
+        return self._job_from_bridge(self._bridge("cancel", {"id": job_id}))
 
     def mark_stuck_as_dead_letter(self, *, timeout_seconds: int) -> list[EnqueuedJob]:
-        cutoff = datetime.now(UTC) - timedelta(seconds=timeout_seconds)
-        moved = []
-        for job in self.jobs.values():
-            if job.status not in {QueueJobStatus.QUEUED, QueueJobStatus.RUNNING}:
-                continue
-            if job.enqueued_at > cutoff:
-                continue
-            dead = EnqueuedJob(
-                id=job.id,
-                kind=job.kind,
-                queue_name=job.queue_name,
-                priority=job.priority,
-                attempts=job.attempts,
-                max_attempts=job.max_attempts,
-                status=QueueJobStatus.DEAD_LETTER,
-                enqueued_at=job.enqueued_at,
-                workspace_id=job.workspace_id,
-                project_id=job.project_id,
-                resource_id=job.resource_id,
-            )
-            self._store_job(dead)
-            moved.append(dead)
-        return moved
+        return []
 
     def snapshots(self) -> list[QueueSnapshot]:
         queue_names = sorted({job.queue_name for job in self.jobs.values()})
@@ -401,62 +329,44 @@ class UpstashQueueRegistry:
             )
         return snapshots
 
-    def _get_job(self, job_id: str) -> EnqueuedJob:
-        payload = self._command("GET", self._job_key(job_id))
-        if not isinstance(payload, str):
-            raise KeyError(job_id)
-        return self._deserialize_job(payload)
-
-    def _store_job(self, job: EnqueuedJob) -> None:
-        self._command("SADD", self.index_key, job.id)
-        self._command("SET", self._job_key(job.id), self._serialize_job(job))
-
-    def _command(self, *parts: str) -> object:
-        import httpx
-
-        response = httpx.post(
-            f"{self.rest_url}/pipeline",
-            headers=self.headers,
-            json=[[part for part in parts]],
-            timeout=10,
+    def _bridge(self, command: str, payload: dict[str, object]) -> object:
+        env = {
+            **os.environ,
+            "REDIS_URL": self.redis_url,
+            "JOB_ATTEMPTS": str(self.job_attempts),
+        }
+        result = subprocess.run(
+            [self.node_command, self.bridge_path, command],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+            env=env,
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, list) or not payload:
-            return None
-        first = payload[0]
-        if not isinstance(first, dict):
-            return None
-        return first.get("result")
+        if result.returncode != 0:
+            raise RuntimeError(
+                result.stderr.strip() or result.stdout.strip() or "BullMQ bridge failed"
+            )
+        return json.loads(result.stdout or "null")
 
-    def _serialize_job(self, job: EnqueuedJob) -> str:
-        payload = asdict(job)
-        payload["status"] = job.status.value
-        payload["enqueued_at"] = job.enqueued_at.isoformat()
-        for key in ("workspace_id", "project_id", "resource_id"):
-            payload[key] = str(payload[key]) if payload[key] else None
-        return json.dumps(payload, separators=(",", ":"))
-
-    def _deserialize_job(self, payload: str) -> EnqueuedJob:
-        data = json.loads(payload)
+    def _job_from_bridge(self, data: object) -> EnqueuedJob:
+        if not isinstance(data, dict):
+            raise RuntimeError("BullMQ bridge returned an invalid job payload")
         return EnqueuedJob(
             id=str(data["id"]),
             kind=str(data["kind"]),
             queue_name=str(data["queue_name"]),
-            priority=int(data["priority"]),
-            attempts=int(data["attempts"]),
-            max_attempts=int(data["max_attempts"]),
-            status=QueueJobStatus(str(data["status"])),
+            priority=int(data.get("priority") or 0),
+            attempts=int(data.get("attempts") or 0),
+            max_attempts=int(data.get("max_attempts") or self.job_attempts),
+            status=QueueJobStatus(str(data.get("status") or QueueJobStatus.QUEUED.value)),
             enqueued_at=datetime.fromisoformat(str(data["enqueued_at"])),
             workspace_id=UUID(str(data["workspace_id"])) if data.get("workspace_id") else None,
             project_id=UUID(str(data["project_id"])) if data.get("project_id") else None,
             resource_id=UUID(str(data["resource_id"])) if data.get("resource_id") else None,
-            # Graceful fallback for jobs enqueued before render_engine was added
             render_engine=str(data.get("render_engine") or "ffmpeg_basic"),
         )
-
-    def _job_key(self, job_id: str) -> str:
-        return f"motionly:queue:job:{job_id}"
 
     def _copy_job(self, job: EnqueuedJob, *, status: QueueJobStatus) -> EnqueuedJob:
         return EnqueuedJob(
@@ -481,7 +391,7 @@ class BaseQueue:
 
     def __init__(
         self,
-        registry: QueueRegistry | UpstashQueueRegistry | None = None,
+        registry: QueueRegistry | BullMQQueueRegistry | None = None,
     ) -> None:
         self.registry = registry or QueueRegistry()
 

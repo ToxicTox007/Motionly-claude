@@ -4,6 +4,12 @@ import { withSentryConfig } from "@sentry/nextjs";
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  allowedDevOrigins: ["localhost", "127.0.0.1", "*.app.github.dev"],
+  experimental: {
+    serverActions: {
+      allowedOrigins: ["localhost:3000", "127.0.0.1:3000", "*.app.github.dev"],
+    },
+  },
 };
 
 export default withSentryConfig(nextConfig, {

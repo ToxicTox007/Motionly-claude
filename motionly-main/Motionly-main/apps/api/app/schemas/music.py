@@ -10,6 +10,7 @@ MUSIC_SCHEMA_VERSION = 1
 
 class MusicProviderKey(StrEnum):
     FIXTURE = "fixture"
+    LICENSED_CATALOG = "licensed_catalog"
 
 
 class MusicTrackResponse(BaseModel):

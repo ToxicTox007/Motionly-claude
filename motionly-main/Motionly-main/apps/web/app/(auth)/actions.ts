@@ -14,6 +14,17 @@ function safeRedirectPath(value: FormDataEntryValue | null) {
   return path;
 }
 
+function authErrorReason(error: { code?: string; status?: number; message: string }) {
+  const message = error.message.toLowerCase();
+  if (error.code === "over_email_send_rate_limit" || error.status === 429) {
+    return "rate_limited";
+  }
+  if (message.includes("email not confirmed")) {
+    return "email_not_confirmed";
+  }
+  return "invalid_credentials";
+}
+
 async function getAuthCallbackUrl() {
   const headerStore = await headers();
   const origin = headerStore.get("origin");
@@ -38,10 +49,12 @@ export async function login(formData: FormData) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
-    const reason = error.message.toLowerCase().includes("email not confirmed")
-      ? "email_not_confirmed"
-      : "invalid_credentials";
-    redirect(`/login?error=${reason}`);
+    console.error("motionly_login_failed", {
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    });
+    redirect(`/login?error=${authErrorReason(error)}`);
   }
 
   redirect(nextPath);
@@ -70,7 +83,12 @@ export async function signup(formData: FormData) {
   });
 
   if (error) {
-    redirect("/signup?error=signup_failed");
+    console.error("motionly_signup_failed", {
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    });
+    redirect(`/signup?error=${authErrorReason(error)}`);
   }
 
   redirect(data.session ? "/dashboard" : "/login?notice=check_email");

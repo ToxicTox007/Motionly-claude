@@ -14,7 +14,7 @@ from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.captions import LanguageHint
 from app.schemas.plans import BrollDensity, EditPlanStyle, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
-from app.services.edit_planner import FixtureEditPlannerProvider
+from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.queue import PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
@@ -301,3 +301,88 @@ def test_validation_errors_use_api_error_envelope() -> None:
     assert response.status_code == 422
     assert b"request_validation_failed" in response.body
     assert b"target_duration_s" in response.body
+
+
+def test_http_planner_repairs_invalid_provider_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+
+    def fake_post(*args: object, **kwargs: object):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": """
+                            {
+                              "plan": {
+                                "style": "LUXURY",
+                                "target_duration_s": 8,
+                                "cuts": [{"start_ms": 0, "end_ms": 3500, "reason": "hook"}],
+                                "caption_highlights": [{"timestamp_ms": 500, "word": "Hello", "effect": "pop"}],
+                                "b_roll_requests": [{"start_ms": 700, "end_ms": 2400, "keywords": "office", "priority": 2}],
+                                "zoom_moments": [{"timestamp_ms": 600, "intensity": 2, "reason": "focus"}],
+                                "music_mood": "clean",
+                                "effects": "warm_grade",
+                                "color_grade": "neutral",
+                                "risk_flags": []
+                              }
+                            }
+                            """
+                        }
+                    }
+                ],
+                "usage": {"total_tokens": 100},
+            },
+        )
+
+    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
+    result = HttpEditPlannerProvider(
+        endpoint="https://planner.test",
+        api_key="test",
+        model="test-model",
+        provider_name="openrouter",
+    ).create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+
+    assert result.plan.style == EditPlanStyle.LUXURY
+    assert result.plan.target_duration_s == 10
+    assert result.plan.caption_highlights[0].effect == "pulse"
+    assert result.validation_errors
+    assert "repair_used" in result.validation_errors[-1]
+
+
+def test_http_planner_falls_back_and_records_validation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+
+    def fake_post(*args: object, **kwargs: object):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"choices": [{"message": {"content": "not json"}}], "usage": {}},
+        )
+
+    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
+    result = HttpEditPlannerProvider(
+        endpoint="https://planner.test",
+        api_key="test",
+        model="test-model",
+        provider_name="openrouter",
+    ).create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.FOUNDER, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+
+    assert result.plan.style == EditPlanStyle.FOUNDER
+    assert result.plan.cuts
+    assert result.validation_errors
+    assert result.raw_payload["fallback_used"] is True

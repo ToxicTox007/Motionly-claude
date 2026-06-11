@@ -41,7 +41,7 @@ export type BrollDensity = "none" | "low" | "medium" | "high";
 export type EditPlanStatus = "ready" | "failed";
 export type BrollSlotStatus = "ready" | "disabled" | "failed";
 export type StockProviderKey = "fixture" | "pexels" | "pixabay";
-export type MusicProviderKey = "fixture";
+export type MusicProviderKey = "fixture" | "licensed_catalog";
 export type MusicSelectionStatus = "ready" | "failed";
 export type VisualPresetKey =
   | "vogue_luxury"

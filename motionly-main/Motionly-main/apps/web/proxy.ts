@@ -3,13 +3,17 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const protectedPrefixes = ["/dashboard", "/projects", "/billing", "/account"];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
-  const isProtected = protectedPrefixes.some((prefix) => request.nextUrl.pathname.startsWith(prefix));
+  const isProtected = protectedPrefixes.some((prefix) =>
+    request.nextUrl.pathname.startsWith(prefix),
+  );
 
   if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
-    // In local bypass mode allow all protected routes and redirect auth pages
-    if (request.nextUrl.pathname.startsWith("/login") || request.nextUrl.pathname.startsWith("/signup")) {
+    if (
+      request.nextUrl.pathname.startsWith("/login") ||
+      request.nextUrl.pathname.startsWith("/signup")
+    ) {
       const dash = new URL("/dashboard", request.url);
       return NextResponse.redirect(dash);
     }
@@ -31,7 +35,9 @@ export async function middleware(request: NextRequest) {
       setAll(cookiesToSet: Parameters<SetAllCookies>[0]) {
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
         response = NextResponse.next({ request });
-        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+        cookiesToSet.forEach(({ name, value, options }) =>
+          response.cookies.set(name, value, options),
+        );
       },
     },
   });

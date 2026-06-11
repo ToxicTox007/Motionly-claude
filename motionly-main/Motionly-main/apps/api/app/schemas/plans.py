@@ -151,4 +151,5 @@ class PlannerProviderResult(BaseModel):
     model: str
     latency_ms: int
     cost_estimate_usd: float | None = None
+    validation_errors: list[str] = Field(default_factory=list)
     raw_payload: dict[str, Any] = Field(default_factory=dict)

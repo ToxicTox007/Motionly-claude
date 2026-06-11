@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.api.dependencies import Actor
 from app.api.internal_jobs import run_queue_job
+from app.api.internal_renders import fail_render_job, update_render_progress
 from app.api.renders import create_render
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.plans import InMemoryPlanRepository
@@ -147,3 +148,102 @@ def test_worker_runs_render_job_to_export() -> None:
     assert worker_response.status == "succeeded"
     assert job.status == RenderJobStatus.COMPLETE
     assert repository.list_exports(project_id=project_id, workspace_id=workspace_id)
+
+
+def test_worker_progress_callback_updates_render_job() -> None:
+    repository, project_id, workspace_id, _user_id = make_render_repository()
+    render = repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=repository.get_active_upload(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        ).id,
+        caption_track_id=repository.latest_caption_track(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        ).id,
+        status=RenderJobStatus.QUEUED,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+        progress_pct=5,
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(admin_api_token="worker-secret"),
+                render_repository=repository,
+            ),
+        ),
+    )
+
+    response = asyncio.run(
+        update_render_progress(
+            render_job_id=render.id,
+            payload=SimpleNamespace(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                status=RenderJobStatus.RENDERING,
+                progress_pct=45,
+                message="Rendering premium video composition.",
+                event_type="remotion_rendering",
+                metadata={"phase": "render"},
+            ),
+            request=request,
+            x_motionly_worker_token="worker-secret",
+        )
+    )
+
+    assert response.status == RenderJobStatus.RENDERING
+    assert response.progress_pct == 45
+    assert repository.events_for_job(render.id)[-1].event_type == "remotion_rendering"
+
+
+def test_worker_failure_callback_marks_terminal_failure() -> None:
+    repository, project_id, workspace_id, _user_id = make_render_repository()
+    render = repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=repository.get_active_upload(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        ).id,
+        caption_track_id=repository.latest_caption_track(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        ).id,
+        status=RenderJobStatus.RENDERING,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+        progress_pct=45,
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(admin_api_token="worker-secret"),
+                render_repository=repository,
+            ),
+        ),
+    )
+
+    response = asyncio.run(
+        fail_render_job(
+            render_job_id=render.id,
+            payload=SimpleNamespace(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                error_code="render_worker_failed",
+                error_message="render-cli.ts exited with code 1",
+                retrying=False,
+                metadata={"attempts": 3},
+            ),
+            request=request,
+            x_motionly_worker_token="worker-secret",
+        )
+    )
+
+    assert response.status == RenderJobStatus.FAILED
+    assert render.error_code == "render_worker_failed"
+    assert "render-cli.ts exited with code 1" in render.logs[-1]

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
 from app.schemas.renders import RenderJobStatus
-from app.services.queue import EnqueuedJob, QueueJobStatus, QueueRegistry
+from app.services.queue import BullMQQueueRegistry, EnqueuedJob, QueueJobStatus, QueueRegistry
 from app.services.render_jobs import complete_render_job_by_id
 from app.services.upload_jobs import complete_upload_preprocessing_by_id
 
@@ -47,10 +47,11 @@ async def run_queue_job(
         return _response(job, result={"message": "Job already succeeded."})
     if job.status in {QueueJobStatus.CANCELED, QueueJobStatus.DEAD_LETTER}:
         raise ApiError(409, "queue_job_not_runnable", "Queue job can no longer be run.")
-    if job.status == QueueJobStatus.RUNNING:
+    if job.status == QueueJobStatus.RUNNING and not isinstance(registry, BullMQQueueRegistry):
         raise ApiError(409, "queue_job_already_running", "Queue job is already running.")
 
-    job = registry.start(queue_job_id)
+    if job.status != QueueJobStatus.RUNNING:
+        job = registry.start(queue_job_id)
     try:
         result = _execute_job(job=job, request=request)
     except Exception:
