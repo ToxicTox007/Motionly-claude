@@ -3,9 +3,9 @@ import { Button } from "@/components/button";
 
 export default function FeedbackPage() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center px-5 py-12">
+    <main className="container-content flex min-h-screen flex-col justify-center py-12">
       <div className="mb-8 flex items-center gap-3">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-foreground text-background">
+        <div className="pixel-button flex size-10 items-center justify-center bg-foreground text-background">
           <MessageSquare className="size-5" aria-hidden="true" />
         </div>
         <div>
@@ -17,13 +17,13 @@ export default function FeedbackPage() {
         action="mailto:support@motionly.local"
         method="post"
         encType="text/plain"
-        className="space-y-4 rounded-lg border border-border bg-surface p-5"
+        className="pixel-panel pixel-corners max-w-2xl space-y-4 p-5"
       >
         <label className="block text-sm font-semibold">
           Category
           <select
             name="category"
-            className="mt-2 h-10 w-full rounded-lg border border-border bg-background px-3"
+            className="pixel-input mt-2 h-10 w-full px-3"
             defaultValue="general"
           >
             <option value="general">General</option>
@@ -40,7 +40,7 @@ export default function FeedbackPage() {
             required
             minLength={10}
             rows={7}
-            className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2"
+            className="pixel-input mt-2 w-full px-3 py-2"
             placeholder="Tell us what happened, what you expected, and the project URL if relevant."
           />
         </label>

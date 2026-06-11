@@ -63,15 +63,15 @@ export function TimelinePanel({
   const LABEL_WIDTH = 52; // px — left label column
 
   return (
-    <div className="flex flex-col border-t border-border bg-[hsl(var(--surface))] select-none">
+    <div className="flex h-full min-h-0 select-none flex-col bg-[hsl(var(--surface))]">
       {/* ── Controls bar ───────────────────────────────────────────────── */}
-      <div className="flex h-8 items-center gap-2 border-b border-border px-3">
+      <div className="pixel-grid-fine flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
           {formatMs(playheadMs)}{" "}
           <span className="opacity-40">/</span>{" "}
           {formatMs(totalDurationMs)}
         </span>
-        <div className="ml-auto flex items-center gap-0.5">
+        <div className="ml-auto flex items-center gap-1">
           <TimelineButton onClick={zoomOut} title="Zoom out">
             <Minus className="size-3" />
           </TimelineButton>
@@ -124,7 +124,7 @@ export function TimelinePanel({
           >
             {/* ── Ruler ───────────────────────────────────────────────── */}
             <div
-              className="relative cursor-pointer bg-[hsl(var(--background))]"
+              className="pixel-grid-fine relative cursor-pointer bg-[hsl(var(--background))]"
               style={{ height: RULER_HEIGHT }}
               onPointerDown={handleRulerPointerDown}
             >
@@ -147,7 +147,7 @@ export function TimelinePanel({
               <div
                 key={track.kind}
                 className={cn(
-                  "relative border-b border-border/40",
+                  "relative border-b border-border/60",
                   trackIdx % 2 === 0 ? "bg-[hsl(var(--background))]" : "bg-[hsl(var(--surface))]",
                 )}
                 style={{ height: TRACK_HEIGHT }}
@@ -187,19 +187,18 @@ interface ClipBlockProps {
 
 function ClipBlock({ clip, pct, selected, onSelect }: ClipBlockProps) {
   const widthMs = Math.max(clip.endMs - clip.startMs, 0);
-  const widthPct = `${((widthMs / 1) * 100).toFixed(4)}%`; // relative to parent (which is 100% of duration)
 
   return (
     <div
       className={cn(
-        "absolute top-1 bottom-1 rounded cursor-pointer overflow-hidden",
+        "absolute bottom-1 top-1 cursor-pointer overflow-hidden border border-white/20",
         "flex items-center px-1.5 text-[9px] font-bold text-white/90 leading-none",
-        "ring-inset transition-all duration-100",
+        "ring-inset transition-all duration-100 shadow-[2px_2px_0_rgba(0,0,0,0.2)]",
         clip.colorClass,
         clip.disabled && "opacity-30",
         selected
-          ? "ring-2 ring-white shadow-[0_0_0_1px_white]"
-          : "hover:brightness-110 ring-1 ring-white/10",
+          ? "ring-2 ring-white shadow-[0_0_0_1px_white,4px_4px_0_rgba(0,0,0,0.22)]"
+          : "hover:-translate-y-0.5 hover:brightness-110 ring-1 ring-white/10",
       )}
       style={{
         left: pct(clip.startMs),
@@ -230,7 +229,7 @@ function TrimHandle({ side }: { side: "left" | "right" }) {
         "flex items-center justify-center",
         "opacity-0 hover:opacity-100 group-hover:opacity-100 transition",
         "bg-white/20 hover:bg-white/50",
-        side === "left" ? "left-0 rounded-l" : "right-0 rounded-r",
+        side === "left" ? "left-0" : "right-0",
       )}
       // Actual trim logic comes in Sprint C; showing the affordance now
       onClick={(e) => e.stopPropagation()}
@@ -272,7 +271,7 @@ function TimelineButton({
     <button
       onClick={onClick}
       title={title}
-      className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition"
+      className="flex size-6 items-center justify-center border border-transparent text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
     >
       {children}
     </button>

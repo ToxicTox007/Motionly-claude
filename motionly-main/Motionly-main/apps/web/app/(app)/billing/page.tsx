@@ -35,7 +35,7 @@ export default async function BillingPage({
           />
         ) : null}
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="rounded-lg border border-border bg-surface p-5">
+          <div className="pixel-panel pixel-corners p-5">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-bold uppercase text-muted-foreground">Current plan</p>
@@ -69,7 +69,7 @@ export default async function BillingPage({
             </div>
           </div>
 
-          <div className="rounded-lg border border-border bg-surface p-5">
+          <div className="pixel-panel p-5">
             <div className="flex items-center gap-2">
               <Gauge className="size-5 text-primary" aria-hidden="true" />
               <h2 className="text-lg font-bold">Monthly usage</h2>
@@ -80,9 +80,9 @@ export default async function BillingPage({
                 of {status.usage.renders_limit} renders
               </p>
             </div>
-            <div className="mt-4 h-2 rounded-full bg-muted">
+            <div className="pixel-progress mt-4 h-2">
               <div
-                className="h-2 rounded-full bg-primary"
+                className="pixel-progress-fill h-full"
                 style={{ width: `${status.usage.percent_used}%` }}
               />
             </div>
@@ -99,7 +99,7 @@ export default async function BillingPage({
               <div
                 key={plan.key}
                 className={cn(
-                  "rounded-lg border bg-surface p-5",
+                  "pixel-panel p-5",
                   isCurrent ? "border-primary" : "border-border",
                 )}
               >
@@ -110,7 +110,7 @@ export default async function BillingPage({
                     <p className="text-sm text-muted-foreground">per month</p>
                   </div>
                   {isCurrent ? (
-                    <span className="rounded-full bg-muted px-3 py-1 text-xs font-bold text-muted-foreground">
+                    <span className="border border-border bg-muted px-3 py-1 text-xs font-bold text-muted-foreground">
                       Current
                     </span>
                   ) : null}
@@ -142,7 +142,7 @@ export default async function BillingPage({
           })}
         </section>
 
-        <section className="rounded-lg border border-border bg-surface p-5">
+        <section className="pixel-panel p-5">
           <h2 className="text-lg font-bold">Operations notes</h2>
           <div className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-3">
             <p>Paid upgrades are disabled until Stripe keys are configured.</p>
@@ -157,7 +157,7 @@ export default async function BillingPage({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border bg-white p-3">
+    <div className="border border-border bg-surface p-3 shadow-soft">
       <p className="text-xs font-bold uppercase text-muted-foreground">{label}</p>
       <p className="mt-1 text-lg font-bold capitalize">{value}</p>
     </div>
@@ -178,7 +178,7 @@ function Banner({
   return (
     <div
       className={cn(
-        "flex gap-3 rounded-lg border p-4",
+        "flex gap-3 border p-4 shadow-soft",
         tone === "danger"
           ? "border-red-200 bg-red-50 text-red-900"
           : "border-border bg-muted text-muted-foreground",

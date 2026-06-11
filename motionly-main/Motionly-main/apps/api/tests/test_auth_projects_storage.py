@@ -11,10 +11,10 @@ import pytest
 
 from app.api.dependencies import get_actor
 from app.api.errors import ApiError
-from app.api.projects import create_project, list_projects
+from app.api.projects import create_project, delete_project, list_projects, update_project
 from app.repositories.projects import InMemoryProjectRepository
 from app.repositories.uploads import InMemoryUploadRepository
-from app.schemas.projects import ProjectCreateRequest
+from app.schemas.projects import ProjectCreateRequest, ProjectStatus, ProjectUpdateRequest
 from app.services.auth import VerifiedToken
 
 
@@ -124,6 +124,50 @@ def test_project_api_create_seeds_local_upload_repository() -> None:
         project_id=project.id,
         workspace_id=workspace_id,
     )
+
+
+def test_project_api_update_and_delete_project() -> None:
+    user_id = uuid4()
+    workspace_id = uuid4()
+    project_repository = InMemoryProjectRepository()
+    upload_repository = InMemoryUploadRepository()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(upload_repository=upload_repository),
+        ),
+    )
+    actor = SimpleNamespace(user_id=user_id, workspace_id=workspace_id)
+
+    project = asyncio.run(
+        create_project(
+            payload=ProjectCreateRequest(title="Draft Reel"),
+            request=request,
+            actor=actor,
+            repository=project_repository,
+        )
+    )
+    updated = asyncio.run(
+        update_project(
+            project_id=project.id,
+            payload=ProjectUpdateRequest(title="Final Reel", status=ProjectStatus.READY),
+            actor=actor,
+            repository=project_repository,
+        )
+    )
+    deleted = asyncio.run(
+        delete_project(
+            project_id=project.id,
+            actor=actor,
+            repository=project_repository,
+        )
+    )
+
+    assert updated.title == "Final Reel"
+    assert updated.status == ProjectStatus.READY
+    assert deleted.id == project.id
+    assert deleted.deleted is True
+    with pytest.raises(ApiError):
+        project_repository.get_project(project_id=project.id, workspace_id=workspace_id)
 
 
 def _request(

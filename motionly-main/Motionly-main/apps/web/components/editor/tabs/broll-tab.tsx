@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Label, Slider } from "../ui";
 import { Button } from "../../button";
-import { Film, Loader2, Sparkles, Image as ImageIcon } from "lucide-react";
+import { Film, Loader2, Sparkles } from "lucide-react";
 import type { BrollSlotSummary, BrollDensity } from "@motionly/shared";
 import { buildApiHeaders } from "@/lib/client-api";
 import { env } from "@/lib/env";
@@ -27,8 +28,10 @@ export function BrollTab({
   activePlanId,
   activePlanBrollDensity,
 }: BrollTabProps) {
+  const router = useRouter();
   const [density, setDensity] = useState<BrollDensity>(activePlanBrollDensity || "medium");
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
   const densityMap: Record<BrollDensity, number> = {
     none: 0,
@@ -47,6 +50,7 @@ export function BrollTab({
   async function regenerateBroll() {
     if (!activePlanId) return;
     setLoading(true);
+    setMessage(null);
     try {
       const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, {
         method: "POST",
@@ -60,19 +64,21 @@ export function BrollTab({
           force: true,
         }),
       });
-      if (!response.ok) throw new Error("Failed to generate B-roll");
-      alert("B-roll regenerated!");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message ?? "Failed to generate B-roll");
+      setMessage(`B-roll queued with ${payload.slots?.length ?? 0} slots.`);
+      router.refresh();
     } catch (error) {
       console.error(error);
-      alert("Failed to regenerate B-roll.");
+      setMessage((error as Error).message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
-      <div className="space-y-6">
+    <div className="space-y-6">
+      <div className="pixel-panel pixel-corners space-y-6 p-4">
         <Slider
           label="B-Roll Density"
           value={densityMap[density]}
@@ -85,14 +91,14 @@ export function BrollTab({
            "Maximum visual variety"}
         </p>
 
-        <div className="pt-6 border-t border-border">
+        <div className="border-t border-border pt-6">
           <div className="flex items-center justify-between mb-4">
              <Label className="mb-0">Selected Assets</Label>
              <span className="text-xs font-bold text-muted-foreground">{initialSlots.length} Slots</span>
           </div>
           <div className="grid grid-cols-2 gap-3">
              {initialSlots.slice(0, 4).map((slot, i) => (
-               <div key={slot.id} className="aspect-video rounded-lg bg-muted border border-border overflow-hidden relative group">
+               <div key={slot.id} className="group relative aspect-video overflow-hidden border border-border bg-muted">
                   {slot.selected_asset?.thumbnail_url ? (
                     <img src={slot.selected_asset.thumbnail_url} alt="" className="w-full h-full object-cover" />
                   ) : (
@@ -101,12 +107,12 @@ export function BrollTab({
                     </div>
                   )}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                     <button className="text-[8px] font-bold text-white uppercase tracking-widest bg-white/20 px-2 py-1 rounded backdrop-blur-md">Change</button>
+                     <button className="border border-white/30 bg-white/20 px-2 py-1 text-[8px] font-bold uppercase tracking-widest text-white backdrop-blur-md">Change</button>
                   </div>
                </div>
              ))}
              {initialSlots.length > 4 && (
-               <div className="aspect-video rounded-lg border border-dashed border-border flex items-center justify-center text-[10px] font-bold text-muted-foreground">
+               <div className="flex aspect-video items-center justify-center border border-dashed border-border text-[10px] font-bold text-muted-foreground">
                  +{initialSlots.length - 4} More
                </div>
              )}
@@ -114,10 +120,15 @@ export function BrollTab({
         </div>
       </div>
 
-      <Button onClick={regenerateBroll} disabled={loading || !activePlanId} className="w-full h-12 rounded-xl">
+      <Button onClick={regenerateBroll} disabled={loading || !activePlanId} className="h-12 w-full">
         {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Sparkles className="mr-2 size-4" />}
         Regenerate B-Roll
       </Button>
+      {message ? (
+        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }

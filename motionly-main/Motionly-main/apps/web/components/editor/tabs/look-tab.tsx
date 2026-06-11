@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Label, Select, Slider } from "../ui";
 import { Button } from "../../button";
-import { Palette, Sparkles, Loader2 } from "lucide-react";
+import { Palette, Loader2 } from "lucide-react";
 import type { VisualPresetKey, EffectsConfigSummary } from "@motionly/shared";
 import { buildApiHeaders } from "@/lib/client-api";
 import { env } from "@/lib/env";
@@ -33,12 +34,15 @@ export function LookTab({
   initialConfig,
   suggestedPreset,
 }: LookTabProps) {
+  const router = useRouter();
   const [preset, setPreset] = useState<VisualPresetKey>(initialConfig?.preset ?? suggestedPreset ?? "clean_founder");
   const [intensity, setIntensity] = useState(initialConfig ? initialConfig.lut_intensity * 100 : 80);
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
   async function applyEffects() {
     setLoading(true);
+    setMessage(null);
     try {
       const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/effects`, {
         method: "PATCH",
@@ -51,19 +55,21 @@ export function LookTab({
           lut_intensity: intensity / 100,
         }),
       });
-      if (!response.ok) throw new Error("Failed to apply effects");
-      alert("Look updated!");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message ?? "Failed to apply effects");
+      setMessage("Look queued and saved.");
+      router.refresh();
     } catch (error) {
       console.error(error);
-      alert("Failed to update look.");
+      setMessage((error as Error).message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
-      <div className="space-y-6">
+    <div className="space-y-6">
+      <div className="pixel-panel pixel-corners space-y-6 p-4">
         <div className="space-y-2">
           <Label>Visual Style</Label>
           <Select
@@ -78,27 +84,17 @@ export function LookTab({
           value={intensity}
           onChange={setIntensity}
         />
-
-        <div className="pt-4 border-t border-border">
-          <div className="flex items-center justify-between mb-4">
-            <Label className="mb-0">Advanced FX</Label>
-            <span className="text-[10px] font-bold text-muted-foreground bg-muted px-1.5 py-0.5 rounded">Coming Soon</span>
-          </div>
-          <div className="grid grid-cols-2 gap-3 opacity-50 grayscale pointer-events-none">
-             {["Background Blur", "Grain Texture", "Motion Blur", "Light Leaks"].map(fx => (
-               <div key={fx} className="flex items-center gap-2 rounded-lg border border-border p-2 text-[10px] font-bold">
-                 <div className="size-2 rounded-full bg-border" />
-                 {fx}
-               </div>
-             ))}
-          </div>
-        </div>
       </div>
 
-      <Button onClick={applyEffects} disabled={loading} className="w-full h-12 rounded-xl">
+      <Button onClick={applyEffects} disabled={loading} className="h-12 w-full">
         {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Palette className="mr-2 size-4" />}
         Apply Look
       </Button>
+      {message ? (
+        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }

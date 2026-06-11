@@ -61,12 +61,13 @@ export default async function DashboardPage() {
   return (
     <AppShell title="Dashboard">
       <div className="flex flex-col gap-8">
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="pixel-panel pixel-corners pixel-grid-fine flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-widest text-primary">{workspaceName}</p>
             <h2 className="text-3xl font-black tracking-tight">Your Projects</h2>
             <p className="text-muted-foreground mt-1">Manage and edit your AI-powered reels.</p>
           </div>
-          <ButtonLink href="/projects/new" className="rounded-xl h-12 px-6 shadow-lg hover:scale-105 transition-transform">
+          <ButtonLink href="/projects/new" className="h-12 shrink-0 px-6">
              <PlusCircle className="mr-2 size-5" />
              Create New Video
           </ButtonLink>
@@ -81,15 +82,15 @@ export default async function DashboardPage() {
                 <Link
                   key={project.id}
                   href={`/projects/${project.id}`}
-                  className="group relative flex flex-col rounded-2xl border border-border bg-surface p-5 shadow-sm transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-primary/50"
+                  className="pixel-panel pixel-corners group relative flex min-h-56 flex-col overflow-hidden p-5 transition-all duration-200 hover:-translate-y-1 hover:border-primary/50 hover:shadow-[6px_6px_0_hsl(var(--primary)/0.12)]"
                 >
                   <div className="flex items-start justify-between mb-4">
-                    <div className="flex size-12 items-center justify-center rounded-xl bg-primary/5 text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors duration-300">
+                    <div className="flex size-12 items-center justify-center border border-primary/20 bg-primary/5 text-primary transition-colors duration-300 group-hover:bg-primary group-hover:text-primary-foreground">
                       <Film className="size-6" />
                     </div>
                     <span className={cn(
-                      "rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest",
-                      upload?.status === "ready" ? "bg-emerald-50 text-emerald-600" : "bg-muted text-muted-foreground"
+                      "border px-3 py-1 text-[10px] font-bold uppercase tracking-widest",
+                      upload?.status === "ready" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-border bg-muted text-muted-foreground"
                     )}>
                       {upload?.status ?? "draft"}
                     </span>

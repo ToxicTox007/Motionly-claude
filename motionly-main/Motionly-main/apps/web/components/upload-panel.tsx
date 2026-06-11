@@ -150,10 +150,7 @@ export function UploadPanel({
   const uploadButtonLabel = hasExistingSource ? "Upload replacement" : "Upload";
 
   useEffect(() => {
-    if (!file) {
-      setMediaProbe(idleProbe);
-      return;
-    }
+    if (!file) return;
 
     const extension = getFileExtension(file.name);
     const mimeType = resolveUploadMimeType(file);
@@ -163,20 +160,12 @@ export function UploadPanel({
       file.size === 0 ||
       file.size > MAX_UPLOAD_SIZE_BYTES
     ) {
-      setMediaProbe(idleProbe);
       return;
     }
 
     const objectUrl = URL.createObjectURL(file);
     const video = document.createElement("video");
     let settled = false;
-    setMediaProbe({
-      status: "loading",
-      durationMs: null,
-      width: null,
-      height: null,
-      warnings: [],
-    });
 
     video.preload = "metadata";
     video.muted = true;
@@ -222,6 +211,13 @@ export function UploadPanel({
   function selectFile(nextFile: File | null) {
     if (phase === "uploading") abortRef.current?.abort();
     setFile(nextFile);
+    setMediaProbe(nextFile && canProbeBrowserMedia(nextFile) ? {
+      status: "loading",
+      durationMs: null,
+      width: null,
+      height: null,
+      warnings: [],
+    } : idleProbe);
     setPhase(nextFile ? "preflight" : "idle");
     setProgress(0);
     setMessage(null);
@@ -369,10 +365,10 @@ export function UploadPanel({
   }
 
   return (
-    <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+    <section className="grid gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
       <div
         className={cn(
-          "flex min-h-72 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-surface p-6 text-center",
+          "pixel-panel-strong pixel-corners flex min-h-80 flex-col items-center justify-center border-dashed p-6 text-center",
           "focus-within:ring-2 focus-within:ring-primary",
           isWorking && "opacity-80",
         )}
@@ -389,7 +385,10 @@ export function UploadPanel({
           className="sr-only"
           onChange={(event) => selectFile(event.target.files?.item(0) ?? null)}
         />
-        <UploadCloud className="size-11 text-primary" aria-hidden="true" />
+        <div className="relative">
+          <span className="absolute -right-3 -top-3 size-2 bg-primary shadow-[10px_10px_0_hsl(var(--primary)/0.25)]" />
+          <UploadCloud className="size-12 text-primary" aria-hidden="true" />
+        </div>
         <h2 className="mt-4 text-xl font-bold">
           {hasExistingSource ? "Replace source video" : "Upload source video"}
         </h2>
@@ -420,7 +419,7 @@ export function UploadPanel({
         </div>
       </div>
 
-      <aside className="rounded-lg border border-border bg-surface p-5">
+      <aside className="pixel-panel pixel-corners p-5">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-bold uppercase text-muted-foreground">
             New File Preflight
@@ -480,7 +479,7 @@ export function UploadPanel({
               />
             </div>
             {isCheckingMedia ? (
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted p-3 text-sm font-semibold text-muted-foreground">
+              <div className="flex items-center gap-2 border border-border bg-muted p-3 text-sm font-semibold text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                 Checking browser metadata...
               </div>
@@ -488,7 +487,7 @@ export function UploadPanel({
             {preflight.warnings.length ? (
               <div
                 className={cn(
-                  "rounded-lg border p-3 text-sm",
+                  "border p-3 text-sm shadow-soft",
                   preflight.blockingWarnings.length
                     ? "border-red-200 bg-red-50 text-red-800"
                     : "border-amber-200 bg-amber-50 text-amber-900",
@@ -507,7 +506,7 @@ export function UploadPanel({
                 </ul>
               </div>
             ) : !isCheckingMedia ? (
-              <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900">
+              <div className="flex items-center gap-2 border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900 shadow-soft">
                 <CheckCircle2 className="size-4" aria-hidden="true" />
                 Browser preflight passed. Upload will run server validation for
                 codec, audio, frame rate, decode, and render readiness.
@@ -515,11 +514,11 @@ export function UploadPanel({
             ) : null}
             <div>
               <div
-                className="h-2 rounded-full bg-muted"
+                className="pixel-progress h-2"
                 aria-label="Upload progress"
               >
                 <div
-                  className="h-2 rounded-full bg-primary transition-all"
+                  className="pixel-progress-fill h-full transition-all"
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -578,7 +577,7 @@ export function UploadPanel({
             {message ? (
               <p
                 className={cn(
-                  "rounded-lg border p-3 text-sm",
+                  "border p-3 text-sm shadow-soft",
                   phase === "failed"
                     ? "border-red-200 bg-red-50 text-red-800"
                     : phase === "complete"
@@ -842,6 +841,17 @@ function mediaProbeWarnings({
   }
 
   return warnings;
+}
+
+function canProbeBrowserMedia(file: File) {
+  const extension = getFileExtension(file.name);
+  const mimeType = resolveUploadMimeType(file);
+  return (
+    ACCEPTED_MIME_TYPES.has(mimeType) &&
+    extensionMatchesMime(extension, mimeType) &&
+    file.size > 0 &&
+    file.size <= MAX_UPLOAD_SIZE_BYTES
+  );
 }
 
 function formatResolution(width: number | null, height: number | null) {

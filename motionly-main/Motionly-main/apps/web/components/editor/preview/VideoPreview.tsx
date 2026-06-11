@@ -60,12 +60,12 @@ export function VideoPreview({
   }, [videoRef]);
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-4">
+    <div className="pixel-grid-fine flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-foreground/[0.02] p-3 sm:p-4">
       {/* ── Video + overlays ─────────────────────────────────────────────── */}
       <div
-        className="relative w-full flex-1 min-h-0 flex items-center justify-center"
+        className="relative flex min-h-0 w-full flex-1 items-center justify-center"
       >
-        <div className="relative aspect-[9/16] h-full max-h-full max-w-full overflow-hidden rounded-lg bg-black shadow-2xl">
+        <div className="pixel-corners relative aspect-[9/16] h-full max-h-[min(100%,calc(100vh-310px))] min-h-[320px] w-auto max-w-full overflow-hidden border-2 border-foreground/20 bg-black shadow-[8px_8px_0_hsl(var(--foreground)/0.14)] lg:min-h-0 lg:max-h-full">
           {/* Video element */}
           {sourceUrl ? (
             <video
@@ -79,7 +79,11 @@ export function VideoPreview({
           ) : (
             /* Empty state when no source yet */
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-900">
-              <div className="text-4xl opacity-20">🎬</div>
+              <div className="grid size-12 grid-cols-3 gap-1 opacity-30">
+                {Array.from({ length: 9 }).map((_, index) => (
+                  <span key={index} className="bg-white/50" />
+                ))}
+              </div>
               <p className="text-xs text-muted-foreground/50">
                 {isProcessing ? "Processing video…" : "No video yet"}
               </p>
@@ -101,14 +105,14 @@ export function VideoPreview({
       </div>
 
       {/* ── Playback controls ────────────────────────────────────────────── */}
-      <div className="flex w-full max-w-[220px] items-center justify-between gap-2">
+      <div className="flex w-full max-w-[240px] items-center justify-between gap-2">
         <ControlButton onClick={() => skip(-5)} title="–5 s">
           <SkipBack className="size-3.5" />
         </ControlButton>
 
         <button
           onClick={togglePlay}
-          className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow transition hover:opacity-90 active:scale-95"
+          className="pixel-button flex size-10 items-center justify-center bg-primary text-primary-foreground"
         >
           {isPlaying
             ? <Pause  className="size-4" />
@@ -121,7 +125,7 @@ export function VideoPreview({
       </div>
 
       {/* Timecode */}
-      <p className="font-mono text-[10px] tabular-nums text-muted-foreground/60">
+      <p className="border border-border bg-surface px-2 py-1 font-mono text-[10px] tabular-nums text-muted-foreground/70 shadow-soft">
         {formatMs(playheadMs)} / {formatMs(totalDurationMs)}
       </p>
     </div>
@@ -238,7 +242,7 @@ function ControlButton({
     <button
       onClick={onClick}
       title={title}
-      className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+      className="flex size-8 items-center justify-center border border-border bg-surface text-muted-foreground transition hover:border-primary/40 hover:bg-muted hover:text-foreground"
     >
       {children}
     </button>

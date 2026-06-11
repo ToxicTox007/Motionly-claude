@@ -19,9 +19,20 @@
   box-sizing: border-box;
 }
 
+html {
+  overflow-x: hidden;
+}
+
 body {
   min-height: 100vh;
-  background: hsl(var(--background));
+  overflow-x: hidden;
+  background:
+    linear-gradient(hsl(var(--border) / 0.26) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--border) / 0.26) 1px, transparent 1px),
+    radial-gradient(circle at 16% 8%, hsl(var(--primary) / 0.08), transparent 28rem),
+    radial-gradient(circle at 86% 10%, hsl(var(--foreground) / 0.06), transparent 22rem),
+    hsl(var(--background));
+  background-size: 28px 28px, 28px 28px, auto, auto, auto;
   color: hsl(var(--foreground));
   font-family: 'Inter', sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -52,5 +63,163 @@ a {
 }
 
 .shadow-soft {
-  shadow: 0 2px 4px rgba(0,0,0,0.02), 0 10px 20px rgba(0,0,0,0.04);
+  box-shadow: 4px 4px 0 hsl(var(--foreground) / 0.08);
+}
+
+@layer components {
+  .pixel-grid {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.34) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.34) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .pixel-grid-fine {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.28) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.28) 1px, transparent 1px);
+    background-size: 12px 12px;
+  }
+
+  .pixel-panel {
+    position: relative;
+    border: 1px solid hsl(var(--border));
+    border-radius: 6px;
+    background:
+      linear-gradient(180deg, hsl(var(--surface) / 0.96), hsl(var(--surface) / 0.9)),
+      hsl(var(--surface));
+    box-shadow:
+      4px 4px 0 hsl(var(--foreground) / 0.08),
+      0 0 0 1px hsl(var(--surface) / 0.7) inset;
+  }
+
+  .pixel-panel-strong {
+    position: relative;
+    border: 2px solid hsl(var(--foreground) / 0.12);
+    border-radius: 6px;
+    background:
+      linear-gradient(180deg, hsl(var(--surface) / 0.98), hsl(var(--muted) / 0.72)),
+      hsl(var(--surface));
+    box-shadow:
+      6px 6px 0 hsl(var(--foreground) / 0.1),
+      0 0 0 1px hsl(var(--primary) / 0.08) inset;
+  }
+
+  .pixel-corners::before,
+  .pixel-corners::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    width: 16px;
+    height: 16px;
+    border-color: hsl(var(--primary) / 0.72);
+  }
+
+  .pixel-corners::before {
+    left: -2px;
+    top: -2px;
+    border-left: 2px solid;
+    border-top: 2px solid;
+  }
+
+  .pixel-corners::after {
+    right: -2px;
+    bottom: -2px;
+    border-right: 2px solid;
+    border-bottom: 2px solid;
+  }
+
+  .pixel-ornament {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    background: hsl(var(--primary));
+    box-shadow:
+      10px 0 0 hsl(var(--primary) / 0.3),
+      0 10px 0 hsl(var(--primary) / 0.2);
+  }
+
+  .pixel-button {
+    border: 1px solid hsl(var(--foreground) / 0.14);
+    border-radius: 5px;
+    box-shadow: 3px 3px 0 hsl(var(--foreground) / 0.1);
+    transition:
+      transform 150ms ease,
+      box-shadow 150ms ease,
+      border-color 150ms ease,
+      background-color 150ms ease,
+      color 150ms ease;
+  }
+
+  .pixel-button:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 hsl(var(--foreground) / 0.12);
+  }
+
+  .pixel-button:active {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 hsl(var(--foreground) / 0.12);
+  }
+
+  .pixel-input {
+    border: 1px solid hsl(var(--foreground) / 0.16);
+    border-radius: 5px;
+    background: hsl(var(--background) / 0.86);
+    box-shadow: 2px 2px 0 hsl(var(--foreground) / 0.05) inset;
+  }
+
+  .pixel-input:focus {
+    outline: none;
+    border-color: hsl(var(--primary));
+    box-shadow:
+      0 0 0 3px hsl(var(--primary) / 0.16),
+      2px 2px 0 hsl(var(--foreground) / 0.05) inset;
+  }
+
+  .pixel-progress {
+    border: 1px solid hsl(var(--foreground) / 0.12);
+    border-radius: 3px;
+    background:
+      repeating-linear-gradient(
+        90deg,
+        hsl(var(--muted)),
+        hsl(var(--muted)) 8px,
+        hsl(var(--border) / 0.62) 8px,
+        hsl(var(--border) / 0.62) 9px
+      );
+    overflow: hidden;
+  }
+
+  .pixel-progress-fill {
+    background:
+      repeating-linear-gradient(
+        90deg,
+        hsl(var(--primary)),
+        hsl(var(--primary)) 10px,
+        hsl(var(--primary) / 0.78) 10px,
+        hsl(var(--primary) / 0.78) 12px
+      );
+  }
+
+  .pixel-skeleton {
+    background:
+      linear-gradient(90deg, hsl(var(--muted)) 25%, hsl(var(--surface)) 37%, hsl(var(--muted)) 63%);
+    background-size: 400% 100%;
+    animation: pixel-shimmer 1.8s ease infinite;
+  }
+
+  .container-content {
+    width: min(100% - 2rem, 72rem);
+    margin-inline: auto;
+  }
+
+  .container-dashboard {
+    width: min(100% - 2rem, 80rem);
+    margin-inline: auto;
+  }
+}
+
+@keyframes pixel-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
 }

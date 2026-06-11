@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { Card, Label, Select, TextArea, Slider } from "./ui";
+import { Label, Select, TextArea, Slider } from "./ui";
 import { Button } from "../button";
-import { Sparkles, Loader2, Wand2 } from "lucide-react";
+import { Sparkles, Loader2 } from "lucide-react";
 import { env } from "@/lib/env";
 import { buildApiHeaders } from "@/lib/client-api";
 import type { BrollDensity, EditPlanRecordSummary, EditPlanStyleKey } from "@motionly/shared";
@@ -43,6 +43,7 @@ export function AIStep({
   const [density, setDensity] = useState<BrollDensity>(activePlan?.broll_density ?? "medium");
   const [prompt, setPrompt] = useState(activePlan?.prompt ?? "");
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
   const densityMap: Record<BrollDensity, number> = {
     none: 0,
@@ -60,6 +61,7 @@ export function AIStep({
 
   async function generatePlan() {
     setLoading(true);
+    setMessage(null);
     try {
       const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
         method: "POST",
@@ -78,24 +80,25 @@ export function AIStep({
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error?.message ?? "Failed to generate plan");
       onPlanGenerated(payload.plan);
+      setMessage(`AI edit plan v${payload.plan.version} is ready.`);
     } catch (error) {
       console.error(error);
-      alert("Failed to generate AI plan. Please try again.");
+      setMessage((error as Error).message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+    <div className="space-y-6">
       <div className="space-y-2">
-        <h3 className="text-xl font-bold tracking-tight">AI Creative Direction</h3>
+        <h3 className="text-xl font-black tracking-tight">AI Creative Direction</h3>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Our AI will analyze your video and plan the perfect edit based on your chosen style.
         </p>
       </div>
 
-      <div className="space-y-6">
+      <div className="pixel-panel pixel-corners space-y-6 p-4">
         <div className="space-y-2">
           <Label>Edit Style</Label>
           <Select
@@ -125,6 +128,7 @@ export function AIStep({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="e.g. Focus on the product demo, keep the tone humorous..."
+            className="min-h-36 font-mono text-[13px]"
           />
         </div>
       </div>
@@ -132,7 +136,7 @@ export function AIStep({
       <Button 
         onClick={generatePlan} 
         disabled={loading || !hasTranscript}
-        className="w-full h-14 rounded-2xl bg-primary text-primary-foreground shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 group"
+        className="h-14 w-full bg-primary text-primary-foreground group"
       >
         {loading ? (
           <Loader2 className="mr-2 size-5 animate-spin" />
@@ -143,10 +147,15 @@ export function AIStep({
       </Button>
       
       {!hasTranscript && (
-        <p className="text-xs text-center text-amber-600 font-medium bg-amber-50 p-3 rounded-lg border border-amber-100">
+        <p className="border border-amber-200 bg-amber-50 p-3 text-center text-xs font-medium text-amber-700 shadow-soft">
           Waiting for transcription to complete...
         </p>
       )}
+      {message ? (
+        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -647,7 +647,11 @@ def _repair_plan_payload(
 
     repaired: dict[str, object] = {
         "schema_version": 1,
-        "style": _coerce_choice(source.get("style"), {item.value for item in EditPlanStyle}, payload.style.value),
+        "style": _coerce_choice(
+            source.get("style"),
+            {item.value for item in EditPlanStyle},
+            payload.style.value,
+        ),
         "target_duration_s": _coerce_int(
             source.get("target_duration_s") or source.get("duration_s"),
             default=max(10, min(90, payload.target_duration_s)),
@@ -671,9 +675,15 @@ def _repair_plan_payload(
             duration_ms,
         ),
         "music_mood": _coerce_text(source.get("music_mood"), fallback_payload["music_mood"]),
-        "effects": _repair_string_list(source.get("effects"), fallback_payload["effects"], limit=8),
+        "effects": _repair_string_list(
+            source.get("effects"),
+            fallback_payload["effects"],
+            limit=8,
+        ),
         "color_grade": _coerce_text(source.get("color_grade"), fallback_payload["color_grade"]),
-        "risk_flags": _repair_string_list(source.get("risk_flags"), fallback_payload["risk_flags"], limit=10),
+        "risk_flags": _repair_string_list(
+            source.get("risk_flags"), fallback_payload["risk_flags"], limit=10
+        ),
     }
     return repaired
 
@@ -741,7 +751,9 @@ def _repair_highlights(value: object, fallback: object, duration_ms: int) -> lis
     return repaired[:12] or list(fallback if isinstance(fallback, list) else [])
 
 
-def _repair_broll_requests(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:
+def _repair_broll_requests(
+    value: object, fallback: object, duration_ms: int
+) -> list[dict[str, object]]:
     items = value if isinstance(value, list) else fallback
     repaired = []
     for item in items if isinstance(items, list) else []:
@@ -785,7 +797,12 @@ def _repair_zoom_moments(value: object, fallback: object, duration_ms: int) -> l
                     minimum=0,
                     maximum=duration_ms,
                 ),
-                "intensity": _coerce_float(item.get("intensity"), default=1.12, minimum=1.0, maximum=1.5),
+                "intensity": _coerce_float(
+                    item.get("intensity"),
+                    default=1.12,
+                    minimum=1.0,
+                    maximum=1.5,
+                ),
                 "reason": _coerce_text(item.get("reason"), "emphasize key moment")[:120],
             }
         )

@@ -40,8 +40,8 @@ export function LeftMediaPanel({
   captionTracks,
 }: LeftMediaPanelProps) {
   return (
-    <div className="flex h-full flex-col overflow-y-auto border-r border-border bg-[hsl(var(--surface))] text-sm">
-      <div className="sticky top-0 z-10 border-b border-border bg-[hsl(var(--surface))] px-3 py-2">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-[hsl(var(--surface))] text-sm">
+      <div className="pixel-grid-fine sticky top-0 z-10 border-b border-border bg-[hsl(var(--surface))] px-3 py-2">
         <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">
           Media
         </p>
@@ -112,9 +112,9 @@ function MediaSection({
 }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="border-b border-border/50">
+    <div className="border-b border-border/70">
       <button
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition hover:text-foreground"
+        className="flex w-full items-center gap-1.5 border-l-2 border-transparent px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition hover:border-primary/50 hover:bg-muted/60 hover:text-foreground"
         onClick={() => setOpen((v) => !v)}
       >
         <Icon className="size-3 opacity-60 shrink-0" />
@@ -142,7 +142,7 @@ function SourceItem({
   }
   return (
     <div className="flex items-center gap-2 px-3 py-1.5">
-      <div className="relative size-10 shrink-0 overflow-hidden rounded border border-border bg-zinc-800">
+      <div className="relative size-10 shrink-0 overflow-hidden border border-border bg-zinc-800">
         {thumbnailUrl ? (
           // eslint-disable-next-line
           <img
@@ -189,7 +189,7 @@ function BrollSlotRow({ slot }: { slot: BrollSlotSummary }) {
         isDisabled && "opacity-40",
       )}
     >
-      <div className="relative size-8 shrink-0 overflow-hidden rounded border border-border bg-zinc-800">
+      <div className="relative size-8 shrink-0 overflow-hidden border border-border bg-zinc-800">
         {slot.selected_asset?.thumbnail_url ? (
           // eslint-disable-next-line
           <img
@@ -222,7 +222,7 @@ function MusicRow({ selection }: { selection: MusicSelectionSummary }) {
   const track = selection.music_track;
   return (
     <div className="flex items-center gap-2 px-3 py-1.5">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded border border-border bg-rose-950/40">
+      <div className="flex size-8 shrink-0 items-center justify-center border border-border bg-rose-950/40">
         <Music2 className="size-3 text-rose-400" />
       </div>
       <div className="min-w-0 flex-1">
@@ -241,7 +241,7 @@ function MusicRow({ selection }: { selection: MusicSelectionSummary }) {
         </div>
       </div>
       <div
-        className="h-4 w-4 shrink-0 rounded-full"
+        className="h-4 w-4 shrink-0 border border-border"
         style={{
           background: `conic-gradient(hsl(var(--primary)) ${selection.music_volume * 360}deg, transparent 0)`,
         }}
@@ -256,7 +256,7 @@ function MusicRow({ selection }: { selection: MusicSelectionSummary }) {
 function CaptionRow({ track }: { track: CaptionTrackSummary }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded border border-border bg-violet-950/40">
+      <div className="flex size-8 shrink-0 items-center justify-center border border-border bg-violet-950/40">
         <Type className="size-3 text-violet-400" />
       </div>
       <div className="min-w-0 flex-1">
@@ -278,7 +278,7 @@ function PlanRow({ plan }: { plan: EditPlanRecordSummary }) {
   const cuts = plan.plan?.cuts?.length ?? 0;
   return (
     <div className="flex items-center gap-2 px-3 py-1.5">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded border border-border bg-teal-950/40">
+      <div className="flex size-8 shrink-0 items-center justify-center border border-border bg-teal-950/40">
         <Film className="size-3 text-teal-400" />
       </div>
       <div className="min-w-0 flex-1">

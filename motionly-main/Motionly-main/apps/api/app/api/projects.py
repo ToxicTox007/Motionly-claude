@@ -7,6 +7,7 @@ from app.api.dependencies import Actor, get_actor, get_project_repository
 from app.repositories.projects import InMemoryProjectRepository
 from app.schemas.projects import (
     ProjectCreateRequest,
+    ProjectDeleteResponse,
     ProjectListResponse,
     ProjectResponse,
     ProjectUpdateRequest,
@@ -78,3 +79,13 @@ async def update_project(
         title=payload.title,
         status=payload.status,
     ).to_response()
+
+
+@router.delete("/{project_id}", response_model=ProjectDeleteResponse)
+async def delete_project(
+    project_id: UUID,
+    actor: ActorDep,
+    repository: ProjectRepositoryDep,
+) -> ProjectDeleteResponse:
+    repository.delete_project(project_id=project_id, workspace_id=actor.workspace_id)
+    return ProjectDeleteResponse(id=project_id)

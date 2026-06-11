@@ -1,8 +1,8 @@
 from dataclasses import dataclass
+import os
 from uuid import UUID
 
 from fastapi import Header, Request
-import os
 
 from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository
@@ -54,7 +54,10 @@ async def get_actor(
     # Local bypass: return a mock actor when explicitly enabled and not in production
     if os.getenv("SKIP_API_AUTH") == "true" and settings.app_env != "production":
         try:
-            return Actor(user_id=UUID("00000000-0000-4000-8000-000000000001"), workspace_id=UUID("00000000-0000-4000-8000-000000000002"))
+            return Actor(
+                user_id=UUID("00000000-0000-4000-8000-000000000001"),
+                workspace_id=UUID("00000000-0000-4000-8000-000000000002"),
+            )
         except Exception:
             pass
     if settings.supabase_jwt_secret:

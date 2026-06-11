@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 export function Card({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <div className={cn("rounded-2xl border border-border bg-surface p-6 shadow-sm", className)}>
+    <div className={cn("pixel-panel pixel-corners p-5", className)}>
       {children}
     </div>
   );
@@ -21,7 +21,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
   return (
     <input
       className={cn(
-        "flex h-11 w-full rounded-xl border border-border bg-background px-4 py-2 text-sm ring-offset-background transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 hover:border-muted-foreground/30",
+        "pixel-input flex h-11 w-full px-4 py-2 text-sm transition-all disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/40",
         className
       )}
       {...props}
@@ -33,7 +33,7 @@ export function TextArea({ className, ...props }: React.TextareaHTMLAttributes<H
   return (
     <textarea
       className={cn(
-        "flex min-h-24 w-full rounded-xl border border-border bg-background px-4 py-3 text-sm ring-offset-background transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 hover:border-muted-foreground/30",
+        "pixel-input flex min-h-28 w-full resize-y px-4 py-3 text-sm transition-all disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/40",
         className
       )}
       {...props}
@@ -57,7 +57,7 @@ export function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="flex h-11 w-full appearance-none rounded-xl border border-border bg-background px-4 py-2 text-sm ring-offset-background transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 hover:border-muted-foreground/30"
+        className="pixel-input flex h-11 w-full appearance-none px-4 py-2 pr-10 text-sm transition-all hover:border-primary/40"
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>
@@ -99,7 +99,7 @@ export function Slider({
         max={max}
         value={value}
         onChange={(e) => onChange(parseInt(e.target.value))}
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary transition-all hover:brightness-110"
+        className="h-2 w-full cursor-pointer appearance-none border border-border bg-muted accent-primary transition-all hover:brightness-110"
       />
     </div>
   );

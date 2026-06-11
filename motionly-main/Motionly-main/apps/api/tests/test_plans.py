@@ -321,9 +321,24 @@ def test_http_planner_repairs_invalid_provider_shape(monkeypatch: pytest.MonkeyP
                                 "style": "LUXURY",
                                 "target_duration_s": 8,
                                 "cuts": [{"start_ms": 0, "end_ms": 3500, "reason": "hook"}],
-                                "caption_highlights": [{"timestamp_ms": 500, "word": "Hello", "effect": "pop"}],
-                                "b_roll_requests": [{"start_ms": 700, "end_ms": 2400, "keywords": "office", "priority": 2}],
-                                "zoom_moments": [{"timestamp_ms": 600, "intensity": 2, "reason": "focus"}],
+                                "caption_highlights": [
+                                  {"timestamp_ms": 500, "word": "Hello", "effect": "pop"}
+                                ],
+                                "b_roll_requests": [
+                                  {
+                                    "start_ms": 700,
+                                    "end_ms": 2400,
+                                    "keywords": "office",
+                                    "priority": 2
+                                  }
+                                ],
+                                "zoom_moments": [
+                                  {
+                                    "timestamp_ms": 600,
+                                    "intensity": 2,
+                                    "reason": "focus"
+                                  }
+                                ],
                                 "music_mood": "clean",
                                 "effects": "warm_grade",
                                 "color_grade": "neutral",

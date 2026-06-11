@@ -2,12 +2,12 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 from dataclasses import dataclass
 from uuid import UUID
 
 import httpx
-import os
 
 from app.api.errors import ApiError
 
@@ -26,7 +26,10 @@ def verify_supabase_jwt(
 ) -> VerifiedToken:
     # Local bypass: accept a fixed mock token when SKIP_API_AUTH is enabled
     if os.getenv("SKIP_API_AUTH") == "true" and token == "mock-local-bearer":
-        return VerifiedToken(user_id=UUID("00000000-0000-4000-8000-000000000001"), claims={})
+        return VerifiedToken(
+            user_id=UUID("00000000-0000-4000-8000-000000000001"),
+            claims={},
+        )
     parts = token.split(".")
     if len(parts) != 3:
         raise ApiError(401, "auth_token_invalid", "Authentication token is invalid.")

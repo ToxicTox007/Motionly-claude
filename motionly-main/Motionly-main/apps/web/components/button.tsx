@@ -14,13 +14,13 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60",
+        "pixel-button inline-flex h-10 items-center justify-center px-4 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0",
         variant === "primary" &&
-          "bg-primary text-primary-foreground shadow-sm hover:brightness-95",
+          "bg-primary text-primary-foreground hover:brightness-105",
         variant === "secondary" &&
-          "border border-border bg-surface text-foreground hover:bg-muted",
+          "bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
         variant === "ghost" &&
-          "text-muted-foreground hover:bg-muted hover:text-foreground",
+          "border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted hover:text-foreground",
         className,
       )}
       {...props}
@@ -41,13 +41,13 @@ export function ButtonLink({
   return (
     <Link
       className={cn(
-        "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 aria-disabled:cursor-not-allowed aria-disabled:opacity-60",
+        "pixel-button inline-flex h-10 items-center justify-center px-4 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background aria-disabled:cursor-not-allowed aria-disabled:opacity-60",
         variant === "primary" &&
-          "bg-primary text-primary-foreground shadow-sm hover:brightness-95",
+          "bg-primary text-primary-foreground hover:brightness-105",
         variant === "secondary" &&
-          "border border-border bg-surface text-foreground hover:bg-muted",
+          "bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
         variant === "ghost" &&
-          "text-muted-foreground hover:bg-muted hover:text-foreground",
+          "border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted hover:text-foreground",
         className,
       )}
       {...props}

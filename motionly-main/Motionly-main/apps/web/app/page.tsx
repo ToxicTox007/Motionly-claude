@@ -1,48 +1,110 @@
-import { ArrowRight, CheckCircle2, Play } from "lucide-react";
+import { ArrowRight, CheckCircle2, Clapperboard, Play, Sparkles, Wand2 } from "lucide-react";
 import { ButtonLink } from "@/components/button";
 
 export default function HomePage() {
   return (
-    <main className="min-h-screen">
-      <section className="grid min-h-[88vh] content-center gap-10 px-6 py-10 lg:grid-cols-[1fr_520px] lg:items-center lg:px-12">
-        <div className="max-w-3xl">
-          <p className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Motionly</p>
-          <h1 className="mt-4 max-w-3xl text-5xl font-black leading-[1.02] sm:text-6xl">
-            Make polished reels from rough footage.
-          </h1>
-          <p className="mt-5 max-w-2xl text-lg leading-8 text-muted-foreground">
-            Upload a talking-head clip, generate timed captions and an edit plan, add B-roll, music, and visual polish,
-            then export a vertical MP4 for Instagram, TikTok, or Shorts.
-          </p>
-          <div className="mt-8 flex flex-wrap gap-3">
+    <main className="min-h-screen overflow-hidden">
+      <section className="relative min-h-screen px-4 py-6 sm:px-6 lg:px-8">
+        <div className="pointer-events-none absolute left-[7%] top-24 size-2 bg-primary/70 shadow-[18px_18px_0_hsl(var(--primary)/0.25),36px_0_0_hsl(var(--foreground)/0.08)]" />
+        <div className="pointer-events-none absolute right-[8%] top-36 size-3 border border-primary/40 bg-surface shadow-[12px_-12px_0_hsl(var(--primary)/0.12)]" />
+        <nav className="container-dashboard flex h-14 items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="pixel-button flex size-9 items-center justify-center bg-primary text-primary-foreground">
+              <Sparkles className="size-5" aria-hidden="true" />
+            </div>
+            <span className="text-lg font-black">Motionly</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <ButtonLink href="/login" variant="ghost" className="hidden sm:inline-flex">
+              Log in
+            </ButtonLink>
             <ButtonLink href="/signup">
               Start free
               <ArrowRight className="ml-2 size-4" aria-hidden="true" />
             </ButtonLink>
-            <ButtonLink href="/pricing" variant="secondary">
-              View pricing
-            </ButtonLink>
           </div>
-          <div className="mt-8 grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-            {["Workspace model", "RLS-first database", "Health-checked API"].map((item) => (
-              <div key={item} className="flex items-center gap-2">
-                <CheckCircle2 className="size-4 text-primary" aria-hidden="true" />
-                {item}
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="rounded-lg border border-border bg-foreground p-3 shadow-xl">
-          <div className="aspect-[9/16] rounded-md bg-[linear-gradient(145deg,#111827_0%,#0f766e_48%,#f8fafc_100%)] p-5 text-white">
-            <div className="flex items-center justify-between text-xs text-white/70">
-              <span>Preview</span>
-              <Play className="size-4" aria-hidden="true" />
+        </nav>
+
+        <div className="container-dashboard grid min-h-[calc(100vh-5rem)] items-center gap-10 py-10 lg:grid-cols-[minmax(0,0.95fr)_minmax(420px,1.05fr)] lg:py-6">
+          <div className="max-w-3xl">
+            <div className="inline-flex items-center gap-2 border border-primary/30 bg-surface/80 px-3 py-2 text-xs font-black uppercase tracking-widest text-primary shadow-soft backdrop-blur">
+              <span className="size-1.5 bg-primary" />
+              Premium AI editing cockpit
             </div>
-            <div className="mt-44 rounded-lg bg-black/30 p-4 backdrop-blur-sm">
-              <p className="text-2xl font-black leading-tight">Captioned, cut, and ready to post.</p>
-              <p className="mt-3 text-sm text-white/75">
-                One workspace for upload, AI planning, media polish, export, and versions.
-              </p>
+            <h1 className="mt-5 max-w-3xl text-4xl font-black leading-[1.02] sm:text-6xl">
+              Make polished reels from rough footage.
+            </h1>
+            <p className="mt-5 max-w-2xl text-base leading-8 text-muted-foreground sm:text-lg">
+              Upload a talking-head clip, generate timed captions and an edit plan, add B-roll, music, and visual polish,
+              then export a vertical MP4 for Instagram, TikTok, or Shorts.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <ButtonLink href="/signup" className="h-12 px-6">
+                Start free
+                <ArrowRight className="ml-2 size-4" aria-hidden="true" />
+              </ButtonLink>
+              <ButtonLink href="/pricing" variant="secondary" className="h-12 px-6">
+                View pricing
+              </ButtonLink>
+            </div>
+            <div className="mt-8 grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
+              {["AI edit plans", "Caption timing", "Render pipeline"].map((item) => (
+                <div key={item} className="pixel-panel flex items-center gap-2 px-3 py-2">
+                  <CheckCircle2 className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  {item}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="pixel-panel-strong pixel-corners relative mx-auto w-full max-w-[680px] overflow-hidden bg-surface/90 p-3 backdrop-blur">
+            <span className="pixel-ornament -right-1 top-10" />
+            <div className="grid min-h-[560px] gap-3 lg:grid-cols-[132px_minmax(0,1fr)_164px]">
+              <aside className="hidden border border-border bg-background/80 p-2 lg:block">
+                <div className="mb-3 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                  <Clapperboard className="size-3" />
+                  Media
+                </div>
+                {["Source", "B-roll", "Music", "Captions"].map((item, index) => (
+                  <div key={item} className="mb-2 border border-border bg-surface p-2">
+                    <div className="mb-2 h-2 w-12 bg-muted" />
+                    <div className={index === 0 ? "aspect-video bg-foreground" : "h-8 bg-muted"} />
+                  </div>
+                ))}
+              </aside>
+              <section className="flex min-w-0 flex-col border border-border bg-foreground p-3 text-white">
+                <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2 text-[10px] font-black uppercase tracking-widest text-white/60">
+                  <span>Live Preview</span>
+                  <Play className="size-4" aria-hidden="true" />
+                </div>
+                <div className="mx-auto flex min-h-0 w-full max-w-[260px] flex-1 items-center justify-center">
+                  <div className="relative aspect-[9/16] max-h-[470px] w-full overflow-hidden border-2 border-white/10 bg-[linear-gradient(145deg,#071311_0%,#0f766e_48%,#f8fafc_130%)]">
+                    <div className="absolute inset-4 border border-dashed border-white/10" />
+                    <div className="absolute bottom-[16%] left-1/2 w-[78%] -translate-x-1/2 border border-white/15 bg-black/45 p-3 backdrop-blur">
+                      <p className="text-xl font-black leading-tight">Captioned. Cut. Ready.</p>
+                      <p className="mt-2 text-xs text-white/65">AI plan, captions, B-roll, look, render.</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-5 gap-1">
+                  {Array.from({ length: 10 }).map((_, index) => (
+                    <div key={index} className="h-3 bg-white/10 odd:bg-primary/70" />
+                  ))}
+                </div>
+              </section>
+              <aside className="hidden border border-border bg-background/80 p-2 lg:block">
+                <div className="mb-3 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                  <Wand2 className="size-3" />
+                  AI tools
+                </div>
+                {["Command prompt", "Caption module", "Export queue"].map((item) => (
+                  <div key={item} className="mb-3 border border-border bg-surface p-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">{item}</p>
+                    <div className="mt-3 h-2 w-full bg-muted" />
+                    <div className="mt-2 h-2 w-2/3 bg-primary/40" />
+                  </div>
+                ))}
+              </aside>
             </div>
           </div>
         </div>

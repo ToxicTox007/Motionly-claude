@@ -7,7 +7,6 @@ import {
   Sparkles,
   UserRound,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import Link from "next/link";
 
 const navItems = [
@@ -23,38 +22,37 @@ const settingsItems = [
 
 export function AppShell({ children, title }: { children: React.ReactNode; title: string }) {
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background">
-      {/* Global Left Sidebar */}
-      <aside className="flex w-64 flex-col border-r border-border bg-surface">
-        <div className="flex h-16 items-center gap-3 px-6 border-b border-border">
-          <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+    <div className="min-h-screen w-full overflow-x-hidden bg-background text-foreground lg:flex lg:h-screen lg:overflow-hidden">
+      <aside className="pixel-grid-fine flex border-b border-border bg-surface/95 backdrop-blur lg:h-screen lg:w-64 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r">
+        <div className="flex h-16 shrink-0 items-center gap-3 border-border px-4 lg:border-b lg:px-6">
+          <div className="pixel-button flex size-8 items-center justify-center bg-primary text-primary-foreground">
             <Sparkles className="size-5" />
           </div>
-          <span className="font-bold text-lg tracking-tight text-foreground">Motionly</span>
+          <span className="text-lg font-black tracking-tight text-foreground">Motionly</span>
         </div>
 
-        <div className="flex-1 overflow-y-auto py-6">
-          <nav className="px-3 space-y-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-3 py-3 lg:block lg:overflow-y-auto lg:py-6">
+          <nav className="flex gap-2 lg:block lg:space-y-1">
             {navItems.map((item) => (
               <SidebarItem key={item.href} {...item} />
             ))}
           </nav>
 
-          <div className="mt-8 px-6">
+          <div className="hidden lg:mt-8 lg:block lg:px-6">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/60">
               Settings
             </p>
           </div>
-          <nav className="mt-2 px-3 space-y-1">
+          <nav className="flex gap-2 lg:mt-2 lg:block lg:space-y-1">
             {settingsItems.map((item) => (
               <SidebarItem key={item.href} {...item} />
             ))}
           </nav>
         </div>
 
-        <div className="p-4 border-t border-border">
+        <div className="hidden border-t border-border p-4 lg:block">
           <div className="flex items-center gap-3 px-2 py-2">
-            <div className="size-8 rounded-full bg-muted flex items-center justify-center">
+            <div className="flex size-8 items-center justify-center border border-border bg-muted">
               <UserRound className="size-4 text-muted-foreground" />
             </div>
             <div className="min-w-0">
@@ -65,19 +63,18 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <header className="flex h-16 items-center justify-between border-b border-border bg-surface px-8">
+      <main className="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-hidden">
+        <header className="pixel-grid-fine flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
           <h1 className="text-lg font-bold text-foreground">{title}</h1>
-          <div className="flex items-center gap-4">
-             <div className="h-2 w-32 rounded-full bg-muted overflow-hidden">
-                <div className="h-full w-1/3 bg-primary" />
+          <div className="flex items-center gap-3">
+             <div className="pixel-progress h-2 w-28 sm:w-32">
+                <div className="pixel-progress-fill h-full w-1/3" />
              </div>
              <span className="text-xs font-bold text-muted-foreground">3/10 Exports</span>
           </div>
         </header>
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="mx-auto w-full max-w-6xl">{children}</div>
+        <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:p-8">
+          <div className="container-dashboard">{children}</div>
         </div>
       </main>
     </div>
@@ -96,7 +93,7 @@ function SidebarItem({
   return (
     <Link
       href={href}
-      className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-bold text-muted-foreground transition-all duration-200 hover:bg-muted hover:text-foreground"
+      className="flex shrink-0 items-center gap-2 border border-transparent px-3 py-2 text-sm font-bold text-muted-foreground transition-all duration-200 hover:border-primary/30 hover:bg-muted hover:text-foreground lg:gap-3 lg:px-4 lg:py-3"
     >
       <Icon className="size-5 text-muted-foreground/70" />
       {label}

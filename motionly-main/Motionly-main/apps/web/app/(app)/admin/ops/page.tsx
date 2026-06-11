@@ -70,7 +70,7 @@ export default async function LaunchOpsPage() {
             Send feedback
           </ButtonLink>
         </div>
-        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        <div className="pixel-panel overflow-hidden">
           <table className="w-full text-left text-sm">
             <thead className="bg-muted text-xs uppercase text-muted-foreground">
               <tr>
@@ -107,7 +107,7 @@ export default async function LaunchOpsPage() {
           {(overview?.recent_renders ?? []).map((render) => (
             <div
               key={render.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface p-4"
+              className="pixel-panel flex flex-wrap items-center justify-between gap-3 p-4"
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold">{render.id}</p>
@@ -116,14 +116,14 @@ export default async function LaunchOpsPage() {
                   {new Date(render.created_at).toLocaleString()}
                 </p>
               </div>
-              <span className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
+              <span className="inline-flex items-center gap-2 border border-border bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
                 <RotateCcw className="size-3.5" aria-hidden="true" />
                 {render.error_code ?? "healthy"}
               </span>
             </div>
           ))}
           {!overview?.recent_renders.length ? (
-            <div className="rounded-lg border border-border bg-surface p-8 text-center text-sm text-muted-foreground">
+            <div className="pixel-panel p-8 text-center text-sm text-muted-foreground">
               No render activity yet.
             </div>
           ) : null}
@@ -161,7 +161,7 @@ function MetricCard({
   value: string;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
+    <div className="pixel-panel p-4">
       <div className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
         <Icon className="size-4" />
         {label}

@@ -12,8 +12,8 @@ export default async function PricingPage({
   await searchParams;
 
   return (
-    <main className="mx-auto min-h-screen max-w-6xl px-6 py-12">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+    <main className="container-content min-h-screen py-12">
+      <div className="pixel-panel pixel-corners flex flex-wrap items-end justify-between gap-4 p-5">
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             Pricing
@@ -29,7 +29,7 @@ export default async function PricingPage({
 
       <div className="mt-8 grid gap-4 lg:grid-cols-4">
         {fallbackBillingStatus.plans.map((plan) => (
-          <section key={plan.key} className="rounded-lg border border-border bg-surface p-6 shadow-sm">
+          <section key={plan.key} className="pixel-panel p-6">
             <h2 className="text-xl font-bold">{plan.name}</h2>
             <p className="mt-4 text-4xl font-black">{formatPrice(plan.price_cents)}</p>
             <p className="text-sm text-muted-foreground">per month</p>

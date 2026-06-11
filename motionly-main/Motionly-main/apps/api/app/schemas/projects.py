@@ -43,3 +43,8 @@ class ProjectResponse(BaseModel):
 
 class ProjectListResponse(BaseModel):
     projects: list[ProjectResponse]
+
+
+class ProjectDeleteResponse(BaseModel):
+    id: UUID
+    deleted: bool = True

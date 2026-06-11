@@ -2,11 +2,14 @@
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Sparkles, Type, Layers, Music2, Palette, Download,
   Film, Loader2, ChevronLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { buildApiHeaders } from "@/lib/client-api";
+import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
 import { EditorLayout } from "./editor-layout";
 import { UploadPanel } from "./upload-panel";
@@ -64,6 +67,10 @@ export function EditorClient(props: EditorClientProps) {
     upload, uploadAssetUrls, transcript, captionTracks,
     brollSlots, musicSelection, effectsConfig, renderJobs, exports,
   } = props;
+  const router = useRouter();
+  const [localTitle, setLocalTitle] = useState(title);
+  const [saveStatus, setSaveStatus] = useState<"saving" | "saved" | "error">("saved");
+  const lastSavedTitleRef = useRef(title);
 
   // Local mutable copies of server state so the UI updates immediately
   // when AI generates a plan or user switches tabs (no round-trip wait).
@@ -110,6 +117,40 @@ export function EditorClient(props: EditorClientProps) {
     setInspectorTab("captions");
   }, []);
 
+  const saveProjectTitle = useCallback(
+    async (nextTitle: string) => {
+      const trimmed = nextTitle.trim() || "Untitled reel";
+      setLocalTitle(trimmed);
+      if (trimmed === lastSavedTitleRef.current) return;
+
+      setSaveStatus("saving");
+      try {
+        const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}`, {
+          method: "PATCH",
+          headers: await buildApiHeaders({
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+          }),
+          body: JSON.stringify({ title: trimmed }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error?.message ?? "Project title could not be saved.");
+        }
+        const savedTitle = payload.title ?? trimmed;
+        lastSavedTitleRef.current = savedTitle;
+        setLocalTitle(savedTitle);
+        setSaveStatus("saved");
+        router.refresh();
+      } catch (error) {
+        console.error(error);
+        setSaveStatus("error");
+      }
+    },
+    [apiAccessToken, projectId, router, userId, workspaceId],
+  );
+
   // ── Phase 1: no upload yet ───────────────────────────────────────────────
   if (!upload) {
     return (
@@ -131,8 +172,10 @@ export function EditorClient(props: EditorClientProps) {
   // ── Phase 3: full 5-panel editor ─────────────────────────────────────────
   return (
     <EditorLayout
-      title={title}
-      onTitleChange={() => {}}   // title editing wired via separate API — no-op for now
+      title={localTitle}
+      onTitleChange={setLocalTitle}
+      onTitleCommit={saveProjectTitle}
+      saveStatus={saveStatus}
       onExport={() => setInspectorTab("export")}
       onAiEdit={() => setInspectorTab("ai")}
     >
@@ -249,9 +292,9 @@ function InspectorPanel({
   const suggestedPreset = (activePlan?.summary?.visual_preset ?? null) as VisualPresetKey | null;
 
   return (
-    <div className="flex h-full flex-col bg-[hsl(var(--surface))]">
+    <div className="flex h-full min-h-0 flex-col bg-[hsl(var(--surface))]">
       {/* Tab strip */}
-      <div className="flex shrink-0 items-end gap-0.5 border-b border-border px-2 pt-2">
+      <div className="pixel-grid-fine flex shrink-0 items-end gap-1 overflow-x-auto border-b border-border px-2 pt-2">
         {INSPECTOR_TABS.map(({ id, label, icon: Icon, requiresPlan }) => {
           const disabled = requiresPlan && !hasActivePlan;
           return (
@@ -261,13 +304,12 @@ function InspectorPanel({
               disabled={disabled}
               title={disabled ? "Generate an AI edit first" : label}
               className={cn(
-                "flex flex-col items-center gap-0.5 px-2 pb-2 pt-1.5 text-[9px] font-bold uppercase tracking-widest transition",
-                "border-b-2 -mb-px",
+                "flex min-w-12 flex-col items-center gap-0.5 border px-2 pb-2 pt-1.5 text-[9px] font-bold uppercase tracking-widest transition",
                 tab === id
-                  ? "border-primary text-primary"
+                  ? "border-primary bg-primary/10 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.08)]"
                   : disabled
                     ? "cursor-not-allowed border-transparent text-muted-foreground/30"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
+                    : "border-transparent text-muted-foreground hover:border-primary/30 hover:bg-muted hover:text-foreground",
               )}
             >
               <Icon className="size-3.5" />
@@ -278,7 +320,7 @@ function InspectorPanel({
       </div>
 
       {/* Tab content — scrollable */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {tab === "ai" && (
           <AIStep
             projectId={projectId}
@@ -339,6 +381,8 @@ function InspectorPanel({
             apiAccessToken={apiAccessToken}
             initialJobs={renderJobs}
             initialExports={exports}
+            captionTrackId={captionTracks[0]?.id ?? null}
+            activePlanId={localActivePlanId}
           />
         )}
       </div>
@@ -355,26 +399,26 @@ function UploadScreen({
   userId: string; apiAccessToken: string;
 }) {
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <header className="flex h-11 items-center gap-3 border-b border-border px-4">
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
+      <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
         <Link
           href="/dashboard"
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition"
+          className="flex items-center gap-1 border border-transparent px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
         >
           <ChevronLeft className="size-4" />
           Dashboard
         </Link>
         <span className="text-sm font-semibold text-foreground">{title}</span>
       </header>
-      <div className="flex flex-1 items-start justify-center px-6 pt-16">
-        <div className="w-full max-w-lg">
+      <div className="flex flex-1 items-start justify-center px-4 py-10 sm:px-6 lg:py-16">
+        <div className="w-full max-w-5xl">
           <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-primary/10">
+            <div className="pixel-button mx-auto mb-4 flex size-14 items-center justify-center bg-primary/10">
               <Film className="size-7 text-primary" />
             </div>
             <h1 className="text-2xl font-bold">Upload your footage</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Drop in your raw talking-head video. We'll transcribe it and build an AI edit plan automatically.
+              Drop in your raw talking-head video. We&apos;ll transcribe it and build an AI edit plan automatically.
             </p>
           </div>
           <UploadPanel
@@ -393,19 +437,19 @@ function UploadScreen({
 
 function ProcessingScreen({ title, status }: { title: string; status: string }) {
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <header className="flex h-11 items-center gap-3 border-b border-border px-4">
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
+      <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
         <Link
           href="/dashboard"
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition"
+          className="flex items-center gap-1 border border-transparent px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
         >
           <ChevronLeft className="size-4" />
           Dashboard
         </Link>
         <span className="text-sm font-semibold text-foreground">{title}</span>
       </header>
-      <div className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
-        <div className="flex size-16 items-center justify-center rounded-2xl bg-primary/10">
+      <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4 text-center">
+        <div className="pixel-panel flex size-16 items-center justify-center">
           <Loader2 className="size-8 animate-spin text-primary" />
         </div>
         <div>
@@ -413,6 +457,9 @@ function ProcessingScreen({ title, status }: { title: string; status: string }) 
           <p className="mt-1 text-sm text-muted-foreground">
             Transcribing your footage and preparing the editor. This takes about a minute.
           </p>
+        </div>
+        <div className="pixel-progress h-2 w-full max-w-xs">
+          <div className="pixel-progress-fill h-full w-2/3 animate-pulse" />
         </div>
         <p className="text-xs text-muted-foreground/50">This page will refresh automatically.</p>
       </div>

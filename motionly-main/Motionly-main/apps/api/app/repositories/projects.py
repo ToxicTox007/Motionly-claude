@@ -81,6 +81,10 @@ class InMemoryProjectRepository:
         project.updated_at = datetime.now(UTC)
         return project
 
+    def delete_project(self, *, project_id: UUID, workspace_id: UUID) -> None:
+        self.get_project(project_id=project_id, workspace_id=workspace_id)
+        del self.projects[project_id]
+
 
 class SupabaseProjectRepository:
     def __init__(self, *, supabase_url: str, service_role_key: str) -> None:
@@ -174,6 +178,19 @@ class SupabaseProjectRepository:
         if not rows:
             raise ApiError(404, "project_not_found", "Project was not found.")
         return self._project_from_row(rows[0])
+
+    def delete_project(self, *, project_id: UUID, workspace_id: UUID) -> None:
+        self.get_project(project_id=project_id, workspace_id=workspace_id)
+        response = httpx.delete(
+            f"{self.rest_url}/projects",
+            headers=self.headers,
+            params={
+                "id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
 
     def _project_from_row(self, row: dict[str, object]) -> ProjectApiRecord:
         return ProjectApiRecord(
