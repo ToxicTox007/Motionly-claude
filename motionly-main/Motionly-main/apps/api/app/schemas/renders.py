@@ -1,0 +1,179 @@
+from datetime import datetime
+from enum import StrEnum
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class RenderJobStatus(StrEnum):
+    QUEUED = "queued"
+    PREPARING = "preparing"
+    RENDERING = "rendering"
+    UPLOADING = "uploading"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class RenderOutputFormat(StrEnum):
+    MP4 = "mp4"
+
+
+class DurationPreset(StrEnum):
+    SHORT = "short"
+    MEDIUM = "medium"
+    LONG = "long"
+
+
+class PlatformPreset(StrEnum):
+    INSTAGRAM = "instagram"
+    TIKTOK = "tiktok"
+    SHORTS = "shorts"
+
+
+class ExportResolution(StrEnum):
+    FREE_720P = "720p"
+    PAID_1080P = "1080p"
+    PRO_4K = "4k"
+
+
+class RenderAdjustmentAction(StrEnum):
+    MAKE_PUNCHIER = "make_punchier"
+    MORE_CINEMATIC = "more_cinematic"
+
+
+class RenderTemplateId(StrEnum):
+    LUXURY_REEL_V1 = "luxury_reel_v1"
+    FOUNDER_REEL_V1 = "founder_reel_v1"
+    TRAVEL_REEL_V1 = "travel_reel_v1"
+    PODCAST_REEL_V1 = "podcast_reel_v1"
+    FASHION_REEL_V1 = "fashion_reel_v1"
+
+
+class RenderEngine(StrEnum):
+    FFMPEG_BASIC = "ffmpeg_basic"
+    REMOTION_PREMIUM = "remotion_premium"
+
+
+class CutSegment(BaseModel):
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    reason: str = Field(min_length=1, max_length=120)
+
+
+class RenderSpecs(BaseModel):
+    width: int = Field(default=1080, gt=0)
+    height: int = Field(default=1920, gt=0)
+    fps: int = Field(default=30, gt=0)
+    video_codec: str = "h264"
+    audio_codec: str = "aac"
+    pixel_format: str = "yuv420p"
+    format: RenderOutputFormat = RenderOutputFormat.MP4
+
+
+class ExportOptions(BaseModel):
+    resolution: ExportResolution = ExportResolution.PAID_1080P
+    format: Literal["mp4"] = "mp4"
+    platform: PlatformPreset = PlatformPreset.INSTAGRAM
+
+
+class RenderCreateRequest(BaseModel):
+    caption_track_id: UUID | None = None
+    include_captions: bool = True
+    include_broll: bool = True
+    edit_plan_id: UUID | None = None
+    template_id: RenderTemplateId | None = None
+    adjustment_action: RenderAdjustmentAction | None = None
+    duration_preset: DurationPreset = DurationPreset.MEDIUM
+    export_options: ExportOptions = Field(default_factory=ExportOptions)
+    force: bool = False
+
+
+class RenderJobEventResponse(BaseModel):
+    id: UUID
+    render_job_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    event_type: str
+    from_status: RenderJobStatus | None = None
+    to_status: RenderJobStatus
+    progress_pct: int = Field(ge=0, le=100)
+    message: str
+    error_code: str | None = None
+    latency_ms: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class RenderJobResponse(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    uploaded_video_id: UUID
+    caption_track_id: UUID
+    status: RenderJobStatus
+    planner_version: str
+    manifest: dict[str, Any]
+    keep_segments: list[CutSegment] = Field(default_factory=list)
+    specs: RenderSpecs = Field(default_factory=RenderSpecs)
+    template_id: RenderTemplateId | None = None
+    render_engine: RenderEngine | None = None
+    renderer_version: str | None = None
+    props_hash: str | None = None
+    artifact_path: str | None = None
+    benchmark_ms: int | None = None
+    logs: list[str] = Field(default_factory=list)
+    progress_pct: int = Field(ge=0, le=100)
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    events: list[RenderJobEventResponse] = Field(default_factory=list)
+
+
+class RenderCreateResponse(BaseModel):
+    job: RenderJobResponse
+    job_id: UUID
+    queue_job_id: str
+    status: RenderJobStatus
+
+
+class RenderListResponse(BaseModel):
+    jobs: list[RenderJobResponse]
+
+
+class ExportResponse(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    render_job_id: UUID
+    version: int
+    storage_bucket: str
+    storage_path: str
+    format: RenderOutputFormat
+    width: int
+    height: int
+    fps: int
+    duration_ms: int | None = None
+    file_size_bytes: int | None = None
+    thumbnail_url: str | None = None
+    settings_summary: dict[str, Any] = Field(default_factory=dict)
+    restored_from_export_id: UUID | None = None
+    created_at: datetime
+
+
+class ExportListResponse(BaseModel):
+    exports: list[ExportResponse]
+
+
+class ExportDownloadUrlResponse(BaseModel):
+    export_id: UUID
+    signed_download_url: str
+    expires_in_seconds: int
+    format: Literal["mp4"] = "mp4"
+
+
+class ExportRestoreResponse(BaseModel):
+    export: ExportResponse
+    restored_from_export_id: UUID

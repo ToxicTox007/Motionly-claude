@@ -1,0 +1,19 @@
+{
+  "name": "motionly",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "format": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "supabase": "^2.104.0",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,161 @@
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+import httpx
+
+from app.schemas.captions import LanguageHint, TranscriptWord
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    language: str
+    confidence: float | None
+    provider: str
+    model: str
+    words: list[TranscriptWord]
+    raw_payload: dict[str, object]
+
+
+class TranscriptionProvider(Protocol):
+    provider_name: str
+    model: str
+
+    def transcribe(
+        self,
+        *,
+        audio_path: Path | None,
+        language_hint: LanguageHint,
+    ) -> TranscriptionResult:
+        """Return word-level transcript data for an extracted audio file."""
+
+
+class FixtureTranscriptionProvider:
+    provider_name = "fixture"
+
+    def __init__(self, *, model: str = "fixture-v1") -> None:
+        self.model = model
+
+    def transcribe(
+        self,
+        *,
+        audio_path: Path | None,
+        language_hint: LanguageHint,
+    ) -> TranscriptionResult:
+        language = "hi" if language_hint == LanguageHint.HINDI else "en"
+        source_words = (
+            ["Yeh", "simple", "secret", "hai:", "pehle", "hook", "dikhao,", "phir", "proof."]
+            if language == "hi"
+            else [
+                "Here",
+                "is",
+                "the",
+                "simple",
+                "secret:",
+                "show",
+                "the",
+                "hook,",
+                "then",
+                "prove",
+                "the",
+                "result.",
+            ]
+        )
+        words: list[TranscriptWord] = []
+        cursor_ms = 240
+        for index, text in enumerate(source_words):
+            duration_ms = max(280, min(620, len(text) * 52))
+            words.append(
+                TranscriptWord(
+                    index=index,
+                    text=text,
+                    start_ms=cursor_ms,
+                    end_ms=cursor_ms + duration_ms,
+                    confidence=0.94,
+                )
+            )
+            cursor_ms += duration_ms + (460 if text.endswith(":") else 120)
+
+        return TranscriptionResult(
+            language=language,
+            confidence=0.94,
+            provider=self.provider_name,
+            model=self.model,
+            words=words,
+            raw_payload={"fixture": True, "word_count": len(words)},
+        )
+
+
+class WhisperCompatibleHttpProvider:
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        api_key: str | None,
+        model: str,
+        provider_name: str = "http_whisper",
+    ) -> None:
+        self.endpoint = endpoint
+        self.api_key = api_key
+        self.model = model
+        self.provider_name = provider_name
+
+    def transcribe(
+        self,
+        *,
+        audio_path: Path | None,
+        language_hint: LanguageHint,
+    ) -> TranscriptionResult:
+        if audio_path is None:
+            raise ValueError("audio_path is required for HTTP transcription.")
+
+        headers = {"authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        data = {
+            "model": self.model,
+            "response_format": "verbose_json",
+            "timestamp_granularities[]": "word",
+        }
+        if language_hint != LanguageHint.AUTO:
+            data["language"] = language_hint.value
+
+        with audio_path.open("rb") as audio_file:
+            response = httpx.post(
+                self.endpoint,
+                headers=headers,
+                data=data,
+                files={"file": (audio_path.name, audio_file, "audio/wav")},
+                timeout=120,
+            )
+        response.raise_for_status()
+        payload = response.json()
+        language = normalize_transcription_language(payload.get("language"), language_hint)
+        words = [
+            TranscriptWord(
+                index=index,
+                text=str(item["word"]).strip(),
+                start_ms=int(float(item["start"]) * 1000),
+                end_ms=int(float(item["end"]) * 1000),
+                confidence=item.get("confidence"),
+            )
+            for index, item in enumerate(payload.get("words", []))
+            if item.get("word") and item.get("start") is not None and item.get("end") is not None
+        ]
+        return TranscriptionResult(
+            language=language,
+            confidence=payload.get("confidence"),
+            provider=self.provider_name,
+            model=self.model,
+            words=words,
+            raw_payload=payload,
+        )
+
+
+def normalize_transcription_language(value: object, language_hint: LanguageHint) -> str:
+    language = str(value or "").strip().lower().replace("_", "-")
+    if language in {"en", "eng", "english"} or language.startswith("en-"):
+        return "en"
+    if language in {"hi", "hin", "hindi"} or language.startswith("hi-"):
+        return "hi"
+    if language_hint in {LanguageHint.ENGLISH, LanguageHint.HINDI}:
+        return language_hint.value
+    return "unknown"

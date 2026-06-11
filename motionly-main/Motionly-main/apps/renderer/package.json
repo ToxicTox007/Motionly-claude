@@ -1,0 +1,31 @@
+{
+  "name": "@motionly/renderer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "dev": "remotion studio src/index.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "render": "node --loader ts-node/esm src/render-cli.ts",
+    "render:cli": "node --loader ts-node/esm src/render-cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@motionly/shared": "workspace:*",
+    "@remotion/bundler": "4.0.431",
+    "@remotion/cli": "4.0.431",
+    "@remotion/renderer": "4.0.431",
+    "remotion": "4.0.431",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}

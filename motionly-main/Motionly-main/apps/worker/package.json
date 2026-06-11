@@ -1,0 +1,16 @@
+{
+  "name": "@motionly/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node src/worker.mjs --check",
+    "dev": "node src/worker.mjs --once",
+    "lint": "node src/worker.mjs --check",
+    "start": "node src/worker.mjs --loop",
+    "typecheck": "node src/worker.mjs --check",
+    "test": "node src/worker.mjs --check"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.4"
+  }
+}

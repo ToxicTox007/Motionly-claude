@@ -1,0 +1,147 @@
+from datetime import datetime
+from enum import StrEnum
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class LanguageHint(StrEnum):
+    AUTO = "auto"
+    ENGLISH = "en"
+    HINDI = "hi"
+
+
+class TranscriptStatus(StrEnum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    READY = "ready"
+    FAILED = "failed"
+    CAPTIONS_UNAVAILABLE = "captions_unavailable"
+
+
+class CaptionPresetKey(StrEnum):
+    LUXURY_MINIMAL = "luxury_minimal"
+    BOLD_INFLUENCER = "bold_influencer"
+    VOGUE_WHITE = "vogue_white"
+    GOLD_PREMIUM = "gold_premium"
+    FOUNDER_CLEAN = "founder_clean"
+
+
+class CaptionAnimation(StrEnum):
+    FADE_UP = "fade_up"
+    POP = "pop"
+    TYPE_ON = "type_on"
+    GLOW = "glow"
+    SLIDE_UP = "slide_up"
+
+
+class TranscriptWord(BaseModel):
+    id: UUID | None = None
+    index: int = Field(ge=0)
+    text: str = Field(min_length=1, max_length=120)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class TranscriptReadResponse(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    uploaded_video_id: UUID
+    status: TranscriptStatus
+    language: Literal["en", "hi", "unknown"] = "unknown"
+    language_hint: LanguageHint = LanguageHint.AUTO
+    provider: str
+    model: str
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    duration_ms: int | None = None
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str | None = None
+    words: list[TranscriptWord] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class TranscriptionCreateRequest(BaseModel):
+    video_id: UUID | None = None
+    language_hint: LanguageHint = LanguageHint.AUTO
+    force: bool = False
+
+
+class TranscriptionCreateResponse(BaseModel):
+    transcript_id: UUID | None = None
+    status: TranscriptStatus
+    job_id: str
+    message: str
+
+
+class CaptionStyle(BaseModel):
+    font_family: str
+    font_size_px: int = Field(gt=0)
+    font_weight: int = Field(ge=100, le=900)
+    text_case: Literal["normal", "uppercase", "title"]
+    text_color: str
+    accent_color: str
+    stroke_color: str | None = None
+    stroke_width_px: int = Field(default=0, ge=0)
+    shadow: str | None = None
+    safe_area_bottom_pct: int = Field(ge=0, le=50)
+    placement: Literal["lower", "middle", "upper"]
+    animation: CaptionAnimation
+    max_lines: int = Field(default=2, ge=1, le=2)
+    contrast_guardrail: str
+
+
+class CaptionPreset(BaseModel):
+    key: CaptionPresetKey
+    name: str
+    style: CaptionStyle
+
+
+class CaptionSegment(BaseModel):
+    id: UUID | None = None
+    index: int = Field(ge=0)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    text: str
+    words: list[TranscriptWord] = Field(default_factory=list)
+    line_count: int = Field(default=1, ge=1, le=2)
+
+
+class CaptionTrackReadResponse(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    transcript_id: UUID
+    preset: CaptionPresetKey
+    schema_version: int
+    style: CaptionStyle
+    hide_filler_words: bool = False
+    segments: list[CaptionSegment] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class CaptionGenerateRequest(BaseModel):
+    transcript_id: UUID | None = None
+    preset: CaptionPresetKey = CaptionPresetKey.LUXURY_MINIMAL
+    hide_filler_words: bool = False
+
+
+class CaptionGenerateResponse(BaseModel):
+    track: CaptionTrackReadResponse
+    job_id: str
+    status: Literal["ready"] = "ready"
+
+
+class CaptionUpdateRequest(BaseModel):
+    preset: CaptionPresetKey | None = None
+    hide_filler_words: bool | None = None
+
+
+class CaptionListResponse(BaseModel):
+    presets: list[CaptionPreset]
+    tracks: list[CaptionTrackReadResponse]

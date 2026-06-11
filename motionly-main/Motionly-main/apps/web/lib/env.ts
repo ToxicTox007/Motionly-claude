@@ -1,0 +1,75 @@
+import { z } from "zod";
+
+const appEnvSchema = z.object({
+  NEXT_PUBLIC_APP_URL: z.string().url(),
+  NEXT_PUBLIC_API_BASE_URL: z.string().url(),
+  NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1).optional(),
+  SUPABASE_URL: z.string().url().optional(),
+  SUPABASE_ANON_KEY: z.string().min(1).optional(),
+  NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH: z.coerce.boolean().default(false),
+  NEXT_PUBLIC_BILLING_ENABLED: z.coerce.boolean().default(false),
+});
+
+const rawEnv = {
+  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+  NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL,
+  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+  NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH: process.env.NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH,
+  NEXT_PUBLIC_BILLING_ENABLED: process.env.NEXT_PUBLIC_BILLING_ENABLED,
+};
+
+const isProductionBuild = process.env.NEXT_PHASE === "phase-production-build";
+const parsedEnv = appEnvSchema.parse(
+  isProductionBuild
+    ? {
+        NEXT_PUBLIC_APP_URL: rawEnv.NEXT_PUBLIC_APP_URL ?? "https://build.motionly.invalid",
+        NEXT_PUBLIC_API_BASE_URL: rawEnv.NEXT_PUBLIC_API_BASE_URL ?? "https://api.build.motionly.invalid",
+        NEXT_PUBLIC_SUPABASE_URL: rawEnv.NEXT_PUBLIC_SUPABASE_URL,
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: rawEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+        SUPABASE_URL: rawEnv.SUPABASE_URL ?? "https://build.supabase.co",
+        SUPABASE_ANON_KEY: rawEnv.SUPABASE_ANON_KEY ?? "build-placeholder",
+        NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH: rawEnv.NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH,
+        NEXT_PUBLIC_BILLING_ENABLED: rawEnv.NEXT_PUBLIC_BILLING_ENABLED,
+      }
+    : rawEnv,
+);
+
+if (process.env.NODE_ENV === "production" && !isProductionBuild) {
+  for (const [name, value] of [
+    ["NEXT_PUBLIC_APP_URL", parsedEnv.NEXT_PUBLIC_APP_URL],
+    ["NEXT_PUBLIC_API_BASE_URL", parsedEnv.NEXT_PUBLIC_API_BASE_URL],
+    ["SUPABASE_URL", parsedEnv.NEXT_PUBLIC_SUPABASE_URL ?? parsedEnv.SUPABASE_URL],
+  ] as const) {
+    if (!value) {
+      throw new Error(`${name} is required.`);
+    }
+    if (/(localhost|127\.0\.0\.1|0\.0\.0\.0|\.invalid)/i.test(value)) {
+      throw new Error(`${name} must be a deployed production URL.`);
+    }
+  }
+}
+
+const supabaseUrl = parsedEnv.NEXT_PUBLIC_SUPABASE_URL ?? parsedEnv.SUPABASE_URL;
+const supabaseAnonKey = parsedEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? parsedEnv.SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error("Supabase public URL and anon key are required.");
+}
+
+export const env = {
+  appUrl: parsedEnv.NEXT_PUBLIC_APP_URL,
+  apiBaseUrl: parsedEnv.NEXT_PUBLIC_API_BASE_URL,
+  supabaseUrl,
+  supabaseAnonKey,
+  googleOAuthEnabled: parsedEnv.NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH,
+  billingEnabled: parsedEnv.NEXT_PUBLIC_BILLING_ENABLED,
+};
+
+export const isSupabaseConfigured = Boolean(
+  (rawEnv.NEXT_PUBLIC_SUPABASE_URL ?? rawEnv.SUPABASE_URL) &&
+    (rawEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? rawEnv.SUPABASE_ANON_KEY),
+);
