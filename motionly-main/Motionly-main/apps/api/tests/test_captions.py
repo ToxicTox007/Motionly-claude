@@ -4,7 +4,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.api.captions import create_transcription, generate_captions
+from app.api.captions import (
+    create_transcription,
+    generate_captions,
+    update_caption_segments,
+    update_caption_track,
+)
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.repositories.captions import InMemoryCaptionRepository, SupabaseCaptionRepository
@@ -13,6 +18,8 @@ from app.schemas.captions import (
     CaptionGenerateRequest,
     CaptionPresetKey,
     CaptionSegment,
+    CaptionSegmentsUpdateRequest,
+    CaptionUpdateRequest,
     LanguageHint,
     TranscriptionCreateRequest,
     TranscriptWord,
@@ -258,6 +265,153 @@ def test_caption_chunking_is_pause_and_punctuation_aware() -> None:
     assert len(segments) >= 2
     assert all(1 <= len(segment.words) <= 4 for segment in segments)
     assert all(segment.line_count <= 2 for segment in segments)
+
+
+def test_update_caption_segments_persists_timeline_edits() -> None:
+    repository, project_id, workspace_id, user_id = make_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    asyncio.run(
+        create_transcription(
+            project_id=project_id,
+            payload=TranscriptionCreateRequest(),
+            request=make_request(),
+            actor=actor,
+            repository=repository,
+            transcription_provider=FixtureTranscriptionProvider(),
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+    captions = asyncio.run(
+        generate_captions(
+            project_id=project_id,
+            payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
+            actor=actor,
+            repository=repository,
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+    first = captions.track.segments[0]
+    second = captions.track.segments[1]
+
+    updated = asyncio.run(
+        update_caption_segments(
+            project_id=project_id,
+            track_id=captions.track.id,
+            payload=CaptionSegmentsUpdateRequest(
+                segments=[
+                    second.model_copy(update={"start_ms": second.start_ms + 100, "highlight_words": ["ship"]}),
+                    first.model_copy(update={"end_ms": first.end_ms - 100}),
+                ],
+            ),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    saved = repository.get_caption_track(
+        project_id=project_id,
+        track_id=captions.track.id,
+        workspace_id=workspace_id,
+    )
+    assert [segment.index for segment in updated.track.segments] == [0, 1]
+    assert updated.track.segments[0].text == second.text
+    assert updated.track.segments[0].highlight_words == ["ship"]
+    assert saved.segments[1].end_ms == first.end_ms - 100
+
+
+def test_update_caption_track_persists_custom_style() -> None:
+    repository, project_id, workspace_id, user_id = make_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    asyncio.run(
+        create_transcription(
+            project_id=project_id,
+            payload=TranscriptionCreateRequest(),
+            request=make_request(),
+            actor=actor,
+            repository=repository,
+            transcription_provider=FixtureTranscriptionProvider(),
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+    captions = asyncio.run(
+        generate_captions(
+            project_id=project_id,
+            payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
+            actor=actor,
+            repository=repository,
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+    custom_style = captions.track.style.model_copy(
+        update={
+            "font_family": "Inter Tight",
+            "text_color": "#fffbeb",
+            "accent_color": "#22c55e",
+            "position_x_pct": 48,
+            "position_y_pct": 72,
+        }
+    )
+
+    updated = asyncio.run(
+        update_caption_track(
+            project_id=project_id,
+            track_id=captions.track.id,
+            payload=CaptionUpdateRequest(style=custom_style),
+            actor=actor,
+            repository=repository,
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+
+    assert updated.track.style.font_family == "Inter Tight"
+    assert updated.track.style.position_x_pct == 48
+
+
+def test_update_caption_segments_rejects_cross_workspace_access() -> None:
+    repository, project_id, workspace_id, user_id = make_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    asyncio.run(
+        create_transcription(
+            project_id=project_id,
+            payload=TranscriptionCreateRequest(),
+            request=make_request(),
+            actor=actor,
+            repository=repository,
+            transcription_provider=FixtureTranscriptionProvider(),
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+    captions = asyncio.run(
+        generate_captions(
+            project_id=project_id,
+            payload=CaptionGenerateRequest(),
+            actor=actor,
+            repository=repository,
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            update_caption_segments(
+                project_id=project_id,
+                track_id=captions.track.id,
+                payload=CaptionSegmentsUpdateRequest(segments=captions.track.segments),
+                actor=Actor(user_id=user_id, workspace_id=uuid4()),
+                repository=repository,
+            )
+        )
+
+    assert exc_info.value.status_code in {403, 404}
+
+
+def test_update_caption_segments_validates_ranges() -> None:
+    with pytest.raises(ValueError):
+        CaptionSegmentsUpdateRequest(
+            segments=[
+                CaptionSegment(index=0, start_ms=1000, end_ms=900, text="bad", line_count=1),
+            ],
+        )
 
 
 def test_transcription_marks_video_without_audio_unavailable() -> None:

@@ -10,6 +10,8 @@ interface VideoPreviewProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   sourceUrl: string | null;
   thumbnailUrl: string | null;
+  sourceWidth?: number | null;
+  sourceHeight?: number | null;
   playheadMs: number;
   captionSegments: CaptionSegment[];
   captionStyle: CaptionStyle | null;
@@ -21,6 +23,8 @@ export function VideoPreview({
   videoRef,
   sourceUrl,
   thumbnailUrl,
+  sourceWidth,
+  sourceHeight,
   playheadMs,
   captionSegments,
   captionStyle,
@@ -28,6 +32,16 @@ export function VideoPreview({
   isProcessing,
 }: VideoPreviewProps) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [intrinsicSize, setIntrinsicSize] = useState<{
+    sourceUrl: string;
+    width: number;
+    height: number;
+  } | null>(null);
+  const activeIntrinsicSize =
+    intrinsicSize?.sourceUrl === sourceUrl ? intrinsicSize : null;
+  const frameWidth = sourceWidth || activeIntrinsicSize?.width || 16;
+  const frameHeight = sourceHeight || activeIntrinsicSize?.height || 9;
+  const sourceAspectRatio = `${frameWidth} / ${frameHeight}`;
 
   // Keep isPlaying in sync with the actual video state
   useEffect(() => {
@@ -65,7 +79,10 @@ export function VideoPreview({
       <div
         className="relative flex min-h-0 w-full flex-1 items-center justify-center"
       >
-        <div className="pixel-corners relative aspect-[9/16] h-full max-h-[min(100%,calc(100vh-310px))] min-h-[320px] w-auto max-w-full overflow-hidden border-2 border-foreground/20 bg-black shadow-[8px_8px_0_hsl(var(--foreground)/0.14)] lg:min-h-0 lg:max-h-full">
+        <div
+          className="pixel-corners relative h-full max-h-[min(100%,calc(100vh-310px))] min-h-[180px] w-auto max-w-full overflow-hidden border-2 border-foreground/20 bg-black shadow-[8px_8px_0_hsl(var(--foreground)/0.14)] sm:min-h-[240px] lg:min-h-0 lg:max-h-full"
+          style={{ aspectRatio: sourceAspectRatio }}
+        >
           {/* Video element */}
           {sourceUrl ? (
             <video
@@ -73,6 +90,16 @@ export function VideoPreview({
               src={sourceUrl}
               poster={thumbnailUrl ?? undefined}
               className="absolute inset-0 h-full w-full object-contain"
+              onLoadedMetadata={(event) => {
+                const video = event.currentTarget;
+                if (video.videoWidth && video.videoHeight) {
+                  setIntrinsicSize({
+                    sourceUrl,
+                    width: video.videoWidth,
+                    height: video.videoHeight,
+                  });
+                }
+              }}
               playsInline
               preload="metadata"
             />
@@ -160,11 +187,21 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
   if (!active) return null;
 
   const placementClass =
-    style.placement === "upper"
+    style.position_x_pct != null && style.position_y_pct != null
+      ? ""
+      : style.placement === "upper"
       ? "top-[12%]"
       : style.placement === "middle"
         ? "top-[50%] -translate-y-1/2"
         : "bottom-[12%]";
+  const positionedStyle: React.CSSProperties =
+    style.position_x_pct != null && style.position_y_pct != null
+      ? {
+          left: `${style.position_x_pct}%`,
+          top: `${style.position_y_pct}%`,
+          transform: "translate(-50%, -50%)",
+        }
+      : {};
 
   const inlineStyle: React.CSSProperties = {
     fontFamily:      style.font_family || "Inter, sans-serif",
@@ -192,6 +229,7 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
         "pointer-events-none absolute left-1/2 -translate-x-1/2 px-2",
         placementClass,
       )}
+      style={positionedStyle}
     >
       <p style={inlineStyle}>
         {active.words?.length
@@ -201,6 +239,7 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
                 word={word}
                 playheadMs={playheadMs}
                 accentColor={style.accent_color}
+                forceHighlight={active.highlight_words?.includes(word.text)}
               />
             ))
           : active.text}
@@ -213,15 +252,18 @@ function WordSpan({
   word,
   playheadMs,
   accentColor,
+  forceHighlight,
 }: {
   word: TranscriptWord;
   playheadMs: number;
   accentColor: string;
+  forceHighlight?: boolean;
 }) {
   const isActive =
     playheadMs >= word.start_ms && playheadMs <= word.end_ms;
+  const highlighted = isActive || forceHighlight;
   return (
-    <span style={{ color: isActive ? (accentColor || "#facc15") : "inherit" }}>
+    <span style={{ color: highlighted ? (accentColor || "#facc15") : "inherit" }}>
       {word.text}{" "}
     </span>
   );

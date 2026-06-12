@@ -20,6 +20,7 @@ class FFmpegCaptionRenderer:
         specs: RenderSpecs,
         broll_assets: list[dict[str, Any]] | None = None,
         effects_config: dict[str, object] | None = None,
+        framing: dict[str, object] | None = None,
         music_source: AudioSource | None = None,
         music_volume: float = 0,
         sfx_sources: list[AudioSource] | None = None,
@@ -43,6 +44,7 @@ class FFmpegCaptionRenderer:
             ass_path=ass_path,
             broll_assets=broll_assets,
             effects_config=effects_config,
+            framing=framing,
             keep_segments=safe_keep_segments,
         )
         active_sfx_sources = (sfx_sources or [])[:6] if sfx_intensity > 0 else []
@@ -139,13 +141,10 @@ def _build_video_filter_graph(
     ass_path: Path | None,
     broll_assets: list[dict[str, Any]],
     effects_config: dict[str, object] | None,
+    framing: dict[str, object] | None,
     keep_segments: list[CutSegment],
 ) -> tuple[str, str, str | None]:
-    source_steps = [
-        f"scale={specs.width}:{specs.height}:force_original_aspect_ratio=increase",
-        f"crop={specs.width}:{specs.height}",
-        "setsar=1",
-    ]
+    source_steps = _source_framing_filters(specs=specs, framing=framing)
     source_steps.extend(_effects_filters(effects_config))
     cut_filters, source_video_label, source_audio_label = _cut_filter_graph(keep_segments)
     if not broll_assets:
@@ -287,6 +286,33 @@ def _effects_filters(effects_config: dict[str, object] | None) -> list[str]:
             f"boxblur=luma_radius={feather:.1f}:luma_power=1:enable='lt(mod(t\\,2)\\,0.28)'"
         )
     return filters
+
+
+def _source_framing_filters(
+    *,
+    specs: RenderSpecs,
+    framing: dict[str, object] | None,
+) -> list[str]:
+    fit_mode = str((framing or {}).get("fit_mode") or "fill")
+    crop = _dict((framing or {}).get("crop"))
+    zoom = _float(crop.get("zoom"), 1)
+    x = min(1, max(0, _float(crop.get("x"), 0.5)))
+    y = min(1, max(0, _float(crop.get("y"), 0.5)))
+    padding_color = _ffmpeg_color(str((framing or {}).get("padding_color") or "#000000"))
+    if fit_mode == "fit":
+        return [
+            f"scale={specs.width}:{specs.height}:force_original_aspect_ratio=decrease",
+            f"pad={specs.width}:{specs.height}:(ow-iw)/2:(oh-ih)/2:color={padding_color}",
+            "setsar=1",
+        ]
+
+    safe_zoom = min(3, max(1, zoom if fit_mode == "custom" else 1))
+    return [
+        f"scale={specs.width}:{specs.height}:force_original_aspect_ratio=increase",
+        f"scale=iw*{safe_zoom:.4f}:ih*{safe_zoom:.4f}",
+        f"crop={specs.width}:{specs.height}:(iw-ow)*{x:.4f}:(ih-oh)*{y:.4f}",
+        "setsar=1",
+    ]
 
 
 def _preset_filter(preset: str, intensity: float) -> str:

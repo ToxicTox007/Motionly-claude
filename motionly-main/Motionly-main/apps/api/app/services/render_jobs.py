@@ -20,6 +20,7 @@ def complete_render_job(
     supabase_url: str | None,
     service_role_key: str | None,
     execute_ffmpeg: bool,
+    allow_fixture_media: bool = False,
 ) -> RenderJobRecord:
     if job.status == RenderJobStatus.COMPLETE:
         return job
@@ -46,11 +47,7 @@ def complete_render_job(
         job=job,
         status=RenderJobStatus.RENDERING,
         progress_pct=70,
-        message=(
-            "Rendering captioned 9:16 MP4."
-            if job.manifest.get("include_captions", True)
-            else "Rendering 9:16 MP4 without captions."
-        ),
+        message=_rendering_message(job),
     )
     export_storage_path = (
         f"workspaces/{job.workspace_id}/projects/{job.project_id}/exports/{job.id}.mp4"
@@ -77,9 +74,17 @@ def complete_render_job(
             )
             output_path = storage.object_path(bucket=export_bucket, path=export_storage_path)
             renderer = FFmpegCaptionRenderer()
-            broll_assets = _broll_assets_from_manifest(job.manifest, storage=storage)
+            broll_assets = _broll_assets_from_manifest(
+                job.manifest,
+                storage=storage,
+                allow_fixture_media=allow_fixture_media,
+            )
             rendered_broll_count = len(broll_assets)
-            audio_mix = _audio_mix_from_manifest(job.manifest, storage=storage)
+            audio_mix = _audio_mix_from_manifest(
+                job.manifest,
+                storage=storage,
+                allow_fixture_media=allow_fixture_media,
+            )
             effects_config = _effects_config_from_manifest(job.manifest)
             try:
                 benchmark_ms, file_size_bytes = renderer.render(
@@ -89,6 +94,7 @@ def complete_render_job(
                     specs=job.specs,
                     broll_assets=broll_assets,
                     effects_config=effects_config,
+                    framing=_framing_from_manifest(job.manifest),
                     keep_segments=job.keep_segments,
                     **audio_mix,
                 )
@@ -98,10 +104,13 @@ def complete_render_job(
                 job.logs = [
                     *job.logs,
                     _render_failure_log(exc),
-                    "render_fallback=720x1280",
                 ]
                 output_path.unlink(missing_ok=True)
-                fallback_specs = RenderSpecs(width=720, height=1280)
+                fallback_specs = _fallback_specs_for(job.specs)
+                job.logs = [
+                    *job.logs,
+                    f"render_fallback={fallback_specs.width}x{fallback_specs.height}",
+                ]
                 benchmark_ms, file_size_bytes = renderer.render(
                     source_path=source_path,
                     ass_path=ass_path,
@@ -109,6 +118,7 @@ def complete_render_job(
                     specs=fallback_specs,
                     broll_assets=broll_assets,
                     effects_config=effects_config,
+                    framing=_framing_from_manifest(job.manifest),
                     keep_segments=job.keep_segments,
                     **audio_mix,
                 )
@@ -190,6 +200,7 @@ def complete_render_job_by_id(
     supabase_url: str | None,
     service_role_key: str | None,
     execute_ffmpeg: bool,
+    allow_fixture_media: bool = False,
 ) -> RenderJobRecord:
     job = repository.get_render_job(
         project_id=project_id,
@@ -204,11 +215,36 @@ def complete_render_job_by_id(
         supabase_url=supabase_url,
         service_role_key=service_role_key,
         execute_ffmpeg=execute_ffmpeg,
+        allow_fixture_media=allow_fixture_media,
     )
 
 
 def _can_retry_with_720p(*, exc: ApiError, specs: RenderSpecs) -> bool:
-    return exc.code == "ffmpeg_render_failed" and (specs.width, specs.height) != (720, 1280)
+    return exc.code == "ffmpeg_render_failed" and max(specs.width, specs.height) > 1280
+
+
+def _fallback_specs_for(specs: RenderSpecs) -> RenderSpecs:
+    if specs.width <= 0 or specs.height <= 0:
+        return RenderSpecs(width=720, height=1280)
+    if specs.height >= specs.width:
+        height = 1280
+        width = _even(round(height * specs.width / specs.height))
+    else:
+        width = 1280
+        height = _even(round(width * specs.height / specs.width))
+    return RenderSpecs(width=width, height=height, fps=specs.fps, format=specs.format)
+
+
+def _even(value: int) -> int:
+    return max(2, int(round(value / 2) * 2))
+
+
+def _rendering_message(job: RenderJobRecord) -> str:
+    framing = _framing_from_manifest(job.manifest)
+    aspect = framing.get("output_aspect", "9:16")
+    fit_mode = framing.get("fit_mode", "fill")
+    caption_text = "captioned " if job.manifest.get("include_captions", True) else ""
+    return f"Rendering {caption_text}{aspect} MP4 with {fit_mode} framing."
 
 
 def _write_simulated_export(
@@ -316,10 +352,19 @@ def _settings_summary_from_job(job: RenderJobRecord) -> dict[str, object]:
     }
 
 
+def _framing_from_manifest(manifest: dict) -> dict[str, object]:
+    export_settings = manifest.get("export_settings")
+    if not isinstance(export_settings, dict):
+        return {}
+    framing = export_settings.get("framing")
+    return framing if isinstance(framing, dict) else {}
+
+
 def _broll_assets_from_manifest(
     manifest: dict,
     *,
     storage: LocalObjectStorage | None = None,
+    allow_fixture_media: bool = False,
 ) -> list[dict[str, object]]:
     render_props = manifest.get("render_props")
     if not isinstance(render_props, dict):
@@ -333,7 +378,11 @@ def _broll_assets_from_manifest(
     for asset in assets[:8]:
         if not isinstance(asset, dict):
             continue
-        src = _video_source_for_asset(asset, storage=storage)
+        src = _video_source_for_asset(
+            asset,
+            storage=storage,
+            allow_fixture_media=allow_fixture_media,
+        )
         if src is None:
             continue
         if asset.get("kind") != "video":
@@ -348,11 +397,14 @@ def _video_source_for_asset(
     asset: dict[str, object],
     *,
     storage: LocalObjectStorage | None,
+    allow_fixture_media: bool,
 ) -> str | Path | None:
     src = str(asset.get("src") or "")
     if not src:
         return None
     if src.startswith("fixture://"):
+        if not allow_fixture_media:
+            return None
         if storage is None:
             return None
         return _fixture_broll_video(
@@ -381,6 +433,7 @@ def _audio_mix_from_manifest(
     manifest: dict,
     *,
     storage: LocalObjectStorage,
+    allow_fixture_media: bool = False,
 ) -> dict[str, object]:
     render_props = manifest.get("render_props")
     if not isinstance(render_props, dict):
@@ -397,8 +450,11 @@ def _audio_mix_from_manifest(
         metadata=metadata,
         storage=storage,
         fixture_id=str(track.get("provider_track_id") or track.get("title") or "fixture-music"),
-        fixture_enabled=str(track.get("provider") or "") == "fixture"
-        or metadata.get("source") == "fixture",
+        fixture_enabled=allow_fixture_media
+        and (
+            str(track.get("provider") or "") == "fixture"
+            or metadata.get("source") == "fixture"
+        ),
     )
     sfx_sources = [
         source
@@ -410,7 +466,8 @@ def _audio_mix_from_manifest(
     music_volume = float(selection.get("music_volume") or 0)
     sfx_intensity = float(selection.get("sfx_intensity") or 0)
     if not sfx_sources and sfx_intensity > 0 and (
-        str(track.get("provider") or "") == "fixture" or metadata.get("source") == "fixture"
+        allow_fixture_media
+        and (str(track.get("provider") or "") == "fixture" or metadata.get("source") == "fixture")
     ):
         sfx_sources = [_fixture_sfx_audio(storage=storage)]
     if music_source is None and not sfx_sources:

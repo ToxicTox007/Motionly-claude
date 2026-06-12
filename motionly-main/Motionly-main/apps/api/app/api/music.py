@@ -15,7 +15,9 @@ from app.api.errors import ApiError
 from app.repositories.music import InMemoryMusicRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.music import (
+    MusicSelectionResponse,
     MusicSelectionStatus,
+    MusicSelectionResponse,
     MusicSelectRequest,
     MusicSelectResponse,
     MusicTrackListResponse,
@@ -30,6 +32,16 @@ MusicRepositoryDep = Annotated[InMemoryMusicRepository, Depends(get_music_reposi
 PlanRepositoryDep = Annotated[InMemoryPlanRepository, Depends(get_plan_repository)]
 MusicProvidersDep = Annotated[list[MusicProvider], Depends(get_music_providers)]
 MusicQueueDep = Annotated[MusicQueue, Depends(get_music_queue)]
+
+
+@router.get("/selection", response_model=MusicSelectionResponse | None)
+async def get_music_selection(
+    project_id: UUID,
+    actor: ActorDep,
+    repository: MusicRepositoryDep,
+) -> MusicSelectionResponse | None:
+    selection = repository.latest_selection(project_id=project_id, workspace_id=actor.workspace_id)
+    return repository.response_for_selection(selection) if selection else None
 
 
 def build_music_cache_key(
@@ -159,6 +171,19 @@ async def select_music(
         selection=repository.response_for_selection(selection),
         job_id=job.id,
     )
+
+
+@router.get("/selection", response_model=MusicSelectionResponse | None)
+async def get_music_selection(
+    project_id: UUID,
+    actor: ActorDep,
+    repository: MusicRepositoryDep,
+) -> MusicSelectionResponse | None:
+    selection = repository.latest_selection(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    return repository.response_for_selection(selection) if selection else None
 
 
 @router.get("/tracks", response_model=MusicTrackListResponse)

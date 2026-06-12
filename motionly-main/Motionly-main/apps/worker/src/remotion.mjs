@@ -107,13 +107,24 @@ async function uploadToStorage(localPath, storageBucket, storagePath) {
  * Resolve a media src value to a real HTTP URL:
  *   - supabase://  → sign via Supabase Storage API
  *   - https://     → pass through (Pexels, Pixabay, etc.)
- *   - fixture://   → return null (will be filtered out)
+ *   - fixture://   → allowed only in non-production/demo mode
  */
 async function resolveSrc(src) {
   if (!src) return null;
-  if (src.startsWith("fixture://")) return null;
+  if (src.startsWith("fixture://")) {
+    if (fixtureMediaAllowed()) return null;
+    throw new Error("Fixture media is not allowed for production rendering.");
+  }
   if (src.startsWith("supabase://")) return signSupabaseSrc(src);
   return src; // already a real HTTP(S) URL
+}
+
+function fixtureMediaAllowed() {
+  return (
+    env("APP_ENV") !== "production" ||
+    env("MOTIONLY_DEMO_MODE") === "true" ||
+    env("ALLOW_FIXTURE_PROVIDERS") === "true"
+  );
 }
 
 /**
@@ -137,7 +148,7 @@ async function assembleRenderProps(renderProps) {
     await Promise.all(
       (renderProps.assets ?? []).map(async (asset) => {
         const src = await resolveSrc(asset.src);
-        if (!src) return null; // fixture — drop silently
+        if (!src) return null; // development/demo fixture asset
         return { ...asset, src };
       }),
     )
@@ -158,7 +169,12 @@ async function assembleRenderProps(renderProps) {
       resolvedMusic.track.full_track_url ||
       resolvedMusic.track.preview_url ||
       "";
-    if (trackUrl.startsWith("fixture://") || !trackUrl.startsWith("http")) {
+    if (trackUrl.startsWith("fixture://")) {
+      if (!fixtureMediaAllowed()) {
+        throw new Error("Fixture music is not allowed for production rendering.");
+      }
+      resolvedMusic = null;
+    } else if (!trackUrl.startsWith("http")) {
       if (trackUrl.startsWith("supabase://")) {
         const signedTrackUrl = await resolveSrc(trackUrl);
         resolvedMusic = {

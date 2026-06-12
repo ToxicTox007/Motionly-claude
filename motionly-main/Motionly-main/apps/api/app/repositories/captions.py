@@ -16,6 +16,7 @@ from app.schemas.captions import (
     TranscriptStatus,
     TranscriptWord,
 )
+from app.services.caption_presets import get_caption_preset
 
 
 @dataclass
@@ -209,6 +210,18 @@ class InMemoryCaptionRepository:
         track.style = style
         track.hide_filler_words = hide_filler_words
         track.segments = segments
+        track.updated_at = datetime.now(UTC)
+        return track
+
+    def replace_caption_segments(
+        self,
+        *,
+        track: CaptionTrackRecord,
+        segments: list[CaptionSegment],
+    ) -> CaptionTrackRecord:
+        track.segments = [
+            segment.model_copy(update={"index": index}) for index, segment in enumerate(segments)
+        ]
         track.updated_at = datetime.now(UTC)
         return track
 
@@ -409,6 +422,34 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         self._write_caption_segments(updated)
         return updated
 
+    def replace_caption_segments(
+        self,
+        *,
+        track: CaptionTrackRecord,
+        segments: list[CaptionSegment],
+    ) -> CaptionTrackRecord:
+        next_segments = [
+            segment.model_copy(update={"index": index}) for index, segment in enumerate(segments)
+        ]
+        response = httpx.patch(
+            f"{self.rest_url}/caption_tracks",
+            headers=self.headers,
+            params={"id": f"eq.{track.id}", "select": "*"},
+            json={"updated_at": datetime.now(UTC).isoformat()},
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        updated = self._track_from_row(response.json()[0], segments=next_segments)
+        delete_response = httpx.delete(
+            f"{self.rest_url}/caption_segments",
+            headers=self.headers,
+            params={"caption_track_id": f"eq.{track.id}"},
+            timeout=10,
+        )
+        self._raise_for_supabase(delete_response)
+        self._write_caption_segments(updated)
+        return updated
+
     def _words_for_transcript(self, transcript_id: UUID) -> list[TranscriptWord]:
         response = httpx.get(
             f"{self.rest_url}/transcript_words",
@@ -458,6 +499,11 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                     for word in row.get("words", [])
                     if isinstance(word, dict)
                 ],
+                highlight_words=[
+                    str(word)
+                    for word in row.get("highlight_words", [])
+                    if isinstance(word, str)
+                ],
             )
             for row in response.json()
         ]
@@ -479,6 +525,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                     "text": segment.text,
                     "words": [word.model_dump(mode="json") for word in segment.words],
                     "line_count": segment.line_count,
+                    "highlight_words": segment.highlight_words,
                 }
                 for segment in track.segments
             ],
@@ -518,9 +565,13 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         *,
         segments: list[CaptionSegment],
     ) -> CaptionTrackRecord:
-        from app.services.caption_presets import get_caption_preset
-
         preset = CaptionPresetKey(str(row["preset"]))
+        raw_style = row.get("style")
+        style = (
+            CaptionStyle.model_validate(raw_style)
+            if isinstance(raw_style, dict) and raw_style
+            else get_caption_preset(preset).style
+        )
         return CaptionTrackRecord(
             id=UUID(str(row["id"])),
             workspace_id=UUID(str(row["workspace_id"])),
@@ -528,7 +579,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             transcript_id=UUID(str(row["transcript_id"])),
             preset=preset,
             schema_version=int(row["schema_version"]),
-            style=get_caption_preset(preset).style,
+            style=style,
             hide_filler_words=bool(row.get("hide_filler_words")),
             segments=segments,
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),

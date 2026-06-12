@@ -21,11 +21,18 @@ export function VideoScene({ input, template }: VideoSceneProps) {
   const outroFrames = template.outro ? Math.min(72, durationInFrames / 5) : 0;
   const outroStart = Math.max(0, durationInFrames - outroFrames);
   const backgroundRemoval = input.effectsConfig?.background_removal;
+  const framing = input.exportSettings.framing;
+  const crop = framing?.crop ?? { x: 0.5, y: 0.5, zoom: 1 };
+  const framingZoom =
+    framing?.fit_mode === "custom" ? Math.max(1, Math.min(3, crop.zoom)) : 1;
+  const activeZoomScale = zoom * framingZoom;
   const sourceStyle = {
     width: "100%",
     height: "100%",
-    objectFit: "cover" as const,
-    transform: `scale(${zoom})`,
+    objectFit: framing?.fit_mode === "fit" ? "contain" as const : "cover" as const,
+    objectPosition: `${Math.round(crop.x * 100)}% ${Math.round(crop.y * 100)}%`,
+    transform: `scale(${activeZoomScale})`,
+    transformOrigin: `${Math.round(crop.x * 100)}% ${Math.round(crop.y * 100)}%`,
     filter: gradeFilter(
       input.editPlan.color_grade,
       template.default_color_grade,

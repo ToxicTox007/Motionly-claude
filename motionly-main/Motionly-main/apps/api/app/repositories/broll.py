@@ -218,6 +218,33 @@ class InMemoryBrollRepository:
         slot.updated_at = datetime.now(UTC)
         return slot
 
+    def update_slot_region(
+        self,
+        *,
+        slot: BrollSlotRecord,
+        start_ms: int,
+        end_ms: int,
+        disabled: bool | None = None,
+    ) -> BrollSlotRecord:
+        slot.start_ms = start_ms
+        slot.end_ms = end_ms
+        if disabled is not None:
+            slot.status = BrollSlotStatus.DISABLED if disabled else BrollSlotStatus.READY
+        slot.updated_at = datetime.now(UTC)
+        return slot
+
+    def add_slot_candidates(
+        self,
+        *,
+        slot: BrollSlotRecord,
+        asset_ids: list[UUID],
+    ) -> BrollSlotRecord:
+        for asset_id in asset_ids:
+            if asset_id not in slot.candidate_asset_ids:
+                slot.candidate_asset_ids.append(asset_id)
+        slot.updated_at = datetime.now(UTC)
+        return slot
+
     def response_for_slot(self, slot: BrollSlotRecord) -> BrollSlotResponse:
         return slot.to_response(self.assets)
 
@@ -385,6 +412,56 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             json={
                 "status": status.value,
                 "selected_asset_id": str(asset_id) if asset_id else None,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._slot_from_row(response.json()[0])
+
+    def update_slot_region(
+        self,
+        *,
+        slot: BrollSlotRecord,
+        start_ms: int,
+        end_ms: int,
+        disabled: bool | None = None,
+    ) -> BrollSlotRecord:
+        payload: dict[str, object] = {
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        if disabled is not None:
+            payload["status"] = (
+                BrollSlotStatus.DISABLED if disabled else BrollSlotStatus.READY
+            ).value
+        response = httpx.patch(
+            f"{self.rest_url}/broll_slots",
+            headers=self.headers,
+            params={"id": f"eq.{slot.id}", "select": "*"},
+            json=payload,
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._slot_from_row(response.json()[0])
+
+    def add_slot_candidates(
+        self,
+        *,
+        slot: BrollSlotRecord,
+        asset_ids: list[UUID],
+    ) -> BrollSlotRecord:
+        candidate_asset_ids = [*slot.candidate_asset_ids]
+        for asset_id in asset_ids:
+            if asset_id not in candidate_asset_ids:
+                candidate_asset_ids.append(asset_id)
+        response = httpx.patch(
+            f"{self.rest_url}/broll_slots",
+            headers=self.headers,
+            params={"id": f"eq.{slot.id}", "select": "*"},
+            json={
+                "candidate_asset_ids": [str(asset_id) for asset_id in candidate_asset_ids],
                 "updated_at": datetime.now(UTC).isoformat(),
             },
             timeout=10,

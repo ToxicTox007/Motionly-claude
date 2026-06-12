@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LanguageHint(StrEnum):
@@ -89,6 +89,8 @@ class CaptionStyle(BaseModel):
     stroke_width_px: int = Field(default=0, ge=0)
     shadow: str | None = None
     safe_area_bottom_pct: int = Field(ge=0, le=50)
+    position_x_pct: int | None = Field(default=None, ge=0, le=100)
+    position_y_pct: int | None = Field(default=None, ge=0, le=100)
     placement: Literal["lower", "middle", "upper"]
     animation: CaptionAnimation
     max_lines: int = Field(default=2, ge=1, le=2)
@@ -109,6 +111,13 @@ class CaptionSegment(BaseModel):
     text: str
     words: list[TranscriptWord] = Field(default_factory=list)
     line_count: int = Field(default=1, ge=1, le=2)
+    highlight_words: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "CaptionSegment":
+        if self.end_ms <= self.start_ms:
+            raise ValueError("caption segment end_ms must be greater than start_ms")
+        return self
 
 
 class CaptionTrackReadResponse(BaseModel):
@@ -140,6 +149,16 @@ class CaptionGenerateResponse(BaseModel):
 class CaptionUpdateRequest(BaseModel):
     preset: CaptionPresetKey | None = None
     hide_filler_words: bool | None = None
+    style: CaptionStyle | None = None
+
+
+class CaptionSegmentsUpdateRequest(BaseModel):
+    segments: list[CaptionSegment] = Field(min_length=1, max_length=240)
+
+
+class CaptionSegmentsUpdateResponse(BaseModel):
+    track: CaptionTrackReadResponse
+    status: Literal["updated"] = "updated"
 
 
 class CaptionListResponse(BaseModel):

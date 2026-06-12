@@ -16,3 +16,5 @@ __pycache__
 .corepack
 deployment-env/
 .playwright-mcp/
+.motionly/
+.screenshots/

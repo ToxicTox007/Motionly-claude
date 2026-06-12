@@ -145,6 +145,24 @@ class PlanActivateResponse(BaseModel):
     status: Literal["active"] = "active"
 
 
+class PlanCutsUpdateRequest(BaseModel):
+    cuts: list[EditPlanCut] = Field(min_length=1, max_length=24)
+
+
+class PlanCutsUpdateResponse(BaseModel):
+    plan: EditPlanResponse
+    status: Literal["updated"] = "updated"
+
+
+class PlanCaptionHighlightsUpdateRequest(BaseModel):
+    caption_highlights: list[CaptionHighlight] = Field(default_factory=list, max_length=12)
+
+
+class PlanCaptionHighlightsUpdateResponse(BaseModel):
+    plan: EditPlanResponse
+    status: Literal["updated"] = "updated"
+
+
 class PlannerProviderResult(BaseModel):
     plan: EditPlan
     provider: str

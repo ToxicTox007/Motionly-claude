@@ -23,6 +23,7 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
       <AnimatedCaptions
         segments={input.captions}
         words={input.words}
+        style={input.captionStyle}
         template={template}
       />
     </AbsoluteFill>
@@ -119,7 +120,7 @@ function MusicAndSfxMix({ input }: { input: MotionlyRenderProps }) {
   const { fps, durationInFrames } = useVideoConfig();
   const selection = input.musicSelection;
   const track = selection?.track;
-  const musicSrc = mediaUrl(track?.raw_metadata);
+  const musicSrc = mediaUrl(track);
   if (!selection || !track || !musicSrc) return null;
 
   const musicVolume = Math.max(0, Math.min(1, selection.music_volume ?? 0.25));
@@ -158,8 +159,18 @@ function MusicAndSfxMix({ input }: { input: MotionlyRenderProps }) {
   );
 }
 
-function mediaUrl(metadata: Record<string, unknown> | undefined) {
-  const value = metadata?.audio_url ?? metadata?.download_url ?? metadata?.src;
+function mediaUrl(
+  track: NonNullable<MotionlyRenderProps["musicSelection"]>["track"] | undefined | null,
+) {
+  const trackRecord = track as Record<string, unknown> | undefined | null;
+  const metadata = track?.raw_metadata;
+  const value =
+    trackRecord?.full_track_url ??
+    trackRecord?.preview_url ??
+    metadata?.audio_url ??
+    metadata?.download_url ??
+    metadata?.preview_url ??
+    metadata?.src;
   return typeof value === "string" && !value.startsWith("fixture://")
     ? value
     : null;

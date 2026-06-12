@@ -11,10 +11,12 @@ from app.schemas.renders import (
     DurationPreset,
     ExportOptions,
     ExportResolution,
+    OutputAspect,
     PlatformPreset,
     RenderSpecs,
     RenderTemplateId,
 )
+from app.schemas.uploads import VideoMetadata
 
 RENDERER_VERSION = "remotion-premium-v1"
 
@@ -82,6 +84,26 @@ TEMPLATES: dict[RenderTemplateId, TemplateMetadata] = {
         intro=True,
         outro=True,
     ),
+    RenderTemplateId.TALKING_HEAD_REEL_V1: TemplateMetadata(
+        id=RenderTemplateId.TALKING_HEAD_REEL_V1,
+        name="Talking Head Reel",
+        style=EditPlanStyle.FOUNDER,
+        caption_animation="slide_up",
+        supported_effects=("clean_lower_third", "emphasis_pulse", "zoom_punch", "motion_blur"),
+        default_color_grade="clean_founder",
+        intro=False,
+        outro=True,
+    ),
+    RenderTemplateId.PRODUCT_PROMO_REEL_V1: TemplateMetadata(
+        id=RenderTemplateId.PRODUCT_PROMO_REEL_V1,
+        name="Product Promo Reel",
+        style=EditPlanStyle.LUXURY,
+        caption_animation="gold_shimmer",
+        supported_effects=("product_card", "warm_grade", "broll_slide_in", "gradient_ramp"),
+        default_color_grade="champagne_gold",
+        intro=True,
+        outro=True,
+    ),
 }
 
 STYLE_DEFAULTS: dict[EditPlanStyle, RenderTemplateId] = {
@@ -128,6 +150,13 @@ RESOLUTION_SPECS: dict[ExportResolution, tuple[int, int]] = {
     ExportResolution.PRO_4K: (2160, 3840),
 }
 
+ASPECT_RATIOS: dict[OutputAspect, tuple[int, int]] = {
+    OutputAspect.VERTICAL_9_16: (9, 16),
+    OutputAspect.SQUARE_1_1: (1, 1),
+    OutputAspect.PORTRAIT_4_5: (4, 5),
+    OutputAspect.LANDSCAPE_16_9: (16, 9),
+}
+
 RESOLUTION_RANK: dict[str, int] = {"720p": 0, "1080p": 1, "4k": 2}
 
 DURATION_TARGET_MS: dict[DurationPreset, int] = {
@@ -162,6 +191,7 @@ def render_specs_for_options(
     *,
     options: ExportOptions,
     max_resolution: str,
+    source_metadata: VideoMetadata | None = None,
 ) -> tuple[RenderSpecs, ExportResolution]:
     requested_rank = RESOLUTION_RANK[options.resolution.value]
     max_rank = RESOLUTION_RANK.get(max_resolution, RESOLUTION_RANK["720p"])
@@ -172,7 +202,11 @@ def render_specs_for_options(
             if max_rank >= RESOLUTION_RANK["1080p"]
             else ExportResolution.FREE_720P
         )
-    width, height = RESOLUTION_SPECS[applied_resolution]
+    width, height = _dimensions_for_aspect(
+        applied_resolution=applied_resolution,
+        output_aspect=options.framing.output_aspect,
+        source_metadata=source_metadata,
+    )
     return RenderSpecs(width=width, height=height), applied_resolution
 
 
@@ -219,5 +253,38 @@ def export_settings(
         "duration_preset": duration_preset.value,
         "fps": specs.fps,
         "format": specs.format.value,
+        "framing": options.framing.model_dump(mode="json"),
         "watermark": False,
     }
+
+
+def _dimensions_for_aspect(
+    *,
+    applied_resolution: ExportResolution,
+    output_aspect: OutputAspect,
+    source_metadata: VideoMetadata | None,
+) -> tuple[int, int]:
+    base_width, base_height = RESOLUTION_SPECS[applied_resolution]
+    max_long_edge = max(base_width, base_height)
+    if output_aspect == OutputAspect.ORIGINAL:
+        source_width = source_metadata.width if source_metadata else None
+        source_height = source_metadata.height if source_metadata else None
+        ratio_width, ratio_height = (
+            (source_width, source_height)
+            if source_width and source_height
+            else ASPECT_RATIOS[OutputAspect.VERTICAL_9_16]
+        )
+    else:
+        ratio_width, ratio_height = ASPECT_RATIOS[output_aspect]
+
+    if ratio_width >= ratio_height:
+        width = max_long_edge
+        height = round(width * ratio_height / ratio_width)
+    else:
+        height = max_long_edge
+        width = round(height * ratio_width / ratio_height)
+    return _even(width), _even(height)
+
+
+def _even(value: int) -> int:
+    return max(2, int(round(value / 2) * 2))

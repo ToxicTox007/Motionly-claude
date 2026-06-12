@@ -6,16 +6,17 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
-import type { CaptionSegment, TranscriptWord } from "@motionly/shared";
+import type { CaptionSegment, CaptionStyle, TranscriptWord } from "@motionly/shared";
 import type { TemplateDefinition } from "../types";
 
 type CaptionsProps = {
   segments: CaptionSegment[];
   words: TranscriptWord[];
+  style?: CaptionStyle | null;
   template: TemplateDefinition;
 };
 
-export function AnimatedCaptions({ segments, words, template }: CaptionsProps) {
+export function AnimatedCaptions({ segments, words, style, template }: CaptionsProps) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const timeMs = (frame / fps) * 1000;
@@ -29,39 +30,64 @@ export function AnimatedCaptions({ segments, words, template }: CaptionsProps) {
       : 1;
 
   if (!segment) return null;
+  const placement = captionPlacement(style);
+  const textColor = style?.text_color ?? template.foreground;
+  const accentColor = style?.accent_color ?? template.accent;
+  const fontSize = style?.font_size_px ? Math.round(style.font_size_px * 1.45) : 76;
+  const fontWeight = style?.font_weight ?? 900;
+  const textTransform =
+    style?.text_case === "uppercase"
+      ? "uppercase"
+      : style?.text_case === "title"
+        ? "capitalize"
+        : "none";
 
   return (
     <AbsoluteFill
       style={{
-        justifyContent: "flex-end",
+        justifyContent: placement.justifyContent,
         alignItems: "center",
-        padding: "0 76px 180px",
+        padding: placement.padding,
         pointerEvents: "none",
       }}
     >
       <div
         style={{
           maxWidth: 840,
-          transform: `translateY(${y}px) scale(${pulse})`,
+          ...(placement.customPosition
+            ? {
+                position: "absolute",
+                left: placement.customPosition.left,
+                top: placement.customPosition.top,
+                transform: `translate(-50%, -50%) translateY(${y}px) scale(${pulse})`,
+              }
+            : {
+                transform: `translateY(${y}px) scale(${pulse})`,
+              }),
           textAlign: "center",
-          color: template.foreground,
-          fontFamily: template.fontFamily,
-          fontSize: 76,
-          fontWeight: 900,
+          color: textColor,
+          fontFamily: style?.font_family ?? template.fontFamily,
+          fontSize,
+          fontWeight,
           lineHeight: 1.05,
-          textShadow: "0 6px 24px rgba(0,0,0,0.72)",
-          textTransform: "uppercase",
+          textShadow: style?.shadow ?? "0 6px 24px rgba(0,0,0,0.72)",
+          WebkitTextStroke:
+            style?.stroke_width_px && style.stroke_color
+              ? `${style.stroke_width_px}px ${style.stroke_color}`
+              : undefined,
+          textTransform,
         }}
       >
         {segment.words.map((word, index) => {
           const isActive = activeWord?.index === word.index;
+          const isHighlighted = isActive || segment.highlight_words?.includes(word.text);
           return (
             <React.Fragment key={`${word.index}-${word.start_ms}`}>
               <span
                 style={{
-                  color: isActive ? template.accent : template.foreground,
+                  color: isHighlighted ? accentColor : textColor,
                   filter:
-                    isActive && template.caption_animation === "gold_shimmer"
+                    isHighlighted && template.caption_animation === "gold_shimmer"
                       ? "drop-shadow(0 0 14px rgba(214,179,95,0.8))"
                       : undefined,
                   transform: isActive ? "scale(1.06)" : "scale(1)",
@@ -78,4 +104,28 @@ export function AnimatedCaptions({ segments, words, template }: CaptionsProps) {
       </div>
     </AbsoluteFill>
   );
+}
+
+function captionPlacement(style?: CaptionStyle | null) {
+  if (style?.position_x_pct != null && style.position_y_pct != null) {
+    return {
+      justifyContent: "flex-start" as const,
+      padding: "0",
+      customPosition: {
+        left: `${style.position_x_pct}%`,
+        top: `${style.position_y_pct}%`,
+      },
+    };
+  }
+  if (style?.placement === "upper") {
+    return { justifyContent: "flex-start" as const, padding: "190px 76px 0" };
+  }
+  if (style?.placement === "middle") {
+    return { justifyContent: "center" as const, padding: "0 76px" };
+  }
+  const bottomPct = style?.safe_area_bottom_pct ?? 12;
+  return {
+    justifyContent: "flex-end" as const,
+    padding: `0 76px ${Math.max(120, Math.round(bottomPct * 10))}px`,
+  };
 }

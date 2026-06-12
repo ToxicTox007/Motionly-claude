@@ -726,7 +726,11 @@ def _repair_cuts(value: object, fallback: object, duration_ms: int) -> list[dict
     return repaired or list(fallback if isinstance(fallback, list) else [])
 
 
-def _repair_highlights(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:
+def _repair_highlights(
+    value: object,
+    fallback: object,
+    duration_ms: int,
+) -> list[dict[str, object]]:
     effect_choices = {"pulse", "underline", "color_pop", "scale", "none"}
     effect_aliases = {"color": "color_pop", "highlight": "color_pop", "pop": "pulse"}
     items = value if isinstance(value, list) else fallback
@@ -783,7 +787,11 @@ def _repair_broll_requests(
     return repaired[:12] or list(fallback if isinstance(fallback, list) else [])
 
 
-def _repair_zoom_moments(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:
+def _repair_zoom_moments(
+    value: object,
+    fallback: object,
+    duration_ms: int,
+) -> list[dict[str, object]]:
     items = value if isinstance(value, list) else fallback
     repaired = []
     for item in items if isinstance(items, list) else []:

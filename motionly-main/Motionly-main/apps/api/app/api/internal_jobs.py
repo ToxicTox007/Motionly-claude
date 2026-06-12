@@ -94,6 +94,10 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
             service_role_key=settings.supabase_service_role_key,
             execute_ffmpeg=settings.render_execute_ffmpeg,
+            allow_fixture_media=(
+                getattr(settings, "app_env", "test") != "production"
+                or getattr(settings, "allow_fixture_providers", False)
+            ),
         )
         return {
             "render_job_id": str(render.id),

@@ -16,6 +16,8 @@ from app.schemas.captions import (
     CaptionGenerateRequest,
     CaptionGenerateResponse,
     CaptionListResponse,
+    CaptionSegmentsUpdateRequest,
+    CaptionSegmentsUpdateResponse,
     CaptionUpdateRequest,
     TranscriptionCreateRequest,
     TranscriptionCreateResponse,
@@ -264,6 +266,7 @@ async def update_caption_track(
         else track.hide_filler_words
     )
     preset = get_caption_preset(preset_key)
+    style = payload.style or preset.style
     segments = chunk_caption_words(transcript.words, hide_filler_words=hide_filler_words)
     job = transcription_queue.enqueue_caption_generation(
         project_id=project_id,
@@ -273,8 +276,28 @@ async def update_caption_track(
     updated = repository.update_caption_track(
         track=track,
         preset=preset_key,
-        style=preset.style,
+        style=style,
         hide_filler_words=hide_filler_words,
         segments=segments,
     )
     return CaptionGenerateResponse(track=updated.to_response(), job_id=job.id)
+
+
+@router.patch("/captions/{track_id}/segments", response_model=CaptionSegmentsUpdateResponse)
+async def update_caption_segments(
+    project_id: UUID,
+    track_id: UUID,
+    payload: CaptionSegmentsUpdateRequest,
+    actor: ActorDep,
+    repository: CaptionRepositoryDep,
+) -> CaptionSegmentsUpdateResponse:
+    track = repository.get_caption_track(
+        track_id=track_id,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    updated = repository.replace_caption_segments(
+        track=track,
+        segments=payload.segments,
+    )
+    return CaptionSegmentsUpdateResponse(track=updated.to_response())

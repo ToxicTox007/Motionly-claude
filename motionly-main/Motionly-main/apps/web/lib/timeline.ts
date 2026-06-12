@@ -98,7 +98,7 @@ export function buildTimelineState({
       label: seg.text.slice(0, 32),
       colorClass: TRACK_COLORS.caption,
       disabled: false,
-      sourceRef: { kind: "caption_segment" as const, id: seg.id ?? undefined },
+      sourceRef: { kind: "caption_segment" as const, id: seg.id ?? undefined, index: seg.index },
     }),
   );
 

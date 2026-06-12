@@ -5,6 +5,7 @@ def caption_track_to_ass(*, segments: list[CaptionSegment], style: CaptionStyle)
     alignment = {"lower": 2, "middle": 5, "upper": 8}[style.placement]
     margin_v = max(80, int(1920 * style.safe_area_bottom_pct / 100))
     primary = _ass_color(style.text_color)
+    accent = _ass_color(style.accent_color)
     stroke = _ass_color(style.stroke_color or "#0f172a")
     lines = [
         "[Script Info]",
@@ -28,18 +29,31 @@ def caption_track_to_ass(*, segments: list[CaptionSegment], style: CaptionStyle)
         "Format: Layer, Start, End, Style, Text",
     ]
     for segment in segments:
-        text = _format_text(segment.text, style)
+        text = _format_text(segment.text, style, primary=primary, accent=accent, highlights=segment.highlight_words)
         lines.append(
             f"Dialogue: 0,{_ass_time(segment.start_ms)},{_ass_time(segment.end_ms)},Motionly,{text}"
         )
     return "\n".join(lines) + "\n"
 
 
-def _format_text(text: str, style: CaptionStyle) -> str:
+def _format_text(
+    text: str,
+    style: CaptionStyle,
+    *,
+    primary: str,
+    accent: str,
+    highlights: list[str],
+) -> str:
     if style.text_case == "uppercase":
         text = text.upper()
+        highlights = [word.upper() for word in highlights]
     elif style.text_case == "title":
         text = text.title()
+        highlights = [word.title() for word in highlights]
+    for word in sorted(set(highlights), key=len, reverse=True):
+        if not word:
+            continue
+        text = text.replace(word, rf"{{\c{accent}}}{word}{{\c{primary}}}")
     return text.replace("\n", r"\N").replace(",", r"\,")
 
 

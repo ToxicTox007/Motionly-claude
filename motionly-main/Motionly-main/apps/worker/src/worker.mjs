@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { Worker } from "bullmq";
 import {
   apiBaseUrl,
@@ -14,6 +16,14 @@ import {
 
 function env(name, fallback = "") {
   return process.env[name] || fallback;
+}
+
+function remotionEnabled() {
+  return env("REMOTION_ENABLED") === "true";
+}
+
+function rendererPath() {
+  return resolve(env("RENDERER_BASE_PATH", join(import.meta.dirname, "../../renderer")));
 }
 
 async function postJson(path, body) {
@@ -191,6 +201,39 @@ function createWorker(queueName, connection) {
   return worker;
 }
 
+function validateRemotionConfig() {
+  if (!remotionEnabled()) return;
+
+  const rPath = rendererPath();
+  const requiredFiles = [
+    join(rPath, "package.json"),
+    join(rPath, "src/render-cli.ts"),
+    join(rPath, "src/index.ts"),
+  ];
+  const missingFiles = requiredFiles.filter((path) => !existsSync(path));
+  if (missingFiles.length > 0) {
+    throw new Error(
+      `REMOTION_ENABLED=true but renderer files are missing: ${missingFiles.join(", ")}`,
+    );
+  }
+
+  if (!env("SUPABASE_URL") || !env("SUPABASE_SERVICE_ROLE_KEY")) {
+    throw new Error(
+      "REMOTION_ENABLED=true requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    );
+  }
+
+  const browserPath = env("BROWSER_EXECUTABLE_PATH", env("PUPPETEER_EXECUTABLE_PATH"));
+  if (browserPath && !existsSync(browserPath)) {
+    throw new Error(`Configured Chromium executable was not found: ${browserPath}`);
+  }
+  if (isProduction() && !browserPath) {
+    throw new Error(
+      "REMOTION_ENABLED=true in production requires BROWSER_EXECUTABLE_PATH or PUPPETEER_EXECUTABLE_PATH.",
+    );
+  }
+}
+
 async function main() {
   const mode = process.argv[2] || (isProduction() ? "--loop" : "--check");
   if (!["--check", "--once", "--loop"].includes(mode)) {
@@ -213,8 +256,13 @@ async function main() {
   }
 
   await writeBuildStamp();
+  validateRemotionConfig();
   if (mode === "--check") {
-    console.log("BullMQ worker queue and API config are present.");
+    console.log(
+      remotionEnabled()
+        ? "BullMQ worker, API config, and Remotion renderer prerequisites are present."
+        : "BullMQ worker queue and API config are present.",
+    );
     return;
   }
 

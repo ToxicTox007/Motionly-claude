@@ -17,8 +17,12 @@ from app.schemas.plans import (
     EDIT_PLAN_SCHEMA_VERSION,
     EditPlanStatus,
     PlanActivateResponse,
+    PlanCaptionHighlightsUpdateRequest,
+    PlanCaptionHighlightsUpdateResponse,
     PlanCreateRequest,
     PlanCreateResponse,
+    PlanCutsUpdateRequest,
+    PlanCutsUpdateResponse,
     PlanListResponse,
 )
 from app.services.edit_planner import (
@@ -139,3 +143,64 @@ async def activate_plan(
         plan_id=plan_id,
     )
     return PlanActivateResponse(plan=plan.to_response())
+
+
+@router.patch("/{plan_id}/cuts", response_model=PlanCutsUpdateResponse)
+async def update_plan_cuts(
+    project_id: UUID,
+    plan_id: UUID,
+    payload: PlanCutsUpdateRequest,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+) -> PlanCutsUpdateResponse:
+    record = repository.get_plan(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+    )
+    target_duration_s = max(
+        10,
+        round(sum(cut.end_ms - cut.start_ms for cut in payload.cuts) / 1000),
+    )
+    plan = record.plan.model_copy(
+        update={
+            "cuts": payload.cuts,
+            "target_duration_s": target_duration_s,
+        }
+    )
+    updated = repository.update_plan_cuts(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+        plan=plan,
+        summary=summarize_plan(plan),
+        target_duration_s=target_duration_s,
+    )
+    return PlanCutsUpdateResponse(plan=updated.to_response())
+
+
+@router.patch("/{plan_id}/caption-highlights", response_model=PlanCaptionHighlightsUpdateResponse)
+async def update_plan_caption_highlights(
+    project_id: UUID,
+    plan_id: UUID,
+    payload: PlanCaptionHighlightsUpdateRequest,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+) -> PlanCaptionHighlightsUpdateResponse:
+    record = repository.get_plan(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+    )
+    plan = record.plan.model_copy(
+        update={"caption_highlights": payload.caption_highlights},
+    )
+    updated = repository.update_plan_cuts(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+        plan=plan,
+        summary=summarize_plan(plan),
+        target_duration_s=record.target_duration_s,
+    )
+    return PlanCaptionHighlightsUpdateResponse(plan=updated.to_response())

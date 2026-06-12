@@ -184,6 +184,23 @@ class InMemoryPlanRepository:
                 plan.updated_at = datetime.now(UTC)
         return target
 
+    def update_plan_cuts(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        plan_id: UUID,
+        plan: EditPlan,
+        summary: PlanSummary,
+        target_duration_s: int,
+    ) -> EditPlanRecord:
+        record = self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+        record.plan = plan
+        record.summary = summary
+        record.target_duration_s = target_duration_s
+        record.updated_at = datetime.now(UTC)
+        return record
+
 
 class SupabasePlanRepository(InMemoryPlanRepository):
     def __init__(
@@ -303,6 +320,34 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             headers=self.headers,
             params={"id": f"eq.{plan_id}", "select": "*"},
             json={"is_active": True, "updated_at": datetime.now(UTC).isoformat()},
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._plan_from_row(response.json()[0])
+
+    def update_plan_cuts(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        plan_id: UUID,
+        plan: EditPlan,
+        summary: PlanSummary,
+        target_duration_s: int,
+    ) -> EditPlanRecord:
+        self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+        response = httpx.patch(
+            f"{self.rest_url}/edit_plans",
+            headers=self.headers,
+            params={"id": f"eq.{plan_id}", "select": "*"},
+            json=self._json_safe(
+                {
+                    "plan": plan,
+                    "summary": summary,
+                    "target_duration_s": target_duration_s,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            ),
             timeout=10,
         )
         self._raise_for_supabase(response)

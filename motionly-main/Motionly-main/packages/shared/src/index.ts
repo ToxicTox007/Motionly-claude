@@ -35,7 +35,9 @@ export type RenderTemplateId =
   | "founder_reel_v1"
   | "travel_reel_v1"
   | "podcast_reel_v1"
-  | "fashion_reel_v1";
+  | "fashion_reel_v1"
+  | "talking_head_reel_v1"
+  | "product_promo_reel_v1";
 export type RenderEngine = "ffmpeg_basic" | "remotion_premium";
 export type BrollDensity = "none" | "low" | "medium" | "high";
 export type EditPlanStatus = "ready" | "failed";
@@ -76,6 +78,8 @@ export type RegenerationAction =
 export type DurationPreset = "short" | "medium" | "long";
 export type PlatformPreset = "instagram" | "tiktok" | "shorts";
 export type ExportResolution = "720p" | "1080p" | "4k";
+export type OutputAspect = "original" | "9:16" | "1:1" | "4:5" | "16:9";
+export type ExportFitMode = "fit" | "fill" | "custom";
 export type BillingPlanKey = "free" | "creator" | "pro" | "agency";
 export type SubscriptionStatus =
   | "none"
@@ -145,6 +149,8 @@ export interface CaptionStyle {
   stroke_width_px: number;
   shadow?: string | null;
   safe_area_bottom_pct: number;
+  position_x_pct?: number | null;
+  position_y_pct?: number | null;
   placement: "lower" | "middle" | "upper";
   animation: "fade_up" | "pop" | "type_on" | "glow" | "slide_up";
   max_lines: number;
@@ -165,6 +171,7 @@ export interface CaptionSegment {
   text: string;
   words: TranscriptWord[];
   line_count: number;
+  highlight_words?: string[];
 }
 
 export interface CaptionTrackSummary {
@@ -425,6 +432,19 @@ export interface RenderSpecs {
   format: ExportFormat;
 }
 
+export interface ExportCropSettings {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface ExportFraming {
+  output_aspect: OutputAspect;
+  fit_mode: ExportFitMode;
+  crop: ExportCropSettings;
+  padding_color: string;
+}
+
 export interface RenderTemplateMetadata {
   id: RenderTemplateId;
   name: string;
@@ -458,6 +478,7 @@ export interface PremiumRenderManifest {
     fps: number;
     format: ExportFormat;
     watermark: boolean;
+    framing?: ExportFraming;
   };
   unsupported_effects: string[];
   downgraded_effects: string[];
@@ -531,6 +552,7 @@ export interface ExportOptions {
   resolution: ExportResolution;
   format: ExportFormat;
   platform: PlatformPreset;
+  framing?: ExportFraming;
 }
 
 export interface RegenerateResponseSummary {

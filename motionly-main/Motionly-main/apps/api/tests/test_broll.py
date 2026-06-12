@@ -4,7 +4,13 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.api.broll import generate_broll, list_broll, swap_broll
+from app.api.broll import (
+    generate_broll,
+    list_broll,
+    search_broll_candidates,
+    swap_broll,
+    update_broll_region,
+)
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.api.plans import create_plan
@@ -14,7 +20,7 @@ from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.billing import BillingPlanKey, SubscriptionStatus
-from app.schemas.broll import BrollGenerateRequest, BrollSwapRequest
+from app.schemas.broll import BrollGenerateRequest, BrollRegionUpdateRequest, BrollSwapRequest
 from app.schemas.captions import LanguageHint
 from app.schemas.plans import BrollDensity, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
@@ -184,6 +190,112 @@ def test_swap_broll_can_disable_and_reselect_candidate() -> None:
     assert disabled.slot.status == "disabled"
     assert swapped.slot.status == "ready"
     assert swapped.slot.selected_asset_id == alternate.id
+
+
+def test_update_broll_region_persists_timing_and_disabled_state() -> None:
+    repository, project_id, workspace_id, user_id = make_broll_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    generated = asyncio.run(
+        generate_broll(
+            project_id=project_id,
+            payload=BrollGenerateRequest(),
+            request=_request(),
+            actor=actor,
+            repository=repository,
+            billing_repository=make_creator_billing_repository(workspace_id),
+            broll_queue=BrollQueue(),
+            providers=[FixtureStockVideoProvider()],
+        )
+    )
+    slot = generated.slots[0]
+
+    updated = asyncio.run(
+        update_broll_region(
+            project_id=project_id,
+            slot_id=slot.id,
+            payload=BrollRegionUpdateRequest(start_ms=750, end_ms=2250, disabled=True),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    saved = repository.get_slot(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        slot_id=slot.id,
+    )
+    assert updated.slot.start_ms == 750
+    assert updated.slot.end_ms == 2250
+    assert updated.slot.status == "disabled"
+    assert saved.start_ms == 750
+
+
+def test_update_broll_region_rejects_cross_workspace_access() -> None:
+    repository, project_id, workspace_id, user_id = make_broll_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    generated = asyncio.run(
+        generate_broll(
+            project_id=project_id,
+            payload=BrollGenerateRequest(),
+            request=_request(),
+            actor=actor,
+            repository=repository,
+            billing_repository=make_creator_billing_repository(workspace_id),
+            broll_queue=BrollQueue(),
+            providers=[FixtureStockVideoProvider()],
+        )
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            update_broll_region(
+                project_id=project_id,
+                slot_id=generated.slots[0].id,
+                payload=BrollRegionUpdateRequest(start_ms=750, end_ms=2250),
+                actor=Actor(user_id=user_id, workspace_id=uuid4()),
+                repository=repository,
+            )
+        )
+
+    assert exc_info.value.status_code in {403, 404}
+
+
+def test_update_broll_region_validates_ranges() -> None:
+    with pytest.raises(ValueError):
+        BrollRegionUpdateRequest(start_ms=3000, end_ms=3000)
+
+
+def test_search_broll_candidates_adds_provider_results_to_slot() -> None:
+    repository, project_id, workspace_id, user_id = make_broll_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    generated = asyncio.run(
+        generate_broll(
+            project_id=project_id,
+            payload=BrollGenerateRequest(),
+            request=_request(),
+            actor=actor,
+            repository=repository,
+            billing_repository=make_creator_billing_repository(workspace_id),
+            broll_queue=BrollQueue(),
+            providers=[FixtureStockVideoProvider()],
+        )
+    )
+    slot = generated.slots[0]
+
+    response = asyncio.run(
+        search_broll_candidates(
+            project_id=project_id,
+            slot_id=slot.id,
+            actor=actor,
+            repository=repository,
+            providers=[FixtureStockVideoProvider()],
+            query="modern office",
+        )
+    )
+
+    assert response.query == "modern office"
+    assert response.candidates
+    assert len(response.slot.candidates) >= len(slot.candidates)
 
 
 def test_generate_broll_allows_local_qa_when_billing_is_disabled() -> None:

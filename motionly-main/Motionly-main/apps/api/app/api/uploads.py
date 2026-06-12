@@ -183,6 +183,19 @@ async def cancel_upload(
     return upload.to_response()
 
 
+@router.get("/active", response_model=UploadReadResponse)
+async def get_active_upload(
+    project_id: UUID,
+    actor: ActorDep,
+    repository: UploadRepositoryDep,
+) -> UploadReadResponse:
+    upload = repository.get_active_upload(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    return upload.to_response()
+
+
 @router.get("/{video_id}", response_model=UploadReadResponse)
 async def get_upload(
     project_id: UUID,

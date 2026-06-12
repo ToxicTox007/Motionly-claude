@@ -2,7 +2,7 @@ import time
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.billing import build_billing_status
 from app.api.dependencies import (
@@ -21,6 +21,9 @@ from app.schemas.broll import (
     BrollGenerateRequest,
     BrollGenerateResponse,
     BrollListResponse,
+    BrollRegionUpdateRequest,
+    BrollRegionUpdateResponse,
+    BrollSearchResponse,
     BrollSlotStatus,
     BrollSwapRequest,
     BrollSwapResponse,
@@ -235,3 +238,105 @@ async def swap_broll(
         disabled=payload.disabled,
     )
     return BrollSwapResponse(slot=repository.response_for_slot(updated))
+
+
+@router.patch("/{slot_id}/region", response_model=BrollRegionUpdateResponse)
+async def update_broll_region(
+    project_id: UUID,
+    slot_id: UUID,
+    payload: BrollRegionUpdateRequest,
+    actor: ActorDep,
+    repository: BrollRepositoryDep,
+) -> BrollRegionUpdateResponse:
+    slot = repository.get_slot(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        slot_id=slot_id,
+    )
+    updated = repository.update_slot_region(
+        slot=slot,
+        start_ms=payload.start_ms,
+        end_ms=payload.end_ms,
+        disabled=payload.disabled,
+    )
+    return BrollRegionUpdateResponse(slot=repository.response_for_slot(updated))
+
+
+@router.get("/{slot_id}/search", response_model=BrollSearchResponse)
+async def search_broll_candidates(
+    project_id: UUID,
+    slot_id: UUID,
+    actor: ActorDep,
+    repository: BrollRepositoryDep,
+    providers: StockProvidersDep,
+    query: Annotated[str | None, Query(max_length=160)] = None,
+) -> BrollSearchResponse:
+    slot = repository.get_slot(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        slot_id=slot_id,
+    )
+    if not providers:
+        raise ApiError(
+            503,
+            "stock_provider_unavailable",
+            "No stock video provider is configured for B-roll search.",
+        )
+    search_query = (query or " ".join(slot.keywords) or slot.intent).strip()
+    duplicate_provider_asset_ids: set[str] = set()
+    for asset_id in slot.candidate_asset_ids:
+        try:
+            asset = repository.get_asset(
+                project_id=project_id,
+                workspace_id=actor.workspace_id,
+                asset_id=asset_id,
+            )
+            duplicate_provider_asset_ids.add(asset.provider_asset_id)
+        except ApiError:
+            continue
+    candidates = []
+    for provider in providers:
+        try:
+            candidates = provider.search(
+                query=search_query,
+                orientation=StockOrientation.PORTRAIT,
+                min_width=720,
+                min_height=1280,
+            )
+        except ApiError:
+            continue
+        if candidates:
+            break
+    assets = [
+        repository.upsert_asset(
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+            provider=candidate.provider,
+            provider_asset_id=candidate.provider_asset_id,
+            title=candidate.title,
+            thumbnail_url=candidate.thumbnail_url,
+            preview_video_url=candidate.preview_video_url,
+            download_url=candidate.download_url,
+            license=candidate.license,
+            width=candidate.width,
+            height=candidate.height,
+            duration_ms=candidate.duration_ms,
+            orientation=candidate.orientation,
+            score=score_candidate(
+                candidate=candidate,
+                slot_duration_ms=slot.end_ms - slot.start_ms,
+                duplicate_provider_asset_ids=duplicate_provider_asset_ids,
+            ),
+            raw_metadata=candidate.raw_metadata,
+        )
+        for candidate in candidates
+    ]
+    updated = repository.add_slot_candidates(
+        slot=slot,
+        asset_ids=[asset.id for asset in assets],
+    )
+    return BrollSearchResponse(
+        slot=repository.response_for_slot(updated),
+        candidates=[asset.to_response() for asset in assets],
+        query=search_query,
+    )

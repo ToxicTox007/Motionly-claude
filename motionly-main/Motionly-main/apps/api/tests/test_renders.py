@@ -36,7 +36,13 @@ from app.schemas.effects import (
     VisualPresetKey,
 )
 from app.schemas.music import MusicProviderKey, MusicSelectionStatus
-from app.schemas.renders import CutSegment, RenderCreateRequest, RenderJobStatus, RenderSpecs
+from app.schemas.renders import (
+    CutSegment,
+    RenderCreateRequest,
+    RenderJobStatus,
+    RenderSpecs,
+    RenderTemplateId,
+)
 from app.schemas.uploads import UploadStatus
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
@@ -325,6 +331,28 @@ def test_render_create_completes_export_and_events() -> None:
     assert exports[0].settings_summary["export_settings"]["watermark"] is True
 
 
+def test_render_create_applies_creator_template_to_manifest() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(template_id=RenderTemplateId.PRODUCT_PROMO_REEL_V1),
+            request=make_request(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+
+    assert response.job.template_id == RenderTemplateId.PRODUCT_PROMO_REEL_V1
+    assert response.job.manifest["template_id"] == "product_promo_reel_v1"
+    assert response.job.manifest["template"]["name"] == "Product Promo Reel"
+    assert response.job.manifest["render_props"]["templateId"] == "product_promo_reel_v1"
+
+
 def test_render_create_applies_export_options_and_entitlement_cap() -> None:
     repository, project_id, workspace_id, user_id = make_render_repository()
     request = make_request()
@@ -372,6 +400,54 @@ def test_render_create_applies_export_options_and_entitlement_cap() -> None:
     assert export.settings_summary["export_settings"]["platform"] == "tiktok"
     assert export.settings_summary["export_settings"]["requested_resolution"] == "4k"
     assert export.settings_summary["export_settings"]["duration_preset"] == "short"
+
+
+def test_render_create_applies_original_aspect_and_custom_framing() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    request = make_request(complete_locally=False)
+    request.app.state.settings.billing_enabled = False
+
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest.model_validate(
+                {
+                    "export_options": {
+                        "platform": "instagram",
+                        "resolution": "1080p",
+                        "format": "mp4",
+                        "framing": {
+                            "output_aspect": "original",
+                            "fit_mode": "custom",
+                            "crop": {"x": 0.25, "y": 0.7, "zoom": 1.4},
+                            "padding_color": "#111111",
+                        },
+                    },
+                }
+            ),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+
+    assert response.status == "queued"
+    assert response.job.specs.width == 1920
+    assert response.job.specs.height == 1080
+    framing = response.job.manifest["export_settings"]["framing"]
+    assert framing == {
+        "output_aspect": "original",
+        "fit_mode": "custom",
+        "crop": {"x": 0.25, "y": 0.7, "zoom": 1.4},
+        "padding_color": "#111111",
+    }
+    render_props_settings = response.job.manifest["render_props"]["exportSettings"]
+    assert render_props_settings["width"] == 1920
+    assert render_props_settings["height"] == 1080
+    assert render_props_settings["framing"] == framing
 
 
 def test_render_timeline_retimes_captions_and_broll_after_cuts() -> None:

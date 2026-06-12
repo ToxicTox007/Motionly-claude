@@ -13,6 +13,7 @@ from app.schemas.admin import (
     QueueListResponse,
     QueueSnapshotResponse,
     RenderAdminActionResponse,
+    RenderJobAdminDetailResponse,
 )
 from app.schemas.renders import RenderJobStatus
 from app.services.queue import EnqueuedJob, QueueRegistry
@@ -48,8 +49,9 @@ async def ops_overview(
     recent_renders = render_repository.list_recent_render_jobs(limit=20)
     render_failures = len([job for job in recent_renders if job.status == RenderJobStatus.FAILED])
     completed = len([job for job in recent_renders if job.status == RenderJobStatus.COMPLETE])
+    settings = request.app.state.settings
     return AdminOverviewResponse(
-        environment=request.app.state.settings.app_env,
+        environment=settings.app_env,
         request_id=request.state.request_id,
         queues=_queue_snapshots(request.app.state.queue_registry),
         recent_renders=[
@@ -61,6 +63,44 @@ async def ops_overview(
             "recent_render_completions": completed,
             "render_success_rate": (
                 round(completed / len(recent_renders), 4) if recent_renders else None
+            ),
+        },
+        provider_costs={
+            "status": "placeholder",
+            "currency": "usd",
+            "transcription": None,
+            "edit_planning": None,
+            "stock_video": None,
+            "music": None,
+            "rendering": None,
+        },
+        render_failure_diagnostics=[
+            {
+                "render_job_id": str(job.id),
+                "project_id": str(job.project_id),
+                "error_code": job.error_code,
+                "error_message": job.error_message,
+                "last_log": job.logs[-1] if job.logs else None,
+                "updated_at": job.updated_at.isoformat(),
+            }
+            for job in recent_renders
+            if job.status == RenderJobStatus.FAILED
+        ][:10],
+        health={
+            "api": "ok",
+            "worker": "ok" if getattr(settings, "admin_api_token", None) else "degraded",
+            "renderer": (
+                "ok"
+                if getattr(settings, "render_execute_ffmpeg", True)
+                or getattr(settings, "remotion_enabled", False)
+                else "degraded"
+            ),
+            "redis": "configured" if getattr(settings, "redis_url", None) else "in_memory",
+            "supabase": (
+                "configured"
+                if getattr(settings, "supabase_url", None)
+                and getattr(settings, "supabase_service_role_key", None)
+                else "not_configured"
             ),
         },
     )
@@ -97,6 +137,26 @@ async def cancel_queue_job(
     if queue_job_id not in registry.jobs:
         raise ApiError(404, "queue_job_not_found", "Queue job was not found.")
     return QueueActionResponse(job=_queue_job_response(registry.cancel(queue_job_id)))
+
+
+@router.get("/renders/{render_job_id}", response_model=RenderJobAdminDetailResponse)
+async def get_render_job_detail(
+    render_job_id: UUID,
+    _actor: AdminActorDep,
+    render_repository: RenderRepositoryDep,
+) -> RenderJobAdminDetailResponse:
+    job = render_repository.get_render_job_by_id(render_job_id=render_job_id)
+    events = render_repository.events_for_job(job.id)
+    return RenderJobAdminDetailResponse(
+        job=job.to_response(events),
+        diagnostics=_render_diagnostics(job, events),
+        provider_costs={
+            "currency": "usd",
+            "estimated_total_usd": None,
+            "status": "placeholder",
+            "render_engine": job.render_engine.value if job.render_engine else None,
+        },
+    )
 
 
 @router.post("/renders/{render_job_id}/retry", response_model=RenderAdminActionResponse)
@@ -153,3 +213,20 @@ def _queue_job_response(job: EnqueuedJob) -> QueueJobResponse:
         project_id=str(job.project_id) if job.project_id else None,
         resource_id=str(job.resource_id) if job.resource_id else None,
     )
+
+
+def _render_diagnostics(job, events) -> dict[str, object]:
+    manifest = job.manifest if isinstance(job.manifest, dict) else {}
+    return {
+        "event_count": len(events),
+        "last_event": events[-1].message if events else None,
+        "render_engine": job.render_engine.value if job.render_engine else None,
+        "renderer_version": job.renderer_version,
+        "artifact_path": job.artifact_path,
+        "benchmark_ms": job.benchmark_ms,
+        "error_code": job.error_code,
+        "error_message": job.error_message,
+        "source": manifest.get("source"),
+        "warnings": manifest.get("warnings") or [],
+        "logs": job.logs[-20:],
+    }

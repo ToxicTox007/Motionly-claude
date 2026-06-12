@@ -38,6 +38,20 @@ class ExportResolution(StrEnum):
     PRO_4K = "4k"
 
 
+class OutputAspect(StrEnum):
+    ORIGINAL = "original"
+    VERTICAL_9_16 = "9:16"
+    SQUARE_1_1 = "1:1"
+    PORTRAIT_4_5 = "4:5"
+    LANDSCAPE_16_9 = "16:9"
+
+
+class ExportFitMode(StrEnum):
+    FIT = "fit"
+    FILL = "fill"
+    CUSTOM = "custom"
+
+
 class RenderAdjustmentAction(StrEnum):
     MAKE_PUNCHIER = "make_punchier"
     MORE_CINEMATIC = "more_cinematic"
@@ -49,6 +63,8 @@ class RenderTemplateId(StrEnum):
     TRAVEL_REEL_V1 = "travel_reel_v1"
     PODCAST_REEL_V1 = "podcast_reel_v1"
     FASHION_REEL_V1 = "fashion_reel_v1"
+    TALKING_HEAD_REEL_V1 = "talking_head_reel_v1"
+    PRODUCT_PROMO_REEL_V1 = "product_promo_reel_v1"
 
 
 class RenderEngine(StrEnum):
@@ -72,10 +88,24 @@ class RenderSpecs(BaseModel):
     format: RenderOutputFormat = RenderOutputFormat.MP4
 
 
+class ExportCropSettings(BaseModel):
+    x: float = Field(default=0.5, ge=0, le=1)
+    y: float = Field(default=0.5, ge=0, le=1)
+    zoom: float = Field(default=1, ge=1, le=3)
+
+
+class ExportFraming(BaseModel):
+    output_aspect: OutputAspect = OutputAspect.VERTICAL_9_16
+    fit_mode: ExportFitMode = ExportFitMode.FILL
+    crop: ExportCropSettings = Field(default_factory=ExportCropSettings)
+    padding_color: str = Field(default="#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+
+
 class ExportOptions(BaseModel):
     resolution: ExportResolution = ExportResolution.PAID_1080P
     format: Literal["mp4"] = "mp4"
     platform: PlatformPreset = PlatformPreset.INSTAGRAM
+    framing: ExportFraming = Field(default_factory=ExportFraming)
 
 
 class RenderCreateRequest(BaseModel):

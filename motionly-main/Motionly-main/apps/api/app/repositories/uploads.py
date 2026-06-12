@@ -132,6 +132,17 @@ class InMemoryUploadRepository:
             raise ApiError(403, "workspace_access_denied", "You do not have access to this upload.")
         return upload
 
+    def get_active_upload(self, *, project_id: UUID, workspace_id: UUID) -> UploadRecord:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        uploads = [
+            upload
+            for upload in self.uploads.values()
+            if upload.project_id == project_id and upload.workspace_id == workspace_id
+        ]
+        if not uploads:
+            raise ApiError(404, "upload_not_found", "Upload was not found.")
+        return sorted(uploads, key=lambda upload: upload.updated_at, reverse=True)[0]
+
     def transition_upload(self, *, upload: UploadRecord, status: UploadStatus) -> UploadRecord:
         assert_upload_transition(upload.status, status)
         upload.status = status
@@ -267,6 +278,26 @@ class SupabaseUploadRepository:
                 "project_id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "select": "*",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "upload_not_found", "Upload was not found.")
+        return self._upload_from_row(rows[0])
+
+    def get_active_upload(self, *, project_id: UUID, workspace_id: UUID) -> UploadRecord:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        response = httpx.get(
+            f"{self.rest_url}/uploaded_videos",
+            headers=self.headers,
+            params={
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": "*",
+                "order": "updated_at.desc",
                 "limit": "1",
             },
             timeout=10,

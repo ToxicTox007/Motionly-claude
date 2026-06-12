@@ -39,6 +39,9 @@ class AdminOverviewResponse(BaseModel):
     queues: list[QueueSnapshotResponse]
     recent_renders: list[RenderJobResponse]
     launch_metrics: dict[str, Any] = Field(default_factory=dict)
+    provider_costs: dict[str, Any] = Field(default_factory=dict)
+    render_failure_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+    health: dict[str, Any] = Field(default_factory=dict)
 
 
 class QueueListResponse(BaseModel):
@@ -52,3 +55,9 @@ class QueueActionResponse(BaseModel):
 
 class RenderAdminActionResponse(BaseModel):
     job: RenderJobResponse
+
+
+class RenderJobAdminDetailResponse(BaseModel):
+    job: RenderJobResponse
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+    provider_costs: dict[str, Any] = Field(default_factory=dict)

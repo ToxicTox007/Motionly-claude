@@ -7,12 +7,12 @@ from fastapi.exceptions import RequestValidationError
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError, request_validation_error_handler
-from app.api.plans import activate_plan, create_plan, list_plans
+from app.api.plans import activate_plan, create_plan, list_plans, update_plan_cuts
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.captions import LanguageHint
-from app.schemas.plans import BrollDensity, EditPlanStyle, PlanCreateRequest
+from app.schemas.plans import BrollDensity, EditPlanStyle, PlanCreateRequest, PlanCutsUpdateRequest
 from app.schemas.uploads import UploadStatus
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.queue import PlanQueue
@@ -243,6 +243,96 @@ def test_activate_plan_restores_previous_version() -> None:
     assert second.plan.is_active is True
     assert restored.plan.id == first.plan.id
     assert listed.active_plan_id == first.plan.id
+
+
+def test_update_plan_cuts_persists_trim_split_delete_and_reorder() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    created = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.PODCAST),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    original = created.plan.plan.cuts
+    first = original[0]
+    second = original[1] if len(original) > 1 else first
+
+    updated = asyncio.run(
+        update_plan_cuts(
+            project_id=project_id,
+            plan_id=created.plan.id,
+            payload=PlanCutsUpdateRequest(
+                cuts=[
+                    {
+                        "start_ms": second.start_ms,
+                        "end_ms": second.end_ms,
+                        "reason": "moved first",
+                    },
+                    {
+                        "start_ms": first.start_ms,
+                        "end_ms": first.start_ms + 900,
+                        "reason": "trimmed intro",
+                    },
+                    {
+                        "start_ms": first.start_ms + 900,
+                        "end_ms": min(first.end_ms, first.start_ms + 1800),
+                        "reason": "split intro",
+                    },
+                ],
+            ),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    saved = repository.get_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=created.plan.id,
+    )
+    assert updated.plan.summary.cut_count == 3
+    assert saved.plan.cuts[0].reason == "moved first"
+    assert saved.plan.cuts[1].end_ms - saved.plan.cuts[1].start_ms == 900
+    assert saved.target_duration_s == updated.plan.target_duration_s
+
+
+def test_update_plan_cuts_rejects_cross_workspace_access() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    created = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.PODCAST),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            update_plan_cuts(
+                project_id=project_id,
+                plan_id=created.plan.id,
+                payload=PlanCutsUpdateRequest(cuts=created.plan.plan.cuts),
+                actor=Actor(user_id=user_id, workspace_id=uuid4()),
+                repository=repository,
+            )
+        )
+
+    assert exc_info.value.status_code in {403, 404}
+
+
+def test_update_plan_cuts_validates_ranges() -> None:
+    with pytest.raises(ValueError):
+        PlanCutsUpdateRequest(
+            cuts=[{"start_ms": 1000, "end_ms": 1000, "reason": "invalid trim"}],
+        )
 
 
 def test_create_plan_requires_transcript() -> None:

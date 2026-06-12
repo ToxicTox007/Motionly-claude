@@ -104,3 +104,26 @@ class BrollSwapRequest(BaseModel):
 class BrollSwapResponse(BaseModel):
     slot: BrollSlotResponse
     status: Literal["updated"] = "updated"
+
+
+class BrollRegionUpdateRequest(BaseModel):
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    disabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "BrollRegionUpdateRequest":
+        if self.end_ms <= self.start_ms:
+            raise ValueError("broll slot end_ms must be greater than start_ms")
+        return self
+
+
+class BrollRegionUpdateResponse(BaseModel):
+    slot: BrollSlotResponse
+    status: Literal["updated"] = "updated"
+
+
+class BrollSearchResponse(BaseModel):
+    slot: BrollSlotResponse
+    candidates: list[StockVideoAssetResponse]
+    query: str

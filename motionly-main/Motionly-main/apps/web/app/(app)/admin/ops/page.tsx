@@ -1,15 +1,19 @@
-import { Activity, AlertTriangle, Gauge, RotateCcw } from "lucide-react";
+import { Activity, AlertTriangle, Gauge, RotateCcw, Square, WalletCards } from "lucide-react";
 import type { ComponentType } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ButtonLink } from "@/components/button";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
+import { cancelQueueJob, cancelRenderJob, retryQueueJob, retryRenderJob } from "./actions";
 
 type QueueSnapshot = {
   queue_name: string;
   queued: number;
   dead_letter: number;
   canceled: number;
+  running: number;
+  succeeded: number;
+  failed: number;
   oldest_queued_seconds: number | null;
 };
 
@@ -19,13 +23,27 @@ type RenderJob = {
   status: string;
   progress_pct: number;
   error_code: string | null;
+  error_message?: string | null;
+  logs?: string[];
   created_at: string;
+};
+
+type QueueJob = {
+  id: string;
+  kind: string;
+  queue_name: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  project_id?: string | null;
+  resource_id?: string | null;
 };
 
 type OpsOverview = {
   environment: string;
   request_id: string;
   queues: QueueSnapshot[];
+  jobs?: QueueJob[];
   recent_renders: RenderJob[];
   launch_metrics: {
     recent_render_count?: number;
@@ -33,11 +51,20 @@ type OpsOverview = {
     recent_render_completions?: number;
     render_success_rate?: number | null;
   };
+  provider_costs?: Record<string, unknown>;
+  render_failure_diagnostics?: Array<Record<string, unknown>>;
+  health?: Record<string, unknown>;
 };
 
 export default async function LaunchOpsPage() {
   const context = await getWorkspaceApiContext();
-  const overview = context ? await fetchOpsOverview(context.headers) : null;
+  const [overview, queues, dependencyHealth] = context
+    ? await Promise.all([
+        fetchOpsOverview(context.headers),
+        fetchQueues(context.headers),
+        fetchDependencyHealth(context.headers),
+      ])
+    : [null, null, null];
 
   return (
     <AppShell title="Launch Ops">
@@ -61,6 +88,11 @@ export default async function LaunchOpsPage() {
           label="Failures"
           value={String(overview?.launch_metrics.recent_render_failures ?? 0)}
         />
+        <MetricCard
+          icon={WalletCards}
+          label="Cost tracking"
+          value={overview?.provider_costs ? "Placeholder" : "No data"}
+        />
       </div>
 
       <section className="mb-8">
@@ -76,6 +108,9 @@ export default async function LaunchOpsPage() {
               <tr>
                 <th className="px-4 py-3">Queue</th>
                 <th className="px-4 py-3">Queued</th>
+                <th className="px-4 py-3">Running</th>
+                <th className="px-4 py-3">Succeeded</th>
+                <th className="px-4 py-3">Failed</th>
                 <th className="px-4 py-3">Dead letter</th>
                 <th className="px-4 py-3">Oldest</th>
               </tr>
@@ -85,19 +120,51 @@ export default async function LaunchOpsPage() {
                 <tr key={queue.queue_name} className="border-t border-border">
                   <td className="px-4 py-3 font-semibold">{queue.queue_name}</td>
                   <td className="px-4 py-3">{queue.queued}</td>
+                  <td className="px-4 py-3">{queue.running}</td>
+                  <td className="px-4 py-3">{queue.succeeded}</td>
+                  <td className="px-4 py-3">{queue.failed}</td>
                   <td className="px-4 py-3">{queue.dead_letter}</td>
                   <td className="px-4 py-3">{formatAge(queue.oldest_queued_seconds)}</td>
                 </tr>
               ))}
               {!overview?.queues.length ? (
                 <tr>
-                  <td className="px-4 py-8 text-center text-muted-foreground" colSpan={4}>
+                  <td className="px-4 py-8 text-center text-muted-foreground" colSpan={7}>
                     No queued jobs reported.
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="mb-3 text-base font-bold">Queue jobs</h2>
+        <div className="grid gap-3">
+          {(queues?.jobs ?? []).slice(0, 20).map((job) => (
+            <div key={job.id} className="pixel-panel flex flex-wrap items-center justify-between gap-3 p-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{job.id}</p>
+                <p className="text-xs text-muted-foreground">
+                  {job.queue_name} | {job.kind} | {job.status} | attempts {job.attempts}/{job.max_attempts}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {["failed", "dead_letter", "canceled"].includes(job.status) ? (
+                  <ActionForm action={retryQueueJob} jobId={job.id} label="Retry" icon={RotateCcw} />
+                ) : null}
+                {["queued", "running"].includes(job.status) ? (
+                  <ActionForm action={cancelQueueJob} jobId={job.id} label="Cancel" icon={Square} />
+                ) : null}
+              </div>
+            </div>
+          ))}
+          {!queues?.jobs?.length ? (
+            <div className="pixel-panel p-8 text-center text-sm text-muted-foreground">
+              No queue job details reported.
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -120,11 +187,64 @@ export default async function LaunchOpsPage() {
                 <RotateCcw className="size-3.5" aria-hidden="true" />
                 {render.error_code ?? "healthy"}
               </span>
+              <div className="flex gap-2">
+                {["failed", "canceled"].includes(render.status) ? (
+                  <ActionForm action={retryRenderJob} jobId={render.id} label="Retry" icon={RotateCcw} />
+                ) : null}
+                {["queued", "processing", "preparing", "rendering", "uploading"].includes(render.status) ? (
+                  <ActionForm action={cancelRenderJob} jobId={render.id} label="Cancel" icon={Square} />
+                ) : null}
+              </div>
             </div>
           ))}
           {!overview?.recent_renders.length ? (
             <div className="pixel-panel p-8 text-center text-sm text-muted-foreground">
               No render activity yet.
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="mb-3 text-base font-bold">Health checks</h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          {Object.entries(dependencyHealth?.dependencies ?? overview?.health ?? {}).map(([name, value]) => (
+            <div key={name} className="pixel-panel p-4">
+              <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">{name}</p>
+              <p className="mt-2 text-sm font-semibold">
+                {typeof value === "object" && value && "status" in value
+                  ? String((value as { status: unknown }).status)
+                  : String(value)}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mt-8">
+        <h2 className="mb-3 text-base font-bold">Render failure diagnostics</h2>
+        <div className="grid gap-3">
+          {(overview?.render_failure_diagnostics ?? []).map((diagnostic) => (
+            <div
+              key={String(diagnostic.render_job_id)}
+              className="pixel-panel p-4"
+            >
+              <p className="truncate text-sm font-semibold">
+                {String(diagnostic.render_job_id)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {String(diagnostic.error_code ?? "unknown")} |{" "}
+                {String(
+                  diagnostic.error_message ??
+                    diagnostic.last_log ??
+                    "No diagnostic message recorded",
+                )}
+              </p>
+            </div>
+          ))}
+          {!overview?.render_failure_diagnostics?.length ? (
+            <div className="pixel-panel p-8 text-center text-sm text-muted-foreground">
+              No recent render failures.
             </div>
           ) : null}
         </div>
@@ -151,6 +271,39 @@ async function fetchOpsOverview(headers: Record<string, string>) {
   }
 }
 
+async function fetchQueues(headers: Record<string, string>) {
+  try {
+    const response = await fetch(`${env.apiBaseUrl}/admin/queues`, {
+      cache: "no-store",
+      headers: {
+        ...headers,
+        ...(process.env.ADMIN_API_TOKEN
+          ? { "x-motionly-admin-token": process.env.ADMIN_API_TOKEN }
+          : {}),
+      },
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as { queues: QueueSnapshot[]; jobs: QueueJob[] };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchDependencyHealth(headers: Record<string, string>) {
+  try {
+    const response = await fetch(`${env.apiBaseUrl}/health/dependencies`, {
+      cache: "no-store",
+      headers,
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as {
+      dependencies: Record<string, { status: string; message: string }>;
+    };
+  } catch {
+    return null;
+  }
+}
+
 function MetricCard({
   icon: Icon,
   label,
@@ -168,6 +321,31 @@ function MetricCard({
       </div>
       <p className="mt-3 text-2xl font-bold">{value}</p>
     </div>
+  );
+}
+
+function ActionForm({
+  action,
+  jobId,
+  label,
+  icon: Icon,
+}: {
+  action: (formData: FormData) => Promise<void>;
+  jobId: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+}) {
+  return (
+    <form action={action}>
+      <input type="hidden" name="jobId" value={jobId} />
+      <button
+        type="submit"
+        className="pixel-button inline-flex h-9 items-center gap-2 bg-background px-3 text-xs font-bold"
+      >
+        <Icon className="size-3.5" aria-hidden="true" />
+        {label}
+      </button>
+    </form>
   );
 }
 

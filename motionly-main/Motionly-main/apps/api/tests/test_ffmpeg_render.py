@@ -39,6 +39,54 @@ def test_ffmpeg_renderer_maps_primary_video_and_optional_audio(
     assert "-shortest" in command
 
 
+def test_ffmpeg_renderer_supports_fit_and_custom_framing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(command, **_kwargs):
+        captured.setdefault("commands", []).append(command)
+        Path(command[-1]).write_bytes(b"mp4")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(ffmpeg_render.subprocess, "run", fake_run)
+
+    FFmpegCaptionRenderer().render(
+        source_path=tmp_path / "source.mp4",
+        ass_path=None,
+        output_path=tmp_path / "exports" / "fit.mp4",
+        specs=RenderSpecs(width=1080, height=1920),
+        framing={
+            "output_aspect": "9:16",
+            "fit_mode": "fit",
+            "crop": {"x": 0.5, "y": 0.5, "zoom": 1},
+            "padding_color": "#111111",
+        },
+    )
+    fit_filter = captured["commands"][0][captured["commands"][0].index("-vf") + 1]
+    assert "force_original_aspect_ratio=decrease" in fit_filter
+    assert "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=0x111111" in fit_filter
+
+    FFmpegCaptionRenderer().render(
+        source_path=tmp_path / "source.mp4",
+        ass_path=None,
+        output_path=tmp_path / "exports" / "custom.mp4",
+        specs=RenderSpecs(width=1920, height=1080),
+        framing={
+            "output_aspect": "original",
+            "fit_mode": "custom",
+            "crop": {"x": 0.25, "y": 0.75, "zoom": 1.4},
+            "padding_color": "#000000",
+        },
+    )
+    custom_filter = captured["commands"][1][captured["commands"][1].index("-vf") + 1]
+    assert "force_original_aspect_ratio=increase" in custom_filter
+    assert "scale=iw*1.4000:ih*1.4000" in custom_filter
+    assert "crop=1920:1080:(iw-ow)*0.2500:(ih-oh)*0.7500" in custom_filter
+
+
 def test_ffmpeg_renderer_mixes_music_with_ducking_and_limiter(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

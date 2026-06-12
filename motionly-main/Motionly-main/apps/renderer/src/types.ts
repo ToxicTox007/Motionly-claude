@@ -1,5 +1,6 @@
 import type {
   CaptionSegment,
+  CaptionStyle,
   EditPlan,
   RenderSpecs,
   RenderTemplateId,
@@ -7,6 +8,7 @@ import type {
   TranscriptWord,
   MusicMixSettings,
   EffectsConfigSummary,
+  ExportFraming,
 } from "@motionly/shared";
 
 export type RendererAsset = {
@@ -31,10 +33,13 @@ export type MotionlyRenderProps = {
   };
   editPlan: EditPlan;
   captions: CaptionSegment[];
+  captionStyle?: CaptionStyle | null;
   words: TranscriptWord[];
   assets: RendererAsset[];
   templateId: RenderTemplateId;
-  exportSettings: RenderSpecs;
+  exportSettings: RenderSpecs & {
+    framing?: ExportFraming;
+  };
   musicSelection?: {
     selection_id?: string | null;
     music_track_id?: string | null;

@@ -973,7 +973,7 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
 
     def _db_status(self, status: object) -> str:
         status_value = status.value if hasattr(status, "value") else str(status)
-        if status_value in {"preparing", "rendering", "uploading"}:
+        if status_value in {"processing", "preparing", "rendering", "uploading"}:
             return "running"
         if status_value == "complete":
             return "succeeded"
@@ -990,6 +990,8 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             return RenderJobStatus.PREPARING
         if status_value == "succeeded":
             return RenderJobStatus.COMPLETE
+        if status_value == "processing":
+            return RenderJobStatus.PREPARING
         return RenderJobStatus(status_value)
 
     def _raise_for_supabase(self, response: httpx.Response) -> None:

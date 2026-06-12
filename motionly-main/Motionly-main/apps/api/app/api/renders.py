@@ -1,8 +1,11 @@
+import asyncio
+import json
 from types import SimpleNamespace
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 
 from app.api.billing import enforce_render_entitlement, record_render_usage
 from app.api.dependencies import (
@@ -228,6 +231,7 @@ async def create_render(
     specs, applied_resolution = render_specs_for_options(
         options=payload.export_options,
         max_resolution=billing_status.current_plan.entitlements.max_resolution,
+        source_metadata=upload.metadata,
     )
     render_export_settings = export_settings(
         specs=specs,
@@ -388,6 +392,7 @@ async def create_render(
         "editPlan": render_edit_plan,
         "captions": [segment.model_dump(mode="json") for segment in caption_segments_for_render],
         "words": [word.model_dump(mode="json") for word in caption_words_for_render],
+        "captionStyle": track.style.model_dump(mode="json"),
         "assets": active_broll_assets,
         "templateId": template.id.value,
         "exportSettings": render_props_export_settings,
@@ -547,6 +552,10 @@ async def create_render(
                 None,
             ),
             execute_ffmpeg=request.app.state.settings.render_execute_ffmpeg,
+            allow_fixture_media=(
+                getattr(request.app.state.settings, "app_env", "test") != "production"
+                or getattr(request.app.state.settings, "allow_fixture_providers", False)
+            ),
         )
     return RenderCreateResponse(
         job=job.to_response(repository.events_for_job(job.id)),
@@ -741,6 +750,54 @@ async def get_render(
         workspace_id=actor.workspace_id,
     )
     return job.to_response(repository.events_for_job(job.id))
+
+
+@router.get("/projects/{project_id}/renders/{render_job_id}/events")
+async def stream_render_events(
+    project_id: UUID,
+    render_job_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    repository: RenderRepositoryDep,
+) -> StreamingResponse:
+    async def event_stream():
+        last_signature = ""
+        terminal = {
+            RenderJobStatus.COMPLETE,
+            RenderJobStatus.FAILED,
+            RenderJobStatus.CANCELED,
+        }
+        while True:
+            if await request.is_disconnected():
+                break
+            job = repository.get_render_job(
+                project_id=project_id,
+                render_job_id=render_job_id,
+                workspace_id=actor.workspace_id,
+            )
+            payload = job.to_response(repository.events_for_job(job.id)).model_dump(
+                mode="json",
+            )
+            signature = (
+                f"{payload['status']}:{payload['progress_pct']}:"
+                f"{payload.get('updated_at')}:{len(payload.get('events') or [])}"
+            )
+            if signature != last_signature:
+                yield f"event: render\n"
+                yield f"data: {json.dumps(payload)}\n\n"
+                last_signature = signature
+            if job.status in terminal:
+                break
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

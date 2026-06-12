@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,11 +15,7 @@ import { buildTimelineState } from "@/lib/timeline";
 import { EditorLayout } from "./editor-layout";
 import { UploadPanel } from "./upload-panel";
 import { AIStep } from "./editor/ai-step";
-import { ExportStep } from "./editor/export-step";
 import { CaptionsTab } from "./editor/tabs/captions-tab";
-import { BrollTab } from "./editor/tabs/broll-tab";
-import { AudioTab } from "./editor/tabs/audio-tab";
-import { LookTab } from "./editor/tabs/look-tab";
 import { LeftMediaPanel } from "./editor/left-panel/LeftMediaPanel";
 import { VideoPreview } from "./editor/preview/VideoPreview";
 import { TimelinePanel } from "./editor/timeline/TimelinePanel";
@@ -59,6 +56,23 @@ interface EditorClientProps {
 
 type InspectorTab = "ai" | "captions" | "broll" | "audio" | "look" | "export";
 
+const BrollTab = dynamic(
+  () => import("./editor/tabs/broll-tab").then((mod) => mod.BrollTab),
+  { loading: () => <InspectorLoading /> },
+);
+const AudioTab = dynamic(
+  () => import("./editor/tabs/audio-tab").then((mod) => mod.AudioTab),
+  { loading: () => <InspectorLoading /> },
+);
+const LookTab = dynamic(
+  () => import("./editor/tabs/look-tab").then((mod) => mod.LookTab),
+  { loading: () => <InspectorLoading /> },
+);
+const ExportStep = dynamic(
+  () => import("./editor/export-step").then((mod) => mod.ExportStep),
+  { loading: () => <InspectorLoading /> },
+);
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function EditorClient(props: EditorClientProps) {
@@ -80,6 +94,14 @@ export function EditorClient(props: EditorClientProps) {
   const [localActivePlanId, setLocalActivePlanId] = useState<string | null>(
     props.activePlanId,
   );
+  const [localCaptionTracks, setLocalCaptionTracks] = useState<CaptionTrackSummary[]>(
+    captionTracks,
+  );
+  const [localBrollSlots, setLocalBrollSlots] = useState<BrollSlotSummary[]>(brollSlots);
+  const [localMusicSelection, setLocalMusicSelection] =
+    useState<MusicSelectionSummary | null>(musicSelection);
+  const [localEffectsConfig, setLocalEffectsConfig] =
+    useState<EffectsConfigSummary | null>(effectsConfig);
 
   const activePlan = useMemo(
     () => localEditPlans.find((p) => p.id === localActivePlanId) ?? null,
@@ -100,11 +122,11 @@ export function EditorClient(props: EditorClientProps) {
       buildTimelineState({
         upload: upload ? { duration_ms: upload.durationMs } : null,
         activePlan,
-        captionTrack: captionTracks[0] ?? null,
-        brollSlots,
-        musicSelection,
+        captionTrack: localCaptionTracks[0] ?? null,
+        brollSlots: localBrollSlots,
+        musicSelection: localMusicSelection,
       }),
-    [upload, activePlan, captionTracks, brollSlots, musicSelection],
+    [upload, activePlan, localCaptionTracks, localBrollSlots, localMusicSelection],
   );
 
   // When AI generates a new plan, update locally and advance inspector
@@ -115,6 +137,37 @@ export function EditorClient(props: EditorClientProps) {
     });
     setLocalActivePlanId(plan.id);
     setInspectorTab("captions");
+  }, []);
+
+  const handlePlanUpdated = useCallback((plan: EditPlanRecordSummary) => {
+    setLocalEditPlans((prev) => {
+      const without = prev.filter((p) => p.id !== plan.id);
+      return [plan, ...without];
+    });
+    setLocalActivePlanId(plan.id);
+  }, []);
+
+  const handleCaptionTrackUpdated = useCallback((track: CaptionTrackSummary) => {
+    setLocalCaptionTracks((prev) => [
+      track,
+      ...prev.filter((item) => item.id !== track.id),
+    ]);
+  }, []);
+
+  const handleBrollSlotUpdated = useCallback((slot: BrollSlotSummary) => {
+    setLocalBrollSlots((prev) =>
+      prev
+        .map((item) => (item.id === slot.id ? slot : item))
+        .sort((a, b) => a.start_ms - b.start_ms),
+    );
+  }, []);
+
+  const handleMusicSelectionUpdated = useCallback((selection: MusicSelectionSummary) => {
+    setLocalMusicSelection(selection);
+  }, []);
+
+  const handleEffectsConfigUpdated = useCallback((config: EffectsConfigSummary) => {
+    setLocalEffectsConfig(config);
   }, []);
 
   const saveProjectTitle = useCallback(
@@ -185,9 +238,9 @@ export function EditorClient(props: EditorClientProps) {
             upload={upload}
             thumbnailUrl={uploadAssetUrls.thumbnail_url}
             activePlan={activePlan}
-            brollSlots={brollSlots}
-            musicSelection={musicSelection}
-            captionTracks={captionTracks}
+            brollSlots={localBrollSlots}
+            musicSelection={localMusicSelection}
+            captionTracks={localCaptionTracks}
           />
         ),
 
@@ -196,9 +249,11 @@ export function EditorClient(props: EditorClientProps) {
             videoRef={videoRef}
             sourceUrl={uploadAssetUrls.source_video_url}
             thumbnailUrl={uploadAssetUrls.thumbnail_url}
+            sourceWidth={upload.width}
+            sourceHeight={upload.height}
             playheadMs={playheadMs}
-            captionSegments={captionTracks[0]?.segments ?? []}
-            captionStyle={captionTracks[0]?.style ?? null}
+            captionSegments={localCaptionTracks[0]?.segments ?? []}
+            captionStyle={localCaptionTracks[0]?.style ?? null}
             totalDurationMs={timelineState.totalDurationMs}
           />
         ),
@@ -214,16 +269,21 @@ export function EditorClient(props: EditorClientProps) {
             apiAccessToken={apiAccessToken}
             upload={upload}
             transcript={transcript}
-            captionTracks={captionTracks}
+            captionTracks={localCaptionTracks}
             localEditPlans={localEditPlans}
             localActivePlanId={localActivePlanId}
             activePlan={activePlan}
-            brollSlots={brollSlots}
-            musicSelection={musicSelection}
-            effectsConfig={effectsConfig}
+            brollSlots={localBrollSlots}
+            musicSelection={localMusicSelection}
+            effectsConfig={localEffectsConfig}
             renderJobs={renderJobs}
             exports={exports}
             onPlanGenerated={handlePlanGenerated}
+            onPlanUpdated={handlePlanUpdated}
+            onCaptionTrackUpdated={handleCaptionTrackUpdated}
+            onBrollSlotUpdated={handleBrollSlotUpdated}
+            onMusicSelectionUpdated={handleMusicSelectionUpdated}
+            onEffectsConfigUpdated={handleEffectsConfigUpdated}
           />
         ),
 
@@ -235,6 +295,15 @@ export function EditorClient(props: EditorClientProps) {
             setPlayheadMs={setPlayheadMs}
             selectedClipId={selectedClipId}
             onClipSelect={setSelectedClipId}
+            projectId={projectId}
+            workspaceId={workspaceId}
+            userId={userId}
+            apiAccessToken={apiAccessToken}
+            activePlan={activePlan}
+            captionTrack={localCaptionTracks[0] ?? null}
+            onPlanUpdated={handlePlanUpdated}
+            onCaptionTrackUpdated={handleCaptionTrackUpdated}
+            onBrollSlotUpdated={handleBrollSlotUpdated}
           />
         ),
       }}
@@ -264,6 +333,11 @@ interface InspectorPanelProps {
   renderJobs:       RenderJobSummary[];
   exports:          ExportSummary[];
   onPlanGenerated:  (plan: EditPlanRecordSummary) => void;
+  onPlanUpdated: (plan: EditPlanRecordSummary) => void;
+  onCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
+  onBrollSlotUpdated: (slot: BrollSlotSummary) => void;
+  onMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
+  onEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
 }
 
 const INSPECTOR_TABS: Array<{
@@ -285,7 +359,8 @@ function InspectorPanel({
   projectId, workspaceId, userId, apiAccessToken,
   upload, transcript, captionTracks, localEditPlans, localActivePlanId,
   activePlan, brollSlots, musicSelection, effectsConfig,
-  renderJobs, exports, onPlanGenerated,
+  renderJobs, exports, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onBrollSlotUpdated,
+  onMusicSelectionUpdated, onEffectsConfigUpdated,
 }: InspectorPanelProps) {
   const brollDensity = (activePlan?.summary?.broll_density ?? null) as BrollDensity | null;
   const musicMood    = activePlan?.summary?.music_mood ?? null;
@@ -340,6 +415,9 @@ function InspectorPanel({
             userId={userId}
             apiAccessToken={apiAccessToken}
             initialTracks={captionTracks}
+            activePlan={activePlan}
+            onTrackUpdated={onCaptionTrackUpdated}
+            onPlanUpdated={onPlanUpdated}
           />
         )}
         {tab === "broll" && (
@@ -351,6 +429,7 @@ function InspectorPanel({
             initialSlots={brollSlots}
             activePlanId={localActivePlanId}
             activePlanBrollDensity={brollDensity}
+            onSlotUpdated={onBrollSlotUpdated}
           />
         )}
         {tab === "audio" && (
@@ -361,6 +440,7 @@ function InspectorPanel({
             apiAccessToken={apiAccessToken}
             initialSelection={musicSelection}
             activePlanMusicMood={musicMood}
+            onSelectionUpdated={onMusicSelectionUpdated}
           />
         )}
         {tab === "look" && (
@@ -371,6 +451,7 @@ function InspectorPanel({
             apiAccessToken={apiAccessToken}
             initialConfig={effectsConfig}
             suggestedPreset={suggestedPreset}
+            onConfigUpdated={onEffectsConfigUpdated}
           />
         )}
         {tab === "export" && (
@@ -383,9 +464,19 @@ function InspectorPanel({
             initialExports={exports}
             captionTrackId={captionTracks[0]?.id ?? null}
             activePlanId={localActivePlanId}
+            sourceWidth={upload.width}
+            sourceHeight={upload.height}
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function InspectorLoading() {
+  return (
+    <div className="flex min-h-40 items-center justify-center">
+      <Loader2 className="size-5 animate-spin text-primary" />
     </div>
   );
 }
