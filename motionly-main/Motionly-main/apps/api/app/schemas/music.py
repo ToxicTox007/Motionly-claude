@@ -4,6 +4,9 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from pydantic import model_validator
+
+from app.schemas.request_body import JsonStringBodyMixin
 
 MUSIC_SCHEMA_VERSION = 1
 
@@ -37,7 +40,7 @@ class MusicSelectionStatus(StrEnum):
     FAILED = "failed"
 
 
-class MusicSelectRequest(BaseModel):
+class MusicSelectRequest(JsonStringBodyMixin, BaseModel):
     music_track_id: UUID | None = None
     mood: str | None = None
     include_music: bool = True
@@ -45,6 +48,11 @@ class MusicSelectRequest(BaseModel):
     sfx_intensity: float = Field(default=0.25, ge=0, le=1)
     rights_confirmed: bool = Field(default=False)
     force: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: object) -> object:
+        return cls._coerce_json_string_body(data)
 
 
 class MusicSelectionResponse(BaseModel):

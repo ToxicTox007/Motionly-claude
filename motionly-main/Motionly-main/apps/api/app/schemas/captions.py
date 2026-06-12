@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.request_body import JsonStringBodyMixin
+
 
 class LanguageHint(StrEnum):
     AUTO = "auto"
@@ -60,15 +62,21 @@ class TranscriptReadResponse(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     error_code: str | None = None
     error_message: str | None = None
+    progress_pct: int = Field(default=0, ge=0, le=100)
     words: list[TranscriptWord] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
 
-class TranscriptionCreateRequest(BaseModel):
+class TranscriptionCreateRequest(JsonStringBodyMixin, BaseModel):
     video_id: UUID | None = None
     language_hint: LanguageHint = LanguageHint.AUTO
     force: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
 class TranscriptionCreateResponse(BaseModel):
@@ -134,10 +142,15 @@ class CaptionTrackReadResponse(BaseModel):
     updated_at: datetime
 
 
-class CaptionGenerateRequest(BaseModel):
+class CaptionGenerateRequest(JsonStringBodyMixin, BaseModel):
     transcript_id: UUID | None = None
     preset: CaptionPresetKey = CaptionPresetKey.LUXURY_MINIMAL
     hide_filler_words: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
 class CaptionGenerateResponse(BaseModel):

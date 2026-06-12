@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -97,6 +97,7 @@ export function EditorClient(props: EditorClientProps) {
   const [localCaptionTracks, setLocalCaptionTracks] = useState<CaptionTrackSummary[]>(
     captionTracks,
   );
+  const [localTranscript, setLocalTranscript] = useState<TranscriptSummary | null>(transcript);
   const [localBrollSlots, setLocalBrollSlots] = useState<BrollSlotSummary[]>(brollSlots);
   const [localMusicSelection, setLocalMusicSelection] =
     useState<MusicSelectionSummary | null>(musicSelection);
@@ -129,6 +130,62 @@ export function EditorClient(props: EditorClientProps) {
     [upload, activePlan, localCaptionTracks, localBrollSlots, localMusicSelection],
   );
 
+  useEffect(() => {
+    setLocalTranscript(transcript);
+  }, [transcript]);
+
+  useEffect(() => {
+    if (!upload || upload.status !== "ready") return;
+    if (
+      localTranscript?.status === "ready" ||
+      localTranscript?.status === "captions_unavailable"
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/transcript`, {
+          headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken }),
+          cache: "no-store",
+        });
+        if (cancelled) return;
+        if (response.status === 404) {
+          setLocalTranscript(null);
+          return;
+        }
+        if (!response.ok) return;
+        const nextTranscript = (await response.json()) as TranscriptSummary;
+        setLocalTranscript(nextTranscript);
+        if (
+          nextTranscript.status === "ready" ||
+          nextTranscript.status === "failed" ||
+          nextTranscript.status === "captions_unavailable"
+        ) {
+          router.refresh();
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    void poll();
+    const timer = window.setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    apiAccessToken,
+    localTranscript?.status,
+    projectId,
+    router,
+    upload,
+    userId,
+    workspaceId,
+  ]);
+
   // When AI generates a new plan, update locally and advance inspector
   const handlePlanGenerated = useCallback((plan: EditPlanRecordSummary) => {
     setLocalEditPlans((prev) => {
@@ -160,6 +217,10 @@ export function EditorClient(props: EditorClientProps) {
         .map((item) => (item.id === slot.id ? slot : item))
         .sort((a, b) => a.start_ms - b.start_ms),
     );
+  }, []);
+
+  const handleBrollSlotsUpdated = useCallback((slots: BrollSlotSummary[]) => {
+    setLocalBrollSlots([...slots].sort((a, b) => a.start_ms - b.start_ms));
   }, []);
 
   const handleMusicSelectionUpdated = useCallback((selection: MusicSelectionSummary) => {
@@ -268,7 +329,7 @@ export function EditorClient(props: EditorClientProps) {
             userId={userId}
             apiAccessToken={apiAccessToken}
             upload={upload}
-            transcript={transcript}
+            transcript={localTranscript}
             captionTracks={localCaptionTracks}
             localEditPlans={localEditPlans}
             localActivePlanId={localActivePlanId}
@@ -278,10 +339,12 @@ export function EditorClient(props: EditorClientProps) {
             effectsConfig={localEffectsConfig}
             renderJobs={renderJobs}
             exports={exports}
+            onTranscriptUpdated={setLocalTranscript}
             onPlanGenerated={handlePlanGenerated}
             onPlanUpdated={handlePlanUpdated}
             onCaptionTrackUpdated={handleCaptionTrackUpdated}
             onBrollSlotUpdated={handleBrollSlotUpdated}
+            onBrollSlotsUpdated={handleBrollSlotsUpdated}
             onMusicSelectionUpdated={handleMusicSelectionUpdated}
             onEffectsConfigUpdated={handleEffectsConfigUpdated}
           />
@@ -332,10 +395,12 @@ interface InspectorPanelProps {
   effectsConfig:    EffectsConfigSummary | null;
   renderJobs:       RenderJobSummary[];
   exports:          ExportSummary[];
+  onTranscriptUpdated: (transcript: TranscriptSummary | null) => void;
   onPlanGenerated:  (plan: EditPlanRecordSummary) => void;
   onPlanUpdated: (plan: EditPlanRecordSummary) => void;
   onCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
   onBrollSlotUpdated: (slot: BrollSlotSummary) => void;
+  onBrollSlotsUpdated: (slots: BrollSlotSummary[]) => void;
   onMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
   onEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
 }
@@ -347,10 +412,10 @@ const INSPECTOR_TABS: Array<{
   requiresPlan: boolean;
 }> = [
   { id: "ai",      label: "AI",      icon: Sparkles,  requiresPlan: false },
-  { id: "captions",label: "Text",    icon: Type,       requiresPlan: true  },
-  { id: "broll",   label: "B-roll",  icon: Layers,     requiresPlan: true  },
-  { id: "audio",   label: "Audio",   icon: Music2,     requiresPlan: true  },
-  { id: "look",    label: "Look",    icon: Palette,    requiresPlan: true  },
+  { id: "captions",label: "Text",    icon: Type,       requiresPlan: false },
+  { id: "broll",   label: "B-roll",  icon: Layers,     requiresPlan: false },
+  { id: "audio",   label: "Audio",   icon: Music2,     requiresPlan: false },
+  { id: "look",    label: "Look",    icon: Palette,    requiresPlan: false },
   { id: "export",  label: "Export",  icon: Download,   requiresPlan: false },
 ];
 
@@ -359,7 +424,7 @@ function InspectorPanel({
   projectId, workspaceId, userId, apiAccessToken,
   upload, transcript, captionTracks, localEditPlans, localActivePlanId,
   activePlan, brollSlots, musicSelection, effectsConfig,
-  renderJobs, exports, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onBrollSlotUpdated,
+  renderJobs, exports, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated,
   onMusicSelectionUpdated, onEffectsConfigUpdated,
 }: InspectorPanelProps) {
   const brollDensity = (activePlan?.summary?.broll_density ?? null) as BrollDensity | null;
@@ -404,8 +469,12 @@ function InspectorPanel({
             apiAccessToken={apiAccessToken}
             initialPlans={localEditPlans}
             activePlanId={localActivePlanId}
-            hasTranscript={Boolean(transcript?.words?.length)}
+            transcript={transcript}
+            onTranscriptUpdated={onTranscriptUpdated}
             onPlanGenerated={onPlanGenerated}
+            onCaptionTrackUpdated={onCaptionTrackUpdated}
+            onBrollSlotsUpdated={onBrollSlotsUpdated}
+            onMusicSelectionUpdated={onMusicSelectionUpdated}
           />
         )}
         {tab === "captions" && (

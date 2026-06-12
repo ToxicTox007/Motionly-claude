@@ -44,14 +44,14 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 WORKDIR /app
 
 # Copy workspace manifests first for better layer caching
-COPY package.json pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/worker/package.json ./apps/worker/
 COPY apps/renderer/package.json ./apps/renderer/
 
 # Install pnpm and all workspace dependencies
 RUN npm install -g pnpm@9 --quiet && \
-    pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -5
+    pnpm install --frozen-lockfile --prefer-offline --prod=false
 
 # Copy source after deps (avoids reinstalling when only source changes)
 COPY packages/shared ./packages/shared

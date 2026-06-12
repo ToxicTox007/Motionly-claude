@@ -135,7 +135,12 @@ export interface TranscriptSummary {
   provider: string;
   model: string;
   confidence?: number | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  progress_pct: number;
   words: TranscriptWord[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface CaptionStyle {

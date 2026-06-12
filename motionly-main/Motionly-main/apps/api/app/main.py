@@ -187,6 +187,9 @@ def create_app() -> FastAPI:
     app.state.plan_queue = PlanQueue(app.state.queue_registry)
     app.state.broll_queue = BrollQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)
+    transcription_provider_key = settings.transcription_provider.strip().lower()
+    edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
+
     app.state.transcription_provider = (
         WhisperCompatibleHttpProvider(
             endpoint=GROQ_TRANSCRIPTION_ENDPOINT,
@@ -194,7 +197,7 @@ def create_app() -> FastAPI:
             model=settings.transcription_model,
             provider_name="groq",
         )
-        if settings.transcription_provider == "groq" and settings.groq_api_key
+        if transcription_provider_key in {"groq", "openai_compatible"} and settings.groq_api_key
         else FixtureTranscriptionProvider(model=settings.transcription_model)
     )
     app.state.edit_planner_provider = (
@@ -204,7 +207,7 @@ def create_app() -> FastAPI:
             model=settings.edit_planner_model,
             provider_name="openrouter",
         )
-        if settings.edit_planner_provider == "openrouter" and settings.openrouter_api_key
+        if edit_planner_provider_key in {"openrouter", "openai_compatible"} and settings.openrouter_api_key
         else FixtureEditPlannerProvider(model=settings.edit_planner_model)
     )
     stock_video_provider = settings.stock_video_provider.replace(",", "_")
@@ -306,14 +309,21 @@ def _validate_production_settings(settings) -> None:
     if settings.allow_fixture_providers:
         raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
 
-    if settings.transcription_provider == "fixture":
+    transcription_provider_key = settings.transcription_provider.strip().lower()
+    edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
+
+    if transcription_provider_key == "fixture":
         raise RuntimeError("TRANSCRIPTION_PROVIDER cannot be fixture in production")
-    if settings.transcription_provider == "groq" and not settings.groq_api_key:
-        raise RuntimeError("GROQ_API_KEY is required when TRANSCRIPTION_PROVIDER=groq")
-    if settings.edit_planner_provider == "fixture":
+    if transcription_provider_key in {"groq", "openai_compatible"} and not settings.groq_api_key:
+        raise RuntimeError(
+            "GROQ_API_KEY is required when TRANSCRIPTION_PROVIDER uses the Groq-compatible path"
+        )
+    if edit_planner_provider_key == "fixture":
         raise RuntimeError("EDIT_PLANNER_PROVIDER cannot be fixture in production")
-    if settings.edit_planner_provider == "openrouter" and not settings.openrouter_api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is required when EDIT_PLANNER_PROVIDER=openrouter")
+    if edit_planner_provider_key in {"openrouter", "openai_compatible"} and not settings.openrouter_api_key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is required when EDIT_PLANNER_PROVIDER uses the OpenRouter path"
+        )
     if settings.music_provider == "fixture":
         raise RuntimeError("MUSIC_PROVIDER cannot be fixture in production")
     if settings.music_provider == "licensed_catalog" and (

@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from app.api.dependencies import (
     Actor,
@@ -25,16 +25,15 @@ from app.schemas.captions import (
     TranscriptStatus,
 )
 from app.schemas.uploads import UploadStatus
-from app.services.audio_extraction import FFmpegAudioExtractor
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import (
     CAPTION_SCHEMA_VERSION,
     get_caption_preset,
     list_caption_presets,
 )
-from app.services.local_storage import create_object_storage
 from app.services.queue import TranscriptionQueue
-from app.services.transcription_provider import FixtureTranscriptionProvider, TranscriptionProvider
+from app.services.transcription_jobs import queue_transcription_for_upload
+from app.services.transcription_provider import TranscriptionProvider
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["transcripts and captions"])
 
@@ -48,7 +47,6 @@ TranscriptionQueueDep = Annotated[TranscriptionQueue, Depends(get_transcription_
 async def create_transcription(
     project_id: UUID,
     payload: TranscriptionCreateRequest,
-    request: Request,
     actor: ActorDep,
     repository: CaptionRepositoryDep,
     transcription_provider: TranscriptionProviderDep,
@@ -69,91 +67,19 @@ async def create_transcription(
             "source_video_not_ready",
             "Finish upload preprocessing before generating a transcript.",
         )
-    existing = repository.latest_transcript(project_id=project_id, workspace_id=actor.workspace_id)
-    if existing and existing.uploaded_video_id == upload.id and not payload.force:
-        job = transcription_queue.enqueue_transcription(
-            project_id=project_id,
-            workspace_id=actor.workspace_id,
-            video_id=upload.id,
-        )
-        return TranscriptionCreateResponse(
-            transcript_id=existing.id,
-            status=existing.status,
-            job_id=job.id,
-            message="Existing transcript is ready. Use force to regenerate.",
-        )
-
-    job = transcription_queue.enqueue_transcription(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        video_id=upload.id,
-    )
-    if upload.metadata.has_audio is False:
-        transcript = repository.create_transcript(
-            workspace_id=actor.workspace_id,
-            project_id=project_id,
-            uploaded_video_id=upload.id,
-            status=TranscriptStatus.CAPTIONS_UNAVAILABLE,
-            language="unknown",
-            language_hint=payload.language_hint,
-            provider=transcription_provider.provider_name,
-            model=transcription_provider.model,
-            words=[],
-            confidence=None,
-            duration_ms=upload.metadata.duration_ms,
-            raw_payload={},
-            error_code="audio_track_missing",
-            error_message="This video has no audio track, so captions cannot be generated.",
-        )
-        return TranscriptionCreateResponse(
-            transcript_id=transcript.id,
-            status=transcript.status,
-            job_id=job.id,
-            message="Captions are unavailable because this video has no audio.",
-        )
-
-    audio_path = None
-    extractor = FFmpegAudioExtractor()
-    if not isinstance(transcription_provider, FixtureTranscriptionProvider):
-        settings = request.app.state.settings
-        storage = create_object_storage(
-            root=settings.media_work_dir,
-            supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
-            service_role_key=getattr(settings, "supabase_service_role_key", None),
-        )
-        source_path = storage.ensure_object(bucket=upload.storage_bucket, path=upload.storage_path)
-        audio_path = source_path.with_suffix(".transcription.wav")
-        extractor.extract_mono_wav(source_path=source_path, output_path=audio_path)
-    try:
-        result = transcription_provider.transcribe(
-            audio_path=audio_path,
-            language_hint=payload.language_hint,
-        )
-    finally:
-        if audio_path is not None:
-            extractor.cleanup(
-                audio_path=audio_path,
-                retain_debug_copy=request.app.state.settings.transcription_debug_retain_audio,
-            )
-    transcript = repository.create_transcript(
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-        uploaded_video_id=upload.id,
-        status=TranscriptStatus.READY,
-        language=result.language,
+    transcript = queue_transcription_for_upload(
+        upload=upload,
+        caption_repository=repository,
+        transcription_queue=transcription_queue,
+        transcription_provider=transcription_provider,
         language_hint=payload.language_hint,
-        provider=result.provider,
-        model=result.model,
-        words=result.words,
-        confidence=result.confidence,
-        duration_ms=upload.metadata.duration_ms,
-        raw_payload=result.raw_payload,
+        force=payload.force,
     )
     return TranscriptionCreateResponse(
         transcript_id=transcript.id,
         status=transcript.status,
-        job_id=job.id,
-        message="Transcript generated with word-level timings.",
+        job_id=f"transcribe--{project_id}--{upload.id}--{actor.workspace_id}",
+        message="Transcript queued for background generation.",
     )
 
 

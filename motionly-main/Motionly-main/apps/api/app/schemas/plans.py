@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.request_body import JsonStringBodyMixin
+
 EDIT_PLAN_SCHEMA_VERSION = 1
 
 
@@ -79,13 +81,18 @@ class EditPlan(BaseModel):
     risk_flags: list[str] = Field(default_factory=list, max_length=10)
 
 
-class PlanCreateRequest(BaseModel):
+class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
     prompt: str = Field(default="", max_length=1200)
     style: EditPlanStyle = EditPlanStyle.LUXURY
     target_duration_s: int = Field(default=35, ge=10, le=90)
     broll_density: BrollDensity = BrollDensity.MEDIUM
     feedback: str | None = Field(default=None, max_length=800)
     force: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
 class PlanSummary(BaseModel):

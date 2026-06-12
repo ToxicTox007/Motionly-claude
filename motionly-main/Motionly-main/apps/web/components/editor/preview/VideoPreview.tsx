@@ -133,8 +133,11 @@ export function VideoPreview({
 
       {/* ── Playback controls ────────────────────────────────────────────── */}
       <div className="flex w-full max-w-[240px] items-center justify-between gap-2">
-        <ControlButton onClick={() => skip(-5)} title="–5 s">
-          <SkipBack className="size-3.5" />
+        <ControlButton onClick={() => skip(-5)} title="Back 5 seconds">
+          <span className="flex items-center gap-1">
+            <SkipBack className="size-3.5" />
+            <span className="text-[10px] font-bold">5s</span>
+          </span>
         </ControlButton>
 
         <button
@@ -146,8 +149,11 @@ export function VideoPreview({
             : <Play   className="size-4 translate-x-px" />}
         </button>
 
-        <ControlButton onClick={() => skip(5)} title="+5 s">
-          <SkipForward className="size-3.5" />
+        <ControlButton onClick={() => skip(5)} title="Forward 5 seconds">
+          <span className="flex items-center gap-1">
+            <span className="text-[10px] font-bold">5s</span>
+            <SkipForward className="size-3.5" />
+          </span>
         </ControlButton>
       </div>
 

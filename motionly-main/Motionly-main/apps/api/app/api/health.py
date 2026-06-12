@@ -62,7 +62,7 @@ async def dependencies(request: Request) -> DependencyHealthResponse:
         "api": DependencyHealth(status="ok", message="API process is responding."),
         "worker": _worker_health(settings),
         "renderer": _renderer_health(settings),
-        "redis": _redis_health(request),
+        "redis": _redis_dependency_health(request),
         "supabase": await _supabase_health(settings),
     }
     aggregate = "ok" if all(item.status == "ok" for item in checks.values()) else "degraded"
@@ -87,6 +87,11 @@ def _worker_health(settings) -> DependencyHealth:
 def _renderer_health(settings) -> DependencyHealth:
     if not settings.remotion_enabled:
         return DependencyHealth(status="ok", message="Remotion renderer is disabled.")
+    if settings.redis_url and settings.admin_api_token:
+        return DependencyHealth(
+            status="ok",
+            message="Worker-backed Remotion renderer is enabled.",
+        )
     renderer_root = Path(__file__).resolve().parents[3] / "renderer"
     missing = [
         str(path)
@@ -105,7 +110,7 @@ def _renderer_health(settings) -> DependencyHealth:
     return DependencyHealth(status="ok", message="Remotion renderer files are present.")
 
 
-def _redis_health(request: Request) -> DependencyHealth:
+def _redis_dependency_health(request: Request) -> DependencyHealth:
     registry = request.app.state.queue_registry
     try:
         snapshots = registry.snapshots()
@@ -168,7 +173,7 @@ async def deep(request: Request) -> DeepHealthResponse:
                 else "Render execution is simulated."
             ),
         ),
-        "redis": _redis_health(request),
+        "redis": _redis_component_health(request),
         "supabase": ComponentHealth(
             status="ok" if settings.supabase_url and settings.supabase_service_role_key else "degraded",
             message=(
@@ -188,19 +193,7 @@ async def deep(request: Request) -> DeepHealthResponse:
     )
 
 
-@router.get("/dependencies")
-async def dependencies(request: Request) -> dict[str, object]:
-    response = await deep(request)
-    return {
-        "status": response.status,
-        "service": response.service,
-        "environment": response.environment,
-        "request_id": response.request_id,
-        "dependencies": response.components,
-    }
-
-
-def _redis_health(request: Request) -> ComponentHealth:
+def _redis_component_health(request: Request) -> ComponentHealth:
     registry = request.app.state.queue_registry
     if isinstance(registry, BullMQQueueRegistry):
         try:

@@ -235,11 +235,22 @@ class BullMQQueueRegistry:
         job_attempts: int = 3,
     ) -> None:
         self.redis_url = redis_url
-        self.bridge_path = bridge_path or str(
-            Path(__file__).resolve().parents[4] / "apps" / "worker" / "src" / "queue-bridge.mjs"
-        )
+        self.bridge_path = bridge_path or str(self._default_bridge_path())
         self.node_command = node_command
         self.job_attempts = job_attempts
+
+    @staticmethod
+    def _default_bridge_path() -> Path:
+        current = Path(__file__).resolve()
+        candidates = [Path("/app/apps/worker/src/queue-bridge.mjs")]
+        candidates.extend(
+            parent / "apps" / "worker" / "src" / "queue-bridge.mjs"
+            for parent in current.parents
+        )
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[-1]
 
     @property
     def jobs(self) -> dict[str, EnqueuedJob]:
@@ -417,6 +428,9 @@ class BaseQueue:
             render_engine=render_engine,
         )
 
+    def _job_id(self, *parts: object) -> str:
+        return "--".join(str(part) for part in parts if part is not None)
+
 
 class PreprocessQueue(BaseQueue):
     queue_name = "upload_preprocess"
@@ -430,7 +444,7 @@ class PreprocessQueue(BaseQueue):
         workspace_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"preprocess:{video_id}",
+            job_id=self._job_id("preprocess", video_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=video_id,
@@ -448,7 +462,7 @@ class TranscriptionQueue(BaseQueue):
         video_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"transcribe:{project_id}:{video_id}:{workspace_id}",
+            job_id=self._job_id("transcribe", project_id, video_id, workspace_id),
             kind="transcription",
             workspace_id=workspace_id,
             project_id=project_id,
@@ -463,7 +477,7 @@ class TranscriptionQueue(BaseQueue):
         transcript_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"captions:{project_id}:{transcript_id}:{workspace_id}",
+            job_id=self._job_id("captions", project_id, transcript_id, workspace_id),
             kind="caption_generation",
             workspace_id=workspace_id,
             project_id=project_id,
@@ -483,7 +497,7 @@ class PlanQueue(BaseQueue):
         transcript_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"plan:{project_id}:{transcript_id}:{workspace_id}",
+            job_id=self._job_id("plan", project_id, transcript_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=transcript_id,
@@ -502,7 +516,7 @@ class BrollQueue(BaseQueue):
         edit_plan_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"broll:{project_id}:{edit_plan_id}:{workspace_id}",
+            job_id=self._job_id("broll", project_id, edit_plan_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
@@ -522,9 +536,14 @@ class RenderQueue(BaseQueue):
         priority: int = 0,
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
-        priority_suffix = f":p{priority}" if priority else ""
         return self._enqueue(
-            job_id=f"render:{project_id}:{render_job_id}:{workspace_id}{priority_suffix}",
+            job_id=self._job_id(
+                "render",
+                project_id,
+                render_job_id,
+                workspace_id,
+                f"p{priority}" if priority else None,
+            ),
             priority=priority,
             workspace_id=workspace_id,
             project_id=project_id,
@@ -545,7 +564,7 @@ class MusicQueue(BaseQueue):
         edit_plan_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"music:{project_id}:{edit_plan_id}:{workspace_id}",
+            job_id=self._job_id("music", project_id, edit_plan_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
@@ -564,7 +583,7 @@ class EffectsQueue(BaseQueue):
         edit_plan_id: UUID | None,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"effects:{project_id}:{edit_plan_id or 'no-plan'}:{workspace_id}",
+            job_id=self._job_id("effects", project_id, edit_plan_id or "no-plan", workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
@@ -583,7 +602,7 @@ class RegenerationQueue(BaseQueue):
         control_settings_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=f"regenerate:{project_id}:{control_settings_id}:{workspace_id}",
+            job_id=self._job_id("regenerate", project_id, control_settings_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=control_settings_id,

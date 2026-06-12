@@ -7,6 +7,10 @@ from app.api.errors import ApiError
 from app.schemas.renders import RenderJobStatus
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob, QueueJobStatus, QueueRegistry
 from app.services.render_jobs import complete_render_job_by_id
+from app.services.transcription_jobs import (
+    queue_transcription_for_upload,
+    run_transcription_for_upload,
+)
 from app.services.upload_jobs import complete_upload_preprocessing_by_id
 
 router = APIRouter(prefix="/internal/jobs", tags=["internal jobs"])
@@ -81,7 +85,37 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
             service_role_key=settings.supabase_service_role_key,
         )
-        return {"upload_id": str(upload.id), "upload_status": upload.status.value}
+        transcript = queue_transcription_for_upload(
+            upload=upload,
+            caption_repository=request.app.state.caption_repository,
+            transcription_queue=request.app.state.transcription_queue,
+            transcription_provider=request.app.state.transcription_provider,
+        )
+        return {
+            "upload_id": str(upload.id),
+            "upload_status": upload.status.value,
+            "transcript_id": str(transcript.id),
+            "transcript_status": transcript.status.value,
+        }
+
+    if job.kind == "transcription":
+        transcript = run_transcription_for_upload(
+            upload_repository=request.app.state.upload_repository,
+            caption_repository=request.app.state.caption_repository,
+            transcription_provider=request.app.state.transcription_provider,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            video_id=job.resource_id,
+            media_work_dir=settings.media_work_dir,
+            supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
+            service_role_key=settings.supabase_service_role_key,
+            retain_debug_audio=settings.transcription_debug_retain_audio,
+        )
+        return {
+            "transcript_id": str(transcript.id),
+            "transcript_status": transcript.status.value,
+            "failed": transcript.status == "failed",
+        }
 
     if job.kind == "render":
         render = complete_render_job_by_id(

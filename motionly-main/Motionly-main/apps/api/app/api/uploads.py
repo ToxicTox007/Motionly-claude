@@ -240,12 +240,16 @@ async def get_upload_asset_urls(
     )
     thumbnail_url = None
     if upload.thumbnail_path:
-        thumbnail = storage_signer.create_signed_download(
-            bucket="thumbnails",
-            path=_thumbnail_object_path(upload.thumbnail_path),
-            expires_in_seconds=ttl,
-        )
-        thumbnail_url = thumbnail.url
+        try:
+            thumbnail = storage_signer.create_signed_download(
+                bucket="thumbnails",
+                path=_thumbnail_object_path(upload.thumbnail_path),
+                expires_in_seconds=ttl,
+            )
+        except Exception:
+            thumbnail = None
+        if thumbnail is not None:
+            thumbnail_url = thumbnail.url
 
     return UploadAssetUrlsResponse(
         video_id=upload.id,

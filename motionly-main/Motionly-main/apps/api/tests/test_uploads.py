@@ -31,6 +31,13 @@ class FakeStorageSigner:
         return SimpleNamespace(url=f"https://storage.example.com/{bucket}/{path}?signed=1")
 
 
+class ThumbnailFailingStorageSigner(FakeStorageSigner):
+    def create_signed_download(self, *, bucket, path, **_kwargs):
+        if bucket == "thumbnails":
+            raise RuntimeError(f"missing thumbnail: {path}")
+        return super().create_signed_download(bucket=bucket, path=path, **_kwargs)
+
+
 def make_context() -> tuple[SimpleNamespace, InMemoryUploadRepository, str, str, str]:
     repository = InMemoryUploadRepository()
     project_id = uuid4()
@@ -92,7 +99,7 @@ def test_upload_init_and_complete_queues_processing_job() -> None:
 
     assert complete_response.video_id == init_response.video_id
     assert complete_response.status == "processing"
-    assert complete_response.job_id == f"preprocess:{init_response.video_id}"
+    assert complete_response.job_id == f"preprocess--{init_response.video_id}"
 
 
 def test_upload_rejects_mime_extension_mismatch() -> None:
@@ -293,6 +300,38 @@ def test_upload_asset_urls_are_signed_after_workspace_check() -> None:
     assert response.thumbnail_url.endswith(
         "/thumbnails/workspaces/one/projects/two/thumbnails/video.jpg?signed=1"
     )
+
+
+def test_upload_asset_urls_keep_source_when_thumbnail_signing_fails() -> None:
+    request, repository, project_id, workspace_id, user_id = make_context()
+    upload = repository.create_upload(
+        project_id=uuid4_from_string(project_id),
+        workspace_id=uuid4_from_string(workspace_id),
+        storage_bucket="raw-uploads",
+        storage_path="workspaces/one/projects/two/raw/video.mp4",
+        original_filename="video.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10_000,
+    )
+    upload.status = UploadStatus.READY
+    upload.thumbnail_path = "workspaces/one/projects/two/thumbnails/video.jpg"
+    upload.metadata = VideoMetadata(duration_ms=3000, width=1080, height=1920)
+
+    response = asyncio.run(
+        get_upload_asset_urls(
+            project_id=uuid4_from_string(project_id),
+            video_id=upload.id,
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            storage_signer=ThumbnailFailingStorageSigner(),
+        )
+    )
+
+    assert response.source_video_url.endswith(
+        "/raw-uploads/workspaces/one/projects/two/raw/video.mp4?signed=1"
+    )
+    assert response.thumbnail_url is None
 
 
 def test_media_readiness_blocks_missing_audio_and_unsupported_codec() -> None:

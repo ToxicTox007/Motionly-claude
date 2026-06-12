@@ -55,6 +55,7 @@ class TranscriptRecord:
             raw_payload=self.raw_payload,
             error_code=self.error_code,
             error_message=self.error_message,
+            progress_pct=_transcript_progress_pct(self.status, has_words=bool(self.words)),
             words=self.words,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -156,6 +157,12 @@ class InMemoryCaptionRepository:
     def create_transcript(self, **values: object) -> TranscriptRecord:
         transcript = TranscriptRecord(id=uuid4(), **values)
         self.transcripts[transcript.id] = transcript
+        return transcript
+
+    def update_transcript(self, *, transcript: TranscriptRecord, **values: object) -> TranscriptRecord:
+        for key, value in values.items():
+            setattr(transcript, key, value)
+        transcript.updated_at = datetime.now(UTC)
         return transcript
 
     def create_caption_track(self, **values: object) -> CaptionTrackRecord:
@@ -274,6 +281,47 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                 timeout=10,
             )
         return transcript
+
+    def update_transcript(self, *, transcript: TranscriptRecord, **values: object) -> TranscriptRecord:
+        words = values.pop("words", transcript.words)
+        payload = self._json_safe({**values, "updated_at": datetime.now(UTC).isoformat()})
+        response = httpx.patch(
+            f"{self.rest_url}/transcripts",
+            headers=self.headers,
+            params={"id": f"eq.{transcript.id}", "select": "*"},
+            json=payload,
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        delete_response = httpx.delete(
+            f"{self.rest_url}/transcript_words",
+            headers=self.headers,
+            params={"transcript_id": f"eq.{transcript.id}"},
+            timeout=10,
+        )
+        self._raise_for_supabase(delete_response)
+        next_words = list(words)
+        if next_words:
+            insert_response = httpx.post(
+                f"{self.rest_url}/transcript_words",
+                headers=self.headers,
+                json=[
+                    {
+                        "workspace_id": str(transcript.workspace_id),
+                        "project_id": str(transcript.project_id),
+                        "transcript_id": str(transcript.id),
+                        "word_index": word.index,
+                        "text": word.text,
+                        "start_ms": word.start_ms,
+                        "end_ms": word.end_ms,
+                        "confidence": word.confidence,
+                    }
+                    for word in next_words
+                ],
+                timeout=10,
+            )
+            self._raise_for_supabase(insert_response)
+        return self._transcript_from_row(response.json()[0], words=next_words)
 
     def latest_transcript(
         self,
@@ -603,3 +651,15 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         if response.status_code < 400:
             return
         raise ApiError(502, "supabase_request_failed", "Caption data could not be saved.")
+
+
+def _transcript_progress_pct(status: TranscriptStatus, *, has_words: bool) -> int:
+    if status == TranscriptStatus.READY:
+        return 100
+    if status == TranscriptStatus.PROCESSING:
+        return 65 if has_words else 55
+    if status == TranscriptStatus.QUEUED:
+        return 15
+    if status == TranscriptStatus.CAPTIONS_UNAVAILABLE:
+        return 100
+    return 0

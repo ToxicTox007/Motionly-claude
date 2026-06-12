@@ -88,7 +88,7 @@ def test_create_plan_returns_valid_structured_plan() -> None:
     assert response.plan.plan.cuts
     assert all(cut.end_ms <= 12_000 for cut in response.plan.plan.cuts)
     assert response.plan.summary.cut_count == len(response.plan.plan.cuts)
-    assert response.job_id.startswith(f"plan:{project_id}:")
+    assert response.job_id.startswith(f"plan--{project_id}--")
 
 
 def test_create_plan_reuses_cache_without_force() -> None:
@@ -375,7 +375,11 @@ def test_create_plan_rejects_cross_workspace_access() -> None:
 def test_validation_errors_use_api_error_envelope() -> None:
     response = asyncio.run(
         request_validation_error_handler(
-            SimpleNamespace(state=SimpleNamespace(request_id="req_test")),
+            SimpleNamespace(
+                state=SimpleNamespace(request_id="req_test"),
+                method="POST",
+                url=SimpleNamespace(path="/projects/test/plans"),
+            ),
             RequestValidationError(
                 [
                     {
@@ -391,6 +395,22 @@ def test_validation_errors_use_api_error_envelope() -> None:
     assert response.status_code == 422
     assert b"request_validation_failed" in response.body
     assert b"target_duration_s" in response.body
+
+
+def test_plan_create_request_accepts_json_string_body() -> None:
+    payload = PlanCreateRequest.model_validate_json(
+        '{"prompt":"tight edit","style":"luxury","broll_density":"medium","force":true}'
+    )
+
+    assert payload.prompt == "tight edit"
+    assert payload.force is True
+
+    payload = PlanCreateRequest.model_validate(
+        '{"prompt":"wrapped body","style":"founder","broll_density":"low"}'
+    )
+
+    assert payload.prompt == "wrapped body"
+    assert payload.style == EditPlanStyle.FOUNDER
 
 
 def test_http_planner_repairs_invalid_provider_shape(monkeypatch: pytest.MonkeyPatch) -> None:
