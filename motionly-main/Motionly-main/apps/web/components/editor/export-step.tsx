@@ -26,6 +26,7 @@ import type {
 import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/browser";
+import type { PreviewExportState } from "./preview/VideoPreview";
 
 interface ExportStepProps {
   projectId: string;
@@ -38,6 +39,7 @@ interface ExportStepProps {
   activePlanId?: string | null;
   sourceWidth?: number | null;
   sourceHeight?: number | null;
+  onPreviewExportUpdated?: (state: PreviewExportState | null) => void;
 }
 
 const platforms: { value: PlatformPreset; label: string }[] = [
@@ -76,6 +78,8 @@ const templates: { value: RenderTemplateId; label: string }[] = [
   { value: "fashion_reel_v1", label: "Fashion reel" },
 ];
 
+type RenderUiState = "idle" | "queued" | "rendering" | "completed" | "failed" | "canceled";
+
 export function ExportStep({
   projectId,
   workspaceId,
@@ -87,6 +91,7 @@ export function ExportStep({
   activePlanId,
   sourceWidth,
   sourceHeight,
+  onPreviewExportUpdated,
 }: ExportStepProps) {
   const router = useRouter();
   const [templateId, setTemplateId] = useState<RenderTemplateId>("luxury_reel_v1");
@@ -106,13 +111,21 @@ export function ExportStep({
 
   const latestJob = jobs[0];
   const latestExport = exports[0];
-  const activeStatuses = useMemo(
-    () => ["queued", "processing", "preparing", "rendering", "uploading"],
-    [],
-  );
+  const activeStatuses = useMemo(() => ["queued", "processing", "preparing", "rendering", "uploading"], []);
   const isRendering = latestJob && activeStatuses.includes(latestJob.status);
-  const retryableJob =
-    latestJob && ["failed", "canceled"].includes(latestJob.status) ? latestJob : null;
+  const renderUiState = getRenderUiState(latestJob);
+  const progress = getDisplayProgress(latestJob);
+  const retryableJob = latestJob?.status === "failed" ? latestJob : null;
+  const canceledJob = latestJob?.status === "canceled" ? latestJob : null;
+  const primaryRenderAction = getPrimaryRenderAction({
+    renderUiState,
+    loading,
+    isRendering: Boolean(isRendering),
+    retryableJobId: retryableJob?.id ?? null,
+    captionTrackId: captionTrackId ?? null,
+    startRender,
+    retryRender,
+  });
   const activeStreamJobId =
     streamingJobId ?? jobs.find((job) => activeStatuses.includes(job.status))?.id ?? null;
   const sourceAspectLabel =
@@ -127,6 +140,16 @@ export function ExportStep({
     },
     padding_color: "#000000",
   };
+
+  useEffect(() => {
+    onPreviewExportUpdated?.({
+      outputAspect,
+      fitMode,
+      cropX,
+      cropY,
+      cropZoom,
+    });
+  }, [cropX, cropY, cropZoom, fitMode, onPreviewExportUpdated, outputAspect]);
 
   async function startRender() {
     setLoading(true);
@@ -216,7 +239,7 @@ export function ExportStep({
             setMessage("Export is ready to download.");
           } else if (status === "failed" || status === "canceled") {
             setStreamingJobId(null);
-            setMessage(row.error_message ?? `Render ${status}.`);
+            setMessage(status === "failed" ? row.error_message ?? "Render failed." : "Render canceled.");
           } else if (status) {
             setMessage(`${statusLabel(status)} (${row.progress_pct ?? 0}%)`);
           }
@@ -287,6 +310,7 @@ export function ExportStep({
         }
       } catch (error) {
         if (abortController.signal.aborted || canceled) return;
+        console.warn("Render event stream unavailable; falling back to polling.", error);
         await pollRender(renderJobId);
       } finally {
         if (!canceled) setLoading(false);
@@ -307,13 +331,23 @@ export function ExportStep({
   }
 
   async function pollRender(renderJobId: string) {
-    for (let attempt = 0; attempt < 36; attempt += 1) {
-      await sleep(2500);
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}`, {
-        headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken, json: false }),
-      });
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (attempt > 0) await sleep(2500);
+      let response: Response;
+      try {
+        response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}`, {
+          cache: "no-store",
+          headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken, json: false }),
+        });
+      } catch (error) {
+        console.warn("Render status poll failed; retrying.", error);
+        continue;
+      }
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Render status could not be refreshed.");
+      if (!response.ok) {
+        console.warn("Render status poll returned an error; retrying.", payload);
+        continue;
+      }
       updateJob(payload);
       setMessage(renderMessage(payload));
       if (payload.status === "complete") {
@@ -324,11 +358,11 @@ export function ExportStep({
       }
       if (payload.status === "failed" || payload.status === "canceled") {
         setStreamingJobId(null);
-        setMessage(payload.error_message ?? `Render ${payload.status}.`);
+        setMessage(payload.status === "failed" ? payload.error_message ?? "Render failed." : "Render canceled.");
         return;
       }
     }
-    setMessage("Render is still running. Refresh this project in a moment.");
+    setMessage("Render is still running. Status updates are delayed.");
   }
 
   async function retryRender(renderJobId: string) {
@@ -407,7 +441,7 @@ export function ExportStep({
   }
 
   return (
-    <div id="editor-export" className="space-y-6" aria-labelledby="export-heading">
+    <div id="editor-export" className="space-y-4" aria-labelledby="export-heading">
       <div className="space-y-2">
         <h2 id="export-heading" className="text-xl font-black tracking-tight">Export</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
@@ -415,136 +449,154 @@ export function ExportStep({
         </p>
       </div>
 
-      <div className="pixel-panel pixel-corners space-y-6 p-4">
-        <div className="space-y-2">
-          <Label>Creator Template</Label>
-          <Select
-            id="creator-template"
-            label="Creator Template"
-            value={templateId}
-            onChange={(val) => setTemplateId(val as RenderTemplateId)}
-            options={templates}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label>Target Platform</Label>
-          <Select
-            id="target-platform"
-            label="Target Platform"
-            value={platform}
-            onChange={(val) => setPlatform(val as PlatformPreset)}
-            options={platforms}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label>Video Quality</Label>
-          <Select
-            id="video-quality"
-            label="Video Quality"
-            value={resolution}
-            onChange={(val) => setResolution(val as ExportResolution)}
-            options={resolutions}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label>Output Frame</Label>
-          <Select
-            id="output-frame"
-            label="Output Frame"
-            value={outputAspect}
-            onChange={(val) => setOutputAspect(val as OutputAspect)}
-            options={outputAspects}
-          />
-          <p className="text-[10px] font-medium text-muted-foreground">
-            Source: {sourceAspectLabel}
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label>Crop Mode</Label>
-          <Select
-            id="crop-mode"
-            label="Crop Mode"
-            value={fitMode}
-            onChange={(val) => setFitMode(val as ExportFitMode)}
-            options={fitModes}
-          />
-        </div>
-
-        {fitMode === "custom" ? (
-          <div className="space-y-5 border-t border-border pt-4">
-            <Slider label="Crop X" value={cropX} onChange={setCropX} />
-            <Slider label="Crop Y" value={cropY} onChange={setCropY} />
-            <Slider
-              label="Zoom"
-              value={cropZoom}
-              min={100}
-              max={300}
-              onChange={setCropZoom}
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              aria-label="Reset crop to centered original size"
-              className="min-h-11 w-full text-xs"
-              onClick={() => {
-                setCropX(50);
-                setCropY(50);
-                setCropZoom(100);
-              }}
-            >
-              Reset Crop
-            </Button>
+      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+        <ExportStepSection step="1" title="Format" status="completed">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="mb-0">Creator Template</Label>
+              <Select
+                id="creator-template"
+                label="Creator Template"
+                value={templateId}
+                onChange={(val) => setTemplateId(val as RenderTemplateId)}
+                options={templates}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="mb-0">Target Platform</Label>
+              <Select
+                id="target-platform"
+                label="Target Platform"
+                value={platform}
+                onChange={(val) => setPlatform(val as PlatformPreset)}
+                options={platforms}
+              />
+            </div>
           </div>
-        ) : null}
+        </ExportStepSection>
+
+        <ExportStepSection step="2" title="Frame" status={fitMode === "custom" ? "active" : "completed"}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label className="mb-0">Output Frame</Label>
+              <Select
+                id="output-frame"
+                label="Output Frame"
+                value={outputAspect}
+                onChange={(val) => setOutputAspect(val as OutputAspect)}
+                options={outputAspects}
+              />
+              <p className="text-[10px] font-medium text-muted-foreground">
+                Source: {sourceAspectLabel}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="mb-0">Crop Mode</Label>
+              <Select
+                id="crop-mode"
+                label="Crop Mode"
+                value={fitMode}
+                onChange={(val) => setFitMode(val as ExportFitMode)}
+                options={fitModes}
+              />
+            </div>
+          </div>
+
+          {fitMode === "custom" ? (
+            <div className="mt-3 space-y-3 border-t border-border pt-3">
+              <Slider label="Crop X" value={cropX} onChange={setCropX} />
+              <Slider label="Crop Y" value={cropY} onChange={setCropY} />
+              <Slider
+                label="Zoom"
+                value={cropZoom}
+                min={100}
+                max={300}
+                onChange={setCropZoom}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                aria-label="Reset crop to centered original size"
+                className="min-h-11 w-full gap-2 text-xs"
+                onClick={() => {
+                  setCropX(50);
+                  setCropY(50);
+                  setCropZoom(100);
+                }}
+              >
+                <RotateCcw className="size-3.5" />
+                Reset Crop
+              </Button>
+            </div>
+          ) : null}
+        </ExportStepSection>
+
+        <ExportStepSection step="3" title="Quality" status="completed">
+          <div className="space-y-1.5">
+            <Label className="mb-0">Video Quality</Label>
+            <Select
+              id="video-quality"
+              label="Video Quality"
+              value={resolution}
+              onChange={(val) => setResolution(val as ExportResolution)}
+              options={resolutions}
+            />
+          </div>
+        </ExportStepSection>
       </div>
 
       <Button 
-        onClick={startRender} 
-        disabled={loading || isRendering || !captionTrackId}
+        onClick={primaryRenderAction.onClick} 
+        disabled={primaryRenderAction.disabled}
         aria-busy={loading || Boolean(isRendering)}
         aria-describedby={message ? "export-message" : !captionTrackId ? "export-missing-captions" : undefined}
         className="h-14 w-full bg-primary text-primary-foreground"
       >
         {loading || isRendering ? (
           <Loader2 className="mr-2 size-5 animate-spin" />
+        ) : primaryRenderAction.icon === "retry" ? (
+          <RotateCcw className="mr-2 size-5" />
         ) : (
           <Video className="mr-2 size-5" />
         )}
         <span className="text-base font-bold">
-          {loading ? "Starting render, please wait" : isRendering ? `Rendering (${latestJob.progress_pct}%)` : "Start Render"}
+          {primaryRenderAction.label}
         </span>
       </Button>
 
       {latestJob ? (
-        <div className="space-y-3 border border-border bg-muted/40 p-4" aria-live="polite">
+        <div className="space-y-3 border border-border bg-muted/40 p-3" aria-live="polite">
           <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <RenderStatusIcon state={renderUiState} loading={loading || Boolean(isRendering)} />
+              <div className="min-w-0">
               <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
                 Render job
               </p>
-              <p className="truncate text-sm font-bold">{statusLabel(latestJob.status)}</p>
+              <p className="truncate text-sm font-bold">{uiStateLabel(renderUiState)}</p>
+              </div>
             </div>
-            <span className="text-sm font-black">{latestJob.progress_pct ?? 0}%</span>
+            {renderUiState === "queued" || renderUiState === "rendering" || renderUiState === "completed" ? (
+              <span className="text-sm font-black">{progress}%</span>
+            ) : null}
           </div>
-          <div
-            className="h-3 overflow-hidden border border-border bg-background"
-            role="progressbar"
-            aria-label={`Render progress: ${statusLabel(latestJob.status)}`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.max(0, Math.min(100, latestJob.progress_pct ?? 0))}
-            aria-valuetext={`${latestJob.progress_pct ?? 0}% ${statusLabel(latestJob.status)}`}
-          >
+          {renderUiState === "queued" || renderUiState === "rendering" || renderUiState === "completed" ? (
             <div
-              className="h-full bg-primary transition-all"
-              style={{ width: `${Math.max(0, Math.min(100, latestJob.progress_pct ?? 0))}%` }}
-            />
-          </div>
-          {latestJob.error_message ? (
+              className="h-3 overflow-hidden border border-border bg-background"
+              role="progressbar"
+              aria-label={`Render progress: ${uiStateLabel(renderUiState)}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+              aria-valuetext={`${progress}% ${uiStateLabel(renderUiState)}`}
+            >
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          ) : null}
+          {renderUiState === "failed" && latestJob.error_message ? (
             <div role="alert" className="flex gap-2 border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700">
               <AlertTriangle className="size-4 shrink-0" />
               <span>{latestJob.error_message} Try again, or reduce caption/B-roll complexity before retrying.</span>
@@ -575,6 +627,19 @@ export function ExportStep({
               >
                 <RotateCcw className="size-3.5" />
                 Retry
+              </Button>
+            ) : null}
+            {canceledJob ? (
+              <Button
+                type="button"
+                variant="secondary"
+                aria-label="Start render again"
+                className="min-h-11 gap-2 text-xs"
+                onClick={startRender}
+                disabled={loading || !captionTrackId}
+              >
+                <Video className="size-3.5" />
+                Start again
               </Button>
             ) : null}
           </div>
@@ -621,6 +686,57 @@ export function ExportStep({
   );
 }
 
+function ExportStepSection({
+  step,
+  title,
+  status,
+  children,
+}: {
+  step: string;
+  title: string;
+  status: "active" | "completed" | "idle";
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border border-border bg-surface/55">
+      <div className="flex min-h-11 items-center gap-3 border-b border-border px-3">
+        <span className="flex size-6 shrink-0 items-center justify-center border border-border bg-background text-xs font-black">
+          {step}
+        </span>
+        <h3 className="flex-1 text-sm font-black">{title}</h3>
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          {status === "completed" ? <CheckCircle2 className="size-3.5 text-primary" /> : null}
+          {status === "active" ? <Video className="size-3.5 text-primary" /> : null}
+          {status}
+        </span>
+      </div>
+      <div className="p-3">{children}</div>
+    </section>
+  );
+}
+
+function RenderStatusIcon({
+  state,
+  loading,
+}: {
+  state: RenderUiState;
+  loading: boolean;
+}) {
+  if (loading || state === "queued" || state === "rendering") {
+    return <Loader2 className="size-5 shrink-0 animate-spin text-primary" aria-hidden="true" />;
+  }
+  if (state === "completed") {
+    return <CheckCircle2 className="size-5 shrink-0 text-primary" aria-hidden="true" />;
+  }
+  if (state === "failed") {
+    return <AlertTriangle className="size-5 shrink-0 text-red-600" aria-hidden="true" />;
+  }
+  if (state === "canceled") {
+    return <Square className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />;
+  }
+  return <Video className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -632,11 +748,96 @@ function statusLabel(status: RenderJobSummary["status"]) {
     preparing: "Processing",
     rendering: "Rendering",
     uploading: "Uploading",
-    complete: "Complete",
+    complete: "Completed",
     failed: "Failed",
     canceled: "Canceled",
   };
   return labels[status] ?? status;
+}
+
+function getRenderUiState(job?: RenderJobSummary): RenderUiState {
+  if (!job) return "idle";
+  if (job.status === "queued") return "queued";
+  if (job.status === "complete") return "completed";
+  if (job.status === "failed") return "failed";
+  if (job.status === "canceled") return "canceled";
+  return "rendering";
+}
+
+function uiStateLabel(state: RenderUiState) {
+  const labels: Record<RenderUiState, string> = {
+    idle: "Idle",
+    queued: "Queued",
+    rendering: "Rendering",
+    completed: "Completed",
+    failed: "Failed",
+    canceled: "Canceled",
+  };
+  return labels[state];
+}
+
+function getDisplayProgress(job?: RenderJobSummary) {
+  if (!job) return 0;
+  if (job.status === "complete") return 100;
+  if (job.status === "failed" || job.status === "canceled") return 0;
+  return Math.max(0, Math.min(100, job.progress_pct ?? 0));
+}
+
+function getPrimaryRenderAction({
+  renderUiState,
+  loading,
+  isRendering,
+  retryableJobId,
+  captionTrackId,
+  startRender,
+  retryRender,
+}: {
+  renderUiState: RenderUiState;
+  loading: boolean;
+  isRendering: boolean;
+  retryableJobId: string | null;
+  captionTrackId: string | null;
+  startRender: () => void;
+  retryRender: (renderJobId: string) => void;
+}) {
+  if (loading) {
+    return {
+      label: "Starting render, please wait",
+      disabled: true,
+      icon: "video" as const,
+      onClick: startRender,
+    };
+  }
+  if (isRendering) {
+    return {
+      label: renderUiState === "queued" ? "Queued" : "Rendering",
+      disabled: true,
+      icon: "video" as const,
+      onClick: startRender,
+    };
+  }
+  if (renderUiState === "failed" && retryableJobId) {
+    return {
+      label: "Retry Render",
+      disabled: false,
+      icon: "retry" as const,
+      onClick: () => retryRender(retryableJobId),
+    };
+  }
+  if (renderUiState === "canceled") {
+    return {
+      label: "Start Again",
+      disabled: !captionTrackId,
+      icon: "video" as const,
+      onClick: startRender,
+    };
+  }
+  return {
+    label: "Start Render",
+    disabled: !captionTrackId,
+    icon: "video" as const,
+    onClick: startRender,
+  };
 }
 
 function renderMessage(job: RenderJobSummary) {

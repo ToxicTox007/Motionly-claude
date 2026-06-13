@@ -406,7 +406,19 @@ export function TimelinePanel({
         </form>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <MobileTimelineView
+        tracks={tracks}
+        totalDurationMs={totalDurationMs}
+        playheadMs={playheadMs}
+        selectedClipId={selectedClipId}
+        onClipSelect={onClipSelect}
+        seekTo={(ms) => {
+          seekTo(ms);
+          setPlayheadMs(ms);
+        }}
+      />
+
+      <div className="hidden min-h-0 flex-1 overflow-hidden md:flex">
         <div
           className="flex flex-shrink-0 flex-col border-r border-border bg-[hsl(var(--surface))]"
           style={{ width: LABEL_WIDTH }}
@@ -492,6 +504,106 @@ function captionSegmentIndex(clip: TimelineClip, segments: CaptionSegment[]) {
     if (byId >= 0) return byId;
   }
   return clip.sourceRef.index ?? -1;
+}
+
+function MobileTimelineView({
+  tracks,
+  totalDurationMs,
+  playheadMs,
+  selectedClipId,
+  onClipSelect,
+  seekTo,
+}: {
+  tracks: TimelineState["tracks"];
+  totalDurationMs: number;
+  playheadMs: number;
+  selectedClipId: string | null;
+  onClipSelect: (clipId: string | null) => void;
+  seekTo: (ms: number) => void;
+}) {
+  const mobileTracks = tracks.filter((track) =>
+    ["video", "captions", "broll", "audio"].includes(track.kind),
+  );
+  const minWidth = Math.max(760, Math.round(totalDurationMs / 60));
+  const pct = (ms: number) => `${((ms / Math.max(totalDurationMs, 1)) * 100).toFixed(4)}%`;
+
+  return (
+    <div className="min-h-0 flex-1 overflow-hidden md:hidden">
+      <div className="h-full overflow-x-auto overflow-y-auto overscroll-x-contain">
+        <div className="relative min-h-full" style={{ minWidth }}>
+          <button
+            type="button"
+            className="pixel-grid-fine sticky top-0 z-10 h-12 w-full cursor-pointer border-b border-border bg-background text-left"
+            aria-label="Timeline ruler. Tap to seek."
+            onPointerDown={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const nextMs = Math.round(
+                ((event.clientX - rect.left) / Math.max(rect.width, 1)) * totalDurationMs,
+              );
+              seekTo(Math.max(0, Math.min(totalDurationMs, nextMs)));
+            }}
+          >
+            {rulerTicks(totalDurationMs).map((tick) => (
+              <span
+                key={tick.ms}
+                className="absolute top-2 font-mono text-[10px] font-semibold text-muted-foreground"
+                style={{ left: pct(tick.ms), transform: "translateX(-50%)" }}
+              >
+                {tick.label}
+              </span>
+            ))}
+          </button>
+
+          <div
+            className="pointer-events-none absolute top-0 z-20 h-full w-px bg-red-500/80"
+            style={{ left: pct(playheadMs) }}
+          />
+
+          {mobileTracks.map((track) => (
+            <div key={track.kind} className="grid grid-cols-[82px_minmax(0,1fr)] border-b border-border bg-surface">
+              <div className="sticky left-0 z-10 flex min-h-16 items-center border-r border-border bg-surface px-2">
+                <span className="whitespace-nowrap text-[11px] font-black uppercase tracking-wide text-muted-foreground">
+                  {track.label}
+                </span>
+              </div>
+              <div className="relative min-h-16 bg-background">
+                {track.clips.length === 0 ? (
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted-foreground">
+                    Empty
+                  </span>
+                ) : (
+                  track.clips.map((clip) => (
+                    <button
+                      key={clip.id}
+                      type="button"
+                      aria-pressed={clip.id === selectedClipId}
+                      aria-label={`${track.label} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}.`}
+                      title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}`}
+                      onClick={() => onClipSelect(clip.id)}
+                      className={cn(
+                        "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden border border-white/20 px-2 text-left text-[11px] font-bold leading-tight text-white shadow-[2px_2px_0_rgba(0,0,0,0.18)]",
+                        clip.colorClass,
+                        clip.disabled && "opacity-35",
+                        clip.id === selectedClipId
+                          ? "ring-2 ring-white"
+                          : "ring-1 ring-white/10",
+                      )}
+                      style={{
+                        left: pct(clip.startMs),
+                        width: `max(4rem, ${pct(Math.max(clip.endMs - clip.startMs, 250))})`,
+                      }}
+                    >
+                      <span className="truncate whitespace-nowrap">{clip.label}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 interface ClipBlockProps {

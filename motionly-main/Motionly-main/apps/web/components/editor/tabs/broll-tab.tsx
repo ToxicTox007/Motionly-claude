@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Input, Label, Slider } from "../ui";
 import { Button } from "../../button";
@@ -9,6 +9,7 @@ import type { BrollDensity, BrollSlotSummary, StockVideoAssetSummary } from "@mo
 import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
+import type { PreviewBrollState } from "../preview/VideoPreview";
 
 interface BrollTabProps {
   projectId: string;
@@ -20,6 +21,7 @@ interface BrollTabProps {
   activePlanBrollDensity: BrollDensity | null;
   onSlotUpdated: (slot: BrollSlotSummary) => void;
   onSlotsUpdated: (slots: BrollSlotSummary[]) => void;
+  onPreviewBrollUpdated?: (state: PreviewBrollState | null) => void;
 }
 
 const densityMap: Record<BrollDensity, number> = {
@@ -46,6 +48,7 @@ export function BrollTab({
   activePlanBrollDensity,
   onSlotUpdated,
   onSlotsUpdated,
+  onPreviewBrollUpdated,
 }: BrollTabProps) {
   const router = useRouter();
   const [density, setDensity] = useState<BrollDensity>(activePlanBrollDensity || "medium");
@@ -57,6 +60,13 @@ export function BrollTab({
   const [message, setMessage] = useState<string | null>(null);
 
   const pickerSlot = initialSlots.find((slot) => slot.id === pickerSlotId) ?? null;
+
+  useEffect(() => {
+    onPreviewBrollUpdated?.({
+      density,
+      slotsCount: initialSlots.filter((slot) => slot.status !== "disabled").length,
+    });
+  }, [density, initialSlots, onPreviewBrollUpdated]);
 
   async function regenerateBroll() {
     if (!activePlanId) return;
@@ -147,28 +157,35 @@ export function BrollTab({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <h2 className="sr-only">B-Roll</h2>
-      <div className="pixel-panel pixel-corners space-y-6 p-4">
-        <Slider
-          label="B-Roll Density"
-          value={densityMap[density]}
-          onChange={(val) => setDensity(reverseDensityMap(val))}
-        />
-        <p className="text-[10px] text-muted-foreground italic font-medium">
-          Density is saved when you regenerate B-roll.
-        </p>
+      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+        <PanelSection title="Basic" defaultOpen>
+          <Slider
+            label="B-Roll Density"
+            value={densityMap[density]}
+            onChange={(val) => setDensity(reverseDensityMap(val))}
+          />
+          <p className="text-[10px] font-medium italic text-muted-foreground">
+            Density is saved when you generate B-roll slots.
+          </p>
+        </PanelSection>
 
-        <div className="border-t border-border pt-6">
-          <div className="mb-4 flex items-center justify-between">
+        <PanelSection title="Selected Assets" defaultOpen>
+          <div className="mb-3 flex items-center justify-between">
             <Label className="mb-0">Selected Assets</Label>
             <span className="text-xs font-bold text-muted-foreground">{initialSlots.length} Slots</span>
           </div>
           <div className="space-y-3">
             {initialSlots.length === 0 ? (
-              <p className="border border-dashed border-border p-3 text-sm text-muted-foreground">
-                No B-roll slots yet. Generate an AI edit first, then regenerate B-roll to create selectable overlay slots.
-              </p>
+              <div className="border border-dashed border-border bg-muted/25 p-3 text-sm text-muted-foreground">
+                <p className="font-bold text-foreground">No B-roll slots yet.</p>
+                <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs">
+                  <li>Generate an AI edit.</li>
+                  <li>Create B-roll slots from the edit plan.</li>
+                  <li>Select or swap assets for each slot.</li>
+                </ol>
+              </div>
             ) : (
               initialSlots.map((slot) => (
                 <SlotRow
@@ -184,7 +201,7 @@ export function BrollTab({
               ))
             )}
           </div>
-        </div>
+        </PanelSection>
       </div>
 
       {pickerSlot ? (
@@ -205,10 +222,10 @@ export function BrollTab({
         disabled={loading || !activePlanId}
         aria-busy={loading}
         aria-describedby={message ? "broll-message" : undefined}
-        className="h-12 w-full"
+        className="h-11 w-full sm:h-12"
       >
         {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Sparkles className="mr-2 size-4" />}
-        {loading ? "Generating, please wait" : "Regenerate B-Roll"}
+        {loading ? "Generating, please wait" : initialSlots.length === 0 ? "Generate B-roll Slots" : "Regenerate B-Roll"}
       </Button>
       {message ? (
         <p
@@ -221,6 +238,26 @@ export function BrollTab({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function PanelSection({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group border border-border bg-surface/55" open={defaultOpen}>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground">
+        {title}
+        <span className="text-xs text-muted-foreground transition group-open:rotate-90">›</span>
+      </summary>
+      <div className="border-t border-border p-3">{children}</div>
+    </details>
   );
 }
 

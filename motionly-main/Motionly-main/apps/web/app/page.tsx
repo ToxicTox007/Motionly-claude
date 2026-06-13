@@ -1,5 +1,7 @@
 import { ArrowRight, CheckCircle2, Clapperboard, Play, Sparkles, Wand2 } from "lucide-react";
+import Image from "next/image";
 import { ButtonLink } from "@/components/button";
+import { ThemeMenu } from "@/components/theme-menu";
 
 export default function HomePage() {
   return (
@@ -7,14 +9,21 @@ export default function HomePage() {
       <section className="relative min-h-screen px-4 py-6 sm:px-6 lg:px-8">
         <div className="pointer-events-none absolute left-[7%] top-24 size-2 bg-primary/70 shadow-[18px_18px_0_hsl(var(--primary)/0.25),36px_0_0_hsl(var(--foreground)/0.08)]" />
         <div className="pointer-events-none absolute right-[8%] top-36 size-3 border border-primary/40 bg-surface shadow-[12px_-12px_0_hsl(var(--primary)/0.12)]" />
-        <nav className="container-dashboard flex h-14 items-center justify-between">
+        <nav className="container-dashboard glass-surface pixel-panel flex h-16 items-center justify-between px-4">
           <div className="flex items-center gap-3">
-            <div className="pixel-button flex size-9 items-center justify-center bg-primary text-primary-foreground">
-              <Sparkles className="size-5" aria-hidden="true" />
+            <div className="flex size-9 items-center justify-center overflow-hidden border border-border bg-foreground">
+              <Image src="/icon.svg" alt="Motionly" width={36} height={36} className="size-9" priority />
             </div>
             <span className="text-lg font-black">Motionly</span>
           </div>
           <div className="flex items-center gap-3">
+            <ThemeMenu
+              items={[
+                { href: "/pricing", label: "Pricing" },
+                { href: "/login", label: "Log in" },
+                { href: "/signup", label: "Start free" },
+              ]}
+            />
             <ButtonLink href="/login" variant="ghost" className="hidden sm:inline-flex">
               Log in
             </ButtonLink>
@@ -57,7 +66,7 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="pixel-panel-strong pixel-corners relative mx-auto w-full max-w-[680px] overflow-hidden bg-surface/90 p-3 backdrop-blur">
+          <div className="pixel-panel-strong pixel-corners pixel-glow relative mx-auto w-full max-w-[680px] overflow-hidden bg-surface/90 p-3 backdrop-blur">
             <span className="pixel-ornament -right-1 top-10" />
             <div className="grid min-h-[560px] gap-3 lg:grid-cols-[132px_minmax(0,1fr)_164px]">
               <aside className="hidden border border-border bg-background/80 p-2 lg:block">

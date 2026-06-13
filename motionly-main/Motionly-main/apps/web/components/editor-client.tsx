@@ -13,11 +13,18 @@ import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
 import { EditorLayout } from "./editor-layout";
+import { ThemeMenu } from "./theme-menu";
 import { UploadPanel } from "./upload-panel";
 import { AIStep } from "./editor/ai-step";
 import { CaptionsTab } from "./editor/tabs/captions-tab";
 import { LeftMediaPanel } from "./editor/left-panel/LeftMediaPanel";
-import { VideoPreview } from "./editor/preview/VideoPreview";
+import {
+  VideoPreview,
+  type PreviewAudioState,
+  type PreviewBrollState,
+  type PreviewExportState,
+  type PreviewLookState,
+} from "./editor/preview/VideoPreview";
 import { TimelinePanel } from "./editor/timeline/TimelinePanel";
 import type {
   BrollDensity,
@@ -103,6 +110,11 @@ export function EditorClient(props: EditorClientProps) {
     useState<MusicSelectionSummary | null>(musicSelection);
   const [localEffectsConfig, setLocalEffectsConfig] =
     useState<EffectsConfigSummary | null>(effectsConfig);
+  const [draftCaptionTrack, setDraftCaptionTrack] = useState<CaptionTrackSummary | null>(null);
+  const [previewAudio, setPreviewAudio] = useState<PreviewAudioState | null>(null);
+  const [previewBroll, setPreviewBroll] = useState<PreviewBrollState | null>(null);
+  const [previewLook, setPreviewLook] = useState<PreviewLookState | null>(null);
+  const [previewExport, setPreviewExport] = useState<PreviewExportState | null>(null);
 
   const activePlan = useMemo(
     () => localEditPlans.find((p) => p.id === localActivePlanId) ?? null,
@@ -205,6 +217,7 @@ export function EditorClient(props: EditorClientProps) {
   }, []);
 
   const handleCaptionTrackUpdated = useCallback((track: CaptionTrackSummary) => {
+    setDraftCaptionTrack(track);
     setLocalCaptionTracks((prev) => [
       track,
       ...prev.filter((item) => item.id !== track.id),
@@ -312,9 +325,13 @@ export function EditorClient(props: EditorClientProps) {
             sourceWidth={upload.width}
             sourceHeight={upload.height}
             playheadMs={playheadMs}
-            captionSegments={localCaptionTracks[0]?.segments ?? []}
-            captionStyle={localCaptionTracks[0]?.style ?? null}
+            captionSegments={(draftCaptionTrack ?? localCaptionTracks[0])?.segments ?? []}
+            captionStyle={(draftCaptionTrack ?? localCaptionTracks[0])?.style ?? null}
             totalDurationMs={timelineState.totalDurationMs}
+            previewAudio={previewAudio}
+            previewBroll={previewBroll}
+            previewLook={previewLook}
+            previewExport={previewExport}
           />
         ),
 
@@ -342,10 +359,15 @@ export function EditorClient(props: EditorClientProps) {
             onPlanGenerated={handlePlanGenerated}
             onPlanUpdated={handlePlanUpdated}
             onCaptionTrackUpdated={handleCaptionTrackUpdated}
+            onPreviewCaptionTrackUpdated={setDraftCaptionTrack}
             onBrollSlotUpdated={handleBrollSlotUpdated}
             onBrollSlotsUpdated={handleBrollSlotsUpdated}
+            onPreviewBrollUpdated={setPreviewBroll}
             onMusicSelectionUpdated={handleMusicSelectionUpdated}
+            onPreviewAudioUpdated={setPreviewAudio}
             onEffectsConfigUpdated={handleEffectsConfigUpdated}
+            onPreviewLookUpdated={setPreviewLook}
+            onPreviewExportUpdated={setPreviewExport}
           />
         ),
 
@@ -398,10 +420,15 @@ interface InspectorPanelProps {
   onPlanGenerated:  (plan: EditPlanRecordSummary) => void;
   onPlanUpdated: (plan: EditPlanRecordSummary) => void;
   onCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
+  onPreviewCaptionTrackUpdated: (track: CaptionTrackSummary | null) => void;
   onBrollSlotUpdated: (slot: BrollSlotSummary) => void;
   onBrollSlotsUpdated: (slots: BrollSlotSummary[]) => void;
+  onPreviewBrollUpdated: (state: PreviewBrollState | null) => void;
   onMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
+  onPreviewAudioUpdated: (state: PreviewAudioState | null) => void;
   onEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
+  onPreviewLookUpdated: (state: PreviewLookState | null) => void;
+  onPreviewExportUpdated: (state: PreviewExportState | null) => void;
 }
 
 const INSPECTOR_TABS: Array<{
@@ -423,8 +450,8 @@ function InspectorPanel({
   projectId, workspaceId, userId, apiAccessToken,
   upload, transcript, captionTracks, localEditPlans, localActivePlanId,
   activePlan, brollSlots, musicSelection, effectsConfig,
-  renderJobs, exports, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated,
-  onMusicSelectionUpdated, onEffectsConfigUpdated,
+  renderJobs, exports, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onPreviewCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated, onPreviewBrollUpdated,
+  onMusicSelectionUpdated, onPreviewAudioUpdated, onEffectsConfigUpdated, onPreviewLookUpdated, onPreviewExportUpdated,
 }: InspectorPanelProps) {
   const brollDensity = activePlan?.broll_density ?? null;
   const musicMood    = activePlan?.summary?.music_mood ?? null;
@@ -462,7 +489,7 @@ function InspectorPanel({
     <div className="flex h-full min-h-0 flex-col bg-[hsl(var(--surface))]">
       {/* Tab strip */}
       <div
-        className="pixel-grid-fine flex shrink-0 gap-2 overflow-x-auto border-b-2 border-border bg-muted px-2 py-2"
+        className="pixel-grid-fine flex shrink-0 snap-x gap-1.5 overflow-x-auto overscroll-x-contain border-b border-border bg-muted px-1.5 py-2 sm:gap-2 sm:px-2"
         role="tablist"
         aria-label="Editor tools"
       >
@@ -483,9 +510,9 @@ function InspectorPanel({
               disabled={disabled}
               title={disabled ? "Generate an AI edit first" : label}
               className={cn(
-                "pixel-button flex min-h-11 min-w-[4.75rem] items-center justify-center gap-1.5 px-3 py-2 font-['Pixelify_Sans'] text-sm font-bold transition sm:min-w-20",
+                "pixel-button flex min-h-11 min-w-[4.6rem] shrink-0 snap-start items-center justify-center gap-1.5 whitespace-nowrap px-2 py-2 text-xs font-bold transition sm:min-w-20 sm:px-3 sm:text-sm",
                 selected
-                  ? "bg-primary text-primary-foreground shadow-[4px_4px_0_hsl(var(--pixel-shadow)/0.32)]"
+                  ? "bg-primary text-primary-foreground shadow-[3px_3px_0_hsl(var(--shadow-color)/0.18)]"
                   : disabled
                     ? "cursor-not-allowed bg-background text-muted-foreground opacity-45"
                     : "bg-surface text-foreground hover:bg-primary/10",
@@ -504,7 +531,7 @@ function InspectorPanel({
         id={`editor-panel-${tab}`}
         role="tabpanel"
         aria-labelledby={`editor-tab-${tab}`}
-        className="min-h-0 flex-1 overflow-y-auto p-4"
+        className="min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-2 sm:p-4"
       >
         <h2 className="sr-only">{activeTabMeta.label}</h2>
         {tab === "ai" && (
@@ -532,6 +559,7 @@ function InspectorPanel({
             initialTracks={captionTracks}
             activePlan={activePlan}
             onTrackUpdated={onCaptionTrackUpdated}
+            onPreviewTrackUpdated={onPreviewCaptionTrackUpdated}
             onPlanUpdated={onPlanUpdated}
           />
         )}
@@ -546,6 +574,7 @@ function InspectorPanel({
             activePlanBrollDensity={brollDensity}
             onSlotUpdated={onBrollSlotUpdated}
             onSlotsUpdated={onBrollSlotsUpdated}
+            onPreviewBrollUpdated={onPreviewBrollUpdated}
           />
         )}
         {tab === "audio" && (
@@ -557,6 +586,7 @@ function InspectorPanel({
             initialSelection={musicSelection}
             activePlanMusicMood={musicMood}
             onSelectionUpdated={onMusicSelectionUpdated}
+            onPreviewAudioUpdated={onPreviewAudioUpdated}
           />
         )}
         {tab === "look" && (
@@ -568,6 +598,7 @@ function InspectorPanel({
             initialConfig={effectsConfig}
             suggestedPreset={suggestedPreset}
             onConfigUpdated={onEffectsConfigUpdated}
+            onPreviewLookUpdated={onPreviewLookUpdated}
           />
         )}
         {tab === "export" && (
@@ -582,6 +613,7 @@ function InspectorPanel({
             activePlanId={localActivePlanId}
             sourceWidth={upload.width}
             sourceHeight={upload.height}
+            onPreviewExportUpdated={onPreviewExportUpdated}
           />
         )}
       </div>
@@ -608,14 +640,19 @@ function UploadScreen({
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
       <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
-        <Link
-          href="/dashboard"
-          className="flex items-center gap-1 border border-transparent px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
-        >
-          <ChevronLeft className="size-4" />
-          Dashboard
-        </Link>
-        <span className="text-sm font-semibold text-foreground">{title}</span>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/dashboard"
+            className="pixel-button flex items-center gap-1 bg-surface px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
+          >
+            <ChevronLeft className="size-4" />
+            Dashboard
+          </Link>
+          <span className="text-sm font-semibold text-foreground">{title}</span>
+        </div>
+        <div className="ml-auto">
+          <ThemeMenu items={[{ href: "/dashboard", label: "Dashboard" }]} />
+        </div>
       </header>
       <div className="flex flex-1 items-start justify-center px-4 py-10 sm:px-6 lg:py-16">
         <div className="w-full max-w-5xl">
@@ -646,14 +683,19 @@ function ProcessingScreen({ title, status }: { title: string; status: string }) 
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
       <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
-        <Link
-          href="/dashboard"
-          className="flex items-center gap-1 border border-transparent px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
-        >
-          <ChevronLeft className="size-4" />
-          Dashboard
-        </Link>
-        <span className="text-sm font-semibold text-foreground">{title}</span>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/dashboard"
+            className="pixel-button flex items-center gap-1 bg-surface px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
+          >
+            <ChevronLeft className="size-4" />
+            Dashboard
+          </Link>
+          <span className="text-sm font-semibold text-foreground">{title}</span>
+        </div>
+        <div className="ml-auto">
+          <ThemeMenu items={[{ href: "/dashboard", label: "Dashboard" }]} />
+        </div>
       </header>
       <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4 text-center">
         <div className="pixel-panel flex size-16 items-center justify-center">

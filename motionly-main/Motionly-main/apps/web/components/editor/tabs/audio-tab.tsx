@@ -9,6 +9,7 @@ import type { MusicSelectionSummary, MusicTrackSummary } from "@motionly/shared"
 import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
+import type { PreviewAudioState } from "../preview/VideoPreview";
 
 interface AudioTabProps {
   projectId: string;
@@ -18,6 +19,7 @@ interface AudioTabProps {
   initialSelection: MusicSelectionSummary | null;
   activePlanMusicMood?: string | null;
   onSelectionUpdated: (selection: MusicSelectionSummary) => void;
+  onPreviewAudioUpdated?: (state: PreviewAudioState | null) => void;
 }
 
 const moods = [
@@ -37,6 +39,7 @@ export function AudioTab({
   initialSelection,
   activePlanMusicMood,
   onSelectionUpdated,
+  onPreviewAudioUpdated,
 }: AudioTabProps) {
   const router = useRouter();
   const initialMood = useMemo(() => {
@@ -64,6 +67,16 @@ export function AudioTab({
   const [message, setMessage] = useState<string | null>(null);
   const selectedTrack =
     tracks.find((track) => track.id === selectedTrackId) ?? initialSelection?.music_track ?? null;
+
+  useEffect(() => {
+    onPreviewAudioUpdated?.({
+      includeMusic,
+      musicVolume,
+      sfxIntensity,
+      mood,
+      selectedTrackTitle: selectedTrack?.title ?? null,
+    });
+  }, [includeMusic, mood, musicVolume, onPreviewAudioUpdated, selectedTrack?.title, sfxIntensity]);
 
   useEffect(() => {
     let canceled = false;
@@ -139,11 +152,12 @@ export function AudioTab({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <h2 className="sr-only">Audio</h2>
-      <div className="pixel-panel pixel-corners space-y-8 p-4">
-        <div className="flex items-center gap-4 border border-primary/20 bg-primary/5 p-4">
-          <div className="flex size-10 items-center justify-center border border-primary/20 bg-primary/10 text-primary">
+      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+        <PanelSection title="Basic" defaultOpen>
+        <div className="flex items-center gap-3 border border-primary/20 bg-primary/5 p-3">
+          <div className="flex size-9 shrink-0 items-center justify-center border border-primary/20 bg-primary/10 text-primary">
             <Music className="size-5" />
           </div>
           <div className="min-w-0">
@@ -156,7 +170,7 @@ export function AudioTab({
           </div>
         </div>
 
-        <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/30 p-3 text-sm font-bold">
+        <label className="mt-3 flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/30 px-3 text-sm font-bold">
           Include Music
           <input
             type="checkbox"
@@ -169,15 +183,18 @@ export function AudioTab({
             className="size-6 accent-primary"
           />
         </label>
+        </PanelSection>
 
-        <div className="space-y-6">
+        <PanelSection title="Mix" defaultOpen>
+        <div className="space-y-3">
           <Slider label="Music Volume" value={musicVolume} onChange={setMusicVolume} />
           <Slider label="SFX Intensity" value={sfxIntensity} onChange={setSfxIntensity} />
         </div>
+        </PanelSection>
 
-        <div className="border-t border-border pt-4">
+        <PanelSection title="Mood" defaultOpen>
           <Label>Audio Mood</Label>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex gap-2 overflow-x-auto pb-1">
             {moods.map((label) => {
               const value = label.toLowerCase();
               const selected = mood.toLowerCase().includes(value);
@@ -193,7 +210,7 @@ export function AudioTab({
                   disabled={loading}
                   aria-pressed={selected}
                   className={cn(
-                    "inline-flex min-h-11 items-center gap-1.5 border px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50",
+                    "inline-flex min-h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50",
                     selected
                       ? "border-primary bg-primary/10 text-primary"
                       : "border-border hover:border-primary/40 hover:bg-muted",
@@ -206,20 +223,20 @@ export function AudioTab({
               );
             })}
           </div>
-        </div>
+        </PanelSection>
 
-        <div className="border-t border-border pt-4">
+        <PanelSection title="Advanced">
           <div className="mb-3 flex items-center justify-between">
             <Label className="mb-0">Track Alternatives</Label>
             {tracksLoading ? <Loader2 className="size-3.5 animate-spin text-primary" /> : null}
           </div>
           <div className="space-y-2">
             {!includeMusic ? (
-              <p className="border border-dashed border-border p-3 text-xs text-muted-foreground">
+              <p className="border border-dashed border-border p-2 text-xs text-muted-foreground">
                 Turn music on to choose a track.
               </p>
             ) : tracks.length === 0 && !tracksLoading ? (
-              <p className="border border-dashed border-border p-3 text-xs text-muted-foreground">
+              <p className="border border-dashed border-border p-2 text-xs text-muted-foreground">
                 No alternatives available for this mood.
               </p>
             ) : (
@@ -254,7 +271,7 @@ export function AudioTab({
               ))
             )}
           </div>
-        </div>
+        </PanelSection>
       </div>
 
       <Button onClick={() => updateAudio()} disabled={loading} aria-busy={loading} className="h-12 w-full">
@@ -267,5 +284,25 @@ export function AudioTab({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function PanelSection({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group border border-border bg-surface/55" open={defaultOpen}>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground">
+        {title}
+        <span className="text-xs text-muted-foreground transition group-open:rotate-90">›</span>
+      </summary>
+      <div className="border-t border-border p-3">{children}</div>
+    </details>
   );
 }

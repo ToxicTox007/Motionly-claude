@@ -16,6 +16,7 @@ import type {
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
+import type { PreviewLookState } from "../preview/VideoPreview";
 
 interface LookTabProps {
   projectId: string;
@@ -25,6 +26,7 @@ interface LookTabProps {
   initialConfig: EffectsConfigSummary | null;
   suggestedPreset?: VisualPresetKey | null;
   onConfigUpdated: (config: EffectsConfigSummary) => void;
+  onPreviewLookUpdated?: (state: PreviewLookState | null) => void;
 }
 
 const presets: { value: VisualPresetKey; label: string }[] = [
@@ -81,6 +83,7 @@ export function LookTab({
   initialConfig,
   suggestedPreset,
   onConfigUpdated,
+  onPreviewLookUpdated,
 }: LookTabProps) {
   const router = useRouter();
   const [preset, setPreset] = useState<VisualPresetKey>(
@@ -114,6 +117,51 @@ export function LookTab({
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);
   }, []);
+
+  useEffect(() => {
+    if (!reducedMotion) return;
+    setSelectedMotionEffects((current) =>
+      current.filter((effect) => !motionHeavyEffects.includes(effect)),
+    );
+    setTexture((current) =>
+      current.light_leak > 0.2 ? { ...current, light_leak: 0.08 } : current,
+    );
+  }, [reducedMotion]);
+
+  useEffect(() => {
+    onPreviewLookUpdated?.({
+      preset,
+      intensity,
+      grain: texture.grain,
+      vignette: texture.vignette,
+      lightLeak: texture.light_leak,
+      gradientRamp: {
+        enabled: gradientRamp.enabled,
+        startColor: gradientRamp.start_color,
+        endColor: gradientRamp.end_color,
+        opacity: gradientRamp.opacity,
+        angleDeg: gradientRamp.angle_deg,
+      },
+      motionEffects: reducedMotion
+        ? selectedMotionEffects.filter((effect) => !motionHeavyEffects.includes(effect))
+        : selectedMotionEffects,
+      reducedMotion,
+    });
+  }, [
+    gradientRamp.angle_deg,
+    gradientRamp.enabled,
+    gradientRamp.end_color,
+    gradientRamp.opacity,
+    gradientRamp.start_color,
+    intensity,
+    onPreviewLookUpdated,
+    preset,
+    reducedMotion,
+    selectedMotionEffects,
+    texture.grain,
+    texture.light_leak,
+    texture.vignette,
+  ]);
 
   async function applyEffects() {
     setLoading(true);
@@ -177,23 +225,25 @@ export function LookTab({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4">
       <h2 className="sr-only">Look</h2>
-      <div className="pixel-panel pixel-corners space-y-6 p-4">
-        <div className="space-y-2">
-          <Label>Visual Style</Label>
-          <Select
-            id="visual-style"
-            label="Visual Style"
-            value={preset}
-            onChange={(val) => setPreset(val as VisualPresetKey)}
-            options={presets}
-          />
-        </div>
+      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+        <PanelSection title="Color" defaultOpen>
+          <div className="space-y-2">
+            <Label>Visual Style</Label>
+            <Select
+              id="visual-style"
+              label="Visual Style"
+              value={preset}
+              onChange={(val) => setPreset(val as VisualPresetKey)}
+              options={presets}
+            />
+          </div>
 
-        <Slider label="LUT Intensity" value={intensity} min={50} max={100} onChange={setIntensity} />
+          <Slider label="LUT Intensity" value={intensity} min={50} max={100} onChange={setIntensity} />
+        </PanelSection>
 
-        <div className="border-t border-border pt-4">
+        <PanelSection title="Texture">
           <Label>Texture</Label>
           <Slider
             label="Grain"
@@ -208,12 +258,17 @@ export function LookTab({
           <Slider
             label="Light Leak"
             value={Math.round(texture.light_leak * 100)}
-            onChange={(value) => setTexture((current) => ({ ...current, light_leak: value / 100 }))}
+            onChange={(value) =>
+              setTexture((current) => ({
+                ...current,
+                light_leak: reducedMotion ? Math.min(value / 100, 0.2) : value / 100,
+              }))
+            }
           />
           {texture.light_leak > 0.2 ? (
-            <p role="alert" className="mt-2 flex gap-2 border border-amber-300 bg-amber-50 p-2 text-xs font-bold text-amber-800">
-              <AlertTriangle className="size-4 shrink-0" />
-              Light leak can create flashing in fast edits. Lower it for sensitive viewers.
+            <p role="alert" className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800">
+              <AlertTriangle className="size-3.5 shrink-0" />
+              Flashing risk: lower Light Leak.
             </p>
           ) : null}
           <label className="mt-3 flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
@@ -228,23 +283,13 @@ export function LookTab({
               className="size-6 accent-primary"
             />
           </label>
-        </div>
+        </PanelSection>
 
-        <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/30 p-3 text-sm font-bold">
-          Reduced motion
-          <input
-            type="checkbox"
-            aria-label="Reduce motion and flashing effects"
-            checked={reducedMotion}
-            onChange={(event) => setReducedMotion(event.target.checked)}
-            className="size-6 accent-primary"
-          />
-        </label>
-
-        <div className="border-t border-border pt-4">
+        <PanelSection title="Motion" defaultOpen>
+        <div className="mt-3">
           <Label>Motion Effects</Label>
-          <p className="mb-3 text-sm text-muted-foreground">
-            Flashing and aggressive motion effects stay disabled when reduced motion is on.
+          <p className="mb-2 text-xs text-muted-foreground">
+            Reduced Motion removes flashing and aggressive effects automatically.
           </p>
           <div className="flex flex-wrap gap-2">
             {motionEffects.map((effect) => {
@@ -259,22 +304,26 @@ export function LookTab({
                   aria-pressed={selected}
                   aria-describedby={flashing ? "motion-effects-warning" : undefined}
                   className={cn(
-                    "inline-flex min-h-11 items-center gap-1.5 border px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50",
+                    "inline-flex min-h-11 items-center gap-1.5 border px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55",
                     selected
                       ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:border-primary/40 hover:bg-muted",
+                      : disabled
+                        ? "border-border bg-muted/35 text-muted-foreground"
+                        : "border-border hover:border-primary/40 hover:bg-muted",
                   )}
                 >
-                  {selected ? <Check className="size-3.5" aria-hidden="true" /> : null}
+                  {selected ? <Check className="size-3.5" aria-hidden="true" /> : disabled ? <AlertTriangle className="size-3.5" aria-hidden="true" /> : null}
                   {effect.label}
-                  {selected ? <span className="sr-only"> selected</span> : null}
+                  <span className="text-[10px] opacity-75">
+                    {disabled ? "Disabled" : selected ? "Selected" : "Off"}
+                  </span>
                 </button>
               );
             })}
           </div>
-          <p id="motion-effects-warning" className="mt-3 flex gap-2 border border-amber-300 bg-amber-50 p-2 text-xs font-bold text-amber-800">
-            <AlertTriangle className="size-4 shrink-0" />
-            Flash and Glitch can create flashing frames. Keep reduced motion on when accessibility is the priority.
+          <p id="motion-effects-warning" className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800">
+            <AlertTriangle className="size-3.5 shrink-0" />
+            Flash/Glitch are risky for sensitive viewers.
           </p>
           {premiumBlockedMessage ? (
             <p className="mt-3 border border-destructive/30 bg-destructive/10 p-2 text-xs font-bold text-destructive">
@@ -282,8 +331,28 @@ export function LookTab({
             </p>
           ) : null}
         </div>
+        </PanelSection>
 
-        <div className="border-t border-border pt-4">
+        <PanelSection title="Accessibility" defaultOpen>
+          <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/30 p-3 text-sm font-bold">
+            <span className="inline-flex items-center gap-2">
+              {reducedMotion ? <Check className="size-4 text-primary" /> : null}
+              Reduced motion
+            </span>
+            <span className="inline-flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">{reducedMotion ? "On" : "Off"}</span>
+              <input
+                type="checkbox"
+                aria-label="Reduce motion and flashing effects"
+                checked={reducedMotion}
+                onChange={(event) => setReducedMotion(event.target.checked)}
+                className="size-6 accent-primary"
+              />
+            </span>
+          </label>
+        </PanelSection>
+
+        <PanelSection title="Advanced">
           <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
             Background removal
             <input
@@ -316,9 +385,9 @@ export function LookTab({
               />
             </div>
           ) : null}
-        </div>
+        </PanelSection>
 
-        <div className="border-t border-border pt-4">
+        <PanelSection title="Gradient">
           <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
             Gradient ramp
             <input
@@ -368,9 +437,9 @@ export function LookTab({
               </div>
             </div>
           ) : null}
-        </div>
+        </PanelSection>
 
-        <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border-t border-border pt-4 text-sm font-bold text-muted-foreground">
+        <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/25 px-3 text-sm font-bold text-muted-foreground">
           Reset preset defaults on save
           <input
             type="checkbox"
@@ -392,5 +461,25 @@ export function LookTab({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function PanelSection({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group border border-border bg-surface/55" open={defaultOpen}>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground">
+        {title}
+        <span className="text-xs text-muted-foreground transition group-open:rotate-90">›</span>
+      </summary>
+      <div className="border-t border-border p-3">{children}</div>
+    </details>
   );
 }

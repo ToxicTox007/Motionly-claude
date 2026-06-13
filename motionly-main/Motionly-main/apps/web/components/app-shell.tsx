@@ -4,10 +4,11 @@ import {
   LayoutDashboard,
   PlusCircle,
   Settings,
-  Sparkles,
   UserRound,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
+import { ThemeMenu } from "@/components/theme-menu";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -23,15 +24,26 @@ const settingsItems = [
 export function AppShell({ children, title }: { children: React.ReactNode; title: string }) {
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-background text-foreground lg:flex lg:h-screen lg:overflow-hidden">
-      <aside className="pixel-grid-fine flex border-b border-border bg-surface/95 backdrop-blur lg:h-screen lg:w-64 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r">
-        <div className="flex h-16 shrink-0 items-center gap-3 border-border px-4 lg:border-b lg:px-6">
-          <div className="pixel-button flex size-8 items-center justify-center bg-primary text-primary-foreground">
-            <Sparkles className="size-5" />
+      <aside className="pixel-grid-fine glass-surface flex border-b border-border bg-surface/90 lg:h-screen lg:w-72 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r">
+        <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-border px-4 lg:border-b lg:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 items-center justify-center overflow-hidden border border-border bg-foreground">
+              <Image src="/icon.svg" alt="Motionly" width={36} height={36} className="size-9" priority />
+            </div>
+            <span className="text-lg font-black tracking-tight text-foreground">Motionly</span>
           </div>
-          <span className="text-lg font-black tracking-tight text-foreground">Motionly</span>
+          <ThemeMenu
+            items={[
+              { href: "/dashboard", label: "Dashboard" },
+              { href: "/projects/new", label: "New Video" },
+              { href: "/projects", label: "Projects" },
+              { href: "/billing", label: "Billing" },
+              { href: "/account", label: "Settings" },
+            ]}
+          />
         </div>
 
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-3 py-3 lg:block lg:overflow-y-auto lg:py-6">
+        <div className="hidden min-w-0 flex-1 px-3 py-3 lg:block lg:overflow-y-auto lg:py-6">
           <nav className="flex gap-2 lg:block lg:space-y-1">
             {navItems.map((item) => (
               <SidebarItem key={item.href} {...item} />
@@ -64,10 +76,13 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-hidden">
-        <header className="pixel-grid-fine flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
-          <h1 className="text-lg font-bold text-foreground">{title}</h1>
+        <header className="glass-surface pixel-grid-fine flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6 lg:px-8">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-primary">Command center</p>
+            <h1 className="text-lg font-bold text-foreground">{title}</h1>
+          </div>
           <div className="flex items-center gap-3">
-             <div className="pixel-progress h-2 w-28 sm:w-32">
+             <div className="pixel-progress h-2.5 w-28 sm:w-32">
                 <div className="pixel-progress-fill h-full w-1/3" />
              </div>
              <span className="text-xs font-bold text-muted-foreground">3/10 Exports</span>
@@ -93,7 +108,7 @@ function SidebarItem({
   return (
     <Link
       href={href}
-      className="flex shrink-0 items-center gap-2 border border-transparent px-3 py-2 text-sm font-bold text-muted-foreground transition-all duration-200 hover:border-primary/30 hover:bg-muted hover:text-foreground lg:gap-3 lg:px-4 lg:py-3"
+      className="pixel-button flex shrink-0 items-center gap-2 bg-transparent px-3 py-2 text-sm font-semibold text-muted-foreground transition-all duration-200 hover:bg-muted hover:text-foreground lg:gap-3 lg:px-4 lg:py-3"
     >
       <Icon className="size-5 text-muted-foreground/70" />
       {label}

@@ -4,7 +4,45 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Maximize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMs } from "@/lib/timeline";
-import type { CaptionSegment, CaptionStyle, TranscriptWord } from "@motionly/shared";
+import type { CaptionSegment, CaptionStyle, TranscriptWord, VisualPresetKey } from "@motionly/shared";
+
+export interface PreviewAudioState {
+  includeMusic: boolean;
+  musicVolume: number;
+  sfxIntensity: number;
+  mood: string;
+  selectedTrackTitle?: string | null;
+}
+
+export interface PreviewBrollState {
+  density: string | null;
+  slotsCount: number;
+}
+
+export interface PreviewLookState {
+  preset: VisualPresetKey | string;
+  intensity: number;
+  grain: number;
+  vignette: number;
+  lightLeak: number;
+  gradientRamp?: {
+    enabled: boolean;
+    startColor: string;
+    endColor: string;
+    opacity: number;
+    angleDeg: number;
+  };
+  motionEffects: string[];
+  reducedMotion: boolean;
+}
+
+export interface PreviewExportState {
+  outputAspect: string;
+  fitMode: "fill" | "fit" | "custom" | string;
+  cropX: number;
+  cropY: number;
+  cropZoom: number;
+}
 
 interface VideoPreviewProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -17,6 +55,10 @@ interface VideoPreviewProps {
   captionStyle: CaptionStyle | null;
   totalDurationMs: number;
   isProcessing?: boolean;
+  previewAudio?: PreviewAudioState | null;
+  previewBroll?: PreviewBrollState | null;
+  previewLook?: PreviewLookState | null;
+  previewExport?: PreviewExportState | null;
 }
 
 export function VideoPreview({
@@ -30,6 +72,10 @@ export function VideoPreview({
   captionStyle,
   totalDurationMs,
   isProcessing,
+  previewAudio,
+  previewBroll,
+  previewLook,
+  previewExport,
 }: VideoPreviewProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -44,6 +90,19 @@ export function VideoPreview({
   const frameWidth = sourceWidth || activeIntrinsicSize?.width || 16;
   const frameHeight = sourceHeight || activeIntrinsicSize?.height || 9;
   const sourceAspectRatio = `${frameWidth} / ${frameHeight}`;
+  const videoFilter = getPreviewFilter(previewLook);
+  const objectFit =
+    previewExport?.fitMode === "fit"
+      ? "contain"
+      : previewExport?.fitMode === "fill" || previewExport?.fitMode === "custom"
+        ? "cover"
+        : "contain";
+  const objectPosition =
+    previewExport && previewExport.fitMode !== "fit"
+      ? `${previewExport.cropX}% ${previewExport.cropY}%`
+      : "center";
+  const cropScale =
+    previewExport?.fitMode === "custom" ? Math.max(1, previewExport.cropZoom / 100) : 1;
 
   // Keep isPlaying in sync with the actual video state
   useEffect(() => {
@@ -101,14 +160,14 @@ export function VideoPreview({
   }, [videoRef]);
 
   return (
-    <div className="pixel-grid-fine flex h-full min-h-0 flex-col items-center justify-center gap-2 bg-foreground/[0.02] p-1.5 sm:gap-3 sm:p-4">
+    <div className="pixel-grid-fine flex h-full min-h-0 max-w-full flex-col items-center justify-center gap-2 overflow-hidden bg-foreground/[0.02] p-1.5 sm:gap-3 sm:p-4">
       <h2 id="preview-heading" className="sr-only">Preview</h2>
       {/* ── Video + overlays ─────────────────────────────────────────────── */}
       <div
         className="relative flex min-h-0 w-full flex-1 items-center justify-center"
       >
         <div
-          className="pixel-corners relative h-full max-h-[min(100%,calc(100vh-180px))] min-h-[430px] w-auto max-w-full overflow-hidden border-2 border-foreground/20 bg-black shadow-[6px_6px_0_hsl(var(--foreground)/0.12)] sm:min-h-[520px] lg:min-h-0 lg:max-h-full"
+          className="pixel-corners relative h-auto max-h-[min(100%,calc(100dvh-220px))] min-h-0 w-full max-w-[min(100%,22rem)] overflow-hidden border border-foreground/20 bg-black shadow-[3px_3px_0_hsl(var(--foreground)/0.1)] sm:max-w-[28rem] sm:border-2 sm:shadow-[6px_6px_0_hsl(var(--foreground)/0.12)] lg:h-full lg:max-h-full lg:max-w-full"
           style={{ aspectRatio: sourceAspectRatio }}
         >
           {/* Video element */}
@@ -117,7 +176,13 @@ export function VideoPreview({
               ref={videoRef}
               src={sourceUrl}
               poster={thumbnailUrl ?? undefined}
-              className="absolute inset-0 h-full w-full object-contain"
+              className="absolute inset-0 h-full w-full transition-[filter,transform] duration-150"
+              style={{
+                filter: videoFilter,
+                objectFit,
+                objectPosition,
+                transform: cropScale > 1 ? `scale(${cropScale})` : undefined,
+              }}
               onLoadedMetadata={(event) => {
                 const video = event.currentTarget;
                 if (video.videoWidth && video.videoHeight) {
@@ -149,6 +214,16 @@ export function VideoPreview({
           {/* Safe zone overlay — 90 % × 90 % dashed border */}
           <SafeZoneOverlay />
 
+          {previewLook?.gradientRamp?.enabled ? (
+            <div
+              className="pointer-events-none absolute inset-0 mix-blend-soft-light"
+              style={{
+                opacity: previewLook.gradientRamp.opacity,
+                background: `linear-gradient(${previewLook.gradientRamp.angleDeg}deg, ${previewLook.gradientRamp.startColor}, ${previewLook.gradientRamp.endColor})`,
+              }}
+            />
+          ) : null}
+
           {/* Live caption overlay */}
           {captionSegments.length > 0 && captionStyle && (
             <CaptionOverlay
@@ -159,6 +234,13 @@ export function VideoPreview({
           )}
         </div>
       </div>
+
+      <PreviewSyncBadges
+        audio={previewAudio}
+        broll={previewBroll}
+        look={previewLook}
+        exportState={previewExport}
+      />
 
       {/* ── Playback controls ────────────────────────────────────────────── */}
       <div className="flex w-full max-w-md flex-wrap items-center justify-center gap-2" aria-label="Video controls">
@@ -212,6 +294,49 @@ export function VideoPreview({
         <span aria-hidden="true"> / </span>
         <span className="sr-only">Duration </span>{formatMs(totalDurationMs)}
       </p>
+    </div>
+  );
+}
+
+function getPreviewFilter(look: PreviewLookState | null | undefined) {
+  if (!look) return undefined;
+  const intensity = Math.max(0.5, Math.min(1, look.intensity / 100));
+  const contrast = 1 + 0.18 * intensity;
+  const saturate = 1 + 0.12 * intensity;
+  const brightness = look.preset === "old_money" ? 0.96 : 1.01;
+  const grain = Math.max(0, Math.min(look.grain, 1));
+  const vignette = Math.max(0, Math.min(look.vignette, 1));
+  return `contrast(${contrast}) saturate(${saturate + grain * 0.08}) brightness(${brightness - vignette * 0.04})`;
+}
+
+function PreviewSyncBadges({
+  audio,
+  broll,
+  look,
+  exportState,
+}: {
+  audio?: PreviewAudioState | null;
+  broll?: PreviewBrollState | null;
+  look?: PreviewLookState | null;
+  exportState?: PreviewExportState | null;
+}) {
+  const badges = [
+    look ? `Look ${look.intensity}%` : null,
+    broll ? `B-roll ${broll.density ?? "auto"} (${broll.slotsCount})` : null,
+    audio ? `${audio.includeMusic ? "Music" : "No music"} ${audio.musicVolume}%` : null,
+    exportState ? `Crop ${exportState.cropZoom}%` : null,
+  ].filter(Boolean);
+  if (!badges.length) return null;
+  return (
+    <div className="flex max-w-full flex-wrap justify-center gap-1.5 px-1" aria-live="polite">
+      {badges.map((badge) => (
+        <span
+          key={badge}
+          className="border border-border bg-surface px-2 py-1 text-[10px] font-bold text-muted-foreground shadow-soft"
+        >
+          {badge}
+        </span>
+      ))}
     </div>
   );
 }

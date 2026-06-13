@@ -16,7 +16,7 @@ export default async function SignupPage({
 
   return (
     <main className="grid min-h-screen place-items-center px-4 py-12 sm:px-6">
-      <form action={signup} className="pixel-panel-strong pixel-corners w-full max-w-md p-6 sm:p-7">
+      <form action={signup} className="pixel-panel-strong pixel-corners glass-surface w-full max-w-md p-6 sm:p-7">
         <Link href="/" className="mb-8 inline-flex items-center gap-2 text-sm font-black">
           <span className="size-2 bg-primary shadow-[8px_0_0_hsl(var(--primary)/0.25)]" />
           Motionly

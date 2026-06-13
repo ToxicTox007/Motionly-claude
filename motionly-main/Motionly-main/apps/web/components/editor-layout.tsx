@@ -1,15 +1,15 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
 import Link from "next/link";
 import {
   Sparkles,
   Download,
   Save,
   ChevronLeft,
-  Moon,
-  Sun,
 } from "lucide-react";
+import { ThemeMenu } from "@/components/theme-menu";
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
@@ -60,20 +60,20 @@ export function EditorLayout({
         onAiEdit={onAiEdit}
       />
 
-      <div className="grid min-h-0 flex-1 gap-2 overflow-y-auto p-2 sm:gap-3 sm:p-3 lg:grid-cols-[220px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_210px] lg:overflow-hidden">
-        <section aria-labelledby="media-heading" className="pixel-panel order-2 min-h-[220px] overflow-hidden lg:order-1 lg:min-h-0">
+      <div className="grid min-h-0 max-w-full flex-1 gap-2 overflow-x-hidden overflow-y-auto p-2 sm:gap-3 sm:p-3 lg:grid-cols-[220px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_210px] lg:overflow-hidden">
+        <section aria-labelledby="media-heading" className="pixel-panel order-2 min-h-[220px] min-w-0 max-w-full overflow-hidden lg:order-1 lg:min-h-0">
           {leftPanel}
         </section>
 
-        <section id="editor-preview" aria-labelledby="preview-heading" className="pixel-panel-strong order-1 min-h-[560px] min-w-0 overflow-hidden sm:min-h-[620px] lg:order-2 lg:min-h-0">
+        <section id="editor-preview" aria-labelledby="preview-heading" className="pixel-panel-strong sticky top-[4.25rem] z-30 order-1 h-[min(48dvh,460px)] min-h-[340px] min-w-0 max-w-full overflow-hidden sm:min-h-[620px] lg:static lg:order-2 lg:h-auto lg:min-h-0">
           {centerPanel}
         </section>
 
-        <section aria-label="Editor settings" className="pixel-panel order-3 min-h-[360px] overflow-hidden lg:order-3 lg:min-h-0">
+        <section aria-label="Editor settings" className="pixel-panel order-3 min-h-[360px] min-w-0 max-w-full overflow-hidden lg:order-3 lg:min-h-0">
           {rightPanel}
         </section>
 
-        <section id="editor-timeline" aria-labelledby="timeline-heading" className="pixel-panel order-4 min-h-[260px] overflow-hidden lg:col-span-3 lg:min-h-0">
+        <section id="editor-timeline" aria-labelledby="timeline-heading" className="pixel-panel order-4 min-h-[260px] min-w-0 max-w-full overflow-hidden lg:col-span-3 lg:min-h-0">
           {bottomPanel}
         </section>
       </div>
@@ -100,45 +100,23 @@ function TopToolbar({
   onExport,
   onAiEdit,
 }: TopToolbarProps) {
-  const [theme, setTheme] = React.useState<"light" | "dark">("light");
-
-  React.useEffect(() => {
-    const stored = window.localStorage.getItem("motionly-theme");
-    const nextTheme =
-      stored === "dark" || stored === "light"
-        ? stored
-        : window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
-    setTheme(nextTheme);
-    document.documentElement.dataset.theme = nextTheme;
-  }, []);
-
-  function toggleTheme() {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    document.documentElement.dataset.theme = nextTheme;
-    window.localStorage.setItem("motionly-theme", nextTheme);
-  }
-
   return (
-    <div className="pixel-grid-fine sticky top-0 z-40 grid shrink-0 grid-cols-[auto_1fr_auto] items-center gap-2 border-b-2 border-border bg-surface px-2 py-2 shadow-[0_4px_0_hsl(var(--pixel-shadow)/0.18)] sm:px-3 lg:static lg:flex lg:min-h-12 lg:flex-nowrap">
-      {/* Back + logo */}
+    <div className="glass-surface pixel-grid-fine sticky top-0 z-40 grid max-w-full shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 overflow-x-hidden border-b border-border px-2 py-2 sm:px-3 lg:static lg:flex lg:min-h-12 lg:flex-nowrap">
       <Link
         href="/dashboard"
-        className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1 bg-muted px-2 py-1 text-foreground transition hover:bg-primary/10 lg:min-w-0"
+        className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1 bg-surface px-2 py-1 text-foreground transition hover:bg-primary/10 lg:min-w-0"
         title="Back to dashboard"
         aria-label="Back to dashboard"
       >
         <ChevronLeft className="size-4" />
-        <span className="hidden font-['Pixelify_Sans'] text-sm font-bold uppercase sm:inline">
+        <Image src="/icon.svg" alt="" width={22} height={22} className="hidden size-5 sm:block" />
+        <span className="hidden text-sm font-bold uppercase tracking-[0.18em] sm:inline">
           Motionly
         </span>
       </Link>
 
       <div className="hidden mx-1 h-4 w-px bg-border lg:block" />
 
-      {/* Editable project title */}
       <input
         aria-label="Project title"
         value={title}
@@ -147,11 +125,10 @@ function TopToolbar({
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        className="pixel-input min-h-11 min-w-0 truncate bg-transparent px-2 font-['Pixelify_Sans'] text-base font-semibold text-foreground placeholder:text-muted-foreground sm:max-w-[280px] lg:max-w-[220px]"
+        className="pixel-input min-h-11 min-w-0 truncate bg-transparent px-3 text-base font-semibold text-foreground placeholder:text-muted-foreground sm:max-w-[280px] lg:max-w-[260px]"
         placeholder="Untitled project"
       />
 
-      {/* Save status */}
       <div className="hidden sm:block">
         <SaveBadge status={saveStatus} />
       </div>
@@ -159,32 +136,31 @@ function TopToolbar({
       <div className="hidden flex-1 lg:block" />
 
       <div className="flex items-center justify-end gap-2">
-        <button
-          onClick={toggleTheme}
-          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          className="pixel-button flex min-h-11 min-w-11 items-center justify-center bg-muted text-foreground transition hover:bg-primary/10"
-        >
-          {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-        </button>
+        <ThemeMenu
+          items={[
+            { href: "/dashboard", label: "Dashboard" },
+            { label: "Open AI Edit", onClick: onAiEdit },
+            { label: "Open Export", onClick: onExport },
+          ]}
+          className="lg:hidden"
+        />
 
-        {/* AI edit shortcut */}
         <button
           onClick={onAiEdit}
           aria-label="Open AI Edit settings"
-          className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary/10 px-2.5 py-1 font-['Pixelify_Sans'] text-sm font-bold text-primary transition hover:bg-primary/20 sm:min-w-0"
+          className="hidden min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary/10 px-2.5 py-1 text-sm font-bold text-primary transition hover:bg-primary/20 lg:inline-flex"
         >
           <Sparkles className="size-4" />
-          <span className="hidden sm:inline">AI</span>
+          <span>AI Edit</span>
         </button>
 
-        {/* Export */}
         <button
           onClick={onExport}
           aria-label="Open export settings"
-          className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary px-3 py-1.5 font-['Pixelify_Sans'] text-sm font-bold text-primary-foreground transition hover:brightness-105 sm:min-w-0"
+          className="pixel-button hidden min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary px-3 py-1.5 text-sm font-bold text-primary-foreground transition hover:brightness-105 lg:inline-flex"
         >
           <Download className="size-4" />
-          <span className="hidden sm:inline">Export</span>
+          <span>Export</span>
         </button>
       </div>
 

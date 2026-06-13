@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Input, Label, Select, Slider, TextArea } from "../ui";
 import { Button } from "../../button";
@@ -26,6 +26,7 @@ interface CaptionsTabProps {
   initialTracks: CaptionTrackSummary[];
   activePlan: EditPlanRecordSummary | null;
   onTrackUpdated: (track: CaptionTrackSummary) => void;
+  onPreviewTrackUpdated?: (track: CaptionTrackSummary | null) => void;
   onPlanUpdated: (plan: EditPlanRecordSummary) => void;
 }
 
@@ -56,6 +57,7 @@ export function CaptionsTab({
   initialTracks,
   activePlan,
   onTrackUpdated,
+  onPreviewTrackUpdated,
   onPlanUpdated,
 }: CaptionsTabProps) {
   const router = useRouter();
@@ -74,6 +76,20 @@ export function CaptionsTab({
   const [message, setMessage] = useState<string | null>(null);
 
   const selectedSegment = segments[selectedSegmentIndex] ?? null;
+
+  useEffect(() => {
+    if (!activeTrack) {
+      onPreviewTrackUpdated?.(null);
+      return;
+    }
+    onPreviewTrackUpdated?.({
+      ...activeTrack,
+      preset,
+      style: style ?? activeTrack.style,
+      hide_filler_words: hideFillerWords,
+      segments,
+    });
+  }, [activeTrack, hideFillerWords, onPreviewTrackUpdated, preset, segments, style]);
 
   async function updateCaptions() {
     setLoading(true);
@@ -165,6 +181,7 @@ export function CaptionsTab({
     setSegments(track.segments ?? []);
     setTranscriptText((track.segments ?? []).map((segment) => segment.text).join(" "));
     setStyle(track.style);
+    onPreviewTrackUpdated?.(track);
     onTrackUpdated(track);
   }
 
@@ -222,32 +239,35 @@ export function CaptionsTab({
   }
 
   return (
-    <div className="space-y-4 sm:space-y-6" aria-live="polite">
-      <div className="pixel-panel space-y-4 p-3 sm:pixel-corners sm:space-y-6 sm:p-4">
-        <div className="space-y-2">
-          <Label htmlFor="caption-preset">Caption Preset</Label>
-          <Select id="caption-preset" label="Caption Preset" value={preset} onChange={(val) => setPreset(val as CaptionPresetKey)} options={presets} />
-        </div>
+    <div className="space-y-3 sm:space-y-4" aria-live="polite">
+      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+        <PanelSection title="Basic" defaultOpen>
+          <div className="grid gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="caption-preset" className="mb-0">Caption Preset</Label>
+              <Select id="caption-preset" label="Caption Preset" value={preset} onChange={(val) => setPreset(val as CaptionPresetKey)} options={presets} />
+            </div>
 
-        <label className="flex min-h-11 items-center justify-between gap-3 border-t border-border pt-4 text-sm font-bold text-muted-foreground">
-          Hide filler words
-          <input
-            type="checkbox"
-            aria-label="Hide filler words"
-            checked={hideFillerWords}
-            onChange={(event) => setHideFillerWords(event.target.checked)}
-            className="size-6 accent-primary"
-          />
-        </label>
+            <div className="space-y-1.5">
+              <Label htmlFor="caption-output-language" className="mb-0">Caption Language</Label>
+              <Select id="caption-output-language" label="Caption Language" value={outputLanguage} onChange={setOutputLanguage} options={outputLanguages} />
+            </div>
 
-        <div className="space-y-2 border-t border-border pt-4">
-          <Label htmlFor="caption-output-language">Caption Language</Label>
-          <Select id="caption-output-language" label="Caption Language" value={outputLanguage} onChange={setOutputLanguage} options={outputLanguages} />
-        </div>
+            <label className="flex min-h-11 items-center justify-between gap-3 border border-border bg-muted/25 px-3 text-sm font-bold text-muted-foreground">
+              Hide filler words
+              <input
+                type="checkbox"
+                aria-label="Hide filler words"
+                checked={hideFillerWords}
+                onChange={(event) => setHideFillerWords(event.target.checked)}
+                className="size-6 accent-primary"
+              />
+            </label>
+          </div>
+        </PanelSection>
 
         {style ? (
-          <div className="space-y-4 border-t border-border pt-4">
-            <Label>Brand Kit Caption Style</Label>
+          <PanelSection title="Advanced">
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
               <Input aria-label="Caption font family" value={style.font_family} onChange={(event) => updateStyle({ font_family: event.target.value })} />
               <Input
@@ -277,36 +297,36 @@ export function CaptionsTab({
             </div>
             <Slider label="Font Size" value={style.font_size_px} min={24} max={80} onChange={(value) => updateStyle({ font_size_px: value })} />
             <PlacementPad style={style} onChange={updateStyle} />
-          </div>
+          </PanelSection>
         ) : null}
 
-        <div className="border-t border-border pt-4">
-          <Label htmlFor="full-transcript">Full Transcript</Label>
+        <PanelSection title="Transcript">
+          <Label htmlFor="full-transcript" className="mb-1">Full Transcript</Label>
           <TextArea
             id="full-transcript"
             value={transcriptText}
             onChange={(event) => setTranscriptText(event.target.value)}
-            className="min-h-32"
+            className="min-h-24 px-3 py-2 text-sm"
             aria-describedby="full-transcript-help"
           />
-          <p id="full-transcript-help" className="mt-2 text-sm text-muted-foreground">
+          <p id="full-transcript-help" className="mt-1.5 text-xs text-muted-foreground">
             Edit the full speech text, apply it to segments, then save text.
           </p>
-          <Button type="button" variant="secondary" onClick={applyTranscriptText} disabled={!segments.length} className="mt-3 min-h-11 w-full">
+          <Button type="button" variant="secondary" onClick={applyTranscriptText} disabled={!segments.length} className="mt-2 min-h-11 w-full">
             Apply Transcript To Segments
           </Button>
-        </div>
+        </PanelSection>
 
-        <div className="border-t border-border pt-4">
-          <div className="mb-4 flex items-center justify-between">
+        <PanelSection title="Segments" defaultOpen>
+          <div className="mb-2 flex items-center justify-between">
             <Label className="mb-0">Segments</Label>
             <span className="text-[10px] font-bold text-muted-foreground">{segments.length} editable</span>
           </div>
           {segments.length === 0 ? (
             <p className="text-xs text-muted-foreground">No caption track yet.</p>
           ) : (
-            <div className="space-y-3">
-              <div className="max-h-48 space-y-2 overflow-y-auto pr-1 sm:max-h-36 sm:pr-2">
+            <div className="space-y-2">
+              <div className="flex gap-2 overflow-x-auto pb-1">
                 {segments.map((segment, index) => (
                   <button
                     key={segment.id ?? index}
@@ -314,7 +334,7 @@ export function CaptionsTab({
                     aria-current={selectedSegmentIndex === index ? "true" : undefined}
                     aria-label={`Caption segment ${index + 1}, ${segment.text}, starts at ${segment.start_ms} milliseconds, ends at ${segment.end_ms} milliseconds`}
                     className={cn(
-                      "min-h-11 w-full border p-2 text-left text-sm transition sm:p-2",
+                      "min-h-11 w-40 shrink-0 border p-2 text-left text-xs transition",
                       selectedSegmentIndex === index
                         ? "border-primary bg-primary/10"
                         : "border-border bg-muted/40 hover:border-primary/40",
@@ -327,28 +347,36 @@ export function CaptionsTab({
               </div>
 
               {selectedSegment ? (
-                <div className="space-y-3 border border-border bg-muted/30 p-2.5 sm:p-3">
+                <div className="space-y-2 border border-border bg-muted/30 p-2.5 sm:p-3">
                   <TextArea
                     aria-label="Selected caption segment text"
                     value={selectedSegment.text}
                     onChange={(event) => updateSelectedText(event.target.value)}
-                    className="min-h-20 text-xs"
+                    className="min-h-16 px-3 py-2 text-sm"
                   />
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      aria-label="Selected caption start time in milliseconds"
-                      type="number"
-                      value={selectedSegment.start_ms}
-                      onChange={(event) => updateSelectedSegment({ start_ms: Number(event.target.value) })}
-                    />
-                    <Input
-                      aria-label="Selected caption end time in milliseconds"
-                      type="number"
-                      value={selectedSegment.end_ms}
-                      onChange={(event) => updateSelectedSegment({ end_ms: Number(event.target.value) })}
-                    />
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <label className="font-bold text-muted-foreground">
+                      Start
+                      <Input
+                        aria-label="Selected caption start time in milliseconds"
+                        type="number"
+                        value={selectedSegment.start_ms}
+                        onChange={(event) => updateSelectedSegment({ start_ms: Number(event.target.value) })}
+                        className="mt-1 min-h-10 px-2 py-1 text-sm"
+                      />
+                    </label>
+                    <label className="font-bold text-muted-foreground">
+                      End
+                      <Input
+                        aria-label="Selected caption end time in milliseconds"
+                        type="number"
+                        value={selectedSegment.end_ms}
+                        onChange={(event) => updateSelectedSegment({ end_ms: Number(event.target.value) })}
+                        className="mt-1 min-h-10 px-2 py-1 text-sm"
+                      />
+                    </label>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex gap-2 overflow-x-auto pb-1">
                     {uniqueWords(selectedSegment.text).map((word) => {
                       const selected = selectedSegment.highlight_words?.includes(word);
                       return (
@@ -357,7 +385,7 @@ export function CaptionsTab({
                           onClick={() => updateHighlight(word)}
                           aria-pressed={selected}
                           className={cn(
-                            "min-h-11 border px-3 py-2 text-xs font-bold",
+                            "min-h-10 shrink-0 whitespace-nowrap border px-3 py-1.5 text-xs font-bold",
                             selected ? "border-primary bg-primary/10 text-primary" : "border-border",
                           )}
                         >
@@ -370,15 +398,15 @@ export function CaptionsTab({
               ) : null}
             </div>
           )}
-        </div>
+        </PanelSection>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <Button onClick={updateCaptions} disabled={loading} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 sm:h-12">
+      <div className="sticky bottom-2 z-10 grid grid-cols-2 gap-2 bg-background/80 py-1 backdrop-blur">
+        <Button onClick={updateCaptions} disabled={loading} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 px-2 text-sm sm:h-12">
           {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
           {activeTrack ? "Save Style" : "Generate"}
         </Button>
-        <Button onClick={saveSegments} disabled={loading || !activeTrack} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 sm:h-12">
+        <Button onClick={saveSegments} disabled={loading || !activeTrack} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 px-2 text-sm sm:h-12">
           {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
           Save Text
         </Button>
@@ -389,6 +417,26 @@ export function CaptionsTab({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function PanelSection({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group border border-border bg-surface/55" open={defaultOpen}>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground">
+        {title}
+        <span className="text-xs text-muted-foreground transition group-open:rotate-90">›</span>
+      </summary>
+      <div className="border-t border-border p-3">{children}</div>
+    </details>
   );
 }
 

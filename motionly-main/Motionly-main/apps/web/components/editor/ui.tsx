@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 export function Card({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
-    <div className={cn("pixel-panel pixel-corners p-5", className)}>
+    <div className={cn("pixel-panel pixel-corners p-5 transition duration-200 hover:-translate-y-0.5 hover:shadow-[12px_12px_0_hsl(var(--shadow-color)/0.08)]", className)}>
       {children}
     </div>
   );
@@ -124,7 +124,7 @@ export function Slider({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Label htmlFor={id} className="mb-0">{label}</Label>
-        <span className="text-sm font-bold text-foreground">{value}%</span>
+        <span className="border border-border bg-surface px-2 py-1 text-xs font-bold text-foreground">{value}%</span>
       </div>
       <input
         id={id}

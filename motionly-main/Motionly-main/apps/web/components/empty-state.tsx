@@ -15,7 +15,7 @@ export function EmptyState({
   actionLabel?: string;
 }) {
   return (
-    <section className="pixel-panel pixel-corners pixel-grid-fine overflow-hidden px-6 py-14 text-center">
+    <section className="pixel-panel pixel-corners pixel-grid-fine glass-surface overflow-hidden px-6 py-14 text-center">
       <div className="relative mx-auto flex size-14 items-center justify-center border border-border bg-surface text-foreground shadow-soft">
         <span className="absolute -right-2 -top-2 size-2 bg-primary shadow-[8px_8px_0_hsl(var(--primary)/0.28)]" />
         <Icon className="size-6" aria-hidden="true" />

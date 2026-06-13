@@ -14,7 +14,7 @@ export function Button({
   return (
     <button
       className={cn(
-        "pixel-button inline-flex h-10 items-center justify-center px-4 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0",
+        "pixel-button inline-flex min-h-10 items-center justify-center px-4 text-sm font-semibold transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0",
         variant === "primary" &&
           "bg-primary text-primary-foreground hover:brightness-105",
         variant === "secondary" &&
@@ -41,7 +41,7 @@ export function ButtonLink({
   return (
     <Link
       className={cn(
-        "pixel-button inline-flex h-10 items-center justify-center px-4 text-sm font-bold transition focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background aria-disabled:cursor-not-allowed aria-disabled:opacity-60",
+        "pixel-button inline-flex min-h-10 items-center justify-center px-4 text-sm font-semibold transition focus:outline-none aria-disabled:cursor-not-allowed aria-disabled:opacity-60",
         variant === "primary" &&
           "bg-primary text-primary-foreground hover:brightness-105",
         variant === "secondary" &&

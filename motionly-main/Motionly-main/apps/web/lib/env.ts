@@ -2,7 +2,8 @@ import { z } from "zod";
 
 const appEnvSchema = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url(),
-  NEXT_PUBLIC_API_BASE_URL: z.string().url(),
+  NEXT_PUBLIC_API_BASE_URL: z.string().url().optional(),
+  NEXT_PUBLIC_API_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1).optional(),
   SUPABASE_URL: z.string().url().optional(),
@@ -14,6 +15,7 @@ const appEnvSchema = z.object({
 const rawEnv = {
   NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
   NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL,
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
   NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   SUPABASE_URL: process.env.SUPABASE_URL,
@@ -27,7 +29,8 @@ const parsedEnv = appEnvSchema.parse(
   isProductionBuild
     ? {
         NEXT_PUBLIC_APP_URL: rawEnv.NEXT_PUBLIC_APP_URL ?? "https://build.motionly.invalid",
-        NEXT_PUBLIC_API_BASE_URL: rawEnv.NEXT_PUBLIC_API_BASE_URL ?? "https://api.build.motionly.invalid",
+        NEXT_PUBLIC_API_BASE_URL: rawEnv.NEXT_PUBLIC_API_BASE_URL,
+        NEXT_PUBLIC_API_URL: rawEnv.NEXT_PUBLIC_API_URL ?? "https://api.build.motionly.invalid",
         NEXT_PUBLIC_SUPABASE_URL: rawEnv.NEXT_PUBLIC_SUPABASE_URL,
         NEXT_PUBLIC_SUPABASE_ANON_KEY: rawEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY,
         SUPABASE_URL: rawEnv.SUPABASE_URL ?? "https://build.supabase.co",
@@ -41,7 +44,7 @@ const parsedEnv = appEnvSchema.parse(
 if (process.env.NODE_ENV === "production" && !isProductionBuild) {
   for (const [name, value] of [
     ["NEXT_PUBLIC_APP_URL", parsedEnv.NEXT_PUBLIC_APP_URL],
-    ["NEXT_PUBLIC_API_BASE_URL", parsedEnv.NEXT_PUBLIC_API_BASE_URL],
+    ["NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL", parsedEnv.NEXT_PUBLIC_API_BASE_URL ?? parsedEnv.NEXT_PUBLIC_API_URL],
     ["SUPABASE_URL", parsedEnv.NEXT_PUBLIC_SUPABASE_URL ?? parsedEnv.SUPABASE_URL],
   ] as const) {
     if (!value) {
@@ -55,6 +58,11 @@ if (process.env.NODE_ENV === "production" && !isProductionBuild) {
 
 const supabaseUrl = parsedEnv.NEXT_PUBLIC_SUPABASE_URL ?? parsedEnv.SUPABASE_URL;
 const supabaseAnonKey = parsedEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? parsedEnv.SUPABASE_ANON_KEY;
+const apiBaseUrl = parsedEnv.NEXT_PUBLIC_API_BASE_URL ?? parsedEnv.NEXT_PUBLIC_API_URL;
+
+if (!apiBaseUrl) {
+  throw new Error("NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL is required.");
+}
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error("Supabase public URL and anon key are required.");
@@ -62,7 +70,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const env = {
   appUrl: parsedEnv.NEXT_PUBLIC_APP_URL,
-  apiBaseUrl: parsedEnv.NEXT_PUBLIC_API_BASE_URL,
+  apiBaseUrl,
   supabaseUrl,
   supabaseAnonKey,
   googleOAuthEnabled: parsedEnv.NEXT_PUBLIC_ENABLE_GOOGLE_OAUTH,
