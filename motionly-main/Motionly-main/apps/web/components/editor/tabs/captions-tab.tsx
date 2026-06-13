@@ -14,7 +14,7 @@ import type {
   EditPlanRecordSummary,
   TranscriptWord,
 } from "@motionly/shared";
-import { buildApiHeaders } from "@/lib/client-api";
+import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +37,17 @@ const presets: { value: CaptionPresetKey; label: string }[] = [
   { value: "founder_clean", label: "Clean Blue" },
 ];
 
+const outputLanguages = [
+  { value: "original", label: "Original" },
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+  { value: "es", label: "Spanish" },
+  { value: "pt", label: "Portuguese" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "ar", label: "Arabic" },
+];
+
 export function CaptionsTab({
   projectId,
   workspaceId,
@@ -53,8 +64,12 @@ export function CaptionsTab({
   const [preset, setPreset] = useState<CaptionPresetKey>(activeTrack?.preset ?? "luxury_minimal");
   const [style, setStyle] = useState<CaptionStyle | null>(activeTrack?.style ?? null);
   const [hideFillerWords, setHideFillerWords] = useState(activeTrack?.hide_filler_words ?? false);
+  const [outputLanguage, setOutputLanguage] = useState("original");
   const [segments, setSegments] = useState<CaptionSegment[]>(activeTrack?.segments ?? []);
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState(0);
+  const [transcriptText, setTranscriptText] = useState(
+    (activeTrack?.segments ?? []).map((segment) => segment.text).join(" "),
+  );
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -67,20 +82,19 @@ export function CaptionsTab({
       const endpoint = activeTrack
         ? `${env.apiBaseUrl}/projects/${projectId}/captions/${activeTrack.id}`
         : `${env.apiBaseUrl}/projects/${projectId}/captions/generate`;
-      const response = await fetch(endpoint, {
+      const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(endpoint, {
         method: activeTrack ? "PATCH" : "POST",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Caption settings could not be saved. Please try again.",
+        body: {
           preset,
           hide_filler_words: hideFillerWords,
           style,
-        }),
+          output_language: outputLanguage,
+        },
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Failed to update captions");
       applyTrack(payload.track);
       setMessage("Caption style updated.");
       router.refresh();
@@ -100,16 +114,17 @@ export function CaptionsTab({
     setLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/captions/${activeTrack.id}/segments`, {
+      const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/captions/${activeTrack.id}/segments`,
+        {
         method: "PATCH",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Caption text could not be saved. Please try again.",
+          body: { segments },
         },
-        body: JSON.stringify({ segments }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Caption segments could not be saved.");
+      );
       applyTrack(payload.track);
       await savePlanHighlights(payload.track.segments);
       setMessage("Caption edits saved.");
@@ -131,22 +146,24 @@ export function CaptionsTab({
         effect: "color_pop" as const,
       })),
     ).slice(0, 12);
-    const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/plans/${activePlan.id}/caption-highlights`, {
+    const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+      `${env.apiBaseUrl}/projects/${projectId}/plans/${activePlan.id}/caption-highlights`,
+      {
       method: "PATCH",
-      headers: {
-        ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-        "Content-Type": "application/json",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Caption highlights could not be saved.",
+        body: { caption_highlights },
       },
-      body: JSON.stringify({ caption_highlights }),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error?.message ?? "Caption highlights could not be saved.");
+    );
     onPlanUpdated(payload.plan);
   }
 
   function applyTrack(track: CaptionTrackSummary) {
     setTracks((current) => [track, ...current.filter((item) => item.id !== track.id)]);
     setSegments(track.segments ?? []);
+    setTranscriptText((track.segments ?? []).map((segment) => segment.text).join(" "));
     setStyle(track.style);
     onTrackUpdated(track);
   }
@@ -168,6 +185,26 @@ export function CaptionsTab({
     });
   }
 
+  function applyTranscriptText() {
+    const words = transcriptText.split(/\s+/).filter(Boolean);
+    if (!words.length || !segments.length) return;
+    const wordsPerSegment = Math.max(1, Math.ceil(words.length / segments.length));
+    setSegments((current) =>
+      current.map((segment, index) => {
+        const text = words.slice(index * wordsPerSegment, (index + 1) * wordsPerSegment).join(" ");
+        return text
+          ? {
+              ...segment,
+              text,
+              words: wordsForText(segment, text),
+              line_count: text.length > 28 ? 2 : 1,
+            }
+          : segment;
+      }),
+    );
+    setMessage("Transcript text applied to caption segments. Save text to persist it.");
+  }
+
   function updateHighlight(word: string) {
     if (!selectedSegment) return;
     const normalized = word.trim();
@@ -185,41 +222,50 @@ export function CaptionsTab({
   }
 
   return (
-    <div className="space-y-6">
-      <div className="pixel-panel pixel-corners space-y-6 p-4">
+    <div className="space-y-4 sm:space-y-6" aria-live="polite">
+      <div className="pixel-panel space-y-4 p-3 sm:pixel-corners sm:space-y-6 sm:p-4">
         <div className="space-y-2">
-          <Label>Caption Preset</Label>
-          <Select value={preset} onChange={(val) => setPreset(val as CaptionPresetKey)} options={presets} />
+          <Label htmlFor="caption-preset">Caption Preset</Label>
+          <Select id="caption-preset" label="Caption Preset" value={preset} onChange={(val) => setPreset(val as CaptionPresetKey)} options={presets} />
         </div>
 
-        <label className="flex items-center justify-between gap-3 border-t border-border pt-4 text-xs font-bold uppercase tracking-widest text-muted-foreground/70">
+        <label className="flex min-h-11 items-center justify-between gap-3 border-t border-border pt-4 text-sm font-bold text-muted-foreground">
           Hide filler words
           <input
             type="checkbox"
+            aria-label="Hide filler words"
             checked={hideFillerWords}
             onChange={(event) => setHideFillerWords(event.target.checked)}
-            className="size-4 accent-primary"
+            className="size-6 accent-primary"
           />
         </label>
+
+        <div className="space-y-2 border-t border-border pt-4">
+          <Label htmlFor="caption-output-language">Caption Language</Label>
+          <Select id="caption-output-language" label="Caption Language" value={outputLanguage} onChange={setOutputLanguage} options={outputLanguages} />
+        </div>
 
         {style ? (
           <div className="space-y-4 border-t border-border pt-4">
             <Label>Brand Kit Caption Style</Label>
-            <div className="grid grid-cols-2 gap-3">
-              <Input value={style.font_family} onChange={(event) => updateStyle({ font_family: event.target.value })} />
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <Input aria-label="Caption font family" value={style.font_family} onChange={(event) => updateStyle({ font_family: event.target.value })} />
               <Input
+                aria-label="Caption text color"
                 type="color"
                 value={style.text_color}
                 onChange={(event) => updateStyle({ text_color: event.target.value })}
                 className="px-2"
               />
               <Input
+                aria-label="Caption accent color"
                 type="color"
                 value={style.accent_color}
                 onChange={(event) => updateStyle({ accent_color: event.target.value })}
                 className="px-2"
               />
               <Select
+                label="Caption placement"
                 value={style.placement}
                 onChange={(value) => updateStyle({ placement: value as CaptionStyle["placement"] })}
                 options={[
@@ -235,6 +281,23 @@ export function CaptionsTab({
         ) : null}
 
         <div className="border-t border-border pt-4">
+          <Label htmlFor="full-transcript">Full Transcript</Label>
+          <TextArea
+            id="full-transcript"
+            value={transcriptText}
+            onChange={(event) => setTranscriptText(event.target.value)}
+            className="min-h-32"
+            aria-describedby="full-transcript-help"
+          />
+          <p id="full-transcript-help" className="mt-2 text-sm text-muted-foreground">
+            Edit the full speech text, apply it to segments, then save text.
+          </p>
+          <Button type="button" variant="secondary" onClick={applyTranscriptText} disabled={!segments.length} className="mt-3 min-h-11 w-full">
+            Apply Transcript To Segments
+          </Button>
+        </div>
+
+        <div className="border-t border-border pt-4">
           <div className="mb-4 flex items-center justify-between">
             <Label className="mb-0">Segments</Label>
             <span className="text-[10px] font-bold text-muted-foreground">{segments.length} editable</span>
@@ -243,13 +306,15 @@ export function CaptionsTab({
             <p className="text-xs text-muted-foreground">No caption track yet.</p>
           ) : (
             <div className="space-y-3">
-              <div className="max-h-36 space-y-2 overflow-y-auto pr-2">
+              <div className="max-h-48 space-y-2 overflow-y-auto pr-1 sm:max-h-36 sm:pr-2">
                 {segments.map((segment, index) => (
                   <button
                     key={segment.id ?? index}
                     onClick={() => setSelectedSegmentIndex(index)}
+                    aria-current={selectedSegmentIndex === index ? "true" : undefined}
+                    aria-label={`Caption segment ${index + 1}, ${segment.text}, starts at ${segment.start_ms} milliseconds, ends at ${segment.end_ms} milliseconds`}
                     className={cn(
-                      "w-full border p-2 text-left text-xs transition",
+                      "min-h-11 w-full border p-2 text-left text-sm transition sm:p-2",
                       selectedSegmentIndex === index
                         ? "border-primary bg-primary/10"
                         : "border-border bg-muted/40 hover:border-primary/40",
@@ -262,19 +327,22 @@ export function CaptionsTab({
               </div>
 
               {selectedSegment ? (
-                <div className="space-y-3 border border-border bg-muted/30 p-3">
+                <div className="space-y-3 border border-border bg-muted/30 p-2.5 sm:p-3">
                   <TextArea
+                    aria-label="Selected caption segment text"
                     value={selectedSegment.text}
                     onChange={(event) => updateSelectedText(event.target.value)}
                     className="min-h-20 text-xs"
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <Input
+                      aria-label="Selected caption start time in milliseconds"
                       type="number"
                       value={selectedSegment.start_ms}
                       onChange={(event) => updateSelectedSegment({ start_ms: Number(event.target.value) })}
                     />
                     <Input
+                      aria-label="Selected caption end time in milliseconds"
                       type="number"
                       value={selectedSegment.end_ms}
                       onChange={(event) => updateSelectedSegment({ end_ms: Number(event.target.value) })}
@@ -287,8 +355,9 @@ export function CaptionsTab({
                         <button
                           key={word}
                           onClick={() => updateHighlight(word)}
+                          aria-pressed={selected}
                           className={cn(
-                            "border px-2 py-1 text-[10px] font-bold uppercase tracking-wider",
+                            "min-h-11 border px-3 py-2 text-xs font-bold",
                             selected ? "border-primary bg-primary/10 text-primary" : "border-border",
                           )}
                         >
@@ -305,17 +374,17 @@ export function CaptionsTab({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Button onClick={updateCaptions} disabled={loading} className="h-12">
+        <Button onClick={updateCaptions} disabled={loading} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 sm:h-12">
           {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
           {activeTrack ? "Save Style" : "Generate"}
         </Button>
-        <Button onClick={saveSegments} disabled={loading || !activeTrack} className="h-12">
+        <Button onClick={saveSegments} disabled={loading || !activeTrack} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 sm:h-12">
           {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
           Save Text
         </Button>
       </div>
       {message ? (
-        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+        <p id="caption-message" role={/failed|could not|try/i.test(message) ? "alert" : "status"} className="border border-border bg-muted p-3 text-sm font-bold text-muted-foreground">
           {message}
         </p>
       ) : null}
@@ -340,9 +409,38 @@ function PlacementPad({
       placement: y < 33 ? "upper" : y > 66 ? "lower" : "middle",
     });
   }
+  function updateFromKeyboard(event: React.KeyboardEvent<HTMLDivElement>) {
+    const x = style.position_x_pct ?? 50;
+    const y = style.position_y_pct ?? (style.placement === "upper" ? 18 : style.placement === "middle" ? 50 : 82);
+    const step = event.shiftKey ? 10 : 2;
+    let nextX = x;
+    let nextY = y;
+    if (event.key === "ArrowLeft") nextX -= step;
+    else if (event.key === "ArrowRight") nextX += step;
+    else if (event.key === "ArrowUp") nextY -= step;
+    else if (event.key === "ArrowDown") nextY += step;
+    else if (event.key === "Home") {
+      nextX = 50;
+      nextY = 82;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    const clampedY = Math.max(12, Math.min(82, nextY));
+    onChange({
+      position_x_pct: Math.max(12, Math.min(88, nextX)),
+      position_y_pct: clampedY,
+      placement: clampedY < 33 ? "upper" : clampedY > 66 ? "lower" : "middle",
+    });
+  }
 
   return (
     <div
+      role="slider"
+      tabIndex={0}
+      aria-label="Caption placement"
+      aria-valuetext={`X ${style.position_x_pct ?? 50} percent, Y ${style.position_y_pct ?? (style.placement === "upper" ? 18 : style.placement === "middle" ? 50 : 82)} percent`}
+      onKeyDown={updateFromKeyboard}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         updateFromPointer(event);

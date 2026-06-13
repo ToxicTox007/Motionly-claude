@@ -9,7 +9,7 @@ import {
   Film, Loader2, ChevronLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { buildApiHeaders } from "@/lib/client-api";
+import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
 import { EditorLayout } from "./editor-layout";
@@ -239,19 +239,17 @@ export function EditorClient(props: EditorClientProps) {
 
       setSaveStatus("saving");
       try {
-        const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}`, {
+        const payload = await editorApiRequest<{ title?: string }>(
+          `${env.apiBaseUrl}/projects/${projectId}`,
+          {
           method: "PATCH",
-          headers: await buildApiHeaders({
-            workspaceId,
-            userId,
-            accessToken: apiAccessToken,
-          }),
-          body: JSON.stringify({ title: trimmed }),
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error?.message ?? "Project title could not be saved.");
-        }
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+            friendlyError: "Project title could not be saved.",
+            body: { title: trimmed },
+          },
+        );
         const savedTitle = payload.title ?? trimmed;
         lastSavedTitleRef.current = savedTitle;
         setLocalTitle(savedTitle);
@@ -298,6 +296,7 @@ export function EditorClient(props: EditorClientProps) {
           <LeftMediaPanel
             upload={upload}
             thumbnailUrl={uploadAssetUrls.thumbnail_url}
+            sourceVideoUrl={uploadAssetUrls.source_video_url}
             activePlan={activePlan}
             brollSlots={localBrollSlots}
             musicSelection={localMusicSelection}
@@ -427,32 +426,73 @@ function InspectorPanel({
   renderJobs, exports, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated,
   onMusicSelectionUpdated, onEffectsConfigUpdated,
 }: InspectorPanelProps) {
-  const brollDensity = (activePlan?.summary?.broll_density ?? null) as BrollDensity | null;
+  const brollDensity = activePlan?.broll_density ?? null;
   const musicMood    = activePlan?.summary?.music_mood ?? null;
   const suggestedPreset = (activePlan?.summary?.visual_preset ?? null) as VisualPresetKey | null;
+  const activeTabMeta = INSPECTOR_TABS.find((item) => item.id === tab) ?? INSPECTOR_TABS[0];
+
+  function onTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number) {
+    if (event.key === "Escape") {
+      event.currentTarget.blur();
+      return;
+    }
+    const direction =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (!direction && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const enabledTabs = INSPECTOR_TABS.filter((item) => !(item.requiresPlan && !hasActivePlan));
+    const current = enabledTabs.findIndex((item) => item.id === INSPECTOR_TABS[currentIndex].id);
+    const next =
+      event.key === "Home"
+        ? enabledTabs[0]
+        : event.key === "End"
+          ? enabledTabs[enabledTabs.length - 1]
+          : enabledTabs[(current + direction + enabledTabs.length) % enabledTabs.length];
+    onTabChange(next.id);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`editor-tab-${next.id}`)?.focus();
+    });
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[hsl(var(--surface))]">
       {/* Tab strip */}
-      <div className="pixel-grid-fine flex shrink-0 items-end gap-1 overflow-x-auto border-b border-border px-2 pt-2">
-        {INSPECTOR_TABS.map(({ id, label, icon: Icon, requiresPlan }) => {
+      <div
+        className="pixel-grid-fine flex shrink-0 gap-2 overflow-x-auto border-b-2 border-border bg-muted px-2 py-2"
+        role="tablist"
+        aria-label="Editor tools"
+      >
+        {INSPECTOR_TABS.map(({ id, label, icon: Icon, requiresPlan }, index) => {
           const disabled = requiresPlan && !hasActivePlan;
+          const selected = tab === id;
           return (
             <button
+              id={`editor-tab-${id}`}
               key={id}
+              role="tab"
+              type="button"
+              aria-selected={selected}
+              aria-controls={`editor-panel-${id}`}
+              tabIndex={selected ? 0 : -1}
               onClick={() => !disabled && onTabChange(id)}
+              onKeyDown={(event) => onTabKeyDown(event, index)}
               disabled={disabled}
               title={disabled ? "Generate an AI edit first" : label}
               className={cn(
-                "flex min-w-12 flex-col items-center gap-0.5 border px-2 pb-2 pt-1.5 text-[9px] font-bold uppercase tracking-widest transition",
-                tab === id
-                  ? "border-primary bg-primary/10 text-primary shadow-[0_0_0_2px_hsl(var(--primary)/0.08)]"
+                "pixel-button flex min-h-11 min-w-[4.75rem] items-center justify-center gap-1.5 px-3 py-2 font-['Pixelify_Sans'] text-sm font-bold transition sm:min-w-20",
+                selected
+                  ? "bg-primary text-primary-foreground shadow-[4px_4px_0_hsl(var(--pixel-shadow)/0.32)]"
                   : disabled
-                    ? "cursor-not-allowed border-transparent text-muted-foreground/30"
-                    : "border-transparent text-muted-foreground hover:border-primary/30 hover:bg-muted hover:text-foreground",
+                    ? "cursor-not-allowed bg-background text-muted-foreground opacity-45"
+                    : "bg-surface text-foreground hover:bg-primary/10",
               )}
             >
-              <Icon className="size-3.5" />
+              <Icon className="size-4 shrink-0" />
+              <span className="sr-only">{selected ? "Selected: " : ""}</span>
               {label}
             </button>
           );
@@ -460,7 +500,13 @@ function InspectorPanel({
       </div>
 
       {/* Tab content — scrollable */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div
+        id={`editor-panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`editor-tab-${tab}`}
+        className="min-h-0 flex-1 overflow-y-auto p-4"
+      >
+        <h2 className="sr-only">{activeTabMeta.label}</h2>
         {tab === "ai" && (
           <AIStep
             projectId={projectId}
@@ -499,6 +545,7 @@ function InspectorPanel({
             activePlanId={localActivePlanId}
             activePlanBrollDensity={brollDensity}
             onSlotUpdated={onBrollSlotUpdated}
+            onSlotsUpdated={onBrollSlotsUpdated}
           />
         )}
         {tab === "audio" && (

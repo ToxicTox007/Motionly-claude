@@ -1,9 +1,11 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
+
+from app.schemas.request_body import JsonStringBodyMixin
 
 EFFECTS_SCHEMA_VERSION = 2
 
@@ -76,7 +78,7 @@ class AfterEffectsPreset(BaseModel):
     expression_controls: dict[str, float | str | bool] = Field(default_factory=dict)
 
 
-class EffectsConfigRequest(BaseModel):
+class EffectsConfigRequest(JsonStringBodyMixin, BaseModel):
     preset: VisualPresetKey
     lut_intensity: float = Field(default=0.75, ge=0.5, le=1)
     texture: EffectsTextureSettings = Field(default_factory=EffectsTextureSettings)
@@ -89,6 +91,11 @@ class EffectsConfigRequest(BaseModel):
     )
     reset_to_defaults: bool = False
     force: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
     @model_validator(mode="after")
     def cap_readability_risk(self) -> "EffectsConfigRequest":

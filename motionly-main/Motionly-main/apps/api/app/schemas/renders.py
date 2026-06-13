@@ -3,7 +3,9 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.schemas.request_body import JsonStringBodyMixin
 
 
 class RenderJobStatus(StrEnum):
@@ -108,7 +110,7 @@ class ExportOptions(BaseModel):
     framing: ExportFraming = Field(default_factory=ExportFraming)
 
 
-class RenderCreateRequest(BaseModel):
+class RenderCreateRequest(JsonStringBodyMixin, BaseModel):
     caption_track_id: UUID | None = None
     include_captions: bool = True
     include_broll: bool = True
@@ -118,6 +120,11 @@ class RenderCreateRequest(BaseModel):
     duration_preset: DurationPreset = DurationPreset.MEDIUM
     export_options: ExportOptions = Field(default_factory=ExportOptions)
     force: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
 class RenderJobEventResponse(BaseModel):

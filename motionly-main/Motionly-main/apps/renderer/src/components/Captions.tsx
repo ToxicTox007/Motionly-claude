@@ -112,8 +112,8 @@ function captionPlacement(style?: CaptionStyle | null) {
       justifyContent: "flex-start" as const,
       padding: "0",
       customPosition: {
-        left: `${style.position_x_pct}%`,
-        top: `${style.position_y_pct}%`,
+        left: `${Math.max(12, Math.min(88, style.position_x_pct))}%`,
+        top: `${Math.max(12, Math.min(82, style.position_y_pct))}%`,
       },
     };
   }
@@ -123,9 +123,9 @@ function captionPlacement(style?: CaptionStyle | null) {
   if (style?.placement === "middle") {
     return { justifyContent: "center" as const, padding: "0 76px" };
   }
-  const bottomPct = style?.safe_area_bottom_pct ?? 12;
+  const bottomPct = style?.safe_area_bottom_pct ?? 20;
   return {
     justifyContent: "flex-end" as const,
-    padding: `0 76px ${Math.max(120, Math.round(bottomPct * 10))}px`,
+    padding: `0 76px ${Math.max(180, Math.round(bottomPct * 10))}px`,
   };
 }

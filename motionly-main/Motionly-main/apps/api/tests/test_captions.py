@@ -136,7 +136,7 @@ def test_transcription_requires_ready_source_video() -> None:
         ("hindi", LanguageHint.AUTO, "hi"),
         ("hi-IN", LanguageHint.AUTO, "hi"),
         ("", LanguageHint.ENGLISH, "en"),
-        ("fr", LanguageHint.AUTO, "unknown"),
+        ("fr", LanguageHint.AUTO, "fr"),
     ],
 )
 def test_provider_language_is_normalized_for_storage(

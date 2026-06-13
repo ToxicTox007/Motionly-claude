@@ -11,7 +11,7 @@ export function Card({ className, children }: { className?: string; children: Re
 
 export function Label({ className, children, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
   return (
-    <label className={cn("text-xs font-bold uppercase tracking-widest text-muted-foreground/70 mb-2 block", className)} {...props}>
+    <label className={cn("mb-2 block text-sm font-bold text-muted-foreground", className)} {...props}>
       {children}
     </label>
   );
@@ -21,7 +21,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
   return (
     <input
       className={cn(
-        "pixel-input flex h-11 w-full px-4 py-2 text-sm transition-all disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/40",
+        "pixel-input flex min-h-11 w-full px-4 py-2 text-base transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary/40 sm:text-sm",
         className
       )}
       {...props}
@@ -33,7 +33,7 @@ export function TextArea({ className, ...props }: React.TextareaHTMLAttributes<H
   return (
     <textarea
       className={cn(
-        "pixel-input flex min-h-28 w-full resize-y px-4 py-3 text-sm transition-all disabled:cursor-not-allowed disabled:opacity-50 hover:border-primary/40",
+        "pixel-input flex min-h-28 w-full resize-y px-4 py-3 text-base transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary/40 sm:text-sm",
         className
       )}
       {...props}
@@ -45,19 +45,26 @@ export function Select({
   className, 
   options, 
   value, 
-  onChange 
+  onChange,
+  label,
+  id,
 }: { 
   className?: string; 
   options: { value: string; label: string }[]; 
   value: string; 
-  onChange: (value: string) => void 
+  onChange: (value: string) => void;
+  label?: string;
+  id?: string;
 }) {
+  const selectId = id ?? `select-${label?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? "field"}`;
   return (
     <div className={cn("relative", className)}>
       <select
+        id={selectId}
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="pixel-input flex h-11 w-full appearance-none px-4 py-2 pr-10 text-sm transition-all hover:border-primary/40"
+        className="pixel-input flex min-h-11 w-full appearance-none px-4 py-2 pr-10 text-base transition-all hover:border-primary/40 sm:text-sm"
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>
@@ -79,27 +86,61 @@ export function Slider({
   value, 
   min = 0, 
   max = 100, 
-  onChange 
+  onChange,
+  step = 1,
 }: { 
   label: string; 
   value: number; 
   min?: number; 
   max?: number; 
-  onChange: (val: number) => void 
+  onChange: (val: number) => void;
+  step?: number;
 }) {
+  const id = `slider-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  const clamp = (next: number) => Math.max(min, Math.min(max, next));
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    const fastStep = Math.max(step * 10, Math.round((max - min) / 10));
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+      event.preventDefault();
+      onChange(clamp(value - step));
+    } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+      event.preventDefault();
+      onChange(clamp(value + step));
+    } else if (event.key === "PageDown") {
+      event.preventDefault();
+      onChange(clamp(value - fastStep));
+    } else if (event.key === "PageUp") {
+      event.preventDefault();
+      onChange(clamp(value + fastStep));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      onChange(min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      onChange(max);
+    }
+  }
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <Label className="mb-0">{label}</Label>
-        <span className="text-xs font-bold text-primary">{value}%</span>
+        <Label htmlFor={id} className="mb-0">{label}</Label>
+        <span className="text-sm font-bold text-foreground">{value}%</span>
       </div>
       <input
+        id={id}
         type="range"
         min={min}
         max={max}
+        step={step}
         value={value}
+        aria-label={label}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        aria-valuetext={`${value} percent`}
         onChange={(e) => onChange(parseInt(e.target.value))}
-        className="h-2 w-full cursor-pointer appearance-none border border-border bg-muted accent-primary transition-all hover:brightness-110"
+        onKeyDown={onKeyDown}
+        className="min-h-11 w-full cursor-pointer accent-primary transition-all hover:brightness-110"
       />
     </div>
   );

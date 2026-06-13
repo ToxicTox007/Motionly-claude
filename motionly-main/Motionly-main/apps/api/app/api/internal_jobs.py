@@ -85,18 +85,31 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
             service_role_key=settings.supabase_service_role_key,
         )
-        transcript = queue_transcription_for_upload(
-            upload=upload,
-            caption_repository=request.app.state.caption_repository,
-            transcription_queue=request.app.state.transcription_queue,
-            transcription_provider=request.app.state.transcription_provider,
-        )
-        return {
+        result = {
             "upload_id": str(upload.id),
             "upload_status": upload.status.value,
-            "transcript_id": str(transcript.id),
-            "transcript_status": transcript.status.value,
         }
+        if all(
+            hasattr(request.app.state, name)
+            for name in (
+                "caption_repository",
+                "transcription_queue",
+                "transcription_provider",
+            )
+        ):
+            transcript = queue_transcription_for_upload(
+                upload=upload,
+                caption_repository=request.app.state.caption_repository,
+                transcription_queue=request.app.state.transcription_queue,
+                transcription_provider=request.app.state.transcription_provider,
+            )
+            result.update(
+                {
+                    "transcript_id": str(transcript.id),
+                    "transcript_status": transcript.status.value,
+                }
+            )
+        return result
 
     if job.kind == "transcription":
         transcript = run_transcription_for_upload(

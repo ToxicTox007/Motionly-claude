@@ -152,10 +152,28 @@ class WhisperCompatibleHttpProvider:
 
 def normalize_transcription_language(value: object, language_hint: LanguageHint) -> str:
     language = str(value or "").strip().lower().replace("_", "-")
-    if language in {"en", "eng", "english"} or language.startswith("en-"):
-        return "en"
-    if language in {"hi", "hin", "hindi"} or language.startswith("hi-"):
-        return "hi"
-    if language_hint in {LanguageHint.ENGLISH, LanguageHint.HINDI}:
+    aliases = {
+        "eng": "en",
+        "english": "en",
+        "hin": "hi",
+        "hindi": "hi",
+        "spa": "es",
+        "spanish": "es",
+        "por": "pt",
+        "portuguese": "pt",
+        "fra": "fr",
+        "fre": "fr",
+        "french": "fr",
+        "deu": "de",
+        "ger": "de",
+        "german": "de",
+        "ara": "ar",
+        "arabic": "ar",
+    }
+    if language in aliases:
+        return aliases[language]
+    if language[:2] in {"en", "hi", "es", "pt", "fr", "de", "ar"}:
+        return language[:2]
+    if language_hint != LanguageHint.AUTO:
         return language_hint.value
     return "unknown"

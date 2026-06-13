@@ -7,6 +7,8 @@ import {
   Download,
   Save,
   ChevronLeft,
+  Moon,
+  Sun,
 } from "lucide-react";
 
 // ── Public interface ──────────────────────────────────────────────────────────
@@ -46,6 +48,9 @@ export function EditorLayout({
 }: EditorLayoutProps) {
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background lg:h-screen lg:overflow-hidden">
+      <a href="#editor-preview" className="skip-link">Skip to preview</a>
+      <a href="#editor-timeline" className="skip-link">Skip to timeline</a>
+      <a href="#editor-export" className="skip-link">Skip to export settings</a>
       <TopToolbar
         title={title}
         onTitleChange={onTitleChange}
@@ -55,22 +60,22 @@ export function EditorLayout({
         onAiEdit={onAiEdit}
       />
 
-      <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[220px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_190px] lg:overflow-hidden">
-        <div className="pixel-panel order-2 min-h-[260px] overflow-hidden lg:order-1 lg:min-h-0">
+      <div className="grid min-h-0 flex-1 gap-2 overflow-y-auto p-2 sm:gap-3 sm:p-3 lg:grid-cols-[220px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_210px] lg:overflow-hidden">
+        <section aria-labelledby="media-heading" className="pixel-panel order-2 min-h-[220px] overflow-hidden lg:order-1 lg:min-h-0">
           {leftPanel}
-        </div>
+        </section>
 
-        <div className="pixel-panel-strong order-1 min-h-[460px] min-w-0 overflow-hidden lg:order-2 lg:min-h-0">
+        <section id="editor-preview" aria-labelledby="preview-heading" className="pixel-panel-strong order-1 min-h-[560px] min-w-0 overflow-hidden sm:min-h-[620px] lg:order-2 lg:min-h-0">
           {centerPanel}
-        </div>
+        </section>
 
-        <div className="pixel-panel order-3 min-h-[420px] overflow-hidden lg:order-3 lg:min-h-0">
+        <section aria-label="Editor settings" className="pixel-panel order-3 min-h-[360px] overflow-hidden lg:order-3 lg:min-h-0">
           {rightPanel}
-        </div>
+        </section>
 
-        <div className="pixel-panel order-4 min-h-[190px] overflow-hidden lg:col-span-3 lg:min-h-0">
+        <section id="editor-timeline" aria-labelledby="timeline-heading" className="pixel-panel order-4 min-h-[260px] overflow-hidden lg:col-span-3 lg:min-h-0">
           {bottomPanel}
-        </div>
+        </section>
       </div>
     </div>
   );
@@ -95,56 +100,97 @@ function TopToolbar({
   onExport,
   onAiEdit,
 }: TopToolbarProps) {
+  const [theme, setTheme] = React.useState<"light" | "dark">("light");
+
+  React.useEffect(() => {
+    const stored = window.localStorage.getItem("motionly-theme");
+    const nextTheme =
+      stored === "dark" || stored === "light"
+        ? stored
+        : window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+  }, []);
+
+  function toggleTheme() {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    window.localStorage.setItem("motionly-theme", nextTheme);
+  }
+
   return (
-    <div className="pixel-grid-fine flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface/95 px-3 py-2 backdrop-blur lg:flex-nowrap">
+    <div className="pixel-grid-fine sticky top-0 z-40 grid shrink-0 grid-cols-[auto_1fr_auto] items-center gap-2 border-b-2 border-border bg-surface px-2 py-2 shadow-[0_4px_0_hsl(var(--pixel-shadow)/0.18)] sm:px-3 lg:static lg:flex lg:min-h-12 lg:flex-nowrap">
       {/* Back + logo */}
       <Link
         href="/dashboard"
-        className="flex items-center gap-1 border border-transparent px-2 py-1 text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
+        className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1 bg-muted px-2 py-1 text-foreground transition hover:bg-primary/10 lg:min-w-0"
         title="Back to dashboard"
+        aria-label="Back to dashboard"
       >
         <ChevronLeft className="size-4" />
-        <span className="text-[10px] font-bold uppercase tracking-widest">
+        <span className="hidden font-['Pixelify_Sans'] text-sm font-bold uppercase sm:inline">
           Motionly
         </span>
       </Link>
 
-      <div className="mx-1 h-4 w-px bg-border" />
+      <div className="hidden mx-1 h-4 w-px bg-border lg:block" />
 
       {/* Editable project title */}
       <input
+        aria-label="Project title"
         value={title}
         onChange={(e) => onTitleChange(e.target.value)}
         onBlur={(e) => onTitleCommit(e.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        className="pixel-input h-8 min-w-0 max-w-[220px] truncate bg-transparent px-2 text-sm font-semibold text-foreground placeholder:text-muted-foreground"
+        className="pixel-input min-h-11 min-w-0 truncate bg-transparent px-2 font-['Pixelify_Sans'] text-base font-semibold text-foreground placeholder:text-muted-foreground sm:max-w-[280px] lg:max-w-[220px]"
         placeholder="Untitled project"
       />
 
       {/* Save status */}
-      <SaveBadge status={saveStatus} />
+      <div className="hidden sm:block">
+        <SaveBadge status={saveStatus} />
+      </div>
 
-      <div className="flex-1" />
+      <div className="hidden flex-1 lg:block" />
 
-      {/* AI edit shortcut */}
-      <button
-        onClick={onAiEdit}
-        className="pixel-button flex items-center gap-1.5 bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary transition hover:bg-primary/20"
-      >
-        <Sparkles className="size-3" />
-        AI Edit
-      </button>
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          className="pixel-button flex min-h-11 min-w-11 items-center justify-center bg-muted text-foreground transition hover:bg-primary/10"
+        >
+          {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </button>
 
-      {/* Export */}
-      <button
-        onClick={onExport}
-        className="pixel-button flex items-center gap-1.5 bg-primary px-3 py-1.5 text-[11px] font-bold text-primary-foreground transition hover:brightness-105"
-      >
-        <Download className="size-3" />
-        Export
-      </button>
+        {/* AI edit shortcut */}
+        <button
+          onClick={onAiEdit}
+          aria-label="Open AI Edit settings"
+          className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary/10 px-2.5 py-1 font-['Pixelify_Sans'] text-sm font-bold text-primary transition hover:bg-primary/20 sm:min-w-0"
+        >
+          <Sparkles className="size-4" />
+          <span className="hidden sm:inline">AI</span>
+        </button>
+
+        {/* Export */}
+        <button
+          onClick={onExport}
+          aria-label="Open export settings"
+          className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary px-3 py-1.5 font-['Pixelify_Sans'] text-sm font-bold text-primary-foreground transition hover:brightness-105 sm:min-w-0"
+        >
+          <Download className="size-4" />
+          <span className="hidden sm:inline">Export</span>
+        </button>
+      </div>
+
+      <div className="col-span-3 sm:hidden">
+        <SaveBadge status={saveStatus} />
+      </div>
     </div>
   );
 }
@@ -153,7 +199,7 @@ function TopToolbar({
 
 function SaveBadge({ status }: { status: "saving" | "saved" | "error" }) {
   return (
-    <div className="flex items-center gap-1 text-[9px] text-muted-foreground/60">
+    <div className="flex items-center gap-1 text-xs text-muted-foreground" aria-live="polite" aria-atomic="true">
       {status === "saving" ? (
         <>
           <Save className="size-2.5 animate-pulse" />

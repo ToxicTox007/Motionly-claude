@@ -6,7 +6,7 @@ import { Input, Label, Slider } from "../ui";
 import { Button } from "../../button";
 import { Check, Film, Loader2, Sparkles, X } from "lucide-react";
 import type { BrollDensity, BrollSlotSummary, StockVideoAssetSummary } from "@motionly/shared";
-import { buildApiHeaders } from "@/lib/client-api";
+import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +19,7 @@ interface BrollTabProps {
   activePlanId: string | null;
   activePlanBrollDensity: BrollDensity | null;
   onSlotUpdated: (slot: BrollSlotSummary) => void;
+  onSlotsUpdated: (slots: BrollSlotSummary[]) => void;
 }
 
 const densityMap: Record<BrollDensity, number> = {
@@ -44,6 +45,7 @@ export function BrollTab({
   activePlanId,
   activePlanBrollDensity,
   onSlotUpdated,
+  onSlotsUpdated,
 }: BrollTabProps) {
   const router = useRouter();
   const [density, setDensity] = useState<BrollDensity>(activePlanBrollDensity || "medium");
@@ -61,21 +63,25 @@ export function BrollTab({
     setLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, {
+      const payload = await editorApiRequest<{ slots?: BrollSlotSummary[] }>(
+        `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
+        {
         method: "POST",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "B-roll could not be generated. Please try another density or try again.",
+          body: {
+            density,
+            force: true,
+          },
         },
-        body: JSON.stringify({
-          edit_plan_id: activePlanId,
-          density,
-          force: true,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Failed to generate B-roll");
+      );
       setMessage(`B-roll queued with ${payload.slots?.length ?? 0} slots.`);
+      onSlotsUpdated(payload.slots ?? []);
+      if (payload.slots?.length === 0) {
+        setMessage("No B-roll slots were created from the active edit plan.");
+      }
       router.refresh();
     } catch (error) {
       console.error(error);
@@ -89,19 +95,20 @@ export function BrollTab({
     setSavingSlotId(slot.id);
     setMessage(null);
     try {
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/broll/${slot.id}/swap`, {
+      const payload = await editorApiRequest<{ slot: BrollSlotSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/broll/${slot.id}/swap`,
+        {
         method: "POST",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "B-roll selection could not be saved.",
+          body: {
+            asset_id: assetId,
+            disabled,
+          },
         },
-        body: JSON.stringify({
-          asset_id: assetId,
-          disabled,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "B-roll slot could not be updated.");
+      );
       onSlotUpdated(payload.slot);
       setPickerSlotId(null);
       setMessage(disabled ? "B-roll slot disabled." : "B-roll selection saved.");
@@ -141,6 +148,7 @@ export function BrollTab({
 
   return (
     <div className="space-y-6">
+      <h2 className="sr-only">B-Roll</h2>
       <div className="pixel-panel pixel-corners space-y-6 p-4">
         <Slider
           label="B-Roll Density"
@@ -158,8 +166,8 @@ export function BrollTab({
           </div>
           <div className="space-y-3">
             {initialSlots.length === 0 ? (
-              <p className="border border-dashed border-border p-3 text-xs text-muted-foreground">
-                Generate B-roll to choose assets.
+              <p className="border border-dashed border-border p-3 text-sm text-muted-foreground">
+                No B-roll slots yet. Generate an AI edit first, then regenerate B-roll to create selectable overlay slots.
               </p>
             ) : (
               initialSlots.map((slot) => (
@@ -192,18 +200,26 @@ export function BrollTab({
         />
       ) : null}
 
-      <Button onClick={regenerateBroll} disabled={loading || !activePlanId} className="h-12 w-full">
+      <Button
+        onClick={regenerateBroll}
+        disabled={loading || !activePlanId}
+        aria-busy={loading}
+        aria-describedby={message ? "broll-message" : undefined}
+        className="h-12 w-full"
+      >
         {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Sparkles className="mr-2 size-4" />}
-        Regenerate B-Roll
+        {loading ? "Generating, please wait" : "Regenerate B-Roll"}
       </Button>
       {message ? (
-        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+        <p
+          id="broll-message"
+          role={message.toLowerCase().includes("could not") || message.toLowerCase().includes("failed") ? "alert" : "status"}
+          aria-live="polite"
+          className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground"
+        >
           {message}
         </p>
       ) : null}
-      <p className="border border-dashed border-border p-3 text-xs text-muted-foreground">
-        Uploaded/custom overlay assets are coming soon. This project currently supports provider B-roll candidates.
-      </p>
     </div>
   );
 }
@@ -235,8 +251,9 @@ function SlotRow({
             <button
               onClick={onChange}
               disabled={!canChange || saving || disabled}
+              aria-label={`Change B-roll asset for ${slot.intent}`}
               title={!canChange ? "No alternatives available" : "Choose B-roll alternative"}
-              className="border border-border px-2 py-1 text-[9px] font-bold uppercase tracking-widest transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-11 border border-border px-3 py-2 text-xs font-bold transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
             >
               {canChange ? "Change" : "No alternatives available"}
             </button>
@@ -244,7 +261,8 @@ function SlotRow({
               <button
                 onClick={onRestore}
                 disabled={saving || !slot.selected_asset_id && slot.candidates.length === 0}
-                className="border border-border px-2 py-1 text-[9px] font-bold uppercase tracking-widest transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={`Restore B-roll asset for ${slot.intent}`}
+                className="min-h-11 border border-border px-3 py-2 text-xs font-bold transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Restore
               </button>
@@ -252,7 +270,8 @@ function SlotRow({
               <button
                 onClick={onDisable}
                 disabled={saving}
-                className="border border-border px-2 py-1 text-[9px] font-bold uppercase tracking-widest text-muted-foreground transition hover:border-destructive/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={`Disable B-roll asset for ${slot.intent}`}
+                className="min-h-11 border border-border px-3 py-2 text-xs font-bold text-muted-foreground transition hover:border-destructive/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Disable
               </button>
@@ -290,7 +309,8 @@ function AssetPicker({
         <Label className="mb-0">Choose Alternative</Label>
         <button
           onClick={onClose}
-          className="flex size-7 items-center justify-center border border-border text-muted-foreground transition hover:border-primary/40 hover:bg-muted hover:text-foreground"
+          aria-label="Close asset picker"
+          className="flex min-h-11 min-w-11 items-center justify-center border border-border text-muted-foreground transition hover:border-primary/40 hover:bg-muted hover:text-foreground"
           title="Close asset picker"
         >
           <X className="size-3.5" />
@@ -298,15 +318,17 @@ function AssetPicker({
       </div>
       <div className="flex gap-2">
         <Input
+          aria-label="B-roll search query"
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value)}
           placeholder={slot.keywords.join(" ") || slot.intent}
-          className="h-9 text-xs"
+          className="h-11 text-sm"
         />
         <button
           onClick={onSearch}
           disabled={searching}
-          className="border border-border px-3 text-[10px] font-bold uppercase tracking-widest transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+          aria-busy={searching}
+          className="min-h-11 border border-border px-3 text-xs font-bold transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
         >
           {searching ? "Searching" : "Search"}
         </button>
@@ -319,6 +341,8 @@ function AssetPicker({
               key={asset.id}
               onClick={() => onSelect(asset)}
               disabled={saving || selected}
+              aria-pressed={selected}
+              aria-label={`${selected ? "Selected" : "Select"} B-roll asset ${asset.title}`}
               className={cn(
                 "group overflow-hidden border bg-muted text-left transition hover:border-primary/50 disabled:cursor-not-allowed",
                 selected ? "border-primary" : "border-border",

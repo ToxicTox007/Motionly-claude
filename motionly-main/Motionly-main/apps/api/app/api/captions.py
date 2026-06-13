@@ -1,7 +1,9 @@
+import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+import httpx
+from fastapi import APIRouter, Depends, Request
 
 from app.api.dependencies import (
     Actor,
@@ -23,6 +25,7 @@ from app.schemas.captions import (
     TranscriptionCreateResponse,
     TranscriptReadResponse,
     TranscriptStatus,
+    TranscriptWord,
 )
 from app.schemas.uploads import UploadStatus
 from app.services.caption_chunking import chunk_caption_words
@@ -47,6 +50,7 @@ TranscriptionQueueDep = Annotated[TranscriptionQueue, Depends(get_transcription_
 async def create_transcription(
     project_id: UUID,
     payload: TranscriptionCreateRequest,
+    request: Request,
     actor: ActorDep,
     repository: CaptionRepositoryDep,
     transcription_provider: TranscriptionProviderDep,
@@ -110,6 +114,7 @@ async def generate_captions(
     actor: ActorDep,
     repository: CaptionRepositoryDep,
     transcription_queue: TranscriptionQueueDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> CaptionGenerateResponse:
     transcript = (
         repository.get_transcript(
@@ -131,6 +136,12 @@ async def generate_captions(
 
     preset = get_caption_preset(payload.preset)
     segments = chunk_caption_words(transcript.words, hide_filler_words=payload.hide_filler_words)
+    segments = translate_segments_if_requested(
+        segments=segments,
+        source_language=transcript.language,
+        output_language=payload.output_language,
+        settings=request.app.state.settings if request else None,
+    )
     if not segments:
         raise ApiError(422, "caption_segments_empty", "No captionable words were found.")
 
@@ -174,6 +185,7 @@ async def update_caption_track(
     actor: ActorDep,
     repository: CaptionRepositoryDep,
     transcription_queue: TranscriptionQueueDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> CaptionGenerateResponse:
     track = repository.get_caption_track(
         track_id=track_id,
@@ -193,7 +205,18 @@ async def update_caption_track(
     )
     preset = get_caption_preset(preset_key)
     style = payload.style or preset.style
-    segments = chunk_caption_words(transcript.words, hide_filler_words=hide_filler_words)
+    should_rechunk = hide_filler_words != track.hide_filler_words
+    segments = (
+        chunk_caption_words(transcript.words, hide_filler_words=hide_filler_words)
+        if should_rechunk
+        else track.segments
+    )
+    segments = translate_segments_if_requested(
+        segments=segments,
+        source_language=transcript.language,
+        output_language=payload.output_language or "original",
+        settings=request.app.state.settings if request else None,
+    )
     job = transcription_queue.enqueue_caption_generation(
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -227,3 +250,118 @@ async def update_caption_segments(
         segments=payload.segments,
     )
     return CaptionSegmentsUpdateResponse(track=updated.to_response())
+
+
+LANGUAGE_NAMES = {
+    "en": "English",
+    "hi": "Hindi",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "fr": "French",
+    "de": "German",
+    "ar": "Arabic",
+}
+
+
+def translate_segments_if_requested(
+    *,
+    segments,
+    source_language: str,
+    output_language: str,
+    settings,
+):
+    target = (output_language or "original").strip().lower()
+    if target in {"original", "auto", source_language, ""}:
+        return segments
+    if target not in LANGUAGE_NAMES:
+        raise ApiError(422, "caption_language_unsupported", "Choose a supported caption language.")
+    if settings is None or not settings.openrouter_api_key:
+        raise ApiError(
+            503,
+            "caption_translation_unavailable",
+            "Caption translation is not configured for production yet.",
+        )
+    payload = {
+        "model": settings.edit_planner_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Translate short video caption segments. Return only JSON with key "
+                    "'segments', an array of translated strings in the same order. Keep meaning, "
+                    "creator tone, punctuation, and short caption length."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "source_language": source_language,
+                        "target_language": LANGUAGE_NAMES[target],
+                        "segments": [segment.text for segment in segments],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1,
+    }
+    try:
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "authorization": f"Bearer {settings.openrouter_api_key}",
+                "content-type": "application/json",
+            },
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        translated = json.loads(content).get("segments", [])
+    except Exception as exc:
+        raise ApiError(
+            502,
+            "caption_translation_failed",
+            "Caption translation failed. Please try again.",
+        ) from exc
+    if not isinstance(translated, list) or len(translated) != len(segments):
+        raise ApiError(
+            502,
+            "caption_translation_invalid",
+            "Caption translation returned an invalid response.",
+        )
+    return [
+        segment.model_copy(
+            update={
+                "text": str(translated[index]).strip() or segment.text,
+                "words": words_for_segment_text(segment, str(translated[index]).strip()),
+                "line_count": 2 if len(str(translated[index])) > 28 else 1,
+            }
+        )
+        for index, segment in enumerate(segments)
+    ]
+
+
+def words_for_segment_text(segment, text: str):
+    tokens = [token for token in text.split() if token.strip()]
+    if not tokens:
+        return []
+    duration = max(len(tokens), segment.end_ms - segment.start_ms)
+    step = max(1, duration // len(tokens))
+    return [
+        TranscriptWord(
+            index=index,
+            text=token,
+            start_ms=segment.start_ms + index * step,
+            end_ms=(
+                segment.end_ms
+                if index == len(tokens) - 1
+                else segment.start_ms + (index + 1) * step
+            ),
+            confidence=None,
+        )
+        for index, token in enumerate(tokens)
+    ]

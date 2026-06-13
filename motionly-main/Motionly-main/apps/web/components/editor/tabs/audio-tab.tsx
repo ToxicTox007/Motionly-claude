@@ -4,9 +4,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Label, Slider } from "../ui";
 import { Button } from "../../button";
-import { Loader2, Music, Volume2 } from "lucide-react";
+import { Check, Loader2, Music, Volume2 } from "lucide-react";
 import type { MusicSelectionSummary, MusicTrackSummary } from "@motionly/shared";
-import { buildApiHeaders } from "@/lib/client-api";
+import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -46,10 +46,10 @@ export function AudioTab({
       : activePlanMusicMood || "uplifting ambient luxury";
   }, [activePlanMusicMood, initialSelection]);
   const [musicVolume, setMusicVolume] = useState(
-    initialSelection ? Math.round(initialSelection.music_volume * 100) : 25,
+    initialSelection?.music_track_id ? Math.round(initialSelection.music_volume * 100) || 25 : 25,
   );
   const [sfxIntensity, setSfxIntensity] = useState(
-    initialSelection ? Math.round(initialSelection.sfx_intensity * 100) : 25,
+    initialSelection?.music_track_id ? Math.round(initialSelection.sfx_intensity * 100) || 20 : 20,
   );
   const [includeMusic, setIncludeMusic] = useState(
     initialSelection ? Boolean(initialSelection.music_track_id) : true,
@@ -62,6 +62,8 @@ export function AudioTab({
   const [tracksLoading, setTracksLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const selectedTrack =
+    tracks.find((track) => track.id === selectedTrackId) ?? initialSelection?.music_track ?? null;
 
   useEffect(() => {
     let canceled = false;
@@ -99,24 +101,25 @@ export function AudioTab({
     setLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/music/select`, {
+      const payload = await editorApiRequest<{ selection: MusicSelectionSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/music/select`,
+        {
         method: "POST",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "No production music track is available for that mood yet.",
+          body: {
+            music_track_id: nextInclude ? nextTrackId : null,
+            music_volume: nextInclude ? Math.max(0.05, musicVolume / 100) : 0,
+            sfx_intensity: nextInclude ? Math.max(0.05, sfxIntensity / 100) : 0,
+            mood: nextMood,
+            include_music: nextInclude,
+            rights_confirmed: true,
+            force: nextTrackId ? false : nextMood !== mood,
+          },
         },
-        body: JSON.stringify({
-          music_track_id: nextInclude ? nextTrackId : null,
-          music_volume: musicVolume / 100,
-          sfx_intensity: sfxIntensity / 100,
-          mood: nextMood,
-          include_music: nextInclude,
-          rights_confirmed: true,
-          force: nextTrackId ? false : nextMood !== mood,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Failed to update audio");
+      );
       setMood(nextMood);
       setSelectedTrackId(payload.selection?.music_track_id ?? null);
       setIncludeMusic(Boolean(payload.selection?.music_track_id));
@@ -137,6 +140,7 @@ export function AudioTab({
 
   return (
     <div className="space-y-6">
+      <h2 className="sr-only">Audio</h2>
       <div className="pixel-panel pixel-corners space-y-8 p-4">
         <div className="flex items-center gap-4 border border-primary/20 bg-primary/5 p-4">
           <div className="flex size-10 items-center justify-center border border-primary/20 bg-primary/10 text-primary">
@@ -146,22 +150,23 @@ export function AudioTab({
             <p className="text-xs font-bold text-primary uppercase tracking-widest">Selected Track</p>
             <p className="truncate text-sm font-bold">
               {includeMusic
-                ? initialSelection?.music_track?.title || "AI Recommended Track"
+                ? selectedTrack?.title || "No track selected"
                 : "No music"}
             </p>
           </div>
         </div>
 
-        <label className="flex items-center justify-between gap-3 border border-border bg-muted/30 p-3 text-xs font-bold uppercase tracking-widest">
+        <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/30 p-3 text-sm font-bold">
           Include Music
           <input
             type="checkbox"
+            aria-label="Include music in export"
             checked={includeMusic}
             onChange={(event) => {
               setIncludeMusic(event.target.checked);
               updateAudio({ include: event.target.checked, trackId: selectedTrackId });
             }}
-            className="size-4 accent-primary"
+            className="size-6 accent-primary"
           />
         </label>
 
@@ -186,14 +191,17 @@ export function AudioTab({
                     updateAudio({ mood: nextMood, trackId: null, include: true });
                   }}
                   disabled={loading}
+                  aria-pressed={selected}
                   className={cn(
-                    "border px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-50",
+                    "inline-flex min-h-11 items-center gap-1.5 border px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50",
                     selected
                       ? "border-primary bg-primary/10 text-primary"
                       : "border-border hover:border-primary/40 hover:bg-muted",
                   )}
                 >
+                  {selected ? <Check className="size-3.5" aria-hidden="true" /> : null}
                   {label}
+                  {selected ? <span className="sr-only"> selected</span> : null}
                 </button>
               );
             })}
@@ -223,8 +231,9 @@ export function AudioTab({
                     updateAudio({ trackId: track.id, include: true });
                   }}
                   disabled={loading || selectedTrackId === track.id}
+                  aria-pressed={selectedTrackId === track.id}
                   className={cn(
-                    "flex w-full items-center justify-between gap-3 border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-70",
+                    "flex min-h-11 w-full items-center justify-between gap-3 border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-70",
                     selectedTrackId === track.id
                       ? "border-primary bg-primary/10"
                       : "border-border hover:border-primary/40 hover:bg-muted",
@@ -237,7 +246,9 @@ export function AudioTab({
                     </span>
                   </span>
                   <span className="text-[10px] font-bold uppercase tracking-widest">
-                    {selectedTrackId === track.id ? "Selected" : "Select"}
+                    {selectedTrackId === track.id ? (
+                      <span className="inline-flex items-center gap-1"><Check className="size-3" /> Selected</span>
+                    ) : "Select"}
                   </span>
                 </button>
               ))
@@ -246,12 +257,12 @@ export function AudioTab({
         </div>
       </div>
 
-      <Button onClick={() => updateAudio()} disabled={loading} className="h-12 w-full">
+      <Button onClick={() => updateAudio()} disabled={loading} aria-busy={loading} className="h-12 w-full">
         {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Volume2 className="mr-2 size-4" />}
-        Save Audio Mix
+        {loading ? "Saving, please wait" : "Save Audio Mix"}
       </Button>
       {message ? (
-        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+        <p role={message.toLowerCase().includes("could not") || message.toLowerCase().includes("unavailable") ? "alert" : "status"} aria-live="polite" className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
           {message}
         </p>
       ) : null}

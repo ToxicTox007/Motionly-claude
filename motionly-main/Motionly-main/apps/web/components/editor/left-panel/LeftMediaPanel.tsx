@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import {
   Film,
   Layers,
@@ -25,6 +25,7 @@ import type {
 interface LeftMediaPanelProps {
   upload:           UploadedVideoSummary | null;
   thumbnailUrl:     string | null;
+  sourceVideoUrl?:  string | null;
   activePlan:       EditPlanRecordSummary | null;
   brollSlots:       BrollSlotSummary[];
   musicSelection:   MusicSelectionSummary | null;
@@ -34,6 +35,7 @@ interface LeftMediaPanelProps {
 export function LeftMediaPanel({
   upload,
   thumbnailUrl,
+  sourceVideoUrl,
   activePlan,
   brollSlots,
   musicSelection,
@@ -42,20 +44,20 @@ export function LeftMediaPanel({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-[hsl(var(--surface))] text-sm">
       <div className="pixel-grid-fine sticky top-0 z-10 border-b border-border bg-[hsl(var(--surface))] px-3 py-2">
-        <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">
+        <h2 id="media-heading" className="text-sm font-bold text-muted-foreground">
           Media
-        </p>
+        </h2>
       </div>
 
       {/* Source */}
       <MediaSection icon={Film} label="Source">
-        <SourceItem upload={upload} thumbnailUrl={thumbnailUrl} />
+        <SourceItem upload={upload} thumbnailUrl={thumbnailUrl} sourceVideoUrl={sourceVideoUrl} />
       </MediaSection>
 
       {/* B-roll */}
       <MediaSection icon={Layers} label={`B-roll (${brollSlots.filter(s => s.status !== "disabled").length})`}>
         {brollSlots.length === 0 ? (
-          <EmptyRow text="No B-roll yet" />
+          <EmptyRow text="No B-roll yet. Generate an AI edit, then regenerate B-roll from the B-roll tab." />
         ) : (
           brollSlots.slice(0, 6).map((slot) => (
             <BrollSlotRow key={slot.id} slot={slot} />
@@ -73,7 +75,7 @@ export function LeftMediaPanel({
         {musicSelection?.music_track ? (
           <MusicRow selection={musicSelection} />
         ) : (
-          <EmptyRow text="No music selected" />
+          <EmptyRow text="No music selected. Open Audio to choose a mood or track." />
         )}
       </MediaSection>
 
@@ -85,7 +87,7 @@ export function LeftMediaPanel({
         {captionTracks[0] ? (
           <CaptionRow track={captionTracks[0]} />
         ) : (
-          <EmptyRow text="No captions yet" />
+          <EmptyRow text="No captions yet. Open Text to generate or edit captions." />
         )}
       </MediaSection>
 
@@ -111,11 +113,14 @@ function MediaSection({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
+  const contentId = useId();
   return (
     <div className="border-b border-border/70">
       <button
-        className="flex w-full items-center gap-1.5 border-l-2 border-transparent px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition hover:border-primary/50 hover:bg-muted/60 hover:text-foreground"
+        className="flex min-h-11 w-full items-center gap-2 border-l-2 border-transparent px-3 py-2 text-left text-sm font-semibold text-muted-foreground transition hover:border-primary/50 hover:bg-muted/60 hover:text-foreground"
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={contentId}
       >
         <Icon className="size-3 opacity-60 shrink-0" />
         <span className="flex-1 truncate">{label}</span>
@@ -123,7 +128,7 @@ function MediaSection({
           ? <ChevronDown className="size-3 opacity-40" />
           : <ChevronRight className="size-3 opacity-40" />}
       </button>
-      {open && <div className="pb-1">{children}</div>}
+      {open && <div id={contentId} className="pb-1">{children}</div>}
     </div>
   );
 }
@@ -133,25 +138,38 @@ function MediaSection({
 function SourceItem({
   upload,
   thumbnailUrl,
+  sourceVideoUrl,
 }: {
   upload: UploadedVideoSummary | null;
   thumbnailUrl: string | null;
+  sourceVideoUrl?: string | null;
 }) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
   if (!upload) {
-    return <EmptyRow text="No video uploaded" />;
+    return <EmptyRow text="No video uploaded. Upload a source video to start editing." />;
   }
   return (
     <div className="flex items-center gap-2 px-3 py-1.5">
       <div className="relative size-10 shrink-0 overflow-hidden border border-border bg-zinc-800">
-        {thumbnailUrl ? (
+        {thumbnailUrl && !thumbnailFailed ? (
           // eslint-disable-next-line
           <img
             src={thumbnailUrl}
-            alt=""
+          alt={`Thumbnail for ${upload.originalFilename}`}
+            className="h-full w-full object-cover"
+            onError={() => setThumbnailFailed(true)}
+          />
+        ) : sourceVideoUrl ? (
+          <video
+            src={sourceVideoUrl}
+            muted
+            playsInline
+            preload="metadata"
+            aria-label={`Video preview thumbnail for ${upload.originalFilename}`}
             className="h-full w-full object-cover"
           />
         ) : (
-          <ImageOff className="m-auto size-4 text-muted-foreground/30" />
+          <ImageOff className="m-auto size-4 text-muted-foreground" aria-label="No thumbnail available" />
         )}
       </div>
       <div className="min-w-0 flex-1">
@@ -198,7 +216,7 @@ function BrollSlotRow({ slot }: { slot: BrollSlotSummary }) {
             className="h-full w-full object-cover"
           />
         ) : (
-          <Layers className="m-auto size-3 text-muted-foreground/20" />
+          <Layers className="m-auto size-3 text-muted-foreground" aria-label="No B-roll thumbnail available" />
         )}
       </div>
       <div className="min-w-0 flex-1">
@@ -294,9 +312,7 @@ function PlanRow({ plan }: { plan: EditPlanRecordSummary }) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function EmptyRow({ text }: { text: string }) {
-  return (
-    <p className="px-3 py-1.5 text-[9px] italic text-muted-foreground/40">{text}</p>
-  );
+  return <p className="px-3 py-2 text-sm text-muted-foreground">{text}</p>;
 }
 
 function StatusDot({ status }: { status: string }) {
@@ -309,6 +325,7 @@ function StatusDot({ status }: { status: string }) {
     <span
       className={cn("inline-block size-1.5 rounded-full", color)}
       title={status}
+      aria-label={`Upload status ${status}`}
     />
   );
 }

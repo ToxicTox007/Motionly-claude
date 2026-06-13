@@ -12,6 +12,11 @@ class LanguageHint(StrEnum):
     AUTO = "auto"
     ENGLISH = "en"
     HINDI = "hi"
+    SPANISH = "es"
+    PORTUGUESE = "pt"
+    FRENCH = "fr"
+    GERMAN = "de"
+    ARABIC = "ar"
 
 
 class TranscriptStatus(StrEnum):
@@ -53,7 +58,7 @@ class TranscriptReadResponse(BaseModel):
     project_id: UUID
     uploaded_video_id: UUID
     status: TranscriptStatus
-    language: Literal["en", "hi", "unknown"] = "unknown"
+    language: str = Field(default="unknown", min_length=2, max_length=24)
     language_hint: LanguageHint = LanguageHint.AUTO
     provider: str
     model: str
@@ -146,6 +151,7 @@ class CaptionGenerateRequest(JsonStringBodyMixin, BaseModel):
     transcript_id: UUID | None = None
     preset: CaptionPresetKey = CaptionPresetKey.LUXURY_MINIMAL
     hide_filler_words: bool = False
+    output_language: str = Field(default="original", min_length=2, max_length=32)
 
     @model_validator(mode="before")
     @classmethod
@@ -159,14 +165,25 @@ class CaptionGenerateResponse(BaseModel):
     status: Literal["ready"] = "ready"
 
 
-class CaptionUpdateRequest(BaseModel):
+class CaptionUpdateRequest(JsonStringBodyMixin, BaseModel):
     preset: CaptionPresetKey | None = None
     hide_filler_words: bool | None = None
     style: CaptionStyle | None = None
+    output_language: str | None = Field(default=None, min_length=2, max_length=32)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
-class CaptionSegmentsUpdateRequest(BaseModel):
+class CaptionSegmentsUpdateRequest(JsonStringBodyMixin, BaseModel):
     segments: list[CaptionSegment] = Field(min_length=1, max_length=240)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
 class CaptionSegmentsUpdateResponse(BaseModel):

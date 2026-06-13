@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import logging
 from uuid import UUID, uuid4
 
 import httpx
@@ -17,6 +18,8 @@ from app.schemas.captions import (
     TranscriptWord,
 )
 from app.services.caption_presets import get_caption_preset
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,7 +49,7 @@ class TranscriptRecord:
             project_id=self.project_id,
             uploaded_video_id=self.uploaded_video_id,
             status=self.status,
-            language=self.language if self.language in {"en", "hi"} else "unknown",
+            language=self.language or "unknown",
             language_hint=self.language_hint,
             provider=self.provider,
             model=self.model,
@@ -650,6 +653,14 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
     def _raise_for_supabase(self, response: httpx.Response) -> None:
         if response.status_code < 400:
             return
+        logger.warning(
+            "supabase_caption_request_failed",
+            extra={
+                "status_code": response.status_code,
+                "url": str(response.request.url),
+                "response": response.text[:1000],
+            },
+        )
         raise ApiError(502, "supabase_request_failed", "Caption data could not be saved.")
 
 

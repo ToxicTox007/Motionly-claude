@@ -6,7 +6,7 @@ import { Label, Select, TextArea, Slider } from "./ui";
 import { Button } from "../button";
 import { AlertCircle, Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { env } from "@/lib/env";
-import { buildApiHeaders } from "@/lib/client-api";
+import { editorApiRequest } from "@/lib/client-api";
 import type {
   BrollSlotSummary,
   BrollDensity,
@@ -40,6 +40,28 @@ const styles: { value: EditPlanStyleKey; label: string }[] = [
   { value: "podcast", label: "Podcast (Speaker-focused)" },
 ];
 
+const captionLanguages = [
+  { value: "original", label: "Original language" },
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+  { value: "es", label: "Spanish" },
+  { value: "pt", label: "Portuguese" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "ar", label: "Arabic" },
+];
+
+const sourceLanguages = [
+  { value: "auto", label: "Auto detect" },
+  { value: "en", label: "English" },
+  { value: "hi", label: "Hindi" },
+  { value: "es", label: "Spanish" },
+  { value: "pt", label: "Portuguese" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "ar", label: "Arabic" },
+];
+
 export function AIStep({
   projectId,
   workspaceId,
@@ -60,6 +82,8 @@ export function AIStep({
   const [style, setStyle] = useState<EditPlanStyleKey>(activePlan?.style ?? "luxury");
   const [density, setDensity] = useState<BrollDensity>(activePlan?.broll_density ?? "medium");
   const [prompt, setPrompt] = useState(activePlan?.prompt ?? "");
+  const [sourceLanguage, setSourceLanguage] = useState("auto");
+  const [outputLanguage, setOutputLanguage] = useState("original");
   const [loading, setLoading] = useState(false);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -83,22 +107,23 @@ export function AIStep({
     setLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
+      const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans`,
+        {
         method: "POST",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "AI edit could not be generated. Please try again.",
+          body: {
+            prompt,
+            style,
+            broll_density: density,
+            target_duration_s: 35,
+            force: true,
+          },
         },
-        body: JSON.stringify({
-          prompt,
-          style,
-          broll_density: density,
-          target_duration_s: 35, // Default for now
-          force: true,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Failed to generate plan");
+      );
       const plan = payload.plan as EditPlanRecordSummary;
       onPlanGenerated(plan);
 
@@ -123,63 +148,61 @@ export function AIStep({
   }
 
   async function ensureCaptions() {
-    const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/captions/generate`, {
+    const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(
+      `${env.apiBaseUrl}/projects/${projectId}/captions/generate`,
+      {
       method: "POST",
-      headers: {
-        ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-        "Content-Type": "application/json",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Captions could not be prepared yet.",
+        body: {
+          transcript_id: transcript?.id ?? null,
+          preset: defaultCaptionPreset(style),
+          hide_filler_words: false,
+          output_language: outputLanguage,
+        },
       },
-      body: JSON.stringify({
-        transcript_id: transcript?.id ?? null,
-        preset: defaultCaptionPreset(style),
-        hide_filler_words: false,
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? "Caption generation failed");
-    }
+    );
     onCaptionTrackUpdated(payload.track);
   }
 
   async function ensureBroll() {
-    const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, {
+    const payload = await editorApiRequest<{ slots?: BrollSlotSummary[] }>(
+      `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
+      {
       method: "POST",
-      headers: {
-        ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-        "Content-Type": "application/json",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "B-roll could not be generated for this edit.",
+        body: {
+          density,
+          force: true,
+        },
       },
-      body: JSON.stringify({
-        density,
-        force: true,
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? "B-roll generation failed");
-    }
+    );
     onBrollSlotsUpdated(payload.slots ?? []);
   }
 
   async function ensureMusic() {
-    const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/music/select`, {
+    const payload = await editorApiRequest<{ selection: MusicSelectionSummary }>(
+      `${env.apiBaseUrl}/projects/${projectId}/music/select`,
+      {
       method: "POST",
-      headers: {
-        ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-        "Content-Type": "application/json",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "No production music track is available for this edit yet.",
+        body: {
+          include_music: true,
+          music_volume: 0.25,
+          sfx_intensity: 0.2,
+          rights_confirmed: true,
+          force: false,
+        },
       },
-      body: JSON.stringify({
-        include_music: true,
-        music_volume: 0.25,
-        sfx_intensity: 0.25,
-        rights_confirmed: true,
-        force: false,
-      }),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error?.message ?? "Music selection failed");
-    }
+    );
     onMusicSelectionUpdated(payload.selection);
   }
 
@@ -187,18 +210,21 @@ export function AIStep({
     setTranscriptLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/transcriptions`, {
+      const payload = await editorApiRequest<{
+        transcript_id: string;
+        status: TranscriptSummary["status"];
+        message?: string;
+      }>(`${env.apiBaseUrl}/projects/${projectId}/transcriptions`, {
         method: "POST",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Transcription could not be started. Please try again.",
+        body: {
+          force,
+          language_hint: sourceLanguage,
         },
-        body: JSON.stringify({ force }),
       });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.error?.message ?? "Failed to start transcription");
-      }
       onTranscriptUpdated({
         id: String(payload.transcript_id),
         status: payload.status,
@@ -233,9 +259,9 @@ export function AIStep({
               : "Transcript ready.";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" aria-live="polite">
       <div className="space-y-2">
-        <h3 className="text-xl font-black tracking-tight">AI Creative Direction</h3>
+        <h2 className="text-xl font-black tracking-tight">AI Edit</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Our AI will analyze your video and plan the perfect edit based on your chosen style.
         </p>
@@ -245,9 +271,30 @@ export function AIStep({
         <div className="space-y-2">
           <Label>Edit Style</Label>
           <Select
+            label="Edit Style"
             value={style}
             onChange={(val) => setStyle(val as EditPlanStyleKey)}
             options={styles}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Source Language</Label>
+          <Select
+            label="Source Language"
+            value={sourceLanguage}
+            onChange={setSourceLanguage}
+            options={sourceLanguages}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label>Caption Output Language</Label>
+          <Select
+            label="Caption Output Language"
+            value={outputLanguage}
+            onChange={setOutputLanguage}
+            options={captionLanguages}
           />
         </div>
 
@@ -268,6 +315,7 @@ export function AIStep({
         <div className="space-y-2">
           <Label>Custom Instructions (Optional)</Label>
           <TextArea
+            aria-label="Custom AI edit instructions"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="e.g. Focus on the product demo, keep the tone humorous..."
@@ -277,7 +325,7 @@ export function AIStep({
       </div>
 
       {!hasTranscript ? (
-        <div className="space-y-3 border border-border bg-muted/40 p-4">
+        <div className="space-y-3 border border-border bg-muted/40 p-4" role={transcript?.status === "failed" ? "alert" : "status"}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-bold capitalize">
@@ -295,7 +343,7 @@ export function AIStep({
               />
             )}
           </div>
-          <div className="h-2 overflow-hidden bg-background">
+          <div className="h-2 overflow-hidden bg-background" role="progressbar" aria-label="Transcription progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(5, Math.min(transcriptProgress, 100))}>
             <div
               className="h-full bg-primary transition-all"
               style={{ width: `${Math.max(5, Math.min(transcriptProgress, 100))}%` }}
@@ -305,7 +353,7 @@ export function AIStep({
             <span>{Math.max(5, Math.min(transcriptProgress, 100))}% complete</span>
             <div className="flex items-center gap-2">
               {!transcript ? (
-                <Button onClick={() => requestTranscript(false)} disabled={transcriptLoading} className="h-8 px-3">
+                <Button onClick={() => requestTranscript(false)} disabled={transcriptLoading} aria-busy={transcriptLoading} className="min-h-11 px-3">
                   {transcriptLoading ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
                   Start
                 </Button>
@@ -332,6 +380,8 @@ export function AIStep({
       <Button 
         onClick={generatePlan} 
         disabled={loading || !hasTranscript}
+        aria-busy={loading}
+        aria-describedby={message ? "ai-edit-message" : undefined}
         className="h-14 w-full bg-primary text-primary-foreground group"
       >
         {loading ? (
@@ -339,11 +389,11 @@ export function AIStep({
         ) : (
           <Sparkles className="mr-2 size-5 group-hover:rotate-12 transition-transform" />
         )}
-        <span className="text-base font-bold">Generate AI Edit</span>
+        <span className="text-base font-bold">{loading ? "Generating, please wait" : "Generate AI Edit"}</span>
       </Button>
       
       {message ? (
-        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+        <p id="ai-edit-message" role={/failed|could not|try/i.test(message) ? "alert" : "status"} className="border border-border bg-muted p-3 text-sm font-bold text-muted-foreground">
           {message}
         </p>
       ) : null}

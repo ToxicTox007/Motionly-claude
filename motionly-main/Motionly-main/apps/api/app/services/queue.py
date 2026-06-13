@@ -516,7 +516,7 @@ class BrollQueue(BaseQueue):
         edit_plan_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=self._job_id("broll", project_id, edit_plan_id, workspace_id),
+            job_id=":".join(str(part) for part in ("broll", project_id, edit_plan_id, workspace_id)),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
@@ -537,12 +537,16 @@ class RenderQueue(BaseQueue):
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=self._job_id(
-                "render",
-                project_id,
-                render_job_id,
-                workspace_id,
-                f"p{priority}" if priority else None,
+            job_id=":".join(
+                str(part)
+                for part in (
+                    "render",
+                    project_id,
+                    render_job_id,
+                    workspace_id,
+                    f"p{priority}" if priority else None,
+                )
+                if part is not None
             ),
             priority=priority,
             workspace_id=workspace_id,
@@ -602,7 +606,9 @@ class RegenerationQueue(BaseQueue):
         control_settings_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=self._job_id("regenerate", project_id, control_settings_id, workspace_id),
+            job_id=":".join(
+                str(part) for part in ("regenerate", project_id, control_settings_id, workspace_id)
+            ),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=control_settings_id,

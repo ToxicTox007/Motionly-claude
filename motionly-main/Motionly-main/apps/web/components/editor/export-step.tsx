@@ -23,7 +23,7 @@ import type {
   RenderJobSummary,
   RenderTemplateId,
 } from "@motionly/shared";
-import { buildApiHeaders } from "@/lib/client-api";
+import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/browser";
 
@@ -132,29 +132,30 @@ export function ExportStep({
     setLoading(true);
     setMessage(null);
     try {
-      const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/renders`, {
+      const payload = await editorApiRequest<{ job: RenderJobSummary; queue_job_id: string }>(
+        `${env.apiBaseUrl}/projects/${projectId}/renders`,
+        {
         method: "POST",
-        headers: {
-          ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          caption_track_id: captionTrackId,
-          edit_plan_id: activePlanId,
-          template_id: templateId,
-          duration_preset: "medium",
-          include_captions: true,
-          include_broll: true,
-          export_options: {
-            platform,
-            resolution,
-            format: "mp4",
-            framing,
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Render could not be started. Please try again.",
+          body: {
+            caption_track_id: captionTrackId ?? null,
+            edit_plan_id: activePlanId ?? null,
+            template_id: templateId,
+            duration_preset: "medium",
+            include_captions: true,
+            include_broll: true,
+            export_options: {
+              platform,
+              resolution,
+              format: "mp4",
+              framing,
+            },
           },
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Failed to start render");
+        },
+      );
       setJobs((current) => [
         payload.job,
         ...current.filter((job) => job.id !== payload.job.id),
@@ -334,15 +335,17 @@ export function ExportStep({
     setLoading(true);
     setMessage("Requeueing render...");
     try {
-      const response = await fetch(
+      const payload = await editorApiRequest<{ job: RenderJobSummary; queue_job_id: string }>(
         `${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}/retry`,
         {
           method: "POST",
-          headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken }),
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Render could not be retried.",
+          body: {},
         },
       );
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Render could not be retried.");
       updateJob(payload.job);
       setStreamingJobId(payload.job.id);
       setMessage(`Render requeued: ${payload.queue_job_id}`);
@@ -356,15 +359,17 @@ export function ExportStep({
     setLoading(true);
     setMessage("Canceling render...");
     try {
-      const response = await fetch(
+      const payload = await editorApiRequest<RenderJobSummary>(
         `${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}/cancel`,
         {
           method: "POST",
-          headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken }),
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Render could not be canceled.",
+          body: {},
         },
       );
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Render could not be canceled.");
       updateJob(payload);
       setStreamingJobId(null);
       setMessage("Render canceled.");
@@ -402,9 +407,9 @@ export function ExportStep({
   }
 
   return (
-    <div className="space-y-6">
+    <div id="editor-export" className="space-y-6" aria-labelledby="export-heading">
       <div className="space-y-2">
-        <h3 className="text-xl font-black tracking-tight">Generate Final Video</h3>
+        <h2 id="export-heading" className="text-xl font-black tracking-tight">Export</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Ready to post? Choose the export frame, then render your MP4.
         </p>
@@ -414,6 +419,8 @@ export function ExportStep({
         <div className="space-y-2">
           <Label>Creator Template</Label>
           <Select
+            id="creator-template"
+            label="Creator Template"
             value={templateId}
             onChange={(val) => setTemplateId(val as RenderTemplateId)}
             options={templates}
@@ -423,6 +430,8 @@ export function ExportStep({
         <div className="space-y-2">
           <Label>Target Platform</Label>
           <Select
+            id="target-platform"
+            label="Target Platform"
             value={platform}
             onChange={(val) => setPlatform(val as PlatformPreset)}
             options={platforms}
@@ -432,6 +441,8 @@ export function ExportStep({
         <div className="space-y-2">
           <Label>Video Quality</Label>
           <Select
+            id="video-quality"
+            label="Video Quality"
             value={resolution}
             onChange={(val) => setResolution(val as ExportResolution)}
             options={resolutions}
@@ -441,6 +452,8 @@ export function ExportStep({
         <div className="space-y-2">
           <Label>Output Frame</Label>
           <Select
+            id="output-frame"
+            label="Output Frame"
             value={outputAspect}
             onChange={(val) => setOutputAspect(val as OutputAspect)}
             options={outputAspects}
@@ -453,6 +466,8 @@ export function ExportStep({
         <div className="space-y-2">
           <Label>Crop Mode</Label>
           <Select
+            id="crop-mode"
+            label="Crop Mode"
             value={fitMode}
             onChange={(val) => setFitMode(val as ExportFitMode)}
             options={fitModes}
@@ -473,7 +488,8 @@ export function ExportStep({
             <Button
               type="button"
               variant="secondary"
-              className="h-9 w-full text-xs"
+              aria-label="Reset crop to centered original size"
+              className="min-h-11 w-full text-xs"
               onClick={() => {
                 setCropX(50);
                 setCropY(50);
@@ -489,6 +505,8 @@ export function ExportStep({
       <Button 
         onClick={startRender} 
         disabled={loading || isRendering || !captionTrackId}
+        aria-busy={loading || Boolean(isRendering)}
+        aria-describedby={message ? "export-message" : !captionTrackId ? "export-missing-captions" : undefined}
         className="h-14 w-full bg-primary text-primary-foreground"
       >
         {loading || isRendering ? (
@@ -497,12 +515,12 @@ export function ExportStep({
           <Video className="mr-2 size-5" />
         )}
         <span className="text-base font-bold">
-          {isRendering ? `Rendering (${latestJob.progress_pct}%)` : "Start Render"}
+          {loading ? "Starting render, please wait" : isRendering ? `Rendering (${latestJob.progress_pct}%)` : "Start Render"}
         </span>
       </Button>
 
       {latestJob ? (
-        <div className="space-y-3 border border-border bg-muted/40 p-4">
+        <div className="space-y-3 border border-border bg-muted/40 p-4" aria-live="polite">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
@@ -512,16 +530,24 @@ export function ExportStep({
             </div>
             <span className="text-sm font-black">{latestJob.progress_pct ?? 0}%</span>
           </div>
-          <div className="h-2 overflow-hidden border border-border bg-background">
+          <div
+            className="h-3 overflow-hidden border border-border bg-background"
+            role="progressbar"
+            aria-label={`Render progress: ${statusLabel(latestJob.status)}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.max(0, Math.min(100, latestJob.progress_pct ?? 0))}
+            aria-valuetext={`${latestJob.progress_pct ?? 0}% ${statusLabel(latestJob.status)}`}
+          >
             <div
               className="h-full bg-primary transition-all"
               style={{ width: `${Math.max(0, Math.min(100, latestJob.progress_pct ?? 0))}%` }}
             />
           </div>
           {latestJob.error_message ? (
-            <div className="flex gap-2 border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700">
+            <div role="alert" className="flex gap-2 border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700">
               <AlertTriangle className="size-4 shrink-0" />
-              <span>{latestJob.error_message}</span>
+              <span>{latestJob.error_message} Try again, or reduce caption/B-roll complexity before retrying.</span>
             </div>
           ) : null}
           <div className="flex gap-2">
@@ -529,7 +555,8 @@ export function ExportStep({
               <Button
                 type="button"
                 variant="secondary"
-                className="h-9 gap-2 text-xs"
+                aria-label="Cancel render"
+                className="min-h-11 gap-2 text-xs"
                 onClick={() => cancelRender(latestJob.id)}
                 disabled={loading}
               >
@@ -541,7 +568,8 @@ export function ExportStep({
               <Button
                 type="button"
                 variant="secondary"
-                className="h-9 gap-2 text-xs"
+                aria-label="Retry failed render"
+                className="min-h-11 gap-2 text-xs"
                 onClick={() => retryRender(retryableJob.id)}
                 disabled={loading}
               >
@@ -568,7 +596,8 @@ export function ExportStep({
               </div>
               <Button
                 variant="secondary"
-                className="h-10 gap-2 px-4 text-xs font-bold"
+                aria-label="Download latest export"
+                className="min-h-11 gap-2 px-4 text-xs font-bold"
                 onClick={() => downloadExport(latestExport.id)}
                 disabled={loading}
               >
@@ -579,12 +608,12 @@ export function ExportStep({
         </div>
       )}
       {!captionTrackId ? (
-        <p className="border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700">
-          Generate captions before export.
+        <p id="export-missing-captions" role="alert" className="border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700">
+          Generate captions before export. Open the Text tab and generate or save captions, then start render again.
         </p>
       ) : null}
       {message ? (
-        <p className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+        <p id="export-message" role={message.toLowerCase().includes("failed") || message.toLowerCase().includes("could not") ? "alert" : "status"} aria-live="polite" className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
           {message}
         </p>
       ) : null}

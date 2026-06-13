@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Play, Pause, SkipBack, SkipForward } from "lucide-react";
+import { Maximize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMs } from "@/lib/timeline";
 import type { CaptionSegment, CaptionStyle, TranscriptWord } from "@motionly/shared";
@@ -32,6 +32,8 @@ export function VideoPreview({
   isProcessing,
 }: VideoPreviewProps) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(80);
   const [intrinsicSize, setIntrinsicSize] = useState<{
     sourceUrl: string;
     width: number;
@@ -73,14 +75,40 @@ export function VideoPreview({
     video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + deltaS));
   }, [videoRef]);
 
+  const toggleMute = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const nextMuted = !video.muted;
+    video.muted = nextMuted;
+    setMuted(nextMuted);
+  }, [videoRef]);
+
+  const updateVolume = useCallback((nextVolume: number) => {
+    const video = videoRef.current;
+    const clamped = Math.max(0, Math.min(100, nextVolume));
+    setVolume(clamped);
+    if (video) {
+      video.volume = clamped / 100;
+      video.muted = clamped === 0;
+      setMuted(video.muted);
+    }
+  }, [videoRef]);
+
+  const requestFullscreen = useCallback(() => {
+    const video = videoRef.current;
+    if (!video?.parentElement?.requestFullscreen) return;
+    void video.parentElement.requestFullscreen();
+  }, [videoRef]);
+
   return (
-    <div className="pixel-grid-fine flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-foreground/[0.02] p-3 sm:p-4">
+    <div className="pixel-grid-fine flex h-full min-h-0 flex-col items-center justify-center gap-2 bg-foreground/[0.02] p-1.5 sm:gap-3 sm:p-4">
+      <h2 id="preview-heading" className="sr-only">Preview</h2>
       {/* ── Video + overlays ─────────────────────────────────────────────── */}
       <div
         className="relative flex min-h-0 w-full flex-1 items-center justify-center"
       >
         <div
-          className="pixel-corners relative h-full max-h-[min(100%,calc(100vh-310px))] min-h-[180px] w-auto max-w-full overflow-hidden border-2 border-foreground/20 bg-black shadow-[8px_8px_0_hsl(var(--foreground)/0.14)] sm:min-h-[240px] lg:min-h-0 lg:max-h-full"
+          className="pixel-corners relative h-full max-h-[min(100%,calc(100vh-180px))] min-h-[430px] w-auto max-w-full overflow-hidden border-2 border-foreground/20 bg-black shadow-[6px_6px_0_hsl(var(--foreground)/0.12)] sm:min-h-[520px] lg:min-h-0 lg:max-h-full"
           style={{ aspectRatio: sourceAspectRatio }}
         >
           {/* Video element */}
@@ -102,6 +130,7 @@ export function VideoPreview({
               }}
               playsInline
               preload="metadata"
+              aria-label="Source video preview"
             />
           ) : (
             /* Empty state when no source yet */
@@ -132,8 +161,8 @@ export function VideoPreview({
       </div>
 
       {/* ── Playback controls ────────────────────────────────────────────── */}
-      <div className="flex w-full max-w-[240px] items-center justify-between gap-2">
-        <ControlButton onClick={() => skip(-5)} title="Back 5 seconds">
+      <div className="flex w-full max-w-md flex-wrap items-center justify-center gap-2" aria-label="Video controls">
+        <ControlButton onClick={() => skip(-5)} title="Back 5 seconds" ariaLabel="Seek back 5 seconds">
           <span className="flex items-center gap-1">
             <SkipBack className="size-3.5" />
             <span className="text-[10px] font-bold">5s</span>
@@ -142,24 +171,46 @@ export function VideoPreview({
 
         <button
           onClick={togglePlay}
-          className="pixel-button flex size-10 items-center justify-center bg-primary text-primary-foreground"
+          aria-label={isPlaying ? "Pause preview video" : "Play preview video"}
+          className="pixel-button flex size-11 items-center justify-center bg-primary text-primary-foreground"
         >
           {isPlaying
             ? <Pause  className="size-4" />
             : <Play   className="size-4 translate-x-px" />}
         </button>
 
-        <ControlButton onClick={() => skip(5)} title="Forward 5 seconds">
+        <ControlButton onClick={() => skip(5)} title="Forward 5 seconds" ariaLabel="Seek forward 5 seconds">
           <span className="flex items-center gap-1">
             <span className="text-[10px] font-bold">5s</span>
             <SkipForward className="size-3.5" />
           </span>
         </ControlButton>
+        <ControlButton onClick={toggleMute} title={muted ? "Unmute" : "Mute"} ariaLabel={muted ? "Unmute preview video" : "Mute preview video"}>
+          {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+        </ControlButton>
+        <label className="flex min-h-11 items-center gap-2 text-sm font-bold text-muted-foreground">
+          <span>Volume</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={volume}
+            aria-label="Preview volume"
+            aria-valuetext={`${volume} percent`}
+            onChange={(event) => updateVolume(Number(event.target.value))}
+            className="w-24 accent-primary"
+          />
+        </label>
+        <ControlButton onClick={requestFullscreen} title="Fullscreen" ariaLabel="Open preview fullscreen">
+          <Maximize2 className="size-4" />
+        </ControlButton>
       </div>
 
       {/* Timecode */}
-      <p className="border border-border bg-surface px-2 py-1 font-mono text-[10px] tabular-nums text-muted-foreground/70 shadow-soft">
-        {formatMs(playheadMs)} / {formatMs(totalDurationMs)}
+      <p className="border border-border bg-surface px-2 py-1 font-mono text-xs tabular-nums text-muted-foreground shadow-soft" aria-live="polite">
+        <span className="sr-only">Current time </span>{formatMs(playheadMs)}
+        <span aria-hidden="true"> / </span>
+        <span className="sr-only">Duration </span>{formatMs(totalDurationMs)}
       </p>
     </div>
   );
@@ -199,12 +250,12 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
       ? "top-[12%]"
       : style.placement === "middle"
         ? "top-[50%] -translate-y-1/2"
-        : "bottom-[12%]";
+        : "bottom-[16%]";
   const positionedStyle: React.CSSProperties =
     style.position_x_pct != null && style.position_y_pct != null
       ? {
-          left: `${style.position_x_pct}%`,
-          top: `${style.position_y_pct}%`,
+          left: `${Math.max(12, Math.min(88, style.position_x_pct))}%`,
+          top: `${Math.max(12, Math.min(82, style.position_y_pct))}%`,
           transform: "translate(-50%, -50%)",
         }
       : {};
@@ -222,8 +273,8 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
       style.stroke_width_px && style.stroke_color
         ? `${style.stroke_width_px}px ${style.stroke_color}`
         : undefined,
-    textShadow: style.shadow ?? undefined,
-    fontSize:   `clamp(10px, ${(style.font_size_px ?? 24) * 0.042}vw, ${style.font_size_px ?? 24}px)`,
+    textShadow: style.shadow ?? "0 3px 12px rgba(0,0,0,0.85)",
+    fontSize:   `${Math.max(18, Math.min(style.font_size_px ?? 32, 52))}px`,
     lineHeight:  1.25,
     maxWidth:    "80%",
     textAlign:   "center",
@@ -237,7 +288,7 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
       )}
       style={positionedStyle}
     >
-      <p style={inlineStyle}>
+      <p className="rounded bg-black/20 px-2 py-1" style={inlineStyle}>
         {active.words?.length
           ? active.words.map((word: TranscriptWord) => (
               <WordSpan
@@ -280,17 +331,20 @@ function WordSpan({
 function ControlButton({
   onClick,
   title,
+  ariaLabel,
   children,
 }: {
   onClick: () => void;
   title:   string;
+  ariaLabel: string;
   children: React.ReactNode;
 }) {
   return (
     <button
       onClick={onClick}
       title={title}
-      className="flex size-8 items-center justify-center border border-border bg-surface text-muted-foreground transition hover:border-primary/40 hover:bg-muted hover:text-foreground"
+      aria-label={ariaLabel}
+      className="flex size-11 items-center justify-center border border-border bg-surface text-muted-foreground transition hover:border-primary/40 hover:bg-muted hover:text-foreground"
     >
       {children}
     </button>

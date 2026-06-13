@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMs, rulerTicks } from "@/lib/timeline";
-import { buildApiHeaders } from "@/lib/client-api";
+import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { useTimeline } from "./useTimeline";
 import { usePlaybackSync } from "./usePlaybackSync";
@@ -46,9 +46,9 @@ interface TimelinePanelProps {
   onBrollSlotUpdated: (slot: BrollSlotSummary) => void;
 }
 
-const TRACK_HEIGHT = 32;
-const RULER_HEIGHT = 24;
-const LABEL_WIDTH = 52;
+const TRACK_HEIGHT = 44;
+const RULER_HEIGHT = 30;
+const LABEL_WIDTH = 64;
 const MIN_CLIP_MS = 300;
 const NUDGE_MS = 500;
 
@@ -114,17 +114,14 @@ export function TimelinePanel({
   }
 
   async function request(path: string, body: object) {
-    const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    return editorApiRequest<Record<string, any>>(`${env.apiBaseUrl}${path}`, {
       method: "PATCH",
-      headers: {
-        ...(await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken })),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+      workspaceId,
+      userId,
+      accessToken: apiAccessToken,
+      friendlyError: "Timeline changes could not be saved. Please try again.",
+      body: body as Record<string, unknown>,
     });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error?.message ?? "Timeline update failed.");
-    return payload;
   }
 
   async function saveCuts(cuts: EditPlanCut[]) {
@@ -255,6 +252,7 @@ export function TimelinePanel({
 
   function deleteSelectedClip() {
     if (!selectedClip) return;
+    if (!window.confirm(`Delete ${selectedClip.label}?`)) return;
     runTimelineAction(async () => {
       if (selectedClip.sourceRef.kind === "music") throw new Error("Cannot delete music here. Edit in Audio.");
       if (selectedClip.sourceRef.kind === "cut") {
@@ -317,6 +315,27 @@ export function TimelinePanel({
     });
   }
 
+  function updateSelectedTiming(startMs: number, endMs: number) {
+    if (!selectedClip) return;
+    runTimelineAction(async () => {
+      if (endMs <= startMs) throw new Error("End time must be after start time.");
+      if (selectedClip.sourceRef.kind === "cut") {
+        const cuts = cutsForClipUpdate(selectedClip, startMs, endMs);
+        if (!cuts) throw new Error("Select a generated video clip.");
+        return saveCuts(cuts);
+      }
+      if (selectedClip.sourceRef.kind === "caption_segment") {
+        const segments = captionSegmentsForClipUpdate(selectedClip, startMs, endMs);
+        if (!segments) throw new Error("Select a caption segment.");
+        return saveCaptionSegments(segments);
+      }
+      if (selectedClip.sourceRef.kind === "broll_slot" && selectedClip.sourceRef.id) {
+        return saveBrollRegion(selectedClip.sourceRef.id, startMs, endMs);
+      }
+      throw new Error("Timing for this clip is edited in Audio.");
+    });
+  }
+
   const ticks = rulerTicks(totalDurationMs);
   const selectedCopy = selectedClip
     ? `${selectedClip.label} ${formatMs(selectedClip.startMs)}-${formatMs(selectedClip.endMs)}`
@@ -324,35 +343,36 @@ export function TimelinePanel({
 
   return (
     <div className="flex h-full min-h-0 select-none flex-col bg-[hsl(var(--surface))]">
-      <div className="pixel-grid-fine flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
-        <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
+      <h2 id="timeline-heading" className="sr-only">Timeline</h2>
+      <div className="pixel-grid-fine flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-2 sm:px-3">
+        <span className="font-mono text-xs text-muted-foreground tabular-nums" aria-live="polite">
           {formatMs(playheadMs)} <span className="opacity-40">/</span> {formatMs(totalDurationMs)}
         </span>
         <span className="hidden truncate text-[10px] font-bold text-muted-foreground sm:block">
           {saving ? "Saving timeline..." : message ?? selectedCopy}
         </span>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1 overflow-x-auto">
           {saving ? <Loader2 className="mr-1 size-3 animate-spin text-primary" /> : null}
-          <TimelineButton onClick={splitSelectedClip} title={selectedClip ? "Split selected clip at playhead" : "Select a clip"} disabled={!selectedClip || saving}>
+          <TimelineButton onClick={splitSelectedClip} title={selectedClip ? "Split selected clip at playhead" : "Select a clip"} ariaLabel="Split selected clip at playhead" disabled={!selectedClip || saving}>
             <Scissors className="size-3" />
           </TimelineButton>
-          <TimelineButton onClick={deleteSelectedClip} title={selectedClip ? "Delete selected clip" : "Select a clip"} disabled={!selectedClip || saving}>
+          <TimelineButton onClick={deleteSelectedClip} title={selectedClip ? "Delete selected clip" : "Select a clip"} ariaLabel="Delete selected clip" disabled={!selectedClip || saving}>
             <Trash2 className="size-3" />
           </TimelineButton>
-          <TimelineButton onClick={() => moveSelectedClip(-1)} title={selectedClip ? "Move left" : "Select a clip"} disabled={!selectedClip || saving}>
+          <TimelineButton onClick={() => moveSelectedClip(-1)} title={selectedClip ? "Move left" : "Select a clip"} ariaLabel="Move selected clip earlier" disabled={!selectedClip || saving}>
             <ArrowLeft className="size-3" />
           </TimelineButton>
-          <TimelineButton onClick={() => moveSelectedClip(1)} title={selectedClip ? "Move right" : "Select a clip"} disabled={!selectedClip || saving}>
+          <TimelineButton onClick={() => moveSelectedClip(1)} title={selectedClip ? "Move right" : "Select a clip"} ariaLabel="Move selected clip later" disabled={!selectedClip || saving}>
             <ArrowRight className="size-3" />
           </TimelineButton>
           <span className="mx-1 h-4 w-px bg-border" />
-          <TimelineButton onClick={zoomOut} title="Zoom out">
+          <TimelineButton onClick={zoomOut} title="Zoom out" ariaLabel="Zoom timeline out">
             <Minus className="size-3" />
           </TimelineButton>
-          <TimelineButton onClick={fitToContent} title="Fit to content">
+          <TimelineButton onClick={fitToContent} title="Fit to content" ariaLabel="Fit timeline to content">
             <Maximize2 className="size-3" />
           </TimelineButton>
-          <TimelineButton onClick={zoomIn} title="Zoom in">
+          <TimelineButton onClick={zoomIn} title="Zoom in" ariaLabel="Zoom timeline in">
             <ZoomIn className="size-3" />
           </TimelineButton>
           {zoomLevel !== 1 && (
@@ -362,6 +382,29 @@ export function TimelinePanel({
           )}
         </div>
       </div>
+      {selectedClip ? (
+        <form
+          className="flex flex-wrap items-end gap-2 border-b border-border bg-muted/35 p-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            updateSelectedTiming(Number(form.get("start_ms")), Number(form.get("end_ms")));
+          }}
+        >
+          <label className="text-sm font-bold text-muted-foreground">
+            Start ms
+            <input name="start_ms" type="number" defaultValue={selectedClip.startMs} className="pixel-input ml-2 min-h-11 w-28 px-2" />
+          </label>
+          <label className="text-sm font-bold text-muted-foreground">
+            End ms
+            <input name="end_ms" type="number" defaultValue={selectedClip.endMs} className="pixel-input ml-2 min-h-11 w-28 px-2" />
+          </label>
+          <span className="text-sm text-muted-foreground">
+            Duration {formatMs(selectedClip.endMs - selectedClip.startMs)}
+          </span>
+          <ButtonLike type="submit" disabled={saving}>Save Timing</ButtonLike>
+        </form>
+      ) : null}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div
@@ -371,7 +414,7 @@ export function TimelinePanel({
           <div style={{ height: RULER_HEIGHT }} />
           {tracks.map((track) => (
             <div key={track.kind} className="flex items-center justify-end pr-2" style={{ height: TRACK_HEIGHT }}>
-              <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/70">
                 {track.label}
               </span>
             </div>
@@ -410,6 +453,8 @@ export function TimelinePanel({
             {tracks.map((track, trackIdx) => (
               <div
                 key={track.kind}
+                role="list"
+                aria-label={`${track.label} timeline track`}
                 className={cn(
                   "relative border-b border-border/60",
                   trackIdx % 2 === 0 ? "bg-[hsl(var(--background))]" : "bg-[hsl(var(--surface))]",
@@ -498,12 +543,28 @@ function ClipBlock({
     };
     window.addEventListener("pointerup", handlePointerUp);
   }
+  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect(clip.id);
+    } else if (event.key === "ArrowLeft" && !moveDisabled) {
+      event.preventDefault();
+      onMove(clip, clip.startMs - 500);
+    } else if (event.key === "ArrowRight" && !moveDisabled) {
+      event.preventDefault();
+      onMove(clip, clip.startMs + 500);
+    }
+  }
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={`${clip.trackKind} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}, duration ${formatMs(widthMs)}.`}
       className={cn(
         "group absolute bottom-1 top-1 cursor-pointer overflow-hidden border border-white/20",
-        "flex items-center px-1.5 text-[9px] font-bold leading-none text-white/90",
+        "flex items-center px-2 text-[10px] font-bold leading-none text-white/90",
         "shadow-[2px_2px_0_rgba(0,0,0,0.2)] ring-inset transition-all duration-100",
         clip.colorClass,
         clip.disabled && "opacity-30",
@@ -516,6 +577,7 @@ function ClipBlock({
         width: pct(widthMs),
       }}
       onPointerDown={startMove}
+      onKeyDown={onKeyDown}
       onClick={(event) => {
         event.stopPropagation();
         onSelect(clip.id);
@@ -570,11 +632,13 @@ function Playhead({ pct, totalHeight }: { pct: string; totalHeight: number }) {
 function TimelineButton({
   onClick,
   title,
+  ariaLabel,
   disabled,
   children,
 }: {
   onClick: () => void;
   title: string;
+  ariaLabel: string;
   disabled?: boolean;
   children: React.ReactNode;
 }) {
@@ -582,8 +646,29 @@ function TimelineButton({
     <button
       onClick={onClick}
       title={title}
+      aria-label={ariaLabel}
       disabled={disabled}
-      className="flex size-6 items-center justify-center border border-transparent text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-transparent disabled:hover:bg-transparent"
+      className="flex min-h-11 min-w-11 shrink-0 items-center justify-center border border-transparent text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-transparent disabled:hover:bg-transparent"
+    >
+      {children}
+    </button>
+  );
+}
+
+function ButtonLike({
+  type,
+  disabled,
+  children,
+}: {
+  type: "submit";
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type={type}
+      disabled={disabled}
+      className="pixel-button min-h-11 px-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60"
     >
       {children}
     </button>

@@ -1,9 +1,11 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
+
+from app.schemas.request_body import JsonStringBodyMixin
 
 BROLL_SCHEMA_VERSION = 1
 
@@ -79,9 +81,14 @@ class BrollSlotResponse(BaseModel):
         return self
 
 
-class BrollGenerateRequest(BaseModel):
+class BrollGenerateRequest(JsonStringBodyMixin, BaseModel):
     density: Literal["from_plan", "low", "medium", "high"] = "from_plan"
     force: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
 class BrollGenerateResponse(BaseModel):
@@ -96,9 +103,14 @@ class BrollListResponse(BaseModel):
     active_version: int | None = None
 
 
-class BrollSwapRequest(BaseModel):
+class BrollSwapRequest(JsonStringBodyMixin, BaseModel):
     asset_id: UUID | None = None
     disabled: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
 
 class BrollSwapResponse(BaseModel):
@@ -106,10 +118,15 @@ class BrollSwapResponse(BaseModel):
     status: Literal["updated"] = "updated"
 
 
-class BrollRegionUpdateRequest(BaseModel):
+class BrollRegionUpdateRequest(JsonStringBodyMixin, BaseModel):
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
     disabled: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
 
     @model_validator(mode="after")
     def validate_range(self) -> "BrollRegionUpdateRequest":

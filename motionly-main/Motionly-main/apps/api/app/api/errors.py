@@ -48,18 +48,19 @@ async def request_validation_error_handler(
             "errors": exc.errors(),
         },
     )
-    first_error = exc.errors()[0] if exc.errors() else {}
-    location = ".".join(str(part) for part in first_error.get("loc", []) if part != "body")
-    message = str(first_error.get("msg") or "Request validation failed.")
-    if location:
-        message = f"{location}: {message}"
     return JSONResponse(
         status_code=422,
         content={
             "error": {
                 "code": "request_validation_failed",
-                "message": message,
+                "message": "We could not process that request. Please try again.",
                 "request_id": request.state.request_id,
+                "details": {
+                    "fields": [
+                        ".".join(str(part) for part in error.get("loc", []) if part != "body")
+                        for error in exc.errors()
+                    ],
+                },
             }
         },
     )
