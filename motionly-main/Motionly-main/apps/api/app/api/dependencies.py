@@ -15,6 +15,7 @@ from app.repositories.projects import InMemoryProjectRepository
 from app.repositories.regeneration import InMemoryRegenerationRepository
 from app.repositories.renders import InMemoryRenderRepository
 from app.repositories.uploads import InMemoryUploadRepository
+from app.repositories.visual import InMemoryVisualRepository
 from app.services.auth import (
     require_workspace_membership,
     verify_supabase_jwt,
@@ -32,10 +33,12 @@ from app.services.queue import (
     RegenerationQueue,
     RenderQueue,
     TranscriptionQueue,
+    VisualQueue,
 )
 from app.services.stock_video import StockVideoProvider
 from app.services.storage import StorageSigner
 from app.services.transcription_provider import TranscriptionProvider
+from app.services.visual_intelligence import VisualIntelligenceProvider
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,10 @@ def get_transcription_queue(request: Request) -> TranscriptionQueue:
     return request.app.state.transcription_queue
 
 
+def get_visual_queue(request: Request) -> VisualQueue:
+    return request.app.state.visual_queue
+
+
 def get_plan_queue(request: Request) -> PlanQueue:
     return request.app.state.plan_queue
 
@@ -178,6 +185,10 @@ def get_billing_repository(request: Request) -> InMemoryBillingRepository:
     return request.app.state.billing_repository
 
 
+def get_visual_repository(request: Request) -> InMemoryVisualRepository:
+    return request.app.state.visual_repository
+
+
 def get_stripe_billing_client(request: Request) -> StripeBillingClient:
     return request.app.state.stripe_billing_client
 
@@ -200,6 +211,10 @@ def get_regeneration_queue(request: Request) -> RegenerationQueue:
 
 def get_transcription_provider(request: Request) -> TranscriptionProvider:
     return request.app.state.transcription_provider
+
+
+def get_visual_intelligence_provider(request: Request) -> VisualIntelligenceProvider:
+    return request.app.state.visual_intelligence_provider
 
 
 def get_edit_planner_provider(request: Request) -> EditPlannerProvider:

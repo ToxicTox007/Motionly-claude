@@ -25,6 +25,7 @@ from app.schemas.plans import (
     PlanCutsUpdateResponse,
     PlanListResponse,
 )
+from app.schemas.visual import VideoManifest
 from app.services.edit_planner import (
     PLANNER_SCHEMA_HASH,
     EditPlannerProvider,
@@ -33,6 +34,7 @@ from app.services.edit_planner import (
     summarize_plan,
 )
 from app.services.queue import PlanQueue
+from app.services.style_classifier import classify_edit_style
 
 router = APIRouter(prefix="/projects/{project_id}/plans", tags=["AI plans"])
 
@@ -67,7 +69,28 @@ async def create_plan(
 
     upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
     video_duration_ms = upload.metadata.duration_ms or transcript.duration_ms or 0
-    cache_key = build_plan_cache_key(transcript=transcript, payload=payload)
+    visual_manifest = _latest_visual_manifest(
+        repository=repository,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        uploaded_video_id=upload.id,
+    )
+    style_classification = classify_edit_style(
+        transcript=transcript,
+        visual_manifest=visual_manifest,
+        requested_style=payload.style,
+        prompt=payload.prompt,
+        feedback=payload.feedback,
+    )
+    effective_payload = payload.model_copy(
+        update={"style": style_classification.effective_style},
+    )
+    cache_key = build_plan_cache_key(
+        transcript=transcript,
+        payload=effective_payload,
+        visual_manifest=visual_manifest,
+        style_classification=style_classification,
+    )
     job = plan_queue.enqueue_plan(
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -84,8 +107,10 @@ async def create_plan(
 
     result = planner_provider.create_plan(
         transcript=transcript,
-        payload=payload,
+        payload=effective_payload,
         video_duration_ms=video_duration_ms,
+        visual_manifest=visual_manifest,
+        style_classification=style_classification,
     )
     plan = normalize_plan(
         plan=result.plan,
@@ -98,7 +123,7 @@ async def create_plan(
         transcript_id=transcript.id,
         schema_version=EDIT_PLAN_SCHEMA_VERSION,
         status=EditPlanStatus.READY,
-        style=payload.style,
+        style=style_classification.effective_style,
         target_duration_s=payload.target_duration_s,
         broll_density=payload.broll_density,
         prompt=payload.prompt.strip(),
@@ -110,7 +135,7 @@ async def create_plan(
         latency_ms=result.latency_ms,
         cost_estimate_usd=result.cost_estimate_usd,
         validation_errors=result.validation_errors,
-        summary=summarize_plan(plan),
+        summary=summarize_plan(plan, style_classification=style_classification),
         plan=plan,
     )
     return PlanCreateResponse(plan=record.to_response(), job_id=job.id)
@@ -173,7 +198,10 @@ async def update_plan_cuts(
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
         plan=plan,
-        summary=summarize_plan(plan),
+        summary=summarize_plan(
+            plan,
+            style_classification=record.summary.style_classification,
+        ),
         target_duration_s=target_duration_s,
     )
     return PlanCutsUpdateResponse(plan=updated.to_response())
@@ -200,7 +228,28 @@ async def update_plan_caption_highlights(
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
         plan=plan,
-        summary=summarize_plan(plan),
+        summary=summarize_plan(
+            plan,
+            style_classification=record.summary.style_classification,
+        ),
         target_duration_s=record.target_duration_s,
     )
     return PlanCaptionHighlightsUpdateResponse(plan=updated.to_response())
+
+
+def _latest_visual_manifest(
+    *,
+    repository: InMemoryPlanRepository,
+    project_id: UUID,
+    workspace_id: UUID,
+    uploaded_video_id: UUID,
+) -> VideoManifest | None:
+    visual_repository = getattr(repository, "visual_repository", None)
+    if visual_repository is None:
+        return None
+    record = visual_repository.latest_ready_for_upload(
+        uploaded_video_id=uploaded_video_id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    return record.manifest if record and record.manifest else None

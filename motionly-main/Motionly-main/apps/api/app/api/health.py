@@ -166,7 +166,9 @@ async def deep(request: Request) -> DeepHealthResponse:
             ),
         ),
         "renderer": ComponentHealth(
-            status="ok" if settings.render_execute_ffmpeg or settings.remotion_enabled else "degraded",
+            status=(
+                "ok" if settings.render_execute_ffmpeg or settings.remotion_enabled else "degraded"
+            ),
             message=(
                 "Render execution is enabled."
                 if settings.render_execute_ffmpeg or settings.remotion_enabled
@@ -175,7 +177,9 @@ async def deep(request: Request) -> DeepHealthResponse:
         ),
         "redis": _redis_component_health(request),
         "supabase": ComponentHealth(
-            status="ok" if settings.supabase_url and settings.supabase_service_role_key else "degraded",
+            status=(
+                "ok" if settings.supabase_url and settings.supabase_service_role_key else "degraded"
+            ),
             message=(
                 "Supabase URL and service role are configured."
                 if settings.supabase_url and settings.supabase_service_role_key

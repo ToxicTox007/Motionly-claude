@@ -12,7 +12,7 @@ from app.schemas.plans import EditPlanStyle
 
 PRESET_DEFAULTS: dict[VisualPresetKey, dict[str, object]] = {
     VisualPresetKey.VOGUE_LUXURY: {
-        "style": EditPlanStyle.FASHION,
+        "style": EditPlanStyle.DRAMATIC,
         "lut": "luts/vogue_luxury.cube",
         "lut_intensity": 0.82,
         "texture": EffectsTextureSettings(grain=0.22, vignette=0.2, light_leak=0.08),
@@ -43,7 +43,7 @@ PRESET_DEFAULTS: dict[VisualPresetKey, dict[str, object]] = {
         ),
     },
     VisualPresetKey.DUBAI_INFLUENCER: {
-        "style": EditPlanStyle.TRAVEL,
+        "style": EditPlanStyle.FAST_PACED,
         "lut": "luts/dubai_influencer.cube",
         "lut_intensity": 0.8,
         "texture": EffectsTextureSettings(
@@ -81,7 +81,7 @@ PRESET_DEFAULTS: dict[VisualPresetKey, dict[str, object]] = {
         ),
     },
     VisualPresetKey.CLEAN_FOUNDER: {
-        "style": EditPlanStyle.FOUNDER,
+        "style": EditPlanStyle.CLEAN_MINIMAL,
         "lut": "luts/clean_founder.cube",
         "lut_intensity": 0.62,
         "texture": EffectsTextureSettings(grain=0.06, vignette=0.06, light_leak=0),
@@ -96,7 +96,7 @@ PRESET_DEFAULTS: dict[VisualPresetKey, dict[str, object]] = {
         ),
     },
     VisualPresetKey.CINEMATIC_HOTEL: {
-        "style": EditPlanStyle.TRAVEL,
+        "style": EditPlanStyle.CINEMATIC,
         "lut": "luts/cinematic_hotel.cube",
         "lut_intensity": 0.84,
         "texture": EffectsTextureSettings(

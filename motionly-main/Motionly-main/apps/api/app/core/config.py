@@ -52,6 +52,32 @@ class Settings(BaseSettings):
         default=False,
         alias="TRANSCRIPTION_DEBUG_RETAIN_AUDIO",
     )
+    audio_ml_provider: str = Field(default="local_ml", alias="AUDIO_ML_PROVIDER")
+    pyannote_model: str = Field(
+        default="pyannote/speaker-diarization-3.1",
+        alias="PYANNOTE_MODEL",
+    )
+    pyannote_auth_token: str | None = Field(default=None, alias="PYANNOTE_AUTH_TOKEN")
+    wav2vec_emotion_model: str = Field(
+        default="superb/wav2vec2-base-superb-er",
+        alias="WAV2VEC_EMOTION_MODEL",
+    )
+    yamnet_model_url: str = Field(
+        default="https://tfhub.dev/google/yamnet/1",
+        alias="YAMNET_MODEL_URL",
+    )
+    visual_intelligence_provider: str = Field(default="local_ml", alias="VISUAL_PROVIDER")
+    visual_clip_model: str = Field(
+        default="openai/clip-vit-base-patch32",
+        alias="VISUAL_CLIP_MODEL",
+    )
+    visual_blip_model: str = Field(
+        default="Salesforce/blip2-opt-2.7b",
+        alias="VISUAL_BLIP_MODEL",
+    )
+    visual_yolo_model: str = Field(default="yolov8n.pt", alias="VISUAL_YOLO_MODEL")
+    visual_sample_fps: float = Field(default=2.0, alias="VISUAL_SAMPLE_FPS")
+    visual_scene_threshold: float = Field(default=0.42, alias="VISUAL_SCENE_THRESHOLD")
     allow_fixture_providers: bool = Field(default=False, alias="ALLOW_FIXTURE_PROVIDERS")
     music_provider: str = Field(default="licensed_catalog", alias="MUSIC_PROVIDER")
     licensed_music_catalog_table: str = Field(

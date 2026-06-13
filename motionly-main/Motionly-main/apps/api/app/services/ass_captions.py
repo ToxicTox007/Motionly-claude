@@ -29,7 +29,13 @@ def caption_track_to_ass(*, segments: list[CaptionSegment], style: CaptionStyle)
         "Format: Layer, Start, End, Style, Text",
     ]
     for segment in segments:
-        text = _format_text(segment.text, style, primary=primary, accent=accent, highlights=segment.highlight_words)
+        text = _format_text(
+            segment.text,
+            style,
+            primary=primary,
+            accent=accent,
+            highlights=segment.highlight_words,
+        )
         lines.append(
             f"Dialogue: 0,{_ass_time(segment.start_ms)},{_ass_time(segment.end_ms)},Motionly,{text}"
         )

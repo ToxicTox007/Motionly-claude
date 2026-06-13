@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.request_body import JsonStringBodyMixin
 
-BROLL_SCHEMA_VERSION = 1
+BROLL_SCHEMA_VERSION = 2
 
 
 class BrollSlotStatus(StrEnum):
@@ -69,6 +69,7 @@ class BrollSlotResponse(BaseModel):
     score: float = Field(ge=0, le=1)
     error_code: str | None = None
     error_message: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
     selected_asset: StockVideoAssetResponse | None = None
     candidates: list[StockVideoAssetResponse] = Field(default_factory=list)
     created_at: datetime

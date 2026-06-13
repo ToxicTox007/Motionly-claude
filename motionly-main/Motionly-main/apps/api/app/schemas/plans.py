@@ -11,7 +11,17 @@ EDIT_PLAN_SCHEMA_VERSION = 1
 
 
 class EditPlanStyle(StrEnum):
+    MOTIVATIONAL = "motivational"
+    EMOTIONAL = "emotional"
+    CINEMATIC = "cinematic"
+    EDUCATIONAL = "educational"
     LUXURY = "luxury"
+    STORYTELLING = "storytelling"
+    DRAMATIC = "dramatic"
+    FAST_PACED = "fast_paced"
+    CLEAN_MINIMAL = "clean_minimal"
+    CREATOR_INFLUENCER = "creator_influencer"
+    # Legacy request styles remain accepted for older clients and records.
     FOUNDER = "founder"
     TRAVEL = "travel"
     FASHION = "fashion"
@@ -53,6 +63,13 @@ class BrollRequest(BaseModel):
     end_ms: int = Field(ge=0)
     keywords: list[str] = Field(default_factory=list, min_length=1, max_length=5)
     priority: float = Field(ge=0, le=1)
+    semantic_query: str | None = Field(default=None, max_length=180)
+    semantic_embedding: list[float] = Field(default_factory=list, max_length=1024)
+    source_scene_index: int | None = Field(default=None, ge=0)
+    source_scene_type: str | None = Field(default=None, max_length=40)
+    shot_type: str = Field(default="cutaway", max_length=40)
+    placement_rule: str = Field(default="semantic_anchor", max_length=80)
+    avoid_face_overlap: bool = True
 
     @model_validator(mode="after")
     def validate_range(self) -> "BrollRequest":
@@ -83,7 +100,7 @@ class EditPlan(BaseModel):
 
 class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
     prompt: str = Field(default="", max_length=1200)
-    style: EditPlanStyle = EditPlanStyle.LUXURY
+    style: EditPlanStyle | None = None
     target_duration_s: int = Field(default=35, ge=10, le=90)
     broll_density: BrollDensity = BrollDensity.MEDIUM
     feedback: str | None = Field(default=None, max_length=800)
@@ -93,6 +110,16 @@ class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
     @classmethod
     def coerce_json_string_body(cls, data: Any) -> Any:
         return cls._coerce_json_string_body(data)
+
+
+class StyleClassification(BaseModel):
+    predicted_style: EditPlanStyle
+    effective_style: EditPlanStyle
+    requested_style: EditPlanStyle | None = None
+    confidence: float = Field(ge=0, le=1)
+    scores: dict[str, float] = Field(default_factory=dict)
+    signals: list[str] = Field(default_factory=list, max_length=12)
+    source: Literal["audio_visual_classifier"] = "audio_visual_classifier"
 
 
 class PlanSummary(BaseModel):
@@ -106,6 +133,7 @@ class PlanSummary(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
     source_topic: str = "Transcript-driven edit"
     direction_notes: list[str] = Field(default_factory=list, max_length=6)
+    style_classification: StyleClassification | None = None
 
 
 class EditPlanResponse(BaseModel):

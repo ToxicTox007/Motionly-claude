@@ -107,7 +107,16 @@ TEMPLATES: dict[RenderTemplateId, TemplateMetadata] = {
 }
 
 STYLE_DEFAULTS: dict[EditPlanStyle, RenderTemplateId] = {
+    EditPlanStyle.MOTIVATIONAL: RenderTemplateId.TRAVEL_REEL_V1,
+    EditPlanStyle.EMOTIONAL: RenderTemplateId.LUXURY_REEL_V1,
+    EditPlanStyle.CINEMATIC: RenderTemplateId.TRAVEL_REEL_V1,
+    EditPlanStyle.EDUCATIONAL: RenderTemplateId.FOUNDER_REEL_V1,
     EditPlanStyle.LUXURY: RenderTemplateId.LUXURY_REEL_V1,
+    EditPlanStyle.STORYTELLING: RenderTemplateId.PODCAST_REEL_V1,
+    EditPlanStyle.DRAMATIC: RenderTemplateId.FASHION_REEL_V1,
+    EditPlanStyle.FAST_PACED: RenderTemplateId.TRAVEL_REEL_V1,
+    EditPlanStyle.CLEAN_MINIMAL: RenderTemplateId.FOUNDER_REEL_V1,
+    EditPlanStyle.CREATOR_INFLUENCER: RenderTemplateId.TALKING_HEAD_REEL_V1,
     EditPlanStyle.FOUNDER: RenderTemplateId.FOUNDER_REEL_V1,
     EditPlanStyle.TRAVEL: RenderTemplateId.TRAVEL_REEL_V1,
     EditPlanStyle.PODCAST: RenderTemplateId.PODCAST_REEL_V1,

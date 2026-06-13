@@ -4,6 +4,7 @@ import IORedis from "ioredis";
 export const queueNames = [
   "upload_preprocess",
   "transcription",
+  "visual_analysis",
   "planning",
   "stock_search",
   "audio",

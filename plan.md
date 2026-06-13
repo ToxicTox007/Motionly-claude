@@ -77,7 +77,7 @@ Every decision the AI makes must be explainable and reversible. The AI is an edi
 | AI Edit Planner | OpenRouter LLM via HTTP (JSON schema-constrained, with fixture fallback + repair layer) |
 | Renderer (standard) | FFmpeg-based render pipeline with ASS caption overlay, B-roll compositing, music/SFX mixing |
 | Renderer (premium) | Remotion (`apps/renderer`) — React-based composition with animated captions, visual grades, music sync |
-| B-roll | Pexels + Pixabay (pluggable provider interface); fixture provider for dev |
+| B-roll | CLIP-style semantic ranking over visual manifests + Pexels/Pixabay providers; fixture provider for dev |
 | Music | Licensed catalog table in Supabase + fixture provider; beat-map aware, SFX cue URLs |
 | Storage | Supabase Storage (signed URLs) or local filesystem — pluggable `StorageSigner` |
 | Database | Supabase / PostgreSQL + RLS; full migration history (`infra/migrations/`) |
@@ -104,24 +104,24 @@ The AI pipeline is sequential with parallelisable sub-tasks. Every stage writes 
 
 ### Stage 1 — Audio Intelligence
 
-**Current state:** Transcription shipped. Emotion/pacing not yet implemented.
+**Current state:** Shipped as an explicit audio-intelligence pass layered on top of transcription.
 
 | Task | Current Implementation | Next Version Target |
 |---|---|---|
-| Speech transcription | Groq-compatible Whisper HTTP endpoint; word-level timestamps, language hint (`auto / en / hi`) | Expand language hints; add confidence scores per word |
-| Keyword extraction | LLM edit planner reads transcript words and ranks by importance implicitly | Explicit keyword extraction pass before planner |
-| Tone / style classification | Integrated into edit planner LLM pass | Separate style pre-classifier to improve planner accuracy |
-| Speaker diarization | Not yet implemented | pyannote.audio integration (Phase 3) |
-| Emotion / pacing | Not yet implemented | wav2vec2 fine-tune (Phase 3) |
-| Sound classification | Not yet implemented | YAMNet background sound pass (Phase 4) |
+| Speech transcription | Groq-compatible Whisper HTTP endpoint; word-level timestamps, expanded language hints, confidence rollups | Add provider-specific word confidence when available |
+| Keyword extraction | Explicit deterministic keyword pass stored in `raw_payload.audio_intelligence` and fed into planner cache/prompting | Replace heuristic ranking with ML/LLM hybrid scorer |
+| Tone / style classification | Separate audio style/tone classifier summary before planner | Fine-tune style pre-classifier on user override history |
+| Speaker diarization | Heuristic speaker turn grouping plus real pyannote.audio worker provider when `PYANNOTE_AUTH_TOKEN` is configured | Tune diarization thresholds for podcast/interview layouts |
+| Emotion / pacing | Pacing, pause, energy, and emotion-window summaries plus real wav2vec2 worker provider | Use fine-tuned emotion model per creator niche |
+| Sound classification | Heuristic background sound summary plus real YAMNet worker provider on normalized 16 kHz audio | Map YAMNet class ids to human labels |
 
-**Output:** `transcripts` Supabase table — word-level records with `start_ms`, `end_ms`, `text`, `confidence`.
+**Output:** `transcripts` Supabase table plus `raw_payload.audio_intelligence` — word-level records, keywords, style/tone, speech metrics, diarization, emotion/pacing windows, and sound classification.
 
 ### Stage 2 — Visual Intelligence
 
-**Current state:** Not yet implemented. Planned for Phase 3.
+**Current state:** Shipped API/service/repository/worker path with a real local ML provider and fixture provider for deterministic tests/dev.
 
-The codebase has no vision pipeline yet. All style classification currently runs from the audio transcript alone via the LLM edit planner. When built:
+The codebase now has a visual pipeline that can run synchronously through the API or via the `visual_analysis` queue. It writes versioned manifests to `video_manifests` in Supabase/local memory. The real provider lazy-loads CLIP, BLIP-2, YOLO, MediaPipe, OpenCV, Pillow, NumPy, Torch, and Transformers:
 
 - Frame sampling at 2 fps or at scene-change boundaries
 - CLIP embeddings per frame for semantic search
@@ -131,15 +131,15 @@ The codebase has no vision pipeline yet. All style classification currently runs
 - Dominant color extraction per scene
 - Camera motion detection (pan, tilt, static, handheld)
 
-**Planned output:** `video_manifest.json` — scene segments with semantic embeddings, color data, visual importance scores. Will be merged with audio manifest to improve style classification and B-roll placement accuracy.
+**Output:** `video_manifest.json` shape stored in `video_manifests.manifest` — frame samples and scene segments with semantic embeddings, captions, objects, faces, color data, camera motion, scene types, and visual importance scores. The latest ready visual manifest is now merged into edit-planner cache keys and planner prompts; fixture planning also uses visual captions/object labels to seed B-roll requests.
 
 ### Stage 3 — Style Classification
 
-**Current state:** Partially shipped. LLM-driven, audio-only.
+**Current state:** Shipped as a deterministic audio+visual pre-classifier feeding the planner, with LLM planning still available downstream.
 
-The `EditPlanStyle` enum currently supports five styles: `luxury`, `founder`, `travel`, `fashion`, `podcast`. The LLM edit planner (`HttpEditPlannerProvider`) selects a style based on the transcript and user prompt. A `FixtureEditPlannerProvider` produces deterministic plans for local dev/testing.
+The `EditPlanStyle` enum now supports the full canonical Stage 3 style set: `motivational`, `emotional`, `cinematic`, `educational`, `luxury`, `storytelling`, `dramatic`, `fast_paced`, `clean_minimal`, `creator_influencer`. Legacy request values (`founder`, `travel`, `fashion`, `podcast`) remain accepted and are disambiguated into canonical styles. The classifier reads transcript words, `raw_payload.audio_intelligence`, prompt/feedback, and the latest ready visual manifest. Its output is stored in `summary.style_classification`, included in cache keys, and sent to the HTTP edit planner prompt.
 
-**Next version target:** Expand to the full style set below as visual intelligence matures.
+**Implemented style defaults:**
 
 | Style Class | Triggers | Defaults |
 |---|---|---|
@@ -154,25 +154,25 @@ The `EditPlanStyle` enum currently supports five styles: `luxury`, `founder`, `t
 | `clean minimal` | Calm speech, single subject, clear product focus | Static reframe, clean white/neutral grade, subtle text |
 | `creator / influencer` | Casual speech, direct-to-camera, personal tone | Hook cut, animated captions, social overlays, trending SFX |
 
-The `founder` style currently maps to `clean minimal / creator` behavior. `travel` maps toward `fast-paced / cinematic`. `fashion` maps toward `dramatic / luxury`. These will be disambiguated as the full set is implemented.
+The web editor includes an Auto style option that omits `style` from the request, allowing the API to classify from audio+visual context. Every canonical style is wired to planner defaults, render template selection, and effects/color-grade defaults.
 
 ### Stage 4 — B-Roll Intelligence
 
-**Current state:** Shipped. Keyword-driven, stock video providers integrated.
+**Current state:** Shipped with semantic visual matching and placement safety rules.
 
-B-roll is placed via `BrollRequest` entries in the `EditPlan`. The planner outputs `keywords`, `start_ms`, `end_ms`, and `priority` per slot. The B-roll engine (`broll.py` API + `broll_engine` queue job) queries Pexels/Pixabay using the keywords and stores results in `stock_assets` + `broll_slots` tables.
+B-roll is placed via enriched `BrollRequest` entries in the `EditPlan`. In addition to `keywords`, `start_ms`, `end_ms`, and `priority`, requests now carry `semantic_query`, CLIP-style `semantic_embedding`, source scene metadata, target `shot_type`, placement rule, and face-overlap safety flags. The B-roll engine (`broll.py` API + `broll_engine` queue job) prefers semantic query/embedding scoring over plain keyword matching, queries Pexels/Pixabay through the pluggable stock provider interface, and stores results in `stock_assets` + versioned `broll_slots`.
 
-Current placement logic (in `FixtureEditPlannerProvider`):
+Current placement and ranking logic:
 - B-roll count controlled by `BrollDensity` enum (none / low / medium / high)
-- Keyword phrases extracted from top transcript words
-- B-roll starts on semantically anchored cut boundaries
+- Keyword phrases seeded from transcript audio intelligence plus visual captions/object labels
+- B-roll starts on semantically anchored cut boundaries and is re-anchored to safe visual scenes when face overlap is avoided
 - Max B-roll count capped at `min(4, cuts + 3)`
 - Direction text overrides: "more b-roll" adds 1 slot, "less b-roll" removes 1
-
-**Next version target (Phase 3):** Replace keyword text search with CLIP embedding similarity search once the visual intelligence pipeline is live. Add the full placement rules:
-- B-roll never covers speaker's face during critical speech moments
-- Shot type diversity enforcement
+- CLIP-style embedding similarity is part of candidate scoring; lexical fallback remains for providers that do not expose embeddings
+- B-roll never covers speaker's face during critical speech moments when a ready visual manifest identifies high-importance face/talking-head scenes
+- Shot type diversity is enforced during candidate ranking
 - Max 3 consecutive B-roll cuts before returning to main subject
+- Slot metadata records semantic query, embedding dimensions, source scene, selected shot type, placement rule, visual manifest signature, and selection rules
 
 B-roll sources (pluggable `StockVideoProvider` interface):
 - Pexels API ✅ (shipped)
@@ -740,11 +740,11 @@ The current editor has all AI pipeline controls but lacks the full manual editin
 - [ ] Element palette search and filter
 - [ ] Palette thumbnail previews for grades, caption styles, transitions
 - [ ] AI Elements in palette: Auto-Caption Clip, Smart B-roll Fill, AI Music Match, Re-analyze Style, AI Highlight Reel
-- [ ] Visual intelligence pipeline: CLIP embeddings, BLIP-2 captions, scene classification
-- [ ] CLIP-based B-roll semantic search (replace keyword text search)
+- [x] Visual intelligence pipeline: CLIP embeddings, BLIP-2 captions, scene classification
+- [x] CLIP-based B-roll semantic search (replace keyword text search)
 - [ ] User B-roll library upload + management
 - [ ] Speaker diarization (pyannote.audio) for podcast/interview content
-- [ ] Additional style classes: `motivational`, `emotional`, `cinematic`, `educational`, `dramatic`, `fast-paced`, `clean minimal`, `creator/influencer`
+- [x] Additional style classes: `motivational`, `emotional`, `cinematic`, `educational`, `dramatic`, `fast-paced`, `clean minimal`, `creator/influencer`
 - [ ] Remaining caption modes: `impact-stamp`, `minimal-line`, `educational-card`, `creator-ticker`
 - [ ] Full LUT-based color grading in export path
 
@@ -882,8 +882,9 @@ The current editor has all AI pipeline controls but lacks the full manual editin
 | Redis / BullMQ | Job queue | ✅ Core |
 | GlitchTip | Error tracking (Sentry-compatible) | ✅ Integrated |
 | Runway Gen-3 API | AI-generated B-roll | Phase 5 |
-| pyannote.audio | Speaker diarization | Phase 3 |
-| CLIP / BLIP-2 | Visual intelligence embeddings | Phase 3 |
+| pyannote.audio | Speaker diarization | ✅ Dependency + worker provider integrated |
+| wav2vec2 / YAMNet | Emotion and background sound analysis | ✅ Dependency + worker providers integrated |
+| CLIP / BLIP-2 / YOLO / MediaPipe | Visual intelligence embeddings, captions, objects, faces | ✅ Integrated |
 | Demucs / Spleeter | Audio stem separation | Phase 5 |
 | Artlist / Storyblocks | Licensed music partnerships | Phase 4 |
 

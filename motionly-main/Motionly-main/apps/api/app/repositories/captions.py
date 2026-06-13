@@ -1,6 +1,6 @@
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-import logging
 from uuid import UUID, uuid4
 
 import httpx
@@ -162,7 +162,12 @@ class InMemoryCaptionRepository:
         self.transcripts[transcript.id] = transcript
         return transcript
 
-    def update_transcript(self, *, transcript: TranscriptRecord, **values: object) -> TranscriptRecord:
+    def update_transcript(
+        self,
+        *,
+        transcript: TranscriptRecord,
+        **values: object,
+    ) -> TranscriptRecord:
         for key, value in values.items():
             setattr(transcript, key, value)
         transcript.updated_at = datetime.now(UTC)
@@ -285,7 +290,12 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             )
         return transcript
 
-    def update_transcript(self, *, transcript: TranscriptRecord, **values: object) -> TranscriptRecord:
+    def update_transcript(
+        self,
+        *,
+        transcript: TranscriptRecord,
+        **values: object,
+    ) -> TranscriptRecord:
         words = values.pop("words", transcript.words)
         payload = self._json_safe({**values, "updated_at": datetime.now(UTC).isoformat()})
         response = httpx.patch(

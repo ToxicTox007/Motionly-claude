@@ -18,6 +18,7 @@ from app.api.projects import router as projects_router
 from app.api.regeneration import router as regeneration_router
 from app.api.renders import router as renders_router
 from app.api.uploads import router as uploads_router
+from app.api.visual import router as visual_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import InMemoryRateLimiter, rate_limit_middleware, request_id_middleware
@@ -34,6 +35,12 @@ from app.repositories.regeneration import (
 )
 from app.repositories.renders import InMemoryRenderRepository, SupabaseRenderRepository
 from app.repositories.uploads import InMemoryUploadRepository, SupabaseUploadRepository
+from app.repositories.visual import InMemoryVisualRepository, SupabaseVisualRepository
+from app.services.audio_ml_providers import (
+    PyannoteSpeakerDiarizationProvider,
+    Wav2VecEmotionProvider,
+    YamnetSoundClassifier,
+)
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
@@ -48,6 +55,7 @@ from app.services.queue import (
     RegenerationQueue,
     RenderQueue,
     TranscriptionQueue,
+    VisualQueue,
 )
 from app.services.stock_video import (
     FixtureStockVideoProvider,
@@ -58,6 +66,10 @@ from app.services.storage import StorageSigner
 from app.services.transcription_provider import (
     FixtureTranscriptionProvider,
     WhisperCompatibleHttpProvider,
+)
+from app.services.visual_intelligence import (
+    FixtureVisualIntelligenceProvider,
+    LocalMLVisualIntelligenceProvider,
 )
 
 GROQ_TRANSCRIPTION_ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -164,6 +176,16 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryBillingRepository()
     )
+    app.state.visual_repository = (
+        SupabaseVisualRepository(
+            upload_repository=upload_repository,
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryVisualRepository(upload_repository)
+    )
+    app.state.plan_repository.visual_repository = app.state.visual_repository
     app.state.stripe_billing_client = StripeBillingClient(api_key=settings.stripe_secret_key)
     app.state.storage_signer = StorageSigner(
         base_url=str(settings.api_public_base_url),
@@ -184,11 +206,13 @@ def create_app() -> FastAPI:
         app.state.queue_registry = QueueRegistry()
     app.state.preprocess_queue = PreprocessQueue(app.state.queue_registry)
     app.state.transcription_queue = TranscriptionQueue(app.state.queue_registry)
+    app.state.visual_queue = VisualQueue(app.state.queue_registry)
     app.state.plan_queue = PlanQueue(app.state.queue_registry)
     app.state.broll_queue = BrollQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)
     transcription_provider_key = settings.transcription_provider.strip().lower()
     edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
+    audio_ml_provider_key = settings.audio_ml_provider.strip().lower()
 
     app.state.transcription_provider = (
         WhisperCompatibleHttpProvider(
@@ -200,6 +224,10 @@ def create_app() -> FastAPI:
         if transcription_provider_key in {"groq", "openai_compatible"} and settings.groq_api_key
         else FixtureTranscriptionProvider(model=settings.transcription_model)
     )
+    app.state.audio_ml_providers = _audio_ml_providers(
+        provider_key=audio_ml_provider_key,
+        settings=settings,
+    )
     app.state.edit_planner_provider = (
         HttpEditPlannerProvider(
             endpoint=OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
@@ -207,8 +235,21 @@ def create_app() -> FastAPI:
             model=settings.edit_planner_model,
             provider_name="openrouter",
         )
-        if edit_planner_provider_key in {"openrouter", "openai_compatible"} and settings.openrouter_api_key
+        if (
+            edit_planner_provider_key in {"openrouter", "openai_compatible"}
+            and settings.openrouter_api_key
+        )
         else FixtureEditPlannerProvider(model=settings.edit_planner_model)
+    )
+    visual_provider_key = settings.visual_intelligence_provider.strip().lower()
+    app.state.visual_intelligence_provider = (
+        FixtureVisualIntelligenceProvider()
+        if visual_provider_key == "fixture"
+        else LocalMLVisualIntelligenceProvider(
+            clip_model=settings.visual_clip_model,
+            blip_model=settings.visual_blip_model,
+            yolo_model=settings.visual_yolo_model,
+        )
     )
     stock_video_provider = settings.stock_video_provider.replace(",", "_")
     stock_video_providers = []
@@ -260,6 +301,7 @@ def create_app() -> FastAPI:
     app.include_router(projects_router)
     app.include_router(uploads_router)
     app.include_router(captions_router)
+    app.include_router(visual_router)
     app.include_router(plans_router)
     app.include_router(broll_router)
     app.include_router(music_router)
@@ -311,6 +353,7 @@ def _validate_production_settings(settings) -> None:
 
     transcription_provider_key = settings.transcription_provider.strip().lower()
     edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
+    audio_ml_provider_key = settings.audio_ml_provider.strip().lower()
 
     if transcription_provider_key == "fixture":
         raise RuntimeError("TRANSCRIPTION_PROVIDER cannot be fixture in production")
@@ -320,12 +363,19 @@ def _validate_production_settings(settings) -> None:
         )
     if edit_planner_provider_key == "fixture":
         raise RuntimeError("EDIT_PLANNER_PROVIDER cannot be fixture in production")
-    if edit_planner_provider_key in {"openrouter", "openai_compatible"} and not settings.openrouter_api_key:
+    if (
+        edit_planner_provider_key in {"openrouter", "openai_compatible"}
+        and not settings.openrouter_api_key
+    ):
         raise RuntimeError(
             "OPENROUTER_API_KEY is required when EDIT_PLANNER_PROVIDER uses the OpenRouter path"
         )
     if settings.music_provider == "fixture":
         raise RuntimeError("MUSIC_PROVIDER cannot be fixture in production")
+    if settings.visual_intelligence_provider.strip().lower() == "fixture":
+        raise RuntimeError("VISUAL_PROVIDER cannot be fixture in production")
+    if audio_ml_provider_key == "fixture":
+        raise RuntimeError("AUDIO_ML_PROVIDER cannot be fixture in production")
     if settings.music_provider == "licensed_catalog" and (
         not settings.supabase_url or not settings.supabase_service_role_key
     ):
@@ -345,6 +395,24 @@ def _reject_local_url(name: str, value: str) -> None:
     lowered = value.lower()
     if any(host in lowered for host in ("localhost", "127.0.0.1", "0.0.0.0", ".invalid")):
         raise RuntimeError(f"{name} must be a real deployed HTTPS URL in production")
+
+
+def _audio_ml_providers(*, provider_key: str, settings) -> dict[str, object]:
+    if provider_key in {"disabled", "none", "off"}:
+        return {}
+    if provider_key not in {"local_ml", "local", "full"}:
+        raise RuntimeError("AUDIO_ML_PROVIDER must be one of local_ml, disabled")
+
+    providers: dict[str, object] = {
+        "emotion": Wav2VecEmotionProvider(model=settings.wav2vec_emotion_model),
+        "sound": YamnetSoundClassifier(model_url=settings.yamnet_model_url),
+    }
+    if settings.pyannote_auth_token:
+        providers["speaker_diarization"] = PyannoteSpeakerDiarizationProvider(
+            model=settings.pyannote_model,
+            auth_token=settings.pyannote_auth_token,
+        )
+    return providers
 
 
 app = create_app()

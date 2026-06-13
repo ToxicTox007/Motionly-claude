@@ -12,6 +12,7 @@ from app.services.transcription_jobs import (
     run_transcription_for_upload,
 )
 from app.services.upload_jobs import complete_upload_preprocessing_by_id
+from app.services.visual_intelligence import run_visual_analysis_for_upload
 
 router = APIRouter(prefix="/internal/jobs", tags=["internal jobs"])
 
@@ -116,6 +117,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             upload_repository=request.app.state.upload_repository,
             caption_repository=request.app.state.caption_repository,
             transcription_provider=request.app.state.transcription_provider,
+            audio_ml_providers=getattr(request.app.state, "audio_ml_providers", None),
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             video_id=job.resource_id,
@@ -127,7 +129,27 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         return {
             "transcript_id": str(transcript.id),
             "transcript_status": transcript.status.value,
-            "failed": transcript.status == "failed",
+            "failed": transcript.status.value == "failed",
+        }
+
+    if job.kind == "visual_analysis":
+        record = run_visual_analysis_for_upload(
+            repository=request.app.state.visual_repository,
+            provider=request.app.state.visual_intelligence_provider,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            video_id=job.resource_id,
+            media_work_dir=settings.media_work_dir,
+            supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
+            service_role_key=settings.supabase_service_role_key,
+            sample_rate_fps=settings.visual_sample_fps,
+            scene_threshold=settings.visual_scene_threshold,
+        )
+        return {
+            "video_manifest_id": str(record.id),
+            "visual_status": record.status.value,
+            "scene_count": len(record.manifest.scenes) if record.manifest else 0,
+            "failed": record.status.value == "failed",
         }
 
     if job.kind == "render":

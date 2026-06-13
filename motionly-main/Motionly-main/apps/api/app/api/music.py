@@ -17,7 +17,6 @@ from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.music import (
     MusicSelectionResponse,
     MusicSelectionStatus,
-    MusicSelectionResponse,
     MusicSelectRequest,
     MusicSelectResponse,
     MusicTrackListResponse,
@@ -171,19 +170,6 @@ async def select_music(
         selection=repository.response_for_selection(selection),
         job_id=job.id,
     )
-
-
-@router.get("/selection", response_model=MusicSelectionResponse | None)
-async def get_music_selection(
-    project_id: UUID,
-    actor: ActorDep,
-    repository: MusicRepositoryDep,
-) -> MusicSelectionResponse | None:
-    selection = repository.latest_selection(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-    )
-    return repository.response_for_selection(selection) if selection else None
 
 
 @router.get("/tracks", response_model=MusicTrackListResponse)

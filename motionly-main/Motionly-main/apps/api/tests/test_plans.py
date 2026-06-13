@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -11,9 +12,26 @@ from app.api.plans import activate_plan, create_plan, list_plans, update_plan_cu
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
+from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.captions import LanguageHint
-from app.schemas.plans import BrollDensity, EditPlanStyle, PlanCreateRequest, PlanCutsUpdateRequest
+from app.schemas.plans import (
+    BrollDensity,
+    EditPlanStyle,
+    PlanCreateRequest,
+    PlanCutsUpdateRequest,
+    StyleClassification,
+)
 from app.schemas.uploads import UploadStatus
+from app.schemas.visual import (
+    BoundingBox,
+    CameraMotion,
+    DominantColor,
+    ObjectDetection,
+    SceneSegment,
+    SceneType,
+    VideoManifest,
+    VisualManifestStatus,
+)
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.queue import PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
@@ -164,6 +182,183 @@ def test_plan_controls_change_structured_output() -> None:
     assert travel.plan.summary.duration_s >= luxury.plan.summary.duration_s
     assert "meaning_preservation_requested" in luxury.plan.summary.risk_flags
     assert luxury.plan.summary.source_topic != "Transcript-driven edit"
+
+
+def test_audio_intelligence_keywords_seed_fixture_broll_requests() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    repository.caption_repository.update_transcript(
+        transcript=transcript,
+        raw_payload={
+            "audio_intelligence": {
+                "keywords": [
+                    {"text": "atelier", "score": 0.96},
+                    {"text": "craft", "score": 0.91},
+                ],
+                "style_signals": {"predicted_style": "luxury"},
+            }
+        },
+    )
+
+    response = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(
+                style=EditPlanStyle.LUXURY,
+                broll_density=BrollDensity.MEDIUM,
+                force=True,
+            ),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    broll_keywords = response.plan.plan.broll_requests[0].keywords
+    assert any("atelier" in keyword for keyword in broll_keywords)
+
+
+def test_visual_manifest_changes_plan_cache_and_seeds_broll_requests() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    payload = PlanCreateRequest(style=EditPlanStyle.LUXURY, broll_density=BrollDensity.MEDIUM)
+
+    first = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=payload,
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    upload = repository.get_active_upload(project_id=project_id, workspace_id=workspace_id)
+    visual_repository = InMemoryVisualRepository(repository.caption_repository.upload_repository)
+    repository.visual_repository = visual_repository
+    visual_repository.create_manifest(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=upload.id,
+        status=VisualManifestStatus.READY,
+        provider="fixture_visual",
+        model="fixture-visual-v1",
+        manifest=_sample_visual_manifest(),
+    )
+
+    second = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=payload,
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    keywords = [
+        keyword
+        for request in second.plan.plan.broll_requests
+        for keyword in request.keywords
+    ]
+    first_request = second.plan.plan.broll_requests[0]
+    assert second.cached is False
+    assert second.plan.version == first.plan.version + 1
+    assert any("watch" in keyword or "macro" in keyword for keyword in keywords)
+    assert first_request.semantic_query
+    assert first_request.semantic_embedding == [0.1, 0.2, 0.3]
+    assert first_request.source_scene_index == 0
+    assert first_request.source_scene_type == SceneType.PRODUCT.value
+    assert first_request.shot_type == "product_detail"
+    assert first_request.avoid_face_overlap is True
+
+
+def test_auto_style_classifier_selects_educational_from_audio_and_visual_context() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    repository.caption_repository.update_transcript(
+        transcript=transcript,
+        raw_payload={
+            "audio_intelligence": {
+                "keywords": [
+                    {"text": "framework", "score": 0.94},
+                    {"text": "steps", "score": 0.9},
+                ],
+                "style_signals": {
+                    "predicted_style": "educational",
+                    "tone": "neutral",
+                    "pace": "medium",
+                },
+                "speech_metrics": {"words_per_minute": 138},
+            }
+        },
+    )
+    upload = repository.get_active_upload(project_id=project_id, workspace_id=workspace_id)
+    visual_repository = InMemoryVisualRepository(repository.caption_repository.upload_repository)
+    repository.visual_repository = visual_repository
+    visual_repository.create_manifest(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=upload.id,
+        status=VisualManifestStatus.READY,
+        provider="fixture_visual",
+        model="fixture-visual-v1",
+        manifest=_educational_visual_manifest(),
+    )
+
+    response = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(prompt="Keep it clear and useful."),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    classification = response.plan.summary.style_classification
+    assert response.plan.style == EditPlanStyle.EDUCATIONAL
+    assert response.plan.plan.style == EditPlanStyle.EDUCATIONAL
+    assert classification is not None
+    assert classification.predicted_style == EditPlanStyle.EDUCATIONAL
+    assert classification.effective_style == EditPlanStyle.EDUCATIONAL
+    assert classification.requested_style is None
+    assert "auto_style" in classification.signals
+    assert "visual_manifest" in classification.signals
+    assert response.plan.plan.color_grade == "neutral_daylight"
+
+
+def test_legacy_style_request_is_disambiguated_to_stage_3_style() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+
+    response = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.FOUNDER, force=True),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    classification = response.plan.summary.style_classification
+    assert response.plan.style in {
+        EditPlanStyle.CLEAN_MINIMAL,
+        EditPlanStyle.CREATOR_INFLUENCER,
+    }
+    assert response.plan.plan.style == response.plan.style
+    assert classification is not None
+    assert classification.requested_style == EditPlanStyle.FOUNDER
+    assert classification.effective_style == response.plan.style
+    assert "legacy_style:founder" in classification.signals
 
 
 def test_regeneration_feedback_changes_plan_without_replacing_previous_version() -> None:
@@ -413,6 +608,89 @@ def test_plan_create_request_accepts_json_string_body() -> None:
     assert payload.style == EditPlanStyle.FOUNDER
 
 
+def test_http_planner_receives_audio_intelligence(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    repository.caption_repository.update_transcript(
+        transcript=transcript,
+        raw_payload={
+            "audio_intelligence": {
+                "keywords": [{"text": "atelier", "score": 0.96}],
+                "style_signals": {"predicted_style": "luxury"},
+                "speech_metrics": {"words_per_minute": 140},
+            }
+        },
+    )
+    captured: dict[str, object] = {}
+
+    def fake_post(*args: object, **kwargs: object):
+        captured["json"] = kwargs["json"]
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "schema_version": 1,
+                                    "style": "luxury",
+                                    "target_duration_s": 10,
+                                    "cuts": [
+                                        {"start_ms": 240, "end_ms": 3500, "reason": "hook"}
+                                    ],
+                                    "caption_highlights": [],
+                                    "broll_requests": [],
+                                    "zoom_moments": [],
+                                    "music_mood": "clean",
+                                    "effects": [],
+                                    "color_grade": "neutral",
+                                    "risk_flags": [],
+                                }
+                            )
+                        }
+                    }
+                ],
+                "usage": {"total_tokens": 100},
+            },
+        )
+
+    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
+    HttpEditPlannerProvider(
+        endpoint="https://planner.test",
+        api_key="test",
+        model="test-model",
+    ).create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
+        video_duration_ms=12_000,
+        visual_manifest=_sample_visual_manifest(),
+        style_classification=StyleClassification(
+            predicted_style=EditPlanStyle.LUXURY,
+            effective_style=EditPlanStyle.LUXURY,
+            requested_style=EditPlanStyle.LUXURY,
+            confidence=0.82,
+            scores={"luxury": 1.0},
+            signals=["audio_style:luxury", "visual_manifest"],
+        ),
+    )
+
+    request_json = captured["json"]
+    assert isinstance(request_json, dict)
+    message = request_json["messages"][1]
+    assert isinstance(message, dict)
+    content = json.loads(str(message["content"]))
+    assert content["audio_intelligence"]["keywords"][0]["text"] == "atelier"
+    assert content["style_classification"]["effective_style"] == "luxury"
+    assert content["style_classification"]["signals"] == [
+        "audio_style:luxury",
+        "visual_manifest",
+    ]
+    assert content["visual_intelligence"]["top_scenes"][0]["objects"] == ["watch"]
+    assert content["visual_intelligence"]["top_scenes"][0]["scene_type"] == "product"
+
+
 def test_http_planner_repairs_invalid_provider_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     repository, project_id, workspace_id, _user_id = make_plan_repository()
     transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
@@ -511,3 +789,91 @@ def test_http_planner_falls_back_and_records_validation_errors(
     assert result.plan.cuts
     assert result.validation_errors
     assert result.raw_payload["fallback_used"] is True
+
+
+def _sample_visual_manifest() -> VideoManifest:
+    return VideoManifest(
+        duration_ms=12_000,
+        sample_rate_fps=2,
+        frame_count=2,
+        provider="fixture_visual",
+        model_versions={
+            "clip": "fixture",
+            "blip": "fixture",
+            "object_detection": "fixture",
+            "face_detection": "fixture",
+        },
+        scenes=[
+            SceneSegment(
+                index=0,
+                start_ms=0,
+                end_ms=5_000,
+                representative_timestamp_ms=1_000,
+                caption="handmade watch macro detail",
+                embedding=[0.1, 0.2, 0.3],
+                dominant_colors=[
+                    DominantColor(hex="#111827", rgb=(17, 24, 39), percentage=0.7)
+                ],
+                objects=[
+                    ObjectDetection(
+                        label="watch",
+                        confidence=0.91,
+                        box=BoundingBox(x=0.2, y=0.2, width=0.4, height=0.3),
+                    )
+                ],
+                camera_motion=CameraMotion.PUSH_IN,
+                scene_type=SceneType.PRODUCT,
+                visual_importance_score=0.92,
+            )
+        ],
+        summary={
+            "scene_count": 1,
+            "sample_count": 2,
+            "scene_types": {"product": 1},
+            "top_objects": ["watch"],
+        },
+    )
+
+
+def _educational_visual_manifest() -> VideoManifest:
+    return VideoManifest(
+        duration_ms=12_000,
+        sample_rate_fps=2,
+        frame_count=2,
+        provider="fixture_visual",
+        model_versions={
+            "clip": "fixture",
+            "blip": "fixture",
+            "object_detection": "fixture",
+            "face_detection": "fixture",
+        },
+        scenes=[
+            SceneSegment(
+                index=0,
+                start_ms=0,
+                end_ms=6_000,
+                representative_timestamp_ms=1_200,
+                caption="screen tutorial showing three clear steps",
+                embedding=[0.1, 0.2, 0.3],
+                dominant_colors=[
+                    DominantColor(hex="#f8fafc", rgb=(248, 250, 252), percentage=0.62)
+                ],
+                objects=[
+                    ObjectDetection(
+                        label="laptop",
+                        confidence=0.88,
+                        box=BoundingBox(x=0.12, y=0.18, width=0.7, height=0.48),
+                    )
+                ],
+                camera_motion=CameraMotion.STATIC,
+                scene_type=SceneType.SCREEN_RECORDING,
+                visual_importance_score=0.9,
+            )
+        ],
+        summary={
+            "scene_count": 1,
+            "sample_count": 2,
+            "scene_types": {"screen_recording": 1},
+            "top_objects": ["laptop"],
+        },
+    )

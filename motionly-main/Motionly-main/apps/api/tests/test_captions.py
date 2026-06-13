@@ -85,6 +85,16 @@ def test_transcription_and_caption_generation_happy_path() -> None:
 
     assert transcription.status == "ready"
     assert transcription.transcript_id is not None
+    transcript = repository.get_transcript(
+        project_id=project_id,
+        transcript_id=transcription.transcript_id,
+        workspace_id=workspace_id,
+    )
+    assert transcript.raw_payload["audio_intelligence"]["keywords"]
+    assert transcript.raw_payload["audio_intelligence"]["style_signals"]["predicted_style"]
+    assert transcript.raw_payload["audio_intelligence"]["speaker_diarization"]["segments"]
+    assert transcript.raw_payload["audio_intelligence"]["emotion_pacing"]["windows"]
+    assert transcript.raw_payload["audio_intelligence"]["sound_classification"]["labels"]
 
     captions = asyncio.run(
         generate_captions(
@@ -101,6 +111,31 @@ def test_transcription_and_caption_generation_happy_path() -> None:
     assert captions.track.schema_version == 1
     assert captions.track.segments
     assert all(segment.end_ms - segment.start_ms >= 450 for segment in captions.track.segments)
+
+
+def test_transcription_preserves_expanded_language_hint() -> None:
+    repository, project_id, workspace_id, user_id = make_repository()
+
+    transcription = asyncio.run(
+        create_transcription(
+            project_id=project_id,
+            payload=TranscriptionCreateRequest(language_hint=LanguageHint.SPANISH),
+            request=make_request(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            transcription_provider=FixtureTranscriptionProvider(),
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+
+    assert transcription.transcript_id is not None
+    transcript = repository.get_transcript(
+        project_id=project_id,
+        transcript_id=transcription.transcript_id,
+        workspace_id=workspace_id,
+    )
+    assert transcript.language == "es"
+    assert transcript.language_hint == LanguageHint.SPANISH
 
 
 def test_transcription_requires_ready_source_video() -> None:
@@ -299,7 +334,12 @@ def test_update_caption_segments_persists_timeline_edits() -> None:
             track_id=captions.track.id,
             payload=CaptionSegmentsUpdateRequest(
                 segments=[
-                    second.model_copy(update={"start_ms": second.start_ms + 100, "highlight_words": ["ship"]}),
+                    second.model_copy(
+                        update={
+                            "start_ms": second.start_ms + 100,
+                            "highlight_words": ["ship"],
+                        }
+                    ),
                     first.model_copy(update={"end_ms": first.end_ms - 100}),
                 ],
             ),
@@ -432,6 +472,15 @@ def test_transcription_marks_video_without_audio_unavailable() -> None:
     )
 
     assert response.status == "captions_unavailable"
+    assert response.transcript_id is not None
+    transcript = repository.get_transcript(
+        project_id=project_id,
+        transcript_id=response.transcript_id,
+        workspace_id=workspace_id,
+    )
+    audio_intelligence = transcript.raw_payload["audio_intelligence"]
+    assert audio_intelligence["sound_classification"]["labels"][0]["label"] == "no_audio"
+    assert audio_intelligence["speaker_diarization"]["speaker_count"] == 0
 
 
 def test_caption_generation_rejects_cross_workspace_access() -> None:

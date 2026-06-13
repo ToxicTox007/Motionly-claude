@@ -22,11 +22,20 @@ from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.billing import BillingPlanKey, SubscriptionStatus
 from app.schemas.broll import BrollGenerateRequest, BrollRegionUpdateRequest, BrollSwapRequest
 from app.schemas.captions import LanguageHint
-from app.schemas.plans import BrollDensity, PlanCreateRequest
+from app.schemas.plans import BrollDensity, BrollRequest, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
+from app.schemas.visual import (
+    BoundingBox,
+    FaceDetection,
+    ObjectDetection,
+    SceneSegment,
+    SceneType,
+    VideoManifest,
+)
+from app.services.broll_intelligence import apply_stage4_broll_rules
 from app.services.edit_planner import FixtureEditPlannerProvider
 from app.services.queue import BrollQueue, PlanQueue
-from app.services.stock_video import FixtureStockVideoProvider
+from app.services.stock_video import FixtureStockVideoProvider, score_candidate
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
 
@@ -116,6 +125,33 @@ def test_generate_broll_creates_scored_vertical_slots() -> None:
         if slot.selected_asset
     )
     assert all(slot.crossfade_ms == 260 for slot in response.slots)
+
+
+def test_generate_broll_stores_stage_4_semantic_metadata() -> None:
+    repository, project_id, workspace_id, user_id = make_broll_repository()
+
+    response = asyncio.run(
+        generate_broll(
+            project_id=project_id,
+            payload=BrollGenerateRequest(force=True),
+            request=_request(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=make_creator_billing_repository(workspace_id),
+            broll_queue=BrollQueue(),
+            providers=[FixtureStockVideoProvider()],
+        )
+    )
+
+    slot = response.slots[0]
+    assert slot.schema_version == 2
+    assert slot.metadata["stage"] == 4
+    assert slot.metadata["semantic_query"]
+    assert slot.metadata["shot_type"]
+    assert slot.metadata["placement_rule"]
+    assert "clip_embedding_similarity" in slot.metadata["selection_rules"]
+    assert slot.selected_asset
+    assert slot.selected_asset.raw_metadata["semantic_query"] == slot.metadata["semantic_query"]
 
 
 def test_generate_broll_reuses_cached_selection() -> None:
@@ -298,6 +334,59 @@ def test_search_broll_candidates_adds_provider_results_to_slot() -> None:
     assert len(response.slot.candidates) >= len(slot.candidates)
 
 
+def test_stage_4_rules_avoid_critical_face_overlap_and_limit_consecutive_broll() -> None:
+    requests = [
+        BrollRequest(
+            start_ms=500 + index * 500,
+            end_ms=1300 + index * 500,
+            keywords=["watch detail"],
+            priority=0.9,
+        )
+        for index in range(4)
+    ]
+
+    placed = apply_stage4_broll_rules(
+        requests=requests,
+        visual_manifest=_face_and_product_manifest(),
+        duration_ms=8_000,
+    )
+
+    assert placed
+    assert all(not (request.start_ms < 2_500 and request.end_ms > 0) for request in placed)
+    assert all(request.semantic_query for request in placed)
+    assert all(request.semantic_embedding for request in placed)
+    assert all(request.shot_type == "product_detail" for request in placed)
+    assert _longest_consecutive_broll_run(placed) <= 3
+
+
+def test_semantic_candidate_scoring_enforces_shot_type_diversity() -> None:
+    candidates = FixtureStockVideoProvider().search(
+        query="watch macro detail",
+        orientation="portrait",
+        min_width=720,
+        min_height=1280,
+    )
+
+    first_score = score_candidate(
+        candidate=candidates[0],
+        slot_duration_ms=1800,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="watch macro detail",
+        target_shot_type="product_detail",
+        used_shot_types={"product_detail"},
+    )
+    alternate_score = score_candidate(
+        candidate=candidates[2],
+        slot_duration_ms=1800,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="watch macro detail",
+        target_shot_type="product_detail",
+        used_shot_types={"product_detail"},
+    )
+
+    assert alternate_score > first_score
+
+
 def test_generate_broll_allows_local_qa_when_billing_is_disabled() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
 
@@ -360,3 +449,63 @@ def _request(*, billing_enabled: bool = True):
             state=SimpleNamespace(settings=SimpleNamespace(billing_enabled=billing_enabled)),
         ),
     )
+
+
+def _face_and_product_manifest() -> VideoManifest:
+    return VideoManifest(
+        duration_ms=8_000,
+        sample_rate_fps=2,
+        frame_count=4,
+        provider="fixture_visual",
+        model_versions={"clip": "fixture"},
+        scenes=[
+            SceneSegment(
+                index=0,
+                start_ms=0,
+                end_ms=2_500,
+                representative_timestamp_ms=1_000,
+                caption="speaker explaining the key point",
+                embedding=[0.1, 0.2, 0.3],
+                faces=[
+                    FaceDetection(
+                        confidence=0.97,
+                        box=BoundingBox(x=0.25, y=0.1, width=0.5, height=0.5),
+                    )
+                ],
+                scene_type=SceneType.TALKING_HEAD,
+                visual_importance_score=0.92,
+            ),
+            SceneSegment(
+                index=1,
+                start_ms=2_500,
+                end_ms=8_000,
+                representative_timestamp_ms=3_200,
+                caption="handmade watch macro detail",
+                embedding=[0.4, 0.5, 0.6],
+                objects=[
+                    ObjectDetection(
+                        label="watch",
+                        confidence=0.91,
+                        box=BoundingBox(x=0.2, y=0.2, width=0.4, height=0.3),
+                    )
+                ],
+                scene_type=SceneType.PRODUCT,
+                visual_importance_score=0.9,
+            ),
+        ],
+        summary={"scene_count": 2},
+    )
+
+
+def _longest_consecutive_broll_run(requests: list[BrollRequest]) -> int:
+    longest = 0
+    current = 0
+    previous_end_ms: int | None = None
+    for request in sorted(requests, key=lambda item: item.start_ms):
+        if previous_end_ms is None or request.start_ms - previous_end_ms > 350:
+            current = 1
+        else:
+            current += 1
+        longest = max(longest, current)
+        previous_end_ms = request.end_ms
+    return longest

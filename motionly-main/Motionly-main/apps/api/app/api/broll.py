@@ -29,14 +29,22 @@ from app.schemas.broll import (
     BrollSwapResponse,
     StockOrientation,
 )
+from app.services.broll_intelligence import (
+    apply_stage4_broll_rules,
+    broll_slot_metadata,
+    latest_visual_manifest_for_broll,
+    visual_manifest_cache_signature,
+)
 from app.services.queue import BrollQueue
 from app.services.stock_video import (
     StockVideoProvider,
     build_broll_cache_key,
+    candidate_shot_type,
     desired_requests,
     keyword_query,
     latency_ms_since,
     score_candidate,
+    semantic_match_score,
 )
 
 router = APIRouter(prefix="/projects/{project_id}/broll", tags=["B-roll"])
@@ -73,17 +81,39 @@ async def generate_broll(
             503,
             "stock_provider_unavailable",
             "No stock video provider is configured for B-roll generation.",
-        )
+    )
     started = time.perf_counter()
     plan = repository.active_plan(project_id=project_id, workspace_id=actor.workspace_id)
-    requests = desired_requests(plan.plan, payload.density)
-    if not requests:
+    visual_manifest = latest_visual_manifest_for_broll(
+        repository=repository,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    source_requests = desired_requests(plan.plan, payload.density)
+    if not source_requests:
         raise ApiError(422, "broll_requests_empty", "The active edit plan has no B-roll requests.")
+    duration_ms = (
+        visual_manifest.duration_ms
+        if visual_manifest and visual_manifest.duration_ms
+        else max(plan.plan.target_duration_s * 1000, max(item.end_ms for item in source_requests))
+    )
+    requests = apply_stage4_broll_rules(
+        requests=source_requests,
+        visual_manifest=visual_manifest,
+        duration_ms=duration_ms,
+    )
+    if not requests:
+        raise ApiError(
+            422,
+            "broll_requests_empty",
+            "The active edit plan has no B-roll that can be placed safely.",
+        )
 
     cache_key = build_broll_cache_key(
         edit_plan_id=plan.id,
         density=payload.density,
         schema_version=BROLL_SCHEMA_VERSION,
+        semantic_context=visual_manifest_cache_signature(visual_manifest),
     )
     job = broll_queue.enqueue_broll(
         project_id=project_id,
@@ -104,10 +134,11 @@ async def generate_broll(
             )
 
     used_provider_asset_ids: set[str] = set()
+    used_shot_types: set[str] = set()
     slots: list[dict[str, object]] = []
-    for request in requests:
-        query = keyword_query(request, plan.style.value)
-        slot_duration_ms = request.end_ms - request.start_ms
+    for broll_request in requests:
+        query = keyword_query(broll_request, plan.style.value)
+        slot_duration_ms = broll_request.end_ms - broll_request.start_ms
         ranked_assets = []
         errors: list[str] = []
         for provider in providers:
@@ -126,6 +157,10 @@ async def generate_broll(
                     candidate=candidate,
                     slot_duration_ms=slot_duration_ms,
                     duplicate_provider_asset_ids=used_provider_asset_ids,
+                    semantic_query=broll_request.semantic_query or query,
+                    semantic_embedding=broll_request.semantic_embedding,
+                    target_shot_type=broll_request.shot_type,
+                    used_shot_types=used_shot_types,
                 )
                 if candidate.duration_ms < 1500:
                     continue
@@ -147,17 +182,32 @@ async def generate_broll(
                     raw_metadata={
                         **candidate.raw_metadata,
                         "query": query,
+                        "semantic_query": broll_request.semantic_query or query,
+                        "target_shot_type": broll_request.shot_type,
                         "latency_ms": latency_ms_since(started),
                     },
                 )
-                ranked_assets.append((score, asset))
+                ranked_assets.append((score, asset, candidate))
             if ranked_assets:
                 break
 
         ranked_assets.sort(key=lambda item: item[0], reverse=True)
         selected = ranked_assets[0][1] if ranked_assets else None
+        selected_candidate = ranked_assets[0][2] if ranked_assets else None
+        selected_shot_type = candidate_shot_type(selected_candidate) if selected_candidate else None
+        selected_semantic_score = (
+            semantic_match_score(
+                candidate=selected_candidate,
+                semantic_query=broll_request.semantic_query or query,
+                semantic_embedding=broll_request.semantic_embedding,
+            )
+            if selected_candidate
+            else None
+        )
         if selected:
             used_provider_asset_ids.add(selected.provider_asset_id)
+        if selected_shot_type:
+            used_shot_types.add(selected_shot_type)
         status = BrollSlotStatus.READY if selected else BrollSlotStatus.FAILED
         slots.append(
             {
@@ -165,18 +215,18 @@ async def generate_broll(
                 "project_id": project_id,
                 "edit_plan_id": plan.id,
                 "status": status,
-                "start_ms": request.start_ms,
-                "end_ms": request.end_ms,
-                "keywords": [query, *request.keywords][:8],
+                "start_ms": broll_request.start_ms,
+                "end_ms": broll_request.end_ms,
+                "keywords": [query, *broll_request.keywords][:8],
                 "intent": f"Support transcript moment with {query}",
                 "density": (
                     payload.density
                     if payload.density != "from_plan"
                     else plan.broll_density.value
                 ),
-                "priority": request.priority,
+                "priority": broll_request.priority,
                 "selected_asset_id": selected.id if selected else None,
-                "candidate_asset_ids": [asset.id for _, asset in ranked_assets[:5]],
+                "candidate_asset_ids": [asset.id for _, asset, _candidate in ranked_assets[:5]],
                 "crossfade_ms": 260,
                 "provider": selected.provider if selected else providers[0].provider_key,
                 "score": ranked_assets[0][0] if ranked_assets else 0,
@@ -184,6 +234,15 @@ async def generate_broll(
                     None if selected else (errors[0] if errors else "stock_asset_not_found")
                 ),
                 "error_message": None if selected else "No usable vertical stock clip was found.",
+                "metadata": broll_slot_metadata(
+                    request=broll_request,
+                    query=query,
+                    candidate_count=len(ranked_assets),
+                    selected_shot_type=selected_shot_type,
+                    selected_semantic_score=selected_semantic_score,
+                    provider_errors=errors,
+                    visual_manifest=visual_manifest,
+                ),
             }
         )
 
@@ -282,8 +341,24 @@ async def search_broll_candidates(
             "stock_provider_unavailable",
             "No stock video provider is configured for B-roll search.",
         )
-    search_query = (query or " ".join(slot.keywords) or slot.intent).strip()
+    metadata = slot.metadata
+    search_query = (
+        query
+        or str(metadata.get("semantic_query") or "").strip()
+        or " ".join(slot.keywords)
+        or slot.intent
+    ).strip()
+    raw_embedding = metadata.get("semantic_embedding")
+    semantic_embedding = [
+        float(value) for value in raw_embedding if isinstance(value, (int, float))
+    ] if isinstance(raw_embedding, list) else []
+    target_shot_type = (
+        str(metadata.get("shot_type")).strip().lower()
+        if metadata.get("shot_type")
+        else None
+    )
     duplicate_provider_asset_ids: set[str] = set()
+    used_shot_types: set[str] = set()
     for asset_id in slot.candidate_asset_ids:
         try:
             asset = repository.get_asset(
@@ -292,6 +367,9 @@ async def search_broll_candidates(
                 asset_id=asset_id,
             )
             duplicate_provider_asset_ids.add(asset.provider_asset_id)
+            raw_shot_type = asset.raw_metadata.get("shot_type")
+            if isinstance(raw_shot_type, str) and raw_shot_type.strip():
+                used_shot_types.add(raw_shot_type.strip().lower())
         except ApiError:
             continue
     candidates = []
@@ -307,6 +385,23 @@ async def search_broll_candidates(
             continue
         if candidates:
             break
+    scored_candidates = [
+        (
+            score_candidate(
+                candidate=candidate,
+                slot_duration_ms=slot.end_ms - slot.start_ms,
+                duplicate_provider_asset_ids=duplicate_provider_asset_ids,
+                semantic_query=search_query,
+                semantic_embedding=semantic_embedding,
+                target_shot_type=target_shot_type,
+                used_shot_types=used_shot_types,
+            ),
+            candidate,
+        )
+        for candidate in candidates
+        if candidate.duration_ms >= 1500
+    ]
+    scored_candidates.sort(key=lambda item: item[0], reverse=True)
     assets = [
         repository.upsert_asset(
             workspace_id=actor.workspace_id,
@@ -322,14 +417,15 @@ async def search_broll_candidates(
             height=candidate.height,
             duration_ms=candidate.duration_ms,
             orientation=candidate.orientation,
-            score=score_candidate(
-                candidate=candidate,
-                slot_duration_ms=slot.end_ms - slot.start_ms,
-                duplicate_provider_asset_ids=duplicate_provider_asset_ids,
-            ),
-            raw_metadata=candidate.raw_metadata,
+            score=score,
+            raw_metadata={
+                **candidate.raw_metadata,
+                "query": search_query,
+                "semantic_query": search_query,
+                "target_shot_type": target_shot_type,
+            },
         )
-        for candidate in candidates
+        for score, candidate in scored_candidates[:10]
     ]
     updated = repository.add_slot_candidates(
         slot=slot,

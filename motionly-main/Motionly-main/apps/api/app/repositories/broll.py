@@ -62,6 +62,7 @@ class BrollSlotRecord:
     score: float
     error_code: str | None = None
     error_message: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -504,6 +505,7 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             score=float(row["score"]),
             error_code=str(row["error_code"]) if row.get("error_code") else None,
             error_message=str(row["error_message"]) if row.get("error_message") else None,
+            metadata=row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),
         )
@@ -534,17 +536,18 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         )
 
     def _json_safe(self, values: dict[str, object]) -> dict[str, object]:
-        safe: dict[str, object] = {}
-        for key, value in values.items():
-            if isinstance(value, UUID):
-                safe[key] = str(value)
-            elif isinstance(value, list):
-                safe[key] = [str(item) if isinstance(item, UUID) else item for item in value]
-            elif hasattr(value, "value"):
-                safe[key] = value.value
-            else:
-                safe[key] = value
-        return safe
+        return {key: self._json_safe_value(value) for key, value in values.items()}
+
+    def _json_safe_value(self, value: object) -> object:
+        if isinstance(value, UUID):
+            return str(value)
+        if isinstance(value, list):
+            return [self._json_safe_value(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): self._json_safe_value(item) for key, item in value.items()}
+        if hasattr(value, "value"):
+            return value.value
+        return value
 
     def _raise_for_supabase(self, response: httpx.Response) -> None:
         if response.status_code < 400:

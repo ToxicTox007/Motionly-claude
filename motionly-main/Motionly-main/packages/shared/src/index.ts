@@ -8,13 +8,39 @@ export type UploadStatus =
   | "processing"
   | "ready"
   | "failed";
-export type LanguageHint = "auto" | "en" | "hi";
+export type LanguageHint =
+  | "auto"
+  | "en"
+  | "hi"
+  | "es"
+  | "pt"
+  | "fr"
+  | "de"
+  | "ar";
+export type TranscriptLanguage = Exclude<LanguageHint, "auto"> | "unknown";
 export type TranscriptStatus =
   | "queued"
   | "processing"
   | "ready"
   | "failed"
   | "captions_unavailable";
+export type VisualManifestStatus = "queued" | "processing" | "ready" | "failed";
+export type CameraMotion =
+  | "static"
+  | "pan"
+  | "tilt"
+  | "push_in"
+  | "handheld"
+  | "unknown";
+export type SceneType =
+  | "talking_head"
+  | "screen_recording"
+  | "product"
+  | "landscape"
+  | "crowd"
+  | "text_heavy"
+  | "abstract"
+  | "unknown";
 export type RenderJobStatus =
   | "queued"
   | "preparing"
@@ -25,7 +51,16 @@ export type RenderJobStatus =
   | "canceled";
 export type ExportFormat = "mp4";
 export type EditPlanStyleKey =
+  | "motivational"
+  | "emotional"
+  | "cinematic"
+  | "educational"
   | "luxury"
+  | "storytelling"
+  | "dramatic"
+  | "fast_paced"
+  | "clean_minimal"
+  | "creator_influencer"
   | "founder"
   | "travel"
   | "fashion"
@@ -128,10 +163,58 @@ export interface TranscriptWord {
   confidence?: number | null;
 }
 
+export interface AudioIntelligenceSummary {
+  schema_version: number;
+  keywords: Array<{ text: string; score: number }>;
+  style_signals: {
+    predicted_style: string;
+    tone: string;
+    pace: string;
+    style_scores: Record<string, number>;
+  };
+  speech_metrics: {
+    word_count: number;
+    duration_ms?: number | null;
+    words_per_minute?: number | null;
+  };
+  confidence: {
+    average_word_confidence?: number | null;
+    low_confidence_word_count: number;
+    word_confidence_available: boolean;
+  };
+  speaker_diarization: {
+    provider: string;
+    speaker_count: number;
+    confidence: number;
+    segments: Array<{
+      speaker: string;
+      start_ms: number;
+      end_ms: number;
+      segment_index: number;
+    }>;
+  };
+  emotion_pacing: {
+    aggregate_emotion: string;
+    pause_count: number;
+    windows: Array<{
+      start_ms: number;
+      end_ms: number;
+      emotion: string;
+      intensity: number;
+      word_count: number;
+    }>;
+  };
+  sound_classification: {
+    provider: string;
+    background_sound: string;
+    labels: Array<{ label: string; confidence: number }>;
+  };
+}
+
 export interface TranscriptSummary {
   id: string;
   status: TranscriptStatus;
-  language: "en" | "hi" | "unknown";
+  language: TranscriptLanguage;
   provider: string;
   model: string;
   confidence?: number | null;
@@ -139,8 +222,96 @@ export interface TranscriptSummary {
   error_message?: string | null;
   progress_pct: number;
   words: TranscriptWord[];
+  raw_payload?: {
+    audio_intelligence?: AudioIntelligenceSummary;
+    [key: string]: unknown;
+  };
   created_at?: string;
   updated_at?: string;
+}
+
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DominantColor {
+  hex: string;
+  rgb: [number, number, number];
+  percentage: number;
+}
+
+export interface ObjectDetection {
+  label: string;
+  confidence: number;
+  box: BoundingBox;
+}
+
+export interface FaceDetection {
+  confidence: number;
+  box: BoundingBox;
+  landmarks: Record<string, [number, number]>;
+}
+
+export interface FrameSample {
+  timestamp_ms: number;
+  width: number;
+  height: number;
+  scene_change_score: number;
+  embedding: number[];
+  caption: string;
+  dominant_colors: DominantColor[];
+  objects: ObjectDetection[];
+  faces: FaceDetection[];
+  camera_motion: CameraMotion;
+  scene_type: SceneType;
+  visual_importance_score: number;
+}
+
+export interface SceneSegment {
+  index: number;
+  start_ms: number;
+  end_ms: number;
+  representative_timestamp_ms: number;
+  caption: string;
+  embedding: number[];
+  dominant_colors: DominantColor[];
+  objects: ObjectDetection[];
+  faces: FaceDetection[];
+  camera_motion: CameraMotion;
+  scene_type: SceneType;
+  visual_importance_score: number;
+}
+
+export interface VideoManifest {
+  schema_version: number;
+  duration_ms?: number | null;
+  sample_rate_fps: number;
+  frame_count: number;
+  provider: string;
+  model_versions: Record<string, string>;
+  frame_samples: FrameSample[];
+  scenes: SceneSegment[];
+  summary: Record<string, unknown>;
+}
+
+export interface VideoManifestSummary {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  uploaded_video_id: string;
+  version: number;
+  schema_version: number;
+  status: VisualManifestStatus;
+  provider: string;
+  model: string;
+  manifest?: VideoManifest | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CaptionStyle {
@@ -211,6 +382,13 @@ export interface BrollRequest {
   end_ms: number;
   keywords: string[];
   priority: number;
+  semantic_query?: string | null;
+  semantic_embedding?: number[];
+  source_scene_index?: number | null;
+  source_scene_type?: string | null;
+  shot_type?: string;
+  placement_rule?: string;
+  avoid_face_overlap?: boolean;
 }
 
 export interface StockVideoAssetSummary {
@@ -254,6 +432,7 @@ export interface BrollSlotSummary {
   score: number;
   error_code?: string | null;
   error_message?: string | null;
+  metadata?: Record<string, unknown>;
   selected_asset?: StockVideoAssetSummary | null;
   candidates: StockVideoAssetSummary[];
   created_at: string;
@@ -371,6 +550,16 @@ export interface ZoomMoment {
   reason: string;
 }
 
+export interface StyleClassification {
+  predicted_style: EditPlanStyleKey;
+  effective_style: EditPlanStyleKey;
+  requested_style?: EditPlanStyleKey | null;
+  confidence: number;
+  scores: Record<string, number>;
+  signals: string[];
+  source: "audio_visual_classifier";
+}
+
 export interface EditPlan {
   schema_version: number;
   style: EditPlanStyleKey;
@@ -399,6 +588,7 @@ export interface EditPlanSummary {
   broll_density?: BrollDensity;
   visual_preset?: VisualPresetKey;
   hook?: string;
+  style_classification?: StyleClassification | null;
 }
 
 export interface EditPlanRecordSummary {

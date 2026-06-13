@@ -42,7 +42,7 @@ class FixtureTranscriptionProvider:
         audio_path: Path | None,
         language_hint: LanguageHint,
     ) -> TranscriptionResult:
-        language = "hi" if language_hint == LanguageHint.HINDI else "en"
+        language = language_hint.value if language_hint != LanguageHint.AUTO else "en"
         source_words = (
             ["Yeh", "simple", "secret", "hai:", "pehle", "hook", "dikhao,", "phir", "proof."]
             if language == "hi"

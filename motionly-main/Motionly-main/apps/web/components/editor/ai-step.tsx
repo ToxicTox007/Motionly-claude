@@ -32,12 +32,20 @@ interface AIStepProps {
   onMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
 }
 
-const styles: { value: EditPlanStyleKey; label: string }[] = [
+type StylePickerValue = EditPlanStyleKey | "auto";
+
+const styles: { value: StylePickerValue; label: string }[] = [
+  { value: "auto", label: "Auto (Audio + Visual)" },
+  { value: "motivational", label: "Motivational" },
+  { value: "emotional", label: "Emotional" },
+  { value: "cinematic", label: "Cinematic" },
+  { value: "educational", label: "Educational" },
   { value: "luxury", label: "Luxury (Warm & Premium)" },
-  { value: "founder", label: "Founder (Clean & Pro)" },
-  { value: "travel", label: "Travel (Vibrant & Immersive)" },
-  { value: "fashion", label: "Fashion (Editorial & Dramatic)" },
-  { value: "podcast", label: "Podcast (Speaker-focused)" },
+  { value: "storytelling", label: "Storytelling" },
+  { value: "dramatic", label: "Dramatic" },
+  { value: "fast_paced", label: "Fast-Paced" },
+  { value: "clean_minimal", label: "Clean Minimal" },
+  { value: "creator_influencer", label: "Creator / Influencer" },
 ];
 
 const captionLanguages = [
@@ -79,7 +87,7 @@ export function AIStep({
   const router = useRouter();
   const activePlan = initialPlans.find(p => p.id === activePlanId) || initialPlans[0];
   
-  const [style, setStyle] = useState<EditPlanStyleKey>(activePlan?.style ?? "luxury");
+  const [style, setStyle] = useState<StylePickerValue>(activePlan?.style ?? "auto");
   const [density, setDensity] = useState<BrollDensity>(activePlan?.broll_density ?? "medium");
   const [prompt, setPrompt] = useState(activePlan?.prompt ?? "");
   const [sourceLanguage, setSourceLanguage] = useState("auto");
@@ -117,7 +125,7 @@ export function AIStep({
           friendlyError: "AI edit could not be generated. Please try again.",
           body: {
             prompt,
-            style,
+            ...(style === "auto" ? {} : { style }),
             broll_density: density,
             target_duration_s: 35,
             force: true,
@@ -273,7 +281,7 @@ export function AIStep({
           <Select
             label="Edit Style"
             value={style}
-            onChange={(val) => setStyle(val as EditPlanStyleKey)}
+            onChange={(val) => setStyle(val as StylePickerValue)}
             options={styles}
           />
         </div>
@@ -401,16 +409,27 @@ export function AIStep({
   );
 }
 
-function defaultCaptionPreset(style: EditPlanStyleKey) {
+function defaultCaptionPreset(style: StylePickerValue) {
   switch (style) {
+    case "auto":
+      return "founder_clean";
+    case "dramatic":
     case "fashion":
       return "vogue_white";
+    case "educational":
+    case "clean_minimal":
     case "founder":
       return "founder_clean";
+    case "motivational":
+    case "fast_paced":
+    case "creator_influencer":
     case "travel":
       return "bold_influencer";
+    case "storytelling":
     case "podcast":
       return "founder_clean";
+    case "emotional":
+    case "cinematic":
     case "luxury":
     default:
       return "luxury_minimal";

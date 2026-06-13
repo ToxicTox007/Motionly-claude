@@ -21,8 +21,11 @@ from app.schemas.plans import (
     PlanCreateRequest,
     PlannerProviderResult,
     PlanSummary,
+    StyleClassification,
     ZoomMoment,
 )
+from app.schemas.visual import VideoManifest
+from app.services.broll_intelligence import apply_stage4_broll_rules
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,8 @@ class EditPlannerProvider(Protocol):
         transcript: TranscriptRecord,
         payload: PlanCreateRequest,
         video_duration_ms: int,
+        visual_manifest: VideoManifest | None = None,
+        style_classification: StyleClassification | None = None,
     ) -> PlannerProviderResult: ...
 
 
@@ -65,6 +70,8 @@ class FixtureEditPlannerProvider:
         transcript: TranscriptRecord,
         payload: PlanCreateRequest,
         video_duration_ms: int,
+        visual_manifest: VideoManifest | None = None,
+        style_classification: StyleClassification | None = None,
     ) -> PlannerProviderResult:
         started = time.perf_counter()
         words = transcript.words
@@ -76,6 +83,10 @@ class FixtureEditPlannerProvider:
             )
 
         duration_ms = max(1000, video_duration_ms or transcript.duration_ms or words[-1].end_ms)
+        style = _effective_payload_style(
+            payload=payload,
+            style_classification=style_classification,
+        )
         target_ms = min(payload.target_duration_s * 1000, duration_ms)
         requested_text = _combined_direction_text(payload)
         cuts = _build_cuts(
@@ -83,39 +94,42 @@ class FixtureEditPlannerProvider:
             target_ms=target_ms,
             duration_ms=duration_ms,
             direction_text=requested_text,
-            style=payload.style,
+            style=style,
         )
         highlights = _build_highlights(words=words, duration_ms=duration_ms)
         broll = _build_broll_requests(
             words=words,
             cuts=cuts,
-            style=payload.style,
+            style=style,
             density=payload.broll_density,
             duration_ms=duration_ms,
             direction_text=requested_text,
+            audio_keywords=_audio_keyword_texts(transcript),
+            visual_keywords=_visual_keyword_texts(visual_manifest),
+            visual_manifest=visual_manifest,
         )
         zoom_limit = _zoom_limit(direction_text=requested_text, default=4)
-        zoom_intensity = _zoom_intensity(style=payload.style, direction_text=requested_text)
+        zoom_intensity = _zoom_intensity(style=style, direction_text=requested_text)
         zooms = [
             ZoomMoment(
                 timestamp_ms=highlight.timestamp_ms,
                 intensity=zoom_intensity,
                 reason=_bounded_reason(
-                    f"Emphasize {highlight.word} for {payload.style.value} pacing"
+                    f"Emphasize {highlight.word} for {style.value} pacing"
                 ),
             )
             for highlight in highlights[:zoom_limit]
         ]
         plan = EditPlan(
-            style=payload.style,
+            style=style,
             target_duration_s=max(10, round(sum(cut.end_ms - cut.start_ms for cut in cuts) / 1000)),
             cuts=cuts,
             caption_highlights=highlights,
             broll_requests=broll,
             zoom_moments=zooms,
-            music_mood=_music_mood(payload.style, requested_text),
-            effects=_effects(payload.style, requested_text),
-            color_grade=_color_grade(payload.style),
+            music_mood=_music_mood(style, requested_text),
+            effects=_effects(style, requested_text),
+            color_grade=_color_grade(style),
             risk_flags=_risk_flags(payload=payload, duration_ms=duration_ms, cuts=cuts),
         )
         return PlannerProviderResult(
@@ -141,8 +155,14 @@ class HttpEditPlannerProvider:
         transcript: TranscriptRecord,
         payload: PlanCreateRequest,
         video_duration_ms: int,
+        visual_manifest: VideoManifest | None = None,
+        style_classification: StyleClassification | None = None,
     ) -> PlannerProviderResult:
         started = time.perf_counter()
+        style = _effective_payload_style(
+            payload=payload,
+            style_classification=style_classification,
+        )
         body = {
             "model": self.model,
             "messages": [
@@ -152,13 +172,23 @@ class HttpEditPlannerProvider:
                     "content": json.dumps(
                         {
                             "schema": EditPlan.model_json_schema(),
-                            "style": payload.style.value,
+                            "style": style.value,
+                            "requested_style": payload.style.value if payload.style else None,
+                            "style_classification": (
+                                style_classification.model_dump(mode="json")
+                                if style_classification
+                                else None
+                            ),
                             "target_duration_s": payload.target_duration_s,
                             "broll_density": payload.broll_density.value,
                             "prompt": payload.prompt,
                             "feedback": payload.feedback,
                             "duration_ms": video_duration_ms,
                             "words": [word.model_dump(mode="json") for word in transcript.words],
+                            "audio_intelligence": _audio_intelligence(transcript),
+                            "visual_intelligence": _visual_intelligence_summary(
+                                visual_manifest
+                            ),
                         },
                         separators=(",", ":"),
                     ),
@@ -190,6 +220,8 @@ class HttpEditPlannerProvider:
                 transcript=transcript,
                 payload=payload,
                 video_duration_ms=video_duration_ms,
+                visual_manifest=visual_manifest,
+                style_classification=style_classification,
             )
         else:
             plan, validation_errors = _validate_or_repair_plan(
@@ -198,6 +230,8 @@ class HttpEditPlannerProvider:
                 payload=payload,
                 video_duration_ms=video_duration_ms,
                 provider_name=self.provider_name,
+                visual_manifest=visual_manifest,
+                style_classification=style_classification,
             )
         plan = normalize_plan(plan=plan, words=transcript.words, duration_ms=video_duration_ms)
         usage = data.get("usage") if isinstance(data, dict) else None
@@ -262,7 +296,11 @@ def normalize_plan(*, plan: EditPlan, words: list[TranscriptWord], duration_ms: 
     )
 
 
-def summarize_plan(plan: EditPlan) -> PlanSummary:
+def summarize_plan(
+    plan: EditPlan,
+    *,
+    style_classification: StyleClassification | None = None,
+) -> PlanSummary:
     return PlanSummary(
         duration_s=round(sum(cut.end_ms - cut.start_ms for cut in plan.cuts) / 1000),
         cut_count=len(plan.cuts),
@@ -274,10 +312,17 @@ def summarize_plan(plan: EditPlan) -> PlanSummary:
         risk_flags=plan.risk_flags,
         source_topic=_source_topic(plan),
         direction_notes=_direction_notes(plan),
+        style_classification=style_classification,
     )
 
 
-def build_plan_cache_key(*, transcript: TranscriptRecord, payload: PlanCreateRequest) -> str:
+def build_plan_cache_key(
+    *,
+    transcript: TranscriptRecord,
+    payload: PlanCreateRequest,
+    visual_manifest: VideoManifest | None = None,
+    style_classification: StyleClassification | None = None,
+) -> str:
     words_payload = [
         {"t": word.text, "s": word.start_ms, "e": word.end_ms} for word in transcript.words
     ]
@@ -288,9 +333,17 @@ def build_plan_cache_key(*, transcript: TranscriptRecord, payload: PlanCreateReq
         "words": words_payload,
         "prompt": payload.prompt.strip(),
         "feedback": payload.feedback or "",
-        "style": payload.style.value,
+        "requested_style": payload.style.value if payload.style else None,
+        "effective_style": (
+            style_classification.effective_style.value if style_classification else None
+        ),
         "target_duration_s": payload.target_duration_s,
         "broll_density": payload.broll_density.value,
+        "style_classification": (
+            style_classification.model_dump(mode="json") if style_classification else None
+        ),
+        "audio_intelligence": _audio_intelligence(transcript),
+        "visual_intelligence": _visual_intelligence_summary(visual_manifest),
     }
     return hashlib.sha256(
         json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -367,6 +420,9 @@ def _build_broll_requests(
     density: BrollDensity,
     duration_ms: int,
     direction_text: str = "",
+    audio_keywords: list[str] | None = None,
+    visual_keywords: list[str] | None = None,
+    visual_manifest: VideoManifest | None = None,
 ) -> list[BrollRequest]:
     count_by_density = {
         BrollDensity.NONE: 0,
@@ -385,7 +441,12 @@ def _build_broll_requests(
     count = min(max(count, 0), max(0, min(4, len(cuts) + 3)))
     if count == 0:
         return []
-    phrases = _keyword_phrases(words)
+    phrases = _merged_keyword_phrases(
+        audio_keywords=audio_keywords,
+        visual_keywords=visual_keywords,
+    )
+    if not phrases:
+        phrases = _keyword_phrases(words)
     requests = []
     for index in range(count):
         anchor = cuts[min(index, len(cuts) - 1)]
@@ -399,7 +460,11 @@ def _build_broll_requests(
                 priority=max(0.35, 0.9 - index * 0.12),
             )
         )
-    return requests
+    return apply_stage4_broll_rules(
+        requests=requests,
+        visual_manifest=visual_manifest,
+        duration_ms=duration_ms,
+    )
 
 
 def _keyword_phrases(words: list[TranscriptWord]) -> list[str]:
@@ -410,14 +475,106 @@ def _keyword_phrases(words: list[TranscriptWord]) -> list[str]:
     return phrases or ["key idea"]
 
 
+def _audio_intelligence(transcript: TranscriptRecord) -> dict[str, object]:
+    value = transcript.raw_payload.get("audio_intelligence")
+    return value if isinstance(value, dict) else {}
+
+
+def _audio_keyword_texts(transcript: TranscriptRecord) -> list[str]:
+    audio = _audio_intelligence(transcript)
+    keywords = audio.get("keywords")
+    if not isinstance(keywords, list):
+        return []
+    texts = []
+    for item in keywords:
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            text = item["text"].strip().lower()
+            if text:
+                texts.append(text)
+    return texts[:8]
+
+
+def _visual_intelligence_summary(visual_manifest: VideoManifest | None) -> dict[str, object]:
+    if visual_manifest is None:
+        return {}
+    scenes = sorted(
+        visual_manifest.scenes,
+        key=lambda scene: scene.visual_importance_score,
+        reverse=True,
+    )
+    top_scenes = scenes[:8]
+    return {
+        "duration_ms": visual_manifest.duration_ms,
+        "frame_count": visual_manifest.frame_count,
+        "scene_count": len(visual_manifest.scenes),
+        "summary": visual_manifest.summary,
+        "top_scenes": [
+            {
+                "start_ms": scene.start_ms,
+                "end_ms": scene.end_ms,
+                "caption": scene.caption,
+                "scene_type": scene.scene_type.value,
+                "camera_motion": scene.camera_motion.value,
+                "importance": scene.visual_importance_score,
+                "objects": [item.label for item in scene.objects[:6]],
+                "colors": [item.hex for item in scene.dominant_colors[:4]],
+            }
+            for scene in top_scenes
+        ],
+    }
+
+
+def _visual_keyword_texts(visual_manifest: VideoManifest | None) -> list[str]:
+    if visual_manifest is None:
+        return []
+    keywords: list[str] = []
+    scenes = sorted(
+        visual_manifest.scenes,
+        key=lambda scene: scene.visual_importance_score,
+        reverse=True,
+    )
+    for scene in scenes[:6]:
+        if scene.caption.strip():
+            keywords.append(scene.caption.strip().lower())
+        for obj in scene.objects[:4]:
+            keywords.append(obj.label.strip().lower())
+        if scene.scene_type.value != "unknown":
+            keywords.append(scene.scene_type.value.replace("_", " "))
+    return _dedupe_texts(keywords)[:8]
+
+
+def _merged_keyword_phrases(
+    *,
+    audio_keywords: list[str] | None,
+    visual_keywords: list[str] | None,
+) -> list[str]:
+    return _dedupe_texts([*(audio_keywords or []), *(visual_keywords or [])])[:8]
+
+
+def _dedupe_texts(values: list[str]) -> list[str]:
+    seen = set()
+    output = []
+    for value in values:
+        text = " ".join(value.lower().split())
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        output.append(text)
+    return output
+
+
+def _effective_payload_style(
+    *,
+    payload: PlanCreateRequest,
+    style_classification: StyleClassification | None = None,
+) -> EditPlanStyle:
+    if style_classification:
+        return style_classification.effective_style
+    return payload.style or EditPlanStyle.LUXURY
+
+
 def _music_mood(style: EditPlanStyle, direction_text: str = "") -> str:
-    mood = {
-        EditPlanStyle.LUXURY: "uplifting ambient luxury",
-        EditPlanStyle.FOUNDER: "clean confident minimal",
-        EditPlanStyle.TRAVEL: "bright energetic travel",
-        EditPlanStyle.FASHION: "editorial high contrast",
-        EditPlanStyle.PODCAST: "subtle conversational bed",
-    }[style]
+    mood = _style_config(style)["music_mood"]
     if _contains_any(direction_text, ("sharper", "punchier", "founder")):
         return f"{mood} with crisp momentum"
     if _contains_any(direction_text, ("preserve", "educational", "teaching")):
@@ -425,14 +582,84 @@ def _music_mood(style: EditPlanStyle, direction_text: str = "") -> str:
     return mood
 
 
+def _style_config(style: EditPlanStyle) -> dict[str, object]:
+    configs: dict[EditPlanStyle, dict[str, object]] = {
+        EditPlanStyle.MOTIVATIONAL: {
+            "music_mood": "uplifting anthemic momentum",
+            "effects": ["tight_jump_cuts", "warm_grade", "emphasis_pulse"],
+            "color_grade": "warm_punch",
+        },
+        EditPlanStyle.EMOTIONAL: {
+            "music_mood": "soft intimate piano bed",
+            "effects": ["subtle_push_in", "soft_flash"],
+            "color_grade": "muted_warm",
+        },
+        EditPlanStyle.CINEMATIC: {
+            "music_mood": "cinematic atmospheric build",
+            "effects": ["film_grain", "ken_burns", "motion_blur"],
+            "color_grade": "teal_orange",
+        },
+        EditPlanStyle.EDUCATIONAL: {
+            "music_mood": "clean light educational bed",
+            "effects": ["clean_lower_third", "meaning_preserved_captions"],
+            "color_grade": "neutral_daylight",
+        },
+        EditPlanStyle.LUXURY: {
+            "music_mood": "uplifting ambient luxury",
+            "effects": ["warm_grade", "soft_flash"],
+            "color_grade": "champagne_gold",
+        },
+        EditPlanStyle.STORYTELLING: {
+            "music_mood": "warm narrative arc",
+            "effects": ["subtle_push_in", "film_grain"],
+            "color_grade": "warm_natural",
+        },
+        EditPlanStyle.DRAMATIC: {
+            "music_mood": "tense impact pulse",
+            "effects": ["flash_cut", "film_grain", "tight_jump_cuts"],
+            "color_grade": "high_contrast",
+        },
+        EditPlanStyle.FAST_PACED: {
+            "music_mood": "energetic beat sync",
+            "effects": ["speed_ramp", "flash_cut", "tight_jump_cuts"],
+            "color_grade": "vibrant_daylight",
+        },
+        EditPlanStyle.CLEAN_MINIMAL: {
+            "music_mood": "clean confident minimal",
+            "effects": ["subtle_push_in", "clean_lower_third"],
+            "color_grade": "neutral_clean",
+        },
+        EditPlanStyle.CREATOR_INFLUENCER: {
+            "music_mood": "bright creator pop",
+            "effects": ["emphasis_pulse", "zoom_punch", "tight_jump_cuts"],
+            "color_grade": "bright_warm",
+        },
+        EditPlanStyle.FOUNDER: {
+            "music_mood": "clean confident minimal",
+            "effects": ["subtle_push_in"],
+            "color_grade": "neutral_clean",
+        },
+        EditPlanStyle.TRAVEL: {
+            "music_mood": "bright energetic travel",
+            "effects": ["speed_ramp", "light_leak"],
+            "color_grade": "vibrant_daylight",
+        },
+        EditPlanStyle.FASHION: {
+            "music_mood": "editorial high contrast",
+            "effects": ["flash_cut", "film_grain"],
+            "color_grade": "editorial_contrast",
+        },
+        EditPlanStyle.PODCAST: {
+            "music_mood": "subtle conversational bed",
+            "effects": ["quote_card"],
+            "color_grade": "natural_skin_tones",
+        },
+    }
+    return configs[style]
+
+
 def _effects(style: EditPlanStyle, direction_text: str = "") -> list[str]:
-    effects = {
-        EditPlanStyle.LUXURY: ["warm_grade", "soft_flash"],
-        EditPlanStyle.FOUNDER: ["subtle_push_in"],
-        EditPlanStyle.TRAVEL: ["speed_ramp", "light_leak"],
-        EditPlanStyle.FASHION: ["flash_cut", "film_grain"],
-        EditPlanStyle.PODCAST: ["quote_card"],
-    }[style]
+    effects = list(_style_config(style)["effects"])
     if _contains_any(direction_text, ("sharper", "punchier")) and "tight_jump_cuts" not in effects:
         effects = [*effects, "tight_jump_cuts"]
     if (
@@ -446,6 +673,20 @@ def _effects(style: EditPlanStyle, direction_text: str = "") -> list[str]:
 
 
 def _color_grade(style: EditPlanStyle) -> str:
+    return str(_style_config(style)["color_grade"])
+
+
+def _legacy_effects(style: EditPlanStyle) -> list[str]:
+    return {
+        EditPlanStyle.LUXURY: ["warm_grade", "soft_flash"],
+        EditPlanStyle.FOUNDER: ["subtle_push_in"],
+        EditPlanStyle.TRAVEL: ["speed_ramp", "light_leak"],
+        EditPlanStyle.FASHION: ["flash_cut", "film_grain"],
+        EditPlanStyle.PODCAST: ["quote_card"],
+    }[style]
+
+
+def _legacy_color_grade(style: EditPlanStyle) -> str:
     return {
         EditPlanStyle.LUXURY: "champagne_gold",
         EditPlanStyle.FOUNDER: "neutral_clean",
@@ -513,7 +754,11 @@ def _zoom_intensity(*, style: EditPlanStyle, direction_text: str) -> float:
         return 1.05
     if _contains_any(direction_text, ("punchier", "sharper")):
         return 1.28
-    return 1.22 if style == EditPlanStyle.FASHION else 1.12
+    if style in {EditPlanStyle.DRAMATIC, EditPlanStyle.FAST_PACED, EditPlanStyle.FASHION}:
+        return 1.24
+    if style in {EditPlanStyle.EMOTIONAL, EditPlanStyle.CINEMATIC}:
+        return 1.08
+    return 1.12
 
 
 def _source_topic(plan: EditPlan) -> str:
@@ -580,6 +825,8 @@ def _validate_or_repair_plan(
     payload: PlanCreateRequest,
     video_duration_ms: int,
     provider_name: str,
+    visual_manifest: VideoManifest | None = None,
+    style_classification: StyleClassification | None = None,
 ) -> tuple[EditPlan, list[str]]:
     try:
         return EditPlan.model_validate(raw_plan), []
@@ -591,6 +838,8 @@ def _validate_or_repair_plan(
         transcript=transcript,
         payload=payload,
         video_duration_ms=video_duration_ms,
+        visual_manifest=visual_manifest,
+        style_classification=style_classification,
     )
     try:
         plan = EditPlan.model_validate(repaired)
@@ -609,6 +858,8 @@ def _validate_or_repair_plan(
                 transcript=transcript,
                 payload=payload,
                 video_duration_ms=video_duration_ms,
+                visual_manifest=visual_manifest,
+                style_classification=style_classification,
             ),
             validation_errors,
         )
@@ -630,6 +881,8 @@ def _repair_plan_payload(
     transcript: TranscriptRecord,
     payload: PlanCreateRequest,
     video_duration_ms: int,
+    visual_manifest: VideoManifest | None = None,
+    style_classification: StyleClassification | None = None,
 ) -> dict[str, object]:
     source = raw_plan if isinstance(raw_plan, dict) else {}
     nested_plan = source.get("plan")
@@ -642,15 +895,21 @@ def _repair_plan_payload(
         transcript=transcript,
         payload=payload,
         video_duration_ms=duration_ms,
+        visual_manifest=visual_manifest,
+        style_classification=style_classification,
     )
     fallback_payload = fallback.model_dump(mode="json")
+    effective_style = _effective_payload_style(
+        payload=payload,
+        style_classification=style_classification,
+    )
 
     repaired: dict[str, object] = {
         "schema_version": 1,
         "style": _coerce_choice(
             source.get("style"),
             {item.value for item in EditPlanStyle},
-            payload.style.value,
+            effective_style.value,
         ),
         "target_duration_s": _coerce_int(
             source.get("target_duration_s") or source.get("duration_s"),
@@ -693,11 +952,15 @@ def _fallback_plan(
     transcript: TranscriptRecord,
     payload: PlanCreateRequest,
     video_duration_ms: int,
+    visual_manifest: VideoManifest | None = None,
+    style_classification: StyleClassification | None = None,
 ) -> EditPlan:
     return FixtureEditPlannerProvider().create_plan(
         transcript=transcript,
         payload=payload,
         video_duration_ms=video_duration_ms,
+        visual_manifest=visual_manifest,
+        style_classification=style_classification,
     ).plan
 
 
@@ -760,7 +1023,7 @@ def _repair_broll_requests(
 ) -> list[dict[str, object]]:
     items = value if isinstance(value, list) else fallback
     repaired = []
-    for item in items if isinstance(items, list) else []:
+    for index, item in enumerate(items if isinstance(items, list) else []):
         if not isinstance(item, dict):
             continue
         start_ms = _coerce_int(item.get("start_ms"), default=0, minimum=0, maximum=duration_ms)
@@ -774,6 +1037,8 @@ def _repair_broll_requests(
         if isinstance(keywords, str):
             keywords = [keywords]
         keywords = _repair_string_list(keywords, ["brand moment"], limit=5)
+        fallback_item = _fallback_broll_item(fallback=fallback, index=index)
+        fallback_semantic_embedding = fallback_item.get("semantic_embedding")
         if end_ms <= start_ms:
             continue
         repaired.append(
@@ -782,9 +1047,46 @@ def _repair_broll_requests(
                 "end_ms": end_ms,
                 "keywords": keywords or ["brand moment"],
                 "priority": _coerce_float(item.get("priority"), default=0.7, minimum=0, maximum=1),
+                "semantic_query": _optional_text(
+                    item.get("semantic_query"),
+                    fallback_item.get("semantic_query"),
+                ),
+                "semantic_embedding": _repair_float_list(
+                    item.get("semantic_embedding") or fallback_semantic_embedding,
+                    limit=1024,
+                ),
+                "source_scene_index": _optional_int(
+                    item.get("source_scene_index"),
+                    fallback_item.get("source_scene_index"),
+                    minimum=0,
+                    maximum=10_000,
+                ),
+                "source_scene_type": _optional_text(
+                    item.get("source_scene_type"),
+                    fallback_item.get("source_scene_type"),
+                ),
+                "shot_type": _coerce_text(
+                    item.get("shot_type") or fallback_item.get("shot_type"),
+                    "cutaway",
+                )[:40],
+                "placement_rule": _coerce_text(
+                    item.get("placement_rule") or fallback_item.get("placement_rule"),
+                    "semantic_anchor",
+                )[:80],
+                "avoid_face_overlap": _coerce_bool(
+                    item.get("avoid_face_overlap"),
+                    default=bool(fallback_item.get("avoid_face_overlap", True)),
+                ),
             }
         )
     return repaired[:12] or list(fallback if isinstance(fallback, list) else [])
+
+
+def _fallback_broll_item(*, fallback: object, index: int) -> dict[str, object]:
+    if not isinstance(fallback, list) or index >= len(fallback):
+        return {}
+    item = fallback[index]
+    return item if isinstance(item, dict) else {}
 
 
 def _repair_zoom_moments(
@@ -838,6 +1140,11 @@ def _coerce_text(value: object, default: object) -> str:
     return text or str(default)
 
 
+def _optional_text(value: object, default: object = None) -> str | None:
+    text = str(value or default or "").strip()
+    return text[:180] if text else None
+
+
 def _coerce_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
     try:
         number = int(round(float(value)))  # type: ignore[arg-type]
@@ -846,12 +1153,49 @@ def _coerce_int(value: object, *, default: int, minimum: int, maximum: int) -> i
     return min(max(number, minimum), maximum)
 
 
+def _optional_int(
+    value: object,
+    default: object = None,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    raw = value if value is not None else default
+    if raw is None:
+        return None
+    return _coerce_int(raw, default=minimum, minimum=minimum, maximum=maximum)
+
+
 def _coerce_float(value: object, *, default: float, minimum: float, maximum: float) -> float:
     try:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         number = default
     return min(max(number, minimum), maximum)
+
+
+def _coerce_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return default
+
+
+def _repair_float_list(value: object, *, limit: int) -> list[float]:
+    if not isinstance(value, list):
+        return []
+    repaired = []
+    for item in value[:limit]:
+        try:
+            repaired.append(float(item))
+        except (TypeError, ValueError):
+            continue
+    return repaired
 
 
 def _validation_error_messages(error: ValidationError) -> list[str]:

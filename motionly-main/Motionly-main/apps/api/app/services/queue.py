@@ -485,6 +485,25 @@ class TranscriptionQueue(BaseQueue):
         )
 
 
+class VisualQueue(BaseQueue):
+    queue_name = "visual_analysis"
+    kind = "visual_analysis"
+
+    def enqueue_visual_analysis(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        video_id: UUID,
+    ) -> EnqueuedJob:
+        return self._enqueue(
+            job_id=self._job_id("visual", project_id, video_id, workspace_id),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            resource_id=video_id,
+        )
+
+
 class PlanQueue(BaseQueue):
     queue_name = "planning"
     kind = "edit_plan"
@@ -516,7 +535,9 @@ class BrollQueue(BaseQueue):
         edit_plan_id: UUID,
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=":".join(str(part) for part in ("broll", project_id, edit_plan_id, workspace_id)),
+            job_id=":".join(
+                str(part) for part in ("broll", project_id, edit_plan_id, workspace_id)
+            ),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,

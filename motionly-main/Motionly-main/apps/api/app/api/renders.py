@@ -783,7 +783,7 @@ async def stream_render_events(
                 f"{payload.get('updated_at')}:{len(payload.get('events') or [])}"
             )
             if signature != last_signature:
-                yield f"event: render\n"
+                yield "event: render\n"
                 yield f"data: {json.dumps(payload)}\n\n"
                 last_signature = signature
             if job.status in terminal:
