@@ -41,6 +41,36 @@ def test_ffmpeg_renderer_maps_primary_video_and_optional_audio(
     assert "-shortest" in command
 
 
+def test_ffmpeg_renderer_uses_nvenc_and_renders_free_plan_watermark(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        Path(command[-1]).write_bytes(b"mp4")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(ffmpeg_render.subprocess, "run", fake_run)
+
+    FFmpegCaptionRenderer().render(
+        source_path=tmp_path / "source.mp4",
+        ass_path=None,
+        output_path=tmp_path / "out.mp4",
+        specs=RenderSpecs(),
+        video_encoder="h264_nvenc",
+        watermark=True,
+    )
+
+    command = captured["command"]
+    assert command[command.index("-c:v") + 1] == "h264_nvenc"
+    assert command[command.index("-preset") + 1] == "p4"
+    video_filter = command[command.index("-vf") + 1]
+    assert "drawtext=text='MOTIONLY'" in video_filter
+
+
 def test_manual_sfx_data_url_is_materialized_for_ffmpeg(tmp_path: Path) -> None:
     mix = _audio_mix_from_manifest(
         {

@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     upload_sync_processing: bool = Field(default=False, alias="UPLOAD_SYNC_PROCESSING")
     render_sync_completion: bool = Field(default=False, alias="RENDER_SYNC_COMPLETION")
     render_execute_ffmpeg: bool = Field(default=True, alias="RENDER_EXECUTE_FFMPEG")
+    ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
+    ffmpeg_gpu_encoder: str = Field(default="h264_nvenc", alias="FFMPEG_GPU_ENCODER")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     bullmq_bridge_path: str | None = Field(default=None, alias="BULLMQ_BRIDGE_PATH")
     bullmq_node_command: str = Field(default="node", alias="BULLMQ_NODE_COMMAND")
@@ -105,6 +107,17 @@ class Settings(BaseSettings):
     )
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
     remotion_enabled: bool = Field(default=False, alias="REMOTION_ENABLED")
+    publish_sync_completion: bool = Field(default=False, alias="PUBLISH_SYNC_COMPLETION")
+    publish_oauth_state_secret: str | None = Field(
+        default=None, alias="PUBLISH_OAUTH_STATE_SECRET"
+    )
+    tiktok_client_key: str | None = Field(default=None, alias="TIKTOK_CLIENT_KEY")
+    tiktok_client_secret: str | None = Field(default=None, alias="TIKTOK_CLIENT_SECRET")
+    meta_app_id: str | None = Field(default=None, alias="META_APP_ID")
+    meta_app_secret: str | None = Field(default=None, alias="META_APP_SECRET")
+    meta_graph_api_version: str = Field(default="v22.0", alias="META_GRAPH_API_VERSION")
+    google_client_id: str | None = Field(default=None, alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
 
     @property
     def cors_origin_list(self) -> list[str]:

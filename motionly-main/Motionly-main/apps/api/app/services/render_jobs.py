@@ -98,6 +98,8 @@ def complete_render_job(
                     manual_elements=_manual_elements_from_manifest(job.manifest),
                     framing=_framing_from_manifest(job.manifest),
                     keep_segments=job.keep_segments,
+                    video_encoder=_video_encoder_from_manifest(job.manifest),
+                    watermark=_watermark_from_manifest(job.manifest),
                     **audio_mix,
                 )
             except ApiError as exc:
@@ -123,6 +125,8 @@ def complete_render_job(
                     manual_elements=_manual_elements_from_manifest(job.manifest),
                     framing=_framing_from_manifest(job.manifest),
                     keep_segments=job.keep_segments,
+                    video_encoder=_video_encoder_from_manifest(job.manifest),
+                    watermark=_watermark_from_manifest(job.manifest),
                     **audio_mix,
                 )
                 job.specs = fallback_specs
@@ -430,6 +434,16 @@ def _effects_config_from_manifest(manifest: dict) -> dict[str, object] | None:
         return None
     effects_config = render_props.get("effectsConfig")
     return effects_config if isinstance(effects_config, dict) else None
+
+
+def _video_encoder_from_manifest(manifest: dict) -> str:
+    encoder = str(manifest.get("video_encoder") or "libx264")
+    return encoder if encoder in {"libx264", "h264_nvenc", "hevc_nvenc"} else "libx264"
+
+
+def _watermark_from_manifest(manifest: dict) -> bool:
+    render_props = manifest.get("render_props")
+    return bool(render_props.get("watermark")) if isinstance(render_props, dict) else False
 
 
 def _manual_elements_from_manifest(manifest: dict) -> list[dict[str, object]]:

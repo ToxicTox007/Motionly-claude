@@ -10,7 +10,9 @@ import {
   Download,
   Loader2,
   RotateCcw,
+  Send,
   Square,
+  Trash2,
   Video,
 } from "lucide-react";
 import type {
@@ -83,6 +85,20 @@ const templates: { value: RenderTemplateId; label: string }[] = [
 ];
 
 type RenderUiState = "idle" | "queued" | "rendering" | "completed" | "failed" | "canceled";
+type PublishPlatform = "tiktok" | "instagram" | "youtube";
+type PublishConnection = {
+  id: string;
+  platform: PublishPlatform;
+  external_account_id: string;
+  account_name: string;
+};
+type PublishJob = {
+  id: string;
+  platform: PublishPlatform;
+  status: "queued" | "publishing" | "published" | "failed";
+  external_url?: string | null;
+  error_message?: string | null;
+};
 
 export function ExportStep({
   projectId,
@@ -117,6 +133,13 @@ export function ExportStep({
   const [message, setMessage] = useState<string | null>(null);
   const [streamingJobId, setStreamingJobId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [connections, setConnections] = useState<PublishConnection[]>([]);
+  const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
+  const [connectPlatform, setConnectPlatform] = useState<PublishPlatform>("tiktok");
+  const [connectAccountId, setConnectAccountId] = useState("");
+  const [connectAccountName, setConnectAccountName] = useState("");
+  const [connectToken, setConnectToken] = useState("");
+  const [publishCaption, setPublishCaption] = useState("");
   const streamAbortRef = useRef<AbortController | null>(null);
 
   const latestJob = jobs[0];
@@ -167,6 +190,19 @@ export function ExportStep({
     const timer = window.setInterval(() => setNowMs(Date.now()), 5000);
     return () => window.clearInterval(timer);
   }, [isRendering]);
+
+  useEffect(() => {
+    void refreshPublishing();
+    // refreshPublishing reads the latest auth/project props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiAccessToken, projectId, userId, workspaceId]);
+
+  useEffect(() => {
+    if (!publishJobs.some((job) => job.status === "queued" || job.status === "publishing")) return;
+    const timer = window.setInterval(() => void refreshPublishing(), 3000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishJobs]);
 
   async function startRender() {
     setLoading(true);
@@ -505,6 +541,105 @@ export function ExportStep({
     }
   }
 
+  async function refreshPublishing() {
+    const headers = await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken, json: false });
+    const [connectionsResponse, jobsResponse] = await Promise.all([
+      fetch(`${env.apiBaseUrl}/publish/connections`, { cache: "no-store", headers }),
+      fetch(`${env.apiBaseUrl}/projects/${projectId}/publish`, { cache: "no-store", headers }),
+    ]);
+    if (connectionsResponse.ok) {
+      const payload = await connectionsResponse.json();
+      setConnections(payload.connections ?? []);
+    }
+    if (jobsResponse.ok) {
+      const payload = await jobsResponse.json();
+      setPublishJobs(payload.jobs ?? []);
+    }
+  }
+
+  async function connectPublishingAccount() {
+    setLoading(true);
+    setMessage(null);
+    try {
+      await editorApiRequest(`${env.apiBaseUrl}/publish/connections`, {
+        method: "POST", workspaceId, userId, accessToken: apiAccessToken,
+        friendlyError: "Social account could not be connected.",
+        body: { platform: connectPlatform, access_token: connectToken, external_account_id: connectAccountId, account_name: connectAccountName },
+      });
+      setConnectToken("");
+      setConnectAccountId("");
+      setConnectAccountName("");
+      await refreshPublishing();
+      setMessage(`${socialLabel(connectPlatform)} account connected.`);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function connectPublishingOAuth() {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const payload = await editorApiRequest<{ authorization_url: string }>(
+        `${env.apiBaseUrl}/publish/oauth/${connectPlatform}/start`,
+        {
+          method: "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: `${socialLabel(connectPlatform)} connection could not be started.`,
+          body: { return_url: window.location.href },
+        },
+      );
+      window.location.assign(payload.authorization_url);
+    } catch (error) {
+      setMessage((error as Error).message);
+      setLoading(false);
+    }
+  }
+
+  async function disconnectPublishingAccount(connectionId: string) {
+    setLoading(true);
+    try {
+      await editorApiRequest(`${env.apiBaseUrl}/publish/connections/${connectionId}`, {
+        method: "DELETE", workspaceId, userId, accessToken: apiAccessToken,
+        friendlyError: "Social account could not be disconnected.",
+      });
+      await refreshPublishing();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function publishExport(connection: PublishConnection) {
+    if (!latestExport) return;
+    setLoading(true);
+    setMessage(`Queueing ${socialLabel(connection.platform)} publish...`);
+    try {
+      await editorApiRequest(`${env.apiBaseUrl}/projects/${projectId}/publish`, {
+        method: "POST", workspaceId, userId, accessToken: apiAccessToken,
+        friendlyError: `Could not publish to ${socialLabel(connection.platform)}.`,
+        body: {
+          export_id: latestExport.id,
+          connection_id: connection.id,
+          title: `Motionly export v${latestExport.version}`,
+          caption: publishCaption,
+          privacy: "private",
+        },
+      });
+      await refreshPublishing();
+      setMessage(`${socialLabel(connection.platform)} publish queued.`);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div id="editor-export" className="space-y-4" aria-labelledby="export-heading">
       <div className="space-y-2">
@@ -793,6 +928,48 @@ export function ExportStep({
            </div>
         </div>
       )}
+      <section className="space-y-3 border-t border-border pt-5">
+        <div>
+          <Label>Direct publish</Label>
+          <p className="mt-1 text-xs text-muted-foreground">Connect an API-enabled creator account, then send the latest export without downloading it.</p>
+        </div>
+        <div>
+          <select aria-label="Social platform" value={connectPlatform} onChange={(event) => setConnectPlatform(event.target.value as PublishPlatform)} className="min-h-11 border border-border bg-background px-3 text-xs font-bold">
+            <option value="tiktok">TikTok</option>
+            <option value="instagram">Instagram</option>
+            <option value="youtube">YouTube</option>
+          </select>
+        </div>
+        <Button type="button" className="min-h-11 w-full" disabled={loading} onClick={connectPublishingOAuth}>Connect {socialLabel(connectPlatform)} with OAuth</Button>
+        <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Developer fallback</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <input aria-label="Account name" placeholder="Account name" value={connectAccountName} onChange={(event) => setConnectAccountName(event.target.value)} className="min-h-11 border border-border bg-background px-3 text-xs" />
+          <input aria-label="Platform account ID" placeholder="Platform account ID" value={connectAccountId} onChange={(event) => setConnectAccountId(event.target.value)} className="min-h-11 border border-border bg-background px-3 text-xs" />
+        </div>
+        <input type="password" autoComplete="off" aria-label="Platform access token" placeholder="Platform access token (stored server-side)" value={connectToken} onChange={(event) => setConnectToken(event.target.value)} className="min-h-11 w-full border border-border bg-background px-3 text-xs" />
+        <Button type="button" variant="secondary" className="min-h-11 w-full" disabled={loading || connectToken.length < 8 || !connectAccountId.trim() || !connectAccountName.trim()} onClick={connectPublishingAccount}>Connect account</Button>
+        {connections.length > 0 ? (
+          <div className="space-y-2 border-t border-border pt-3">
+            <textarea aria-label="Post caption" placeholder="Post caption" value={publishCaption} onChange={(event) => setPublishCaption(event.target.value)} maxLength={2200} className="min-h-20 w-full resize-y border border-border bg-background p-3 text-xs" />
+            {connections.map((connection) => {
+              const job = publishJobs.find((item) => item.platform === connection.platform);
+              return (
+                <div key={connection.id} className="flex items-center justify-between gap-2 border border-border bg-muted/30 p-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-black">{socialLabel(connection.platform)} · {connection.account_name}</p>
+                    <p className="text-[10px] font-bold text-muted-foreground">{job ? publishStatusLabel(job.status) : "Ready"}{job?.error_message ? ` · ${job.error_message}` : ""}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    {job?.external_url ? <a href={job.external_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center border border-border px-3 text-xs font-bold">View</a> : null}
+                    <Button type="button" variant="secondary" className="min-h-11 gap-1 px-3 text-xs" disabled={loading || !latestExport || job?.status === "queued" || job?.status === "publishing"} onClick={() => publishExport(connection)}><Send className="size-3.5" />Publish</Button>
+                    <Button type="button" variant="secondary" aria-label={`Disconnect ${connection.account_name}`} className="min-h-11 px-3" disabled={loading} onClick={() => disconnectPublishingAccount(connection.id)}><Trash2 className="size-3.5" /></Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </section>
       {!captionTrackId ? (
         <p id="export-missing-captions" role="alert" className="border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700">
           Generate captions before export. Open the Text tab and generate or save captions, then start render again.
@@ -860,6 +1037,14 @@ function RenderStatusIcon({
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function socialLabel(platform: PublishPlatform) {
+  return { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube" }[platform];
+}
+
+function publishStatusLabel(status: PublishJob["status"]) {
+  return { queued: "Queued", publishing: "Publishing", published: "Published", failed: "Failed" }[status];
 }
 
 function statusLabel(status: RenderJobSummary["status"]) {

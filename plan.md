@@ -762,13 +762,13 @@ The current editor has all AI pipeline controls but lacks the full manual editin
 
 ### Phase 4 — Export & Platform (Weeks 25–28)
 
-- [ ] GPU-accelerated FFmpeg export (A10/T4 worker tier)
-- [ ] Multi-format export presets (TikTok, Reels, Shorts, YT landscape)
-- [ ] Export progress UI with real-time ETA
-- [ ] Direct publish integrations (TikTok, Instagram, YouTube APIs)
-- [ ] Project version history (save named snapshots of EditPlan)
-- [ ] Bulk export: multiple format targets from one render job
-- [ ] Watermark removal for paid tiers
+- [x] GPU-accelerated FFmpeg export (A10/T4 worker tier)
+- [x] Multi-format export presets (TikTok, Reels, Shorts, YT landscape)
+- [x] Export progress UI with real-time ETA
+- [x] Direct publish integrations (TikTok, Instagram, YouTube APIs)
+- [x] Project version history (save named snapshots of EditPlan)
+- [x] Bulk export: multiple format targets from one render job
+- [x] Watermark removal for paid tiers
 
 **Milestone:** Production-grade export. Full upload-to-publish flow.
 

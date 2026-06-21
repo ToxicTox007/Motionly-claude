@@ -49,6 +49,7 @@ export type MotionlyRenderProps = {
     mix?: MusicMixSettings;
   };
   effectsConfig?: EffectsConfigSummary | null;
+  watermark?: boolean;
 };
 
 export type TemplateDefinition = RenderTemplateMetadata & {

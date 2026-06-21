@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
-export const queueNames = [
+const allQueueNames = [
   "upload_preprocess",
   "transcription",
   "visual_analysis",
@@ -9,7 +9,13 @@ export const queueNames = [
   "stock_search",
   "audio",
   "render",
+  "render_gpu",
+  "publish",
 ];
+
+export const queueNames = env("WORKER_QUEUES")
+  ? env("WORKER_QUEUES").split(",").map((name) => name.trim()).filter((name) => allQueueNames.includes(name))
+  : allQueueNames;
 
 export function env(name, fallback = "") {
   return process.env[name] || fallback;
@@ -77,7 +83,9 @@ export function defaultJobOptions() {
 }
 
 export function workerConcurrency(queueName) {
-  const specific = queueName === "render" ? env("RENDER_WORKER_CONCURRENCY") : "";
+  const specific = queueName === "render_gpu"
+    ? env("GPU_RENDER_WORKER_CONCURRENCY")
+    : queueName === "render" ? env("RENDER_WORKER_CONCURRENCY") : "";
   return positiveIntValue(specific || env("WORKER_CONCURRENCY", "3"), 3);
 }
 

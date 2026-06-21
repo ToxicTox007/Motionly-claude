@@ -28,6 +28,11 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
         style={input.captionStyle}
         template={template}
       />
+      {input.watermark ? (
+        <div style={{ position: "absolute", right: 32, bottom: 26, padding: "8px 12px", background: "rgba(0,0,0,.38)", color: "rgba(255,255,255,.82)", fontFamily: "Inter, sans-serif", fontSize: 22, fontWeight: 800, letterSpacing: 2 }}>
+          MOTIONLY
+        </div>
+      ) : null}
     </AbsoluteFill>
   );
 }

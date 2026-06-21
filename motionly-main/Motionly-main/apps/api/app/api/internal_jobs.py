@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
 from app.schemas.renders import RenderJobStatus
+from app.services.publishing import execute_publish_job
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob, QueueJobStatus, QueueRegistry
 from app.services.render_jobs import complete_render_job_by_id
 from app.services.transcription_jobs import (
@@ -172,6 +173,22 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             "render_job_id": str(render.id),
             "render_status": render.status.value,
             "failed": render.status == RenderJobStatus.FAILED,
+        }
+
+    if job.kind == "publish":
+        published = execute_publish_job(
+            publishing_repository=request.app.state.publishing_repository,
+            render_repository=request.app.state.render_repository,
+            storage_signer=request.app.state.storage_signer,
+            client=request.app.state.social_publishing_client,
+            job_id=job.resource_id,
+            workspace_id=job.workspace_id,
+        )
+        return {
+            "publish_job_id": str(published.id),
+            "publish_status": published.status.value,
+            "external_post_id": published.external_post_id,
+            "failed": published.status.value == "failed",
         }
 
     return {

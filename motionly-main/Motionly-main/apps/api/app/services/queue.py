@@ -416,11 +416,12 @@ class BaseQueue:
         project_id: UUID | None = None,
         resource_id: UUID | None = None,
         render_engine: str = "ffmpeg_basic",
+        queue_name: str | None = None,
     ) -> EnqueuedJob:
         return self.registry.enqueue(
             job_id=job_id,
             kind=kind or self.kind,
-            queue_name=self.queue_name,
+            queue_name=queue_name or self.queue_name,
             priority=priority,
             workspace_id=workspace_id,
             project_id=project_id,
@@ -556,6 +557,7 @@ class RenderQueue(BaseQueue):
         workspace_id: UUID,
         priority: int = 0,
         render_engine: str = "ffmpeg_basic",
+        compute_tier: str = "cpu",
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=":".join(
@@ -574,6 +576,26 @@ class RenderQueue(BaseQueue):
             project_id=project_id,
             resource_id=render_job_id,
             render_engine=render_engine,
+            queue_name="render_gpu" if compute_tier == "gpu" else self.queue_name,
+        )
+
+
+class PublishQueue(BaseQueue):
+    queue_name = "publish"
+    kind = "publish"
+
+    def enqueue_publish(
+        self,
+        *,
+        publish_job_id: UUID,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> EnqueuedJob:
+        return self._enqueue(
+            job_id=self._job_id("publish", publish_job_id),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            resource_id=publish_job_id,
         )
 
 

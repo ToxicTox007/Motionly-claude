@@ -29,6 +29,8 @@ class FFmpegCaptionRenderer:
         sfx_cue_ms: list[float] | None = None,
         duck_music: bool = True,
         keep_segments: list[CutSegment] | None = None,
+        video_encoder: str = "libx264",
+        watermark: bool = False,
     ) -> tuple[int, int]:
         if which("ffmpeg") is None:
             raise ApiError(
@@ -48,6 +50,7 @@ class FFmpegCaptionRenderer:
             manual_elements=manual_elements or [],
             framing=framing,
             keep_segments=safe_keep_segments,
+            watermark=watermark,
         )
         active_sfx_sources = (sfx_sources or [])[:6] if sfx_intensity > 0 else []
         has_music = music_source is not None and music_volume > 0
@@ -92,12 +95,7 @@ class FFmpegCaptionRenderer:
                 "[aout]" if audio_filter else (source_audio_map or "0:a?"),
                 "-r",
                 str(specs.fps),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-threads",
-                "2",
+                *_video_encoder_args(video_encoder),
                 "-pix_fmt",
                 specs.pixel_format,
                 "-c:a",
@@ -132,6 +130,20 @@ class FFmpegCaptionRenderer:
         return benchmark_ms, file_size
 
 
+def _video_encoder_args(video_encoder: str) -> list[str]:
+    if video_encoder == "h264_nvenc":
+        return [
+            "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq",
+            "-rc", "vbr", "-cq", "21", "-b:v", "0", "-spatial-aq", "1",
+        ]
+    if video_encoder == "hevc_nvenc":
+        return [
+            "-c:v", "hevc_nvenc", "-preset", "p4", "-tune", "hq",
+            "-rc", "vbr", "-cq", "23", "-b:v", "0", "-spatial-aq", "1",
+        ]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-threads", "2"]
+
+
 def _ffmpeg_filter_path(path: Path) -> str:
     escaped = str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     return f"'{escaped}'"
@@ -146,10 +158,17 @@ def _build_video_filter_graph(
     manual_elements: list[dict[str, object]],
     framing: dict[str, object] | None,
     keep_segments: list[CutSegment],
+    watermark: bool,
 ) -> tuple[str, str, str | None]:
     source_steps = _source_framing_filters(specs=specs, framing=framing)
     source_steps.extend(_effects_filters(effects_config))
     source_steps.extend(_manual_element_filters(manual_elements, specs=specs))
+    if watermark:
+        source_steps.append(
+            "drawtext=text='MOTIONLY':fontsize=h/24:fontcolor=white@0.72:"
+            "x=w-text_w-w*0.035:y=h-text_h-h*0.025:"
+            "box=1:boxcolor=black@0.38:boxborderw=10"
+        )
     cut_filters, source_video_label, source_audio_label = _cut_filter_graph(keep_segments)
     if not broll_assets:
         if ass_path is not None:

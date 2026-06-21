@@ -502,6 +502,12 @@ async def create_render(
         has_music=bool(music_selection and music_selection.music_track_id),
         has_effects=bool(effects_config),
     )
+    compute_tier = (
+        "gpu"
+        if selected_engine == RenderEngine.FFMPEG_BASIC
+        and getattr(request.app.state.settings, "ffmpeg_gpu_enabled", False)
+        else "cpu"
+    )
     manifest = {
         "schema_version": 1,
         "source_video_id": str(upload.id),
@@ -528,6 +534,12 @@ async def create_render(
         "template_id": template.id.value,
         "broll_selection_version": max([slot.version for slot in broll_slots], default=None),
         "render_engine": selected_engine.value,
+        "compute_tier": compute_tier,
+        "video_encoder": (
+            request.app.state.settings.ffmpeg_gpu_encoder
+            if compute_tier == "gpu"
+            else "libx264"
+        ),
         "renderer_version": _RENDERER_VERSIONS[selected_engine],
         "props_hash": props_hash,
         "export_settings": render_export_settings,
@@ -609,6 +621,7 @@ async def create_render(
             f"include_captions={payload.include_captions}",
             f"include_broll={payload.include_broll}",
             f"broll_assets={len(active_broll_assets)}",
+            f"compute_tier={compute_tier}",
             f"adjustment_action={payload.adjustment_action.value}"
             if payload.adjustment_action
             else "adjustment_action=none",
@@ -637,6 +650,7 @@ async def create_render(
         workspace_id=actor.workspace_id,
         priority=10 if billing_status.current_plan.entitlements.priority_queue else 0,
         render_engine=selected_engine.value,
+        compute_tier=compute_tier,
     )
 
     if request.app.state.settings.should_complete_renders_synchronously:
@@ -1002,6 +1016,8 @@ async def retry_render(
         render_job_id=job.id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
+        render_engine=(job.render_engine or RenderEngine.FFMPEG_BASIC).value,
+        compute_tier=str(job.manifest.get("compute_tier") or "cpu"),
     )
     return RenderCreateResponse(
         job=job.to_response(repository.events_for_job(job.id)),

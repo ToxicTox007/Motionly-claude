@@ -16,6 +16,7 @@ from app.api.local_storage import router as local_storage_router
 from app.api.music import router as music_router
 from app.api.plans import router as plans_router
 from app.api.projects import router as projects_router
+from app.api.publishing import router as publishing_router
 from app.api.regeneration import router as regeneration_router
 from app.api.renders import router as renders_router
 from app.api.uploads import router as uploads_router
@@ -31,6 +32,7 @@ from app.repositories.effects import InMemoryEffectsRepository, SupabaseEffectsR
 from app.repositories.music import InMemoryMusicRepository, SupabaseMusicRepository
 from app.repositories.plans import InMemoryPlanRepository, SupabasePlanRepository
 from app.repositories.projects import InMemoryProjectRepository, SupabaseProjectRepository
+from app.repositories.publishing import InMemoryPublishingRepository, SupabasePublishingRepository
 from app.repositories.regeneration import (
     InMemoryRegenerationRepository,
     SupabaseRegenerationRepository,
@@ -46,6 +48,7 @@ from app.services.audio_ml_providers import (
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
+from app.services.publishing import SocialPublishingClient
 from app.services.queue import (
     BrollQueue,
     BullMQQueueRegistry,
@@ -53,6 +56,7 @@ from app.services.queue import (
     MusicQueue,
     PlanQueue,
     PreprocessQueue,
+    PublishQueue,
     QueueRegistry,
     RegenerationQueue,
     RenderQueue,
@@ -124,6 +128,14 @@ def create_app() -> FastAPI:
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryRenderRepository(app.state.caption_repository)
+    )
+    app.state.publishing_repository = (
+        SupabasePublishingRepository(
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryPublishingRepository()
     )
     app.state.plan_repository = (
         SupabasePlanRepository(
@@ -220,6 +232,10 @@ def create_app() -> FastAPI:
     app.state.plan_queue = PlanQueue(app.state.queue_registry)
     app.state.broll_queue = BrollQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)
+    app.state.publish_queue = PublishQueue(app.state.queue_registry)
+    app.state.social_publishing_client = SocialPublishingClient(
+        meta_graph_api_version=settings.meta_graph_api_version
+    )
     transcription_provider_key = settings.transcription_provider.strip().lower()
     edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
     audio_ml_provider_key = settings.audio_ml_provider.strip().lower()
@@ -318,6 +334,7 @@ def create_app() -> FastAPI:
     app.include_router(effects_router)
     app.include_router(regeneration_router)
     app.include_router(renders_router)
+    app.include_router(publishing_router)
     app.include_router(billing_router)
     app.include_router(analytics_router)
     app.include_router(internal_jobs_router)

@@ -19,7 +19,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Sparkles, Type, Layers, Music2, Palette, Download,
-  Film, Loader2, ChevronLeft,
+  Film, Loader2, ChevronLeft, History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
@@ -33,6 +33,7 @@ import { CaptionsTab } from "./editor/tabs/captions-tab";
 import { ElementPalette } from "./editor/dnd/ElementPalette";
 import { type PaletteElement } from "./editor/dnd/element-catalog";
 import { PropertiesInspector } from "./editor/PropertiesInspector";
+import { VersionHistoryPanel } from "./editor/VersionHistoryPanel";
 import {
   EditorHistoryProvider,
   useEditorHistory,
@@ -84,7 +85,7 @@ interface EditorClientProps {
   exports:         ExportSummary[];
 }
 
-type InspectorTab = "ai" | "captions" | "broll" | "audio" | "look" | "export";
+type InspectorTab = "ai" | "captions" | "broll" | "audio" | "look" | "history" | "export";
 
 const BrollTab = dynamic(
   () => import("./editor/tabs/broll-tab").then((mod) => mod.BrollTab),
@@ -814,6 +815,7 @@ const INSPECTOR_TABS: Array<{
   { id: "broll",   label: "B-roll",  icon: Layers,     requiresPlan: false },
   { id: "audio",   label: "Audio",   icon: Music2,     requiresPlan: false },
   { id: "look",    label: "Look",    icon: Palette,    requiresPlan: false },
+  { id: "history", label: "History", icon: History, requiresPlan: true },
   { id: "export",  label: "Export",  icon: Download,   requiresPlan: false },
 ];
 
@@ -995,6 +997,9 @@ function InspectorPanel({
             sourceHeight={upload.height}
             onPreviewExportUpdated={onPreviewExportUpdated}
           />
+        )}
+        {tab === "history" && (
+          <VersionHistoryPanel projectId={projectId} workspaceId={workspaceId} userId={userId} apiAccessToken={apiAccessToken} activePlan={activePlan} onPlanRestored={onPlanUpdated} />
         )}
       </div>
     </div>

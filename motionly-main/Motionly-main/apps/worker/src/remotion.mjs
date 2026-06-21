@@ -211,6 +211,7 @@ async function assembleRenderProps(renderProps) {
     exportSettings: renderProps.exportSettings ?? {},
     musicSelection: resolvedMusic,
     effectsConfig: renderProps.effectsConfig ?? null,
+    watermark: Boolean(renderProps.watermark),
   };
 }
 

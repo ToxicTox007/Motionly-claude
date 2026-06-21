@@ -1,0 +1,26 @@
+services:
+  gpu-api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile.gpu
+    gpus: all
+    environment:
+      FFMPEG_GPU_ENABLED: "true"
+      FFMPEG_GPU_ENCODER: h264_nvenc
+      RENDER_EXECUTE_FFMPEG: "true"
+    volumes:
+      - motionly-media:/var/data/motionly
+
+  gpu-worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      WORKER_QUEUES: render_gpu
+      GPU_RENDER_WORKER_CONCURRENCY: "1"
+      WORKER_API_BASE_URL: http://gpu-api:8000
+    depends_on:
+      - gpu-api
+
+volumes:
+  motionly-media:

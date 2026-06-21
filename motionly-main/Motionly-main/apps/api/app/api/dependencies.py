@@ -13,6 +13,7 @@ from app.repositories.effects import InMemoryEffectsRepository
 from app.repositories.music import InMemoryMusicRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.projects import InMemoryProjectRepository
+from app.repositories.publishing import InMemoryPublishingRepository
 from app.repositories.regeneration import InMemoryRegenerationRepository
 from app.repositories.renders import InMemoryRenderRepository
 from app.repositories.uploads import InMemoryUploadRepository
@@ -31,6 +32,7 @@ from app.services.queue import (
     MusicQueue,
     PlanQueue,
     PreprocessQueue,
+    PublishQueue,
     RegenerationQueue,
     RenderQueue,
     TranscriptionQueue,
@@ -152,6 +154,14 @@ def get_broll_queue(request: Request) -> BrollQueue:
 
 def get_render_queue(request: Request) -> RenderQueue:
     return request.app.state.render_queue
+
+
+def get_publish_queue(request: Request) -> PublishQueue:
+    return request.app.state.publish_queue
+
+
+def get_publishing_repository(request: Request) -> InMemoryPublishingRepository:
+    return request.app.state.publishing_repository
 
 
 def get_caption_repository(request: Request) -> InMemoryCaptionRepository:
