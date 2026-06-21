@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.request_body import JsonStringBodyMixin
 
-EDIT_PLAN_SCHEMA_VERSION = 1
+EDIT_PLAN_SCHEMA_VERSION = 2
 
 
 class EditPlanStyle(StrEnum):
@@ -84,6 +84,50 @@ class ZoomMoment(BaseModel):
     reason: str = Field(min_length=1, max_length=120)
 
 
+class ManualElement(BaseModel):
+    """A user-placed spatial or temporal editor element.
+
+    The typed envelope stays stable while ``properties`` carries the controls
+    specific to text, graphics, audio, transitions, grades, and AI actions.
+    This keeps saved plans forward compatible as the palette grows.
+    """
+
+    id: str = Field(min_length=1, max_length=120)
+    type: Literal[
+        "text",
+        "caption",
+        "overlay",
+        "shape",
+        "graphic",
+        "broll",
+        "transition",
+        "sfx",
+        "music",
+        "motion",
+        "grade",
+    ]
+    name: str = Field(min_length=1, max_length=120)
+    zone: Literal["canvas", "timeline", "clip"]
+    start_ms: int = Field(default=0, ge=0)
+    end_ms: int = Field(default=3000, ge=1)
+    x_pct: float = Field(default=50, ge=0, le=100)
+    y_pct: float = Field(default=50, ge=0, le=100)
+    width_pct: float = Field(default=40, ge=1, le=100)
+    height_pct: float = Field(default=12, ge=1, le=100)
+    rotation_deg: float = Field(default=0, ge=-360, le=360)
+    opacity: float = Field(default=1, ge=0, le=1)
+    clip_id: str | None = Field(default=None, max_length=120)
+    properties: dict[str, Any] = Field(default_factory=dict)
+    ai_reason: str | None = Field(default=None, max_length=240)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ManualElement":
+        if self.end_ms <= self.start_ms:
+            raise ValueError("manual element end_ms must be greater than start_ms")
+        return self
+
+
 class EditPlan(BaseModel):
     schema_version: int = EDIT_PLAN_SCHEMA_VERSION
     style: EditPlanStyle
@@ -96,6 +140,7 @@ class EditPlan(BaseModel):
     effects: list[str] = Field(default_factory=list, max_length=8)
     color_grade: str = Field(min_length=1, max_length=80)
     risk_flags: list[str] = Field(default_factory=list, max_length=10)
+    manual_elements: list[ManualElement] = Field(default_factory=list, max_length=200)
 
 
 class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
@@ -206,6 +251,60 @@ class PlanCaptionHighlightsUpdateRequest(JsonStringBodyMixin, BaseModel):
 class PlanCaptionHighlightsUpdateResponse(BaseModel):
     plan: EditPlanResponse
     status: Literal["updated"] = "updated"
+
+
+class PlanManualElementsUpdateRequest(JsonStringBodyMixin, BaseModel):
+    manual_elements: list[ManualElement] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
+
+
+class PlanManualElementsUpdateResponse(BaseModel):
+    plan: EditPlanResponse
+    status: Literal["updated"] = "updated"
+
+
+class PlanSnapshotCreateRequest(JsonStringBodyMixin, BaseModel):
+    plan_id: UUID | None = None
+    name: str = Field(min_length=1, max_length=80)
+    notes: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
+
+
+class PlanSnapshotResponse(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    source_plan_id: UUID
+    source_plan_version: int
+    name: str
+    notes: str | None = None
+    created_by_user_id: UUID
+    plan: EditPlan
+    summary: PlanSummary
+    created_at: datetime
+
+
+class PlanSnapshotCreateResponse(BaseModel):
+    snapshot: PlanSnapshotResponse
+    status: Literal["created"] = "created"
+
+
+class PlanSnapshotListResponse(BaseModel):
+    snapshots: list[PlanSnapshotResponse]
+
+
+class PlanSnapshotRestoreResponse(BaseModel):
+    plan: EditPlanResponse
+    snapshot_id: UUID
+    status: Literal["restored"] = "restored"
 
 
 class PlannerProviderResult(BaseModel):

@@ -17,10 +17,16 @@ from app.schemas.billing import BillingPlanKey, SubscriptionStatus
 from app.schemas.captions import LanguageHint
 from app.schemas.effects import (
     AfterEffectsPreset,
+    AutoReframeSettings,
     BackgroundRemovalSettings,
+    BeatImpactSettings,
     EffectsConfigRequest,
     GradientRampSettings,
+    KenBurnsSettings,
     MotionEffectKey,
+    MotionKeyframe,
+    MotionSettings,
+    SpeedRampSettings,
     VisualPresetKey,
 )
 from app.schemas.plans import BrollDensity, PlanCreateRequest
@@ -209,6 +215,58 @@ def test_update_effects_accepts_background_gradient_and_ae_handoff() -> None:
     assert response.config.after_effects_presets[0].name == "Fast Vertical Cleanup"
 
 
+def test_update_effects_persists_stage_six_motion_design() -> None:
+    repository, project_id, workspace_id, user_id = make_effects_repository()
+    billing_repository = InMemoryBillingRepository()
+    billing_repository.upsert_subscription(
+        workspace_id=workspace_id,
+        plan=BillingPlanKey.PRO,
+        status=SubscriptionStatus.ACTIVE,
+    )
+
+    response = asyncio.run(
+        update_effects(
+            project_id=project_id,
+            payload=EffectsConfigRequest(
+                preset=VisualPresetKey.DUBAI_INFLUENCER,
+                motion_effects=[MotionEffectKey.KEN_BURNS],
+                motion=MotionSettings(
+                    keyframes=[
+                        MotionKeyframe(at_ms=0, scale=1, x_pct=50, y_pct=50),
+                        MotionKeyframe(at_ms=900, scale=1.12, x_pct=62, y_pct=46),
+                    ],
+                    ken_burns=KenBurnsSettings(enabled=True, intensity=0.12),
+                    speed_ramp=SpeedRampSettings(enabled=True, peak_speed=1.6),
+                    beat_impact=BeatImpactSettings(enabled=True, shake_px=16),
+                    auto_reframe=AutoReframeSettings(
+                        enabled=True,
+                        target_aspect="9:16",
+                        subject_x_pct=64,
+                        subject_y_pct=44,
+                    ),
+                ),
+            ),
+            request=_request(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=billing_repository,
+            plan_repository=repository.plan_repository,
+            effects_queue=EffectsQueue(),
+        )
+    )
+
+    assert response.config.schema_version == 3
+    assert MotionEffectKey.KEN_BURNS in response.config.motion_effects
+    assert MotionEffectKey.SPEED_RAMP in response.config.motion_effects
+    assert MotionEffectKey.BEAT_IMPACT in response.config.motion_effects
+    assert response.config.motion.ken_burns.enabled is True
+    assert response.config.motion.speed_ramp.peak_speed == 1.6
+    assert response.config.motion.beat_impact.shake_px == 16
+    assert response.config.motion.auto_reframe.subject_x_pct == 64
+    assert len(response.config.motion.keyframes) == 2
+    assert response.config.effect_count_limit_per_30s >= 8
+
+
 def test_reset_effects_uses_preset_defaults_as_single_source_of_truth() -> None:
     repository, project_id, workspace_id, user_id = make_effects_repository()
 
@@ -285,6 +343,43 @@ def test_update_effects_requires_pro_when_billing_is_enabled() -> None:
 
     assert exc_info.value.status_code == 402
     assert exc_info.value.code == "premium_effects_plan_required"
+
+
+def test_update_effects_persists_per_clip_motion_effects() -> None:
+    repository, project_id, workspace_id, user_id = make_effects_repository()
+    billing_repository = InMemoryBillingRepository()
+    billing_repository.upsert_subscription(
+        workspace_id=workspace_id,
+        plan=BillingPlanKey.PRO,
+        status=SubscriptionStatus.ACTIVE,
+    )
+
+    response = asyncio.run(
+        update_effects(
+            project_id=project_id,
+            payload=EffectsConfigRequest(
+                preset=VisualPresetKey.CLEAN_FOUNDER,
+                motion=MotionSettings(
+                    clip_effects={
+                        "cut-0": [MotionEffectKey.ZOOM_PUNCH, MotionEffectKey.KEN_BURNS],
+                        "broll-slot-1": [MotionEffectKey.BROLL_SLIDE_IN],
+                    },
+                ),
+            ),
+            request=_request(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=billing_repository,
+            plan_repository=repository.plan_repository,
+            effects_queue=EffectsQueue(),
+        )
+    )
+
+    assert response.config.motion.clip_effects == {
+        "cut-0": [MotionEffectKey.ZOOM_PUNCH, MotionEffectKey.KEN_BURNS],
+        "broll-slot-1": [MotionEffectKey.BROLL_SLIDE_IN],
+    }
+    assert response.config.render_time_impact in {"low", "medium", "high"}
 
 
 def _request(*, billing_enabled: bool = True):

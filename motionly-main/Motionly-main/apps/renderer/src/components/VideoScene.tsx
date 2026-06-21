@@ -6,6 +6,8 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import type { MotionKeyframe, MotionSettings } from "@motionly/shared";
+import type { CSSProperties } from "react";
 import type { MotionlyRenderProps, TemplateDefinition } from "../types";
 
 type VideoSceneProps = {
@@ -22,21 +24,36 @@ export function VideoScene({ input, template }: VideoSceneProps) {
   const outroStart = Math.max(0, durationInFrames - outroFrames);
   const backgroundRemoval = input.effectsConfig?.background_removal;
   const framing = input.exportSettings.framing;
-  const crop = framing?.crop ?? { x: 0.5, y: 0.5, zoom: 1 };
+  const crop = cropWithAutoReframe(
+    input,
+    framing?.crop ?? { x: 0.5, y: 0.5, zoom: 1 },
+    framing?.output_aspect,
+  );
   const framingZoom =
     framing?.fit_mode === "custom" ? Math.max(1, Math.min(3, crop.zoom)) : 1;
   const activeZoomScale = zoom * framingZoom;
-  const sourceStyle = {
+  const activeSourceClipId = activeCutClipId(input, (frame / fps) * 1000);
+  const sourceMotion = sourceMotionState({
+    input,
+    frame,
+    fps,
+    durationInFrames,
+    baseScale: activeZoomScale,
+    crop,
+    activeClipId: activeSourceClipId,
+  });
+  const sourceStyle: CSSProperties = {
     width: "100%",
     height: "100%",
     objectFit: framing?.fit_mode === "fit" ? "contain" as const : "cover" as const,
-    objectPosition: `${Math.round(crop.x * 100)}% ${Math.round(crop.y * 100)}%`,
-    transform: `scale(${activeZoomScale})`,
-    transformOrigin: `${Math.round(crop.x * 100)}% ${Math.round(crop.y * 100)}%`,
-    filter: gradeFilter(
-      input.editPlan.color_grade,
-      template.default_color_grade,
-    ),
+    objectPosition: `${Math.round(sourceMotion.xPct)}% ${Math.round(sourceMotion.yPct)}%`,
+    transform: motionTransformCss(sourceMotion),
+    transformOrigin: `${Math.round(sourceMotion.xPct)}% ${Math.round(sourceMotion.yPct)}%`,
+    opacity: sourceMotion.opacity,
+    filter: [
+      gradeFilter(input.editPlan.color_grade, template.default_color_grade),
+      sourceMotion.filter,
+    ].filter(Boolean).join(" "),
     ...(backgroundRemoval?.enabled
       ? subjectIsolationStyle(backgroundRemoval.feather_px)
       : {}),
@@ -54,7 +71,12 @@ export function VideoScene({ input, template }: VideoSceneProps) {
       {backgroundRemoval?.enabled ? (
         <RemovedBackgroundPlate input={input} template={template} />
       ) : null}
-      <OffthreadVideo src={input.sourceVideo.src} muted={false} style={sourceStyle} />
+      <OffthreadVideo
+        src={input.sourceVideo.src}
+        muted={false}
+        playbackRate={sourceMotion.playbackRate}
+        style={sourceStyle}
+      />
       {input.assets
         .filter(
           (asset) =>
@@ -159,6 +181,15 @@ function BrollSurface({
         extrapolateRight: "clamp",
       })
     : 0;
+  const motion = brollMotionState({
+    input,
+    asset,
+    frame,
+    fps,
+    durationInFrames,
+    baseScale: scale,
+    baseTranslateX: slideX,
+  });
   const isolateBroll = Boolean(
     input.effectsConfig?.background_removal.enabled &&
     input.effectsConfig.background_removal.apply_to_broll,
@@ -167,13 +198,16 @@ function BrollSurface({
     <OffthreadVideo
       src={asset.src}
       muted
+      playbackRate={motion.playbackRate}
       style={{
         width: "100%",
         height: "100%",
         objectFit: "cover",
-        opacity,
-        transform: `translateX(${slideX}px) scale(${scale})`,
-        filter: "contrast(1.04) saturate(1.05)",
+        opacity: opacity * motion.opacity,
+        objectPosition: `${Math.round(motion.xPct)}% ${Math.round(motion.yPct)}%`,
+        transform: motionTransformCss(motion),
+        transformOrigin: `${Math.round(motion.xPct)}% ${Math.round(motion.yPct)}%`,
+        filter: ["contrast(1.04) saturate(1.05)", motion.filter].filter(Boolean).join(" "),
         ...(isolateBroll
           ? subjectIsolationStyle(
               input.effectsConfig?.background_removal.feather_px ?? 18,
@@ -216,6 +250,520 @@ function subjectIsolationStyle(featherPx: number) {
   return {
     clipPath: "ellipse(38% 48% at 50% 50%)",
     boxShadow: `0 0 ${blur}px rgba(255,255,255,0.26)`,
+  };
+}
+
+type CropState = { x: number; y: number; zoom: number };
+type MotionState = {
+  scale: number;
+  xPct: number;
+  yPct: number;
+  translateX: number;
+  translateY: number;
+  rotationDeg: number;
+  opacity: number;
+  playbackRate: number;
+  filter?: string;
+};
+
+function sourceMotionState({
+  input,
+  frame,
+  fps,
+  durationInFrames,
+  baseScale,
+  crop,
+  activeClipId,
+}: {
+  input: MotionlyRenderProps;
+  frame: number;
+  fps: number;
+  durationInFrames: number;
+  baseScale: number;
+  crop: CropState;
+  activeClipId: string | null;
+}) {
+  const timeMs = (frame / fps) * 1000;
+  const motion = input.effectsConfig?.motion;
+  let state: MotionState = {
+    scale: baseScale,
+    xPct: crop.x * 100,
+    yPct: crop.y * 100,
+    translateX: 0,
+    translateY: 0,
+    rotationDeg: 0,
+    opacity: 1,
+    playbackRate: 1,
+  };
+  state = applyKenBurns(state, motion, frame, durationInFrames);
+  state = applyMotionKeyframes(state, motion, "source", null, timeMs);
+  state = applyMotionKeyframes(state, motion, "source", activeClipId, timeMs);
+  state = applySpeedRamp(state, input, motion, timeMs, input.sourceVideo.duration_ms);
+  state = applyBeatImpact(state, input, motion, timeMs, frame);
+  state = applyClipMotionEffects(
+    state,
+    input,
+    motion,
+    activeClipId,
+    timeMs,
+    frame,
+    durationInFrames,
+    fps,
+  );
+  return clampMotionState(state);
+}
+
+function activeCutClipId(input: MotionlyRenderProps, timeMs: number) {
+  const index = input.editPlan.cuts.findIndex(
+    (cut) => timeMs >= cut.start_ms && timeMs <= cut.end_ms,
+  );
+  return index >= 0 ? `cut-${index}` : null;
+}
+
+function brollMotionState({
+  input,
+  asset,
+  frame,
+  fps,
+  durationInFrames,
+  baseScale,
+  baseTranslateX,
+}: {
+  input: MotionlyRenderProps;
+  asset: MotionlyRenderProps["assets"][number];
+  frame: number;
+  fps: number;
+  durationInFrames: number;
+  baseScale: number;
+  baseTranslateX: number;
+}) {
+  const localMs = (frame / fps) * 1000;
+  const globalMs = (asset.start_ms ?? 0) + localMs;
+  const motion = input.effectsConfig?.motion;
+  let state: MotionState = {
+    scale: baseScale,
+    xPct: 50,
+    yPct: 50,
+    translateX: baseTranslateX,
+    translateY: 0,
+    rotationDeg: 0,
+    opacity: 1,
+    playbackRate: 1,
+  };
+  state = applyMotionKeyframes(state, motion, "broll", asset.slot_id ?? asset.id, localMs);
+  state = applyMotionKeyframes(state, motion, "broll", null, globalMs);
+  state = applySpeedRamp(state, input, motion, globalMs, (durationInFrames / fps) * 1000);
+  state = applyBeatImpact(state, input, motion, globalMs, frame);
+  const brollClipId = asset.slot_id ? `broll-${asset.slot_id}` : null;
+  state = applyClipMotionEffects(
+    state,
+    input,
+    motion,
+    brollClipId,
+    globalMs,
+    frame,
+    durationInFrames,
+    fps,
+  );
+  return clampMotionState(state);
+}
+
+function cropWithAutoReframe(
+  input: MotionlyRenderProps,
+  crop: CropState,
+  outputAspect: string | undefined,
+): CropState {
+  const settings = input.effectsConfig?.motion?.auto_reframe;
+  if (!settings?.enabled) return crop;
+  if ((outputAspect ?? "9:16") !== settings.target_aspect) return crop;
+  const subjectX = clamp(settings.subject_x_pct / 100, 0, 1);
+  const subjectY = clamp(settings.subject_y_pct / 100, 0, 1);
+  const strength = clamp(1 - settings.smoothing * 0.25, 0.5, 1);
+  return {
+    ...crop,
+    x: clamp(0.5 + (subjectX - 0.5) * strength, 0, 1),
+    y: clamp(0.5 + (subjectY - 0.5) * strength, 0, 1),
+    zoom: Math.max(1, crop.zoom),
+  };
+}
+
+function applyKenBurns(
+  state: MotionState,
+  motion: MotionSettings | undefined,
+  frame: number,
+  durationInFrames: number,
+) {
+  return applyKenBurnsSettings(state, motion?.ken_burns, frame, durationInFrames);
+}
+
+function applyKenBurnsSettings(
+  state: MotionState,
+  settings: MotionSettings["ken_burns"] | undefined,
+  frame: number,
+  durationInFrames: number,
+) {
+  if (!settings?.enabled) return state;
+  const progress = ease(
+    clamp(frame / Math.max(1, durationInFrames - 1), 0, 1),
+    settings.easing,
+  );
+  const pan = settings.intensity * 38;
+  const next = { ...state };
+  if (settings.direction === "pull_out") {
+    next.scale *= 1 + settings.intensity * (1 - progress);
+  } else if (settings.direction === "pan_left") {
+    next.xPct -= pan * progress;
+    next.scale *= 1 + settings.intensity * 0.5;
+  } else if (settings.direction === "pan_right") {
+    next.xPct += pan * progress;
+    next.scale *= 1 + settings.intensity * 0.5;
+  } else if (settings.direction === "pan_up") {
+    next.yPct -= pan * progress;
+    next.scale *= 1 + settings.intensity * 0.5;
+  } else if (settings.direction === "pan_down") {
+    next.yPct += pan * progress;
+    next.scale *= 1 + settings.intensity * 0.5;
+  } else {
+    next.scale *= 1 + settings.intensity * progress;
+  }
+  return next;
+}
+
+function applyMotionKeyframes(
+  state: MotionState,
+  motion: MotionSettings | undefined,
+  target: "source" | "broll",
+  clipId: string | null,
+  timeMs: number,
+) {
+  const keyframes = matchingKeyframes(motion, target, clipId);
+  if (!keyframes.length) return state;
+  const keyState = interpolatedKeyframeState(keyframes, timeMs);
+  return {
+    ...state,
+    scale: state.scale * keyState.scale,
+    xPct: keyState.xPct,
+    yPct: keyState.yPct,
+    rotationDeg: state.rotationDeg + keyState.rotationDeg,
+    opacity: state.opacity * keyState.opacity,
+  };
+}
+
+function matchingKeyframes(
+  motion: MotionSettings | undefined,
+  target: "source" | "broll",
+  clipId: string | null,
+) {
+  return [...(motion?.keyframes ?? [])]
+    .filter((keyframe) => keyframe.target === target || keyframe.target === "all")
+    .filter((keyframe) => {
+      if (!keyframe.clip_id) return clipId === null;
+      return keyframe.clip_id === clipId;
+    })
+    .sort((a, b) => a.at_ms - b.at_ms);
+}
+
+function interpolatedKeyframeState(keyframes: MotionKeyframe[], timeMs: number) {
+  const base = keyframeToState({
+    target: "source",
+    clip_id: null,
+    at_ms: 0,
+    scale: 1,
+    x_pct: 50,
+    y_pct: 50,
+    rotation_deg: 0,
+    opacity: 1,
+    easing: "linear",
+  });
+  const first = keyframes[0];
+  if (timeMs <= first.at_ms) {
+    if (first.at_ms === 0) return keyframeToState(first);
+    return mixKeyframeState(base, keyframeToState(first), ease(timeMs / first.at_ms, first.easing));
+  }
+  const last = keyframes[keyframes.length - 1];
+  if (timeMs >= last.at_ms) return keyframeToState(last);
+  const nextIndex = keyframes.findIndex((keyframe) => keyframe.at_ms >= timeMs);
+  const from = keyframes[Math.max(0, nextIndex - 1)];
+  const to = keyframes[nextIndex];
+  const progress = ease(
+    (timeMs - from.at_ms) / Math.max(1, to.at_ms - from.at_ms),
+    to.easing,
+  );
+  return mixKeyframeState(keyframeToState(from), keyframeToState(to), progress);
+}
+
+function keyframeToState(keyframe: MotionKeyframe) {
+  return {
+    scale: keyframe.scale,
+    xPct: keyframe.x_pct,
+    yPct: keyframe.y_pct,
+    rotationDeg: keyframe.rotation_deg,
+    opacity: keyframe.opacity,
+  };
+}
+
+function mixKeyframeState(
+  from: ReturnType<typeof keyframeToState>,
+  to: ReturnType<typeof keyframeToState>,
+  progress: number,
+) {
+  return {
+    scale: lerp(from.scale, to.scale, progress),
+    xPct: lerp(from.xPct, to.xPct, progress),
+    yPct: lerp(from.yPct, to.yPct, progress),
+    rotationDeg: lerp(from.rotationDeg, to.rotationDeg, progress),
+    opacity: lerp(from.opacity, to.opacity, progress),
+  };
+}
+
+function applySpeedRamp(
+  state: MotionState,
+  input: MotionlyRenderProps,
+  motion: MotionSettings | undefined,
+  timeMs: number,
+  durationMs: number,
+) {
+  const settings = motion?.speed_ramp;
+  if (!settings?.enabled) return state;
+  const amount = speedRampAmount({
+    input,
+    timeMs,
+    durationMs,
+    rampInMs: settings.ramp_in_ms,
+    rampOutMs: settings.ramp_out_ms,
+    easing: settings.easing,
+  });
+  if (amount <= 0) return state;
+  return {
+    ...state,
+    playbackRate: 1 + amount * (settings.peak_speed - 1),
+    scale: state.scale * (1 + amount * 0.018),
+    filter: `blur(${(amount * 1.4).toFixed(2)}px)`,
+  };
+}
+
+function speedRampAmount({
+  input,
+  timeMs,
+  durationMs,
+  rampInMs,
+  rampOutMs,
+  easing,
+}: {
+  input: MotionlyRenderProps;
+  timeMs: number;
+  durationMs: number;
+  rampInMs: number;
+  rampOutMs: number;
+  easing: MotionSettings["speed_ramp"]["easing"];
+}) {
+  const boundaries = [
+    ...input.editPlan.cuts.map((cut) => cut.start_ms),
+    ...input.editPlan.zoom_moments.map((moment) => moment.timestamp_ms),
+  ].filter((boundary) => boundary > 0);
+  let amount = 0;
+  for (const boundary of boundaries) {
+    const delta = timeMs - boundary;
+    if (delta < 0 && Math.abs(delta) <= rampInMs) {
+      amount = Math.max(amount, ease(1 - Math.abs(delta) / rampInMs, easing));
+    }
+    if (delta >= 0 && delta <= rampOutMs) {
+      amount = Math.max(amount, ease(1 - delta / rampOutMs, easing));
+    }
+  }
+  if (!boundaries.length) {
+    if (timeMs <= rampInMs) amount = Math.max(amount, ease(timeMs / rampInMs, easing));
+    const remaining = durationMs - timeMs;
+    if (remaining <= rampOutMs) amount = Math.max(amount, ease(remaining / rampOutMs, easing));
+  }
+  return clamp(amount, 0, 1);
+}
+
+function applyBeatImpact(
+  state: MotionState,
+  input: MotionlyRenderProps,
+  motion: MotionSettings | undefined,
+  timeMs: number,
+  frame: number,
+) {
+  const settings = motion?.beat_impact;
+  const beats = input.musicSelection?.track?.beat_map ?? [];
+  if (!settings?.enabled || !beats.length || settings.max_impacts <= 0) return state;
+  const impactBeats = beats.slice(0, settings.max_impacts);
+  const nearest = impactBeats.reduce(
+    (current, beat) => (Math.abs(beat - timeMs) < Math.abs(current - timeMs) ? beat : current),
+    impactBeats[0],
+  );
+  const distance = Math.abs(nearest - timeMs);
+  const windowMs = 150;
+  if (distance > windowMs) return state;
+  const amount = ease(1 - distance / windowMs, "ease_out") * settings.intensity;
+  return {
+    ...state,
+    scale: state.scale * (1 + (settings.zoom - 1) * amount * 2.4),
+    translateX: state.translateX + Math.sin(frame * 1.7) * settings.shake_px * amount,
+    translateY: state.translateY + Math.cos(frame * 2.1) * settings.shake_px * amount,
+    rotationDeg: state.rotationDeg + Math.sin(frame * 0.9) * amount * 0.8,
+  };
+}
+
+function applyClipMotionEffects(
+  state: MotionState,
+  input: MotionlyRenderProps,
+  motion: MotionSettings | undefined,
+  clipId: string | null,
+  timeMs: number,
+  frame: number,
+  durationInFrames: number,
+  fps: number,
+): MotionState {
+  if (!clipId) return state;
+  const effects = motion?.clip_effects?.[clipId] ?? [];
+  if (!effects.length) return state;
+  const effectSet = new Set(effects);
+  let next = { ...state };
+  if (effectSet.has("ken_burns")) {
+    next = applyKenBurnsSettings(next, motion?.ken_burns, frame, durationInFrames);
+  }
+  if (effectSet.has("zoom_punch")) {
+    const nearest = input.editPlan.zoom_moments.find(
+      (moment) => Math.abs(moment.timestamp_ms - timeMs) <= 220,
+    );
+    const punch = nearest ? Math.min(1.12, nearest.intensity) : 1;
+    next = { ...next, scale: next.scale * punch };
+  }
+  if (effectSet.has("speed_ramp")) {
+    const settings = motion?.speed_ramp;
+    if (settings?.enabled) {
+      const durationMs = (durationInFrames / fps) * 1000;
+      const amount = clipSpeedRampAmount(timeMs, durationMs, settings);
+      next = {
+        ...next,
+        playbackRate: next.playbackRate * (1 + amount * (settings.peak_speed - 1)),
+        scale: next.scale * (1 + amount * 0.018),
+        filter: [next.filter, `blur(${(amount * 1.4).toFixed(2)}px)`].filter(Boolean).join(" ") || undefined,
+      };
+    }
+  }
+  if (effectSet.has("beat_impact")) {
+    const settings = motion?.beat_impact;
+    const beats = input.musicSelection?.track?.beat_map ?? [];
+    if (settings?.enabled && beats.length && settings.max_impacts > 0) {
+      const nearest = beats.slice(0, settings.max_impacts).reduce(
+        (current, beat) => (Math.abs(beat - timeMs) < Math.abs(current - timeMs) ? beat : current),
+        beats[0],
+      );
+      const distance = Math.abs(nearest - timeMs);
+      const windowMs = 150;
+      if (distance <= windowMs) {
+        const amount = ease(1 - distance / windowMs, "ease_out") * settings.intensity;
+        next = {
+          ...next,
+          scale: next.scale * (1 + (settings.zoom - 1) * amount * 2.4),
+          translateX: next.translateX + Math.sin(frame * 1.7) * settings.shake_px * amount,
+          translateY: next.translateY + Math.cos(frame * 2.1) * settings.shake_px * amount,
+          rotationDeg: next.rotationDeg + Math.sin(frame * 0.9) * amount * 0.8,
+        };
+      }
+    }
+  }
+  if (effectSet.has("motion_blur")) {
+    next = { ...next, filter: [next.filter, "blur(0.65px)"].filter(Boolean).join(" ") || undefined };
+  }
+  if (effectSet.has("flash")) {
+    const flashAmount = pulseAroundBoundaries({
+      timeMs,
+      boundaries: input.editPlan.cuts.map((cut) => cut.start_ms).filter((start) => start > 0),
+      fallbackDurationMs: (durationInFrames / fps) * 1000,
+      rampInMs: 50,
+      rampOutMs: 180,
+      easing: "ease_out",
+    });
+    next = {
+      ...next,
+      filter: [next.filter, `brightness(${1 + flashAmount * 0.25})`].filter(Boolean).join(" ") || undefined,
+    };
+  }
+  if (effectSet.has("glitch")) {
+    const glitchAmount = pulseAroundBoundaries({
+      timeMs,
+      boundaries: input.editPlan.cuts.map((cut) => cut.start_ms).filter((start) => start > 0),
+      fallbackDurationMs: (durationInFrames / fps) * 1000,
+      rampInMs: 60,
+      rampOutMs: 220,
+      easing: "ease_out",
+    });
+    next = {
+      ...next,
+      translateX: next.translateX + Math.sin(timeMs * 0.12) * glitchAmount * 1.4,
+      filter: [next.filter, `hue-rotate(${glitchAmount * 12}deg)`].filter(Boolean).join(" ") || undefined,
+    };
+  }
+  return next;
+}
+
+function pulseAroundBoundaries({
+  timeMs,
+  boundaries,
+  fallbackDurationMs,
+  rampInMs,
+  rampOutMs,
+  easing,
+}: {
+  timeMs: number;
+  boundaries: number[];
+  fallbackDurationMs: number;
+  rampInMs: number;
+  rampOutMs: number;
+  easing: MotionSettings["speed_ramp"]["easing"] | "linear";
+}) {
+  const activeBoundaries = boundaries.length ? boundaries : [0, fallbackDurationMs];
+  let amount = 0;
+  for (const boundary of activeBoundaries) {
+    const delta = timeMs - boundary;
+    if (delta < 0 && Math.abs(delta) <= rampInMs) {
+      amount = Math.max(amount, ease(1 - Math.abs(delta) / rampInMs, easing));
+    }
+    if (delta >= 0 && delta <= rampOutMs) {
+      amount = Math.max(amount, ease(1 - delta / rampOutMs, easing));
+    }
+  }
+  return clamp(amount, 0, 1);
+}
+
+function clipSpeedRampAmount(
+  timeMs: number,
+  durationMs: number,
+  settings: NonNullable<MotionSettings["speed_ramp"]>,
+) {
+  let amount = 0;
+  if (timeMs <= settings.ramp_in_ms) {
+    amount = Math.max(amount, ease(timeMs / settings.ramp_in_ms, settings.easing));
+  }
+  const remaining = durationMs - timeMs;
+  if (remaining <= settings.ramp_out_ms) {
+    amount = Math.max(amount, ease(remaining / settings.ramp_out_ms, settings.easing));
+  }
+  return clamp(amount, 0, 1);
+}
+
+function motionTransformCss(state: MotionState) {
+  return [
+    `translate(${state.translateX.toFixed(2)}px, ${state.translateY.toFixed(2)}px)`,
+    `scale(${state.scale.toFixed(4)})`,
+    `rotate(${state.rotationDeg.toFixed(3)}deg)`,
+  ].join(" ");
+}
+
+function clampMotionState(state: MotionState): MotionState {
+  return {
+    ...state,
+    scale: clamp(state.scale, 0.5, 3),
+    xPct: clamp(state.xPct, 0, 100),
+    yPct: clamp(state.yPct, 0, 100),
+    rotationDeg: clamp(state.rotationDeg, -45, 45),
+    opacity: clamp(state.opacity, 0, 1),
+    playbackRate: clamp(state.playbackRate, 0.2, 4),
   };
 }
 
@@ -352,4 +900,24 @@ function Waveform({ accent }: { accent: string }) {
       </div>
     </AbsoluteFill>
   );
+}
+
+function ease(
+  progress: number,
+  easing: MotionSettings["ken_burns"]["easing"] | "linear",
+) {
+  const t = clamp(progress, 0, 1);
+  if (easing === "ease_in") return t * t;
+  if (easing === "ease_out") return 1 - Math.pow(1 - t, 2);
+  if (easing === "spring") return clamp(1 - Math.cos(t * Math.PI * 1.5) * Math.pow(1 - t, 2), 0, 1);
+  if (easing === "ease_in_out") return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  return t;
+}
+
+function lerp(from: number, to: number, progress: number) {
+  return from + (to - from) * progress;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }

@@ -196,6 +196,40 @@ class InMemoryBrollRepository:
             raise ApiError(403, "workspace_access_denied", "You do not have access to this asset.")
         return asset
 
+    def list_library_assets(
+        self, *, project_id: UUID, workspace_id: UUID
+    ) -> list[StockAssetRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        return sorted(
+            [
+                asset
+                for asset in self.assets.values()
+                if asset.project_id == project_id
+                and asset.workspace_id == workspace_id
+                and asset.provider == StockProviderKey.USER_LIBRARY
+            ],
+            key=lambda asset: asset.created_at,
+            reverse=True,
+        )
+
+    def mark_library_asset_ready(
+        self, *, asset: StockAssetRecord, download_url: str
+    ) -> StockAssetRecord:
+        asset.download_url = download_url
+        asset.preview_video_url = download_url
+        asset.raw_metadata = {**asset.raw_metadata, "status": "ready"}
+        return asset
+
+    def delete_library_asset(
+        self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID
+    ) -> None:
+        asset = self.get_asset(
+            project_id=project_id, workspace_id=workspace_id, asset_id=asset_id
+        )
+        if asset.provider != StockProviderKey.USER_LIBRARY:
+            raise ApiError(409, "library_asset_required", "Only library assets can be deleted.")
+        self.assets.pop(asset_id, None)
+
     def update_slot_selection(
         self,
         *,
@@ -397,6 +431,56 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         if not rows:
             raise ApiError(404, "stock_asset_not_found", "Stock asset was not found.")
         return self._asset_from_row(rows[0])
+
+    def list_library_assets(
+        self, *, project_id: UUID, workspace_id: UUID
+    ) -> list[StockAssetRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        response = httpx.get(
+            f"{self.rest_url}/stock_assets",
+            headers=self.headers,
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "provider": f"eq.{StockProviderKey.USER_LIBRARY.value}",
+                "select": "*",
+                "order": "created_at.desc",
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._asset_from_row(row) for row in response.json()]
+
+    def mark_library_asset_ready(
+        self, *, asset: StockAssetRecord, download_url: str
+    ) -> StockAssetRecord:
+        response = httpx.patch(
+            f"{self.rest_url}/stock_assets",
+            headers=self.headers,
+            params={"id": f"eq.{asset.id}", "select": "*"},
+            json={
+                "download_url": download_url,
+                "preview_video_url": download_url,
+                "raw_metadata": {**asset.raw_metadata, "status": "ready"},
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    def delete_library_asset(
+        self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID
+    ) -> None:
+        asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
+        if asset.provider != StockProviderKey.USER_LIBRARY:
+            raise ApiError(409, "library_asset_required", "Only library assets can be deleted.")
+        response = httpx.delete(
+            f"{self.rest_url}/stock_assets",
+            headers=self.headers,
+            params={"id": f"eq.{asset_id}", "workspace_id": f"eq.{workspace_id}"},
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
 
     def update_slot_selection(
         self, *, slot: BrollSlotRecord, asset_id: UUID | None, disabled: bool

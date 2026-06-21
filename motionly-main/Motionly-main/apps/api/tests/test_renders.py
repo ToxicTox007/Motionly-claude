@@ -9,6 +9,7 @@ import pytest
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.api.renders import (
+    create_bulk_render,
     create_render,
     get_export_download_url,
     restore_export_version,
@@ -28,16 +29,23 @@ from app.schemas.broll import BrollSlotStatus, StockOrientation, StockProviderKe
 from app.schemas.captions import CaptionPresetKey, LanguageHint
 from app.schemas.effects import (
     AfterEffectsPreset,
+    AutoReframeSettings,
     BackgroundRemovalSettings,
     EffectsStatus,
     EffectsTextureSettings,
     GradientRampSettings,
     MotionEffectKey,
+    MotionSettings,
     VisualPresetKey,
 )
 from app.schemas.music import MusicProviderKey, MusicSelectionStatus
 from app.schemas.renders import (
     CutSegment,
+    ExportFraming,
+    ExportOptions,
+    OutputAspect,
+    PlatformPreset,
+    RenderBulkCreateRequest,
     RenderCreateRequest,
     RenderJobStatus,
     RenderSpecs,
@@ -400,6 +408,49 @@ def test_render_create_applies_export_options_and_entitlement_cap() -> None:
     assert export.settings_summary["export_settings"]["platform"] == "tiktok"
     assert export.settings_summary["export_settings"]["requested_resolution"] == "4k"
     assert export.settings_summary["export_settings"]["duration_preset"] == "short"
+
+
+def test_bulk_render_create_queues_multiple_platform_targets() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    request = make_request(complete_locally=False)
+    request.app.state.settings.billing_enabled = False
+
+    response = asyncio.run(
+        create_bulk_render(
+            project_id=project_id,
+            payload=RenderBulkCreateRequest(
+                export_targets=[
+                    ExportOptions(
+                        platform=PlatformPreset.TIKTOK,
+                        framing=ExportFraming(output_aspect=OutputAspect.VERTICAL_9_16),
+                    ),
+                    ExportOptions(
+                        platform=PlatformPreset.YOUTUBE_LANDSCAPE,
+                        framing=ExportFraming(output_aspect=OutputAspect.LANDSCAPE_16_9),
+                    ),
+                ],
+            ),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+
+    assert response.status == "queued"
+    assert len(response.jobs) == 2
+    assert len(response.queue_job_ids) == 2
+    assert response.jobs[0].manifest["export_settings"]["platform"] == "tiktok"
+    assert response.jobs[0].manifest["render_props"]["exportSettings"]["height"] == 1920
+    assert response.jobs[1].manifest["export_settings"]["platform"] == "youtube_landscape"
+    assert (
+        response.jobs[1].manifest["export_settings"]["platform_metadata"]["delivery"]
+        == "youtube_standard"
+    )
+    assert response.jobs[1].manifest["render_props"]["exportSettings"]["width"] == 1920
+    assert response.jobs[1].manifest["render_props"]["exportSettings"]["height"] == 1080
 
 
 def test_render_create_applies_original_aspect_and_custom_framing() -> None:
@@ -1049,6 +1100,63 @@ def test_render_manifest_includes_effects_config() -> None:
     assert effects_props["background_removal"]["enabled"] is True
     assert effects_props["gradient_ramp"]["enabled"] is True
     assert response.job.manifest["after_effects_handoff"]["project_file_url"] is None
+
+
+def test_render_manifest_applies_motion_auto_reframe_to_export_framing() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    plan_repository = InMemoryPlanRepository(repository.caption_repository)
+    effects_repository = InMemoryEffectsRepository(plan_repository)
+    config = effects_repository.create_config(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        edit_plan_id=None,
+        status=EffectsStatus.READY,
+        preset=VisualPresetKey.CLEAN_FOUNDER,
+        lut_intensity=0.72,
+        texture=EffectsTextureSettings(),
+        motion_effects=[],
+        motion=MotionSettings(
+            auto_reframe=AutoReframeSettings(
+                enabled=True,
+                target_aspect="9:16",
+                subject_x_pct=68,
+                subject_y_pct=42,
+            )
+        ),
+        background_removal=BackgroundRemovalSettings(enabled=False),
+        gradient_ramp=GradientRampSettings(enabled=False),
+        after_effects_presets=[],
+        after_effects_project_url=None,
+        correction_manifest_url=None,
+        effect_count_limit_per_30s=3,
+        render_time_impact="medium",
+        preview_before_url=None,
+        preview_after_url=None,
+        cache_key="motion-auto-reframe",
+    )
+    request = make_request_with_effects(effects_repository)
+
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=plan_repository,
+            render_queue=RenderQueue(),
+        )
+    )
+
+    assert response.job.manifest["effects_config_id"] == str(config.id)
+    motion_design = response.job.manifest["motion_design"]
+    assert motion_design["auto_reframe"]["applied"] is True
+    framing = response.job.manifest["render_props"]["exportSettings"]["framing"]
+    assert framing["fit_mode"] == "custom"
+    assert framing["crop"]["x"] == 0.68
+    assert framing["crop"]["y"] == 0.42
+    assert response.job.manifest["export_settings"]["framing"] == framing
 
 
 def test_render_manifest_includes_selected_broll_assets() -> None:

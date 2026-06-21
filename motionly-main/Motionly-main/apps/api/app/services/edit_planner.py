@@ -12,6 +12,7 @@ from app.api.errors import ApiError
 from app.repositories.captions import TranscriptRecord
 from app.schemas.captions import TranscriptWord
 from app.schemas.plans import (
+    EDIT_PLAN_SCHEMA_VERSION,
     BrollDensity,
     BrollRequest,
     CaptionHighlight,
@@ -273,6 +274,7 @@ def normalize_plan(*, plan: EditPlan, words: list[TranscriptWord], duration_ms: 
         )
     return plan.model_copy(
         update={
+            "schema_version": EDIT_PLAN_SCHEMA_VERSION,
             "cuts": cuts,
             "caption_highlights": [
                 item.model_copy(update={"timestamp_ms": min(item.timestamp_ms, duration_ms)})
@@ -905,7 +907,7 @@ def _repair_plan_payload(
     )
 
     repaired: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": EDIT_PLAN_SCHEMA_VERSION,
         "style": _coerce_choice(
             source.get("style"),
             {item.value for item in EditPlanStyle},

@@ -5,8 +5,12 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.api.broll import (
+    complete_user_broll_upload,
+    delete_user_broll_library_asset,
     generate_broll,
+    init_user_broll_upload,
     list_broll,
+    list_user_broll_library,
     search_broll_candidates,
     swap_broll,
     update_broll_region,
@@ -20,7 +24,12 @@ from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.billing import BillingPlanKey, SubscriptionStatus
-from app.schemas.broll import BrollGenerateRequest, BrollRegionUpdateRequest, BrollSwapRequest
+from app.schemas.broll import (
+    BrollGenerateRequest,
+    BrollRegionUpdateRequest,
+    BrollSwapRequest,
+    UserBrollUploadInitRequest,
+)
 from app.schemas.captions import LanguageHint
 from app.schemas.plans import BrollDensity, BrollRequest, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
@@ -36,6 +45,7 @@ from app.services.broll_intelligence import apply_stage4_broll_rules
 from app.services.edit_planner import FixtureEditPlannerProvider
 from app.services.queue import BrollQueue, PlanQueue
 from app.services.stock_video import FixtureStockVideoProvider, score_candidate
+from app.services.storage import StorageSigner
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
 
@@ -125,6 +135,76 @@ def test_generate_broll_creates_scored_vertical_slots() -> None:
         if slot.selected_asset
     )
     assert all(slot.crossfade_ms == 260 for slot in response.slots)
+
+
+def test_user_broll_library_upload_list_and_delete() -> None:
+    repository, project_id, workspace_id, user_id = make_broll_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    upload_storage_bucket="raw-uploads",
+                    upload_signed_url_ttl_seconds=900,
+                    media_work_dir="/tmp/motionly-tests",
+                )
+            )
+        )
+    )
+    signer = StorageSigner(base_url="http://localhost:8000")
+    initialized = asyncio.run(
+        init_user_broll_upload(
+            project_id=project_id,
+            payload=UserBrollUploadInitRequest(
+                filename="office-cutaway.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=4096,
+                width=1080,
+                height=1920,
+                duration_ms=3200,
+            ),
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+    assert initialized.asset.provider == "user_library"
+    assert initialized.signed_upload_url.endswith(".mp4")
+
+    completed = asyncio.run(
+        complete_user_broll_upload(
+            project_id=project_id,
+            asset_id=initialized.asset.id,
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+    assert completed.asset.download_url
+    listed = asyncio.run(
+        list_user_broll_library(
+            project_id=project_id,
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+    assert [asset.id for asset in listed.assets] == [initialized.asset.id]
+
+    deleted = asyncio.run(
+        delete_user_broll_library_asset(
+            project_id=project_id,
+            asset_id=initialized.asset.id,
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+    assert deleted.status == "deleted"
 
 
 def test_generate_broll_stores_stage_4_semantic_metadata() -> None:

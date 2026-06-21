@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDroppable } from "@dnd-kit/core";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -10,6 +11,8 @@ import {
   Minus,
   Scissors,
   Trash2,
+  Redo2,
+  Undo2,
   ZoomIn,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -18,12 +21,15 @@ import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { useTimeline } from "./useTimeline";
 import { usePlaybackSync } from "./usePlaybackSync";
+import { useEditorHistory, type HistoryEntry } from "../history-context";
 import type {
   BrollSlotSummary,
   CaptionSegment,
   CaptionTrackSummary,
   EditPlanCut,
   EditPlanRecordSummary,
+  MusicRegion,
+  MusicSelectionSummary,
   TimelineClip,
   TimelineState,
 } from "@motionly/shared";
@@ -41,16 +47,27 @@ interface TimelinePanelProps {
   apiAccessToken: string;
   activePlan: EditPlanRecordSummary | null;
   captionTrack: CaptionTrackSummary | null;
+  musicSelection: MusicSelectionSummary | null;
   onPlanUpdated: (plan: EditPlanRecordSummary) => void;
   onCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
   onBrollSlotUpdated: (slot: BrollSlotSummary) => void;
+  onMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
 }
+
+type ReorderDirection = -1 | 1;
 
 const TRACK_HEIGHT = 44;
 const RULER_HEIGHT = 30;
 const LABEL_WIDTH = 64;
 const MIN_CLIP_MS = 300;
 const NUDGE_MS = 500;
+const REORDER_THRESHOLD_MS = 120;
+
+type BrollRegionSnapshot = {
+  startMs: number;
+  endMs: number;
+  disabled?: boolean;
+};
 
 export function TimelinePanel({
   state,
@@ -65,9 +82,11 @@ export function TimelinePanel({
   apiAccessToken,
   activePlan,
   captionTrack,
+  musicSelection,
   onPlanUpdated,
   onCaptionTrackUpdated,
   onBrollSlotUpdated,
+  onMusicSelectionUpdated,
 }: TimelinePanelProps) {
   const router = useRouter();
   const { totalDurationMs, tracks } = state;
@@ -75,6 +94,7 @@ export function TimelinePanel({
   const canvasRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const { pushHistory, undo, redo, canUndo, canRedo, currentLabel } = useEditorHistory();
 
   const { zoomLevel, zoomIn, zoomOut, fitToContent, seekTo } = useTimeline({
     totalDurationMs,
@@ -113,7 +133,7 @@ export function TimelinePanel({
     onClipSelect(null);
   }
 
-  async function request(path: string, body: object) {
+  const request = useCallback(async (path: string, body: object) => {
     return editorApiRequest<Record<string, any>>(`${env.apiBaseUrl}${path}`, {
       method: "PATCH",
       workspaceId,
@@ -122,25 +142,30 @@ export function TimelinePanel({
       friendlyError: "Timeline changes could not be saved. Please try again.",
       body: body as Record<string, unknown>,
     });
-  }
+  }, [apiAccessToken, userId, workspaceId]);
 
-  async function saveCuts(cuts: EditPlanCut[]) {
+  const saveCuts = useCallback(async (cuts: EditPlanCut[]) => {
     if (!activePlan) throw new Error("Generate an AI edit first.");
     const payload = await request(`/projects/${projectId}/plans/${activePlan.id}/cuts`, { cuts });
     onPlanUpdated(payload.plan);
     return "Video cuts saved.";
-  }
+  }, [activePlan, onPlanUpdated, projectId, request]);
 
-  async function saveCaptionSegments(segments: CaptionSegment[]) {
+  const saveCaptionSegments = useCallback(async (segments: CaptionSegment[]) => {
     if (!captionTrack) throw new Error("Generate captions first.");
     const payload = await request(`/projects/${projectId}/captions/${captionTrack.id}/segments`, {
       segments,
     });
     onCaptionTrackUpdated(payload.track);
     return "Caption timing saved.";
-  }
+  }, [captionTrack, onCaptionTrackUpdated, projectId, request]);
 
-  async function saveBrollRegion(slotId: string, startMs: number, endMs: number, disabled?: boolean) {
+  const saveBrollRegion = useCallback(async (
+    slotId: string,
+    startMs: number,
+    endMs: number,
+    disabled?: boolean,
+  ) => {
     const payload = await request(`/projects/${projectId}/broll/${slotId}/region`, {
       start_ms: startMs,
       end_ms: endMs,
@@ -148,13 +173,24 @@ export function TimelinePanel({
     });
     onBrollSlotUpdated(payload.slot);
     return disabled ? "B-roll slot disabled." : "B-roll timing saved.";
-  }
+  }, [onBrollSlotUpdated, projectId, request]);
 
-  async function runTimelineAction(action: () => Promise<string>) {
+  const saveMusicRegions = useCallback(async (regions: MusicRegion[]) => {
+    if (!musicSelection) throw new Error("Select music first.");
+    const payload = (await request(`/projects/${projectId}/music/regions`, { regions })) as MusicSelectionSummary;
+    onMusicSelectionUpdated(payload);
+    return "Music regions saved.";
+  }, [musicSelection, onMusicSelectionUpdated, projectId, request]);
+
+  const runTimelineAction = useCallback(async (
+    action: () => Promise<string>,
+    historyEntry?: HistoryEntry,
+  ) => {
     setSaving(true);
     setMessage(null);
     try {
       const nextMessage = await action();
+      if (historyEntry) pushHistory(historyEntry);
       setMessage(nextMessage);
       router.refresh();
     } catch (error) {
@@ -163,6 +199,83 @@ export function TimelinePanel({
     } finally {
       setSaving(false);
     }
+  }, [pushHistory, router]);
+
+
+
+  function cloneCuts(cuts: EditPlanCut[]) {
+    return cuts.map((cut) => ({ ...cut }));
+  }
+
+  function cloneSegments(segments: CaptionSegment[]) {
+    return segments.map((segment) => ({
+      ...segment,
+      words: segment.words.map((word) => ({ ...word })),
+      highlight_words: [...(segment.highlight_words ?? [])],
+    }));
+  }
+
+  function commitCuts(nextCuts: EditPlanCut[], label: string) {
+    const before = cloneCuts(activePlan?.plan.cuts ?? []);
+    const after = cloneCuts(nextCuts);
+    runTimelineAction(
+      () => saveCuts(after),
+      {
+        id: `cuts-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label,
+        undo: () => saveCuts(before),
+        redo: () => saveCuts(after),
+      },
+    );
+  }
+
+  function commitCaptionSegments(nextSegments: CaptionSegment[], label: string) {
+    const before = cloneSegments(captionTrack?.segments ?? []);
+    const after = cloneSegments(nextSegments);
+    runTimelineAction(
+      () => saveCaptionSegments(after),
+      {
+        id: `captions-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label,
+        undo: () => saveCaptionSegments(before),
+        redo: () => saveCaptionSegments(after),
+      },
+    );
+  }
+
+  function commitBrollRegion(
+    slotId: string,
+    before: BrollRegionSnapshot,
+    after: BrollRegionSnapshot,
+    label: string,
+  ) {
+    runTimelineAction(
+      () => saveBrollRegion(slotId, after.startMs, after.endMs, after.disabled),
+      {
+        id: `broll-${slotId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label,
+        undo: () => saveBrollRegion(slotId, before.startMs, before.endMs, before.disabled),
+        redo: () => saveBrollRegion(slotId, after.startMs, after.endMs, after.disabled),
+      },
+    );
+  }
+
+  function cloneMusicRegions(regions: MusicRegion[]) {
+    return regions.map((region) => ({ ...region }));
+  }
+
+  function commitMusicRegions(nextRegions: MusicRegion[], label: string) {
+    const before = cloneMusicRegions(musicSelection?.regions ?? []);
+    const after = cloneMusicRegions(nextRegions);
+    runTimelineAction(
+      () => saveMusicRegions(after),
+      {
+        id: `music-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label,
+        undo: () => saveMusicRegions(before),
+        redo: () => saveMusicRegions(after),
+      },
+    );
   }
 
   function cutsForClipUpdate(clip: TimelineClip, startMs: number, endMs: number) {
@@ -181,160 +294,351 @@ export function TimelinePanel({
     return segments;
   }
 
+  function musicRegionsWithUpdate(regionId: string, startMs: number, endMs: number) {
+    const regions = [...(musicSelection?.regions ?? [])];
+    const index = regions.findIndex((region) => region.id === regionId);
+    if (index < 0) return null;
+    regions[index] = { ...regions[index], start_ms: startMs, end_ms: endMs };
+    return regions;
+  }
+
   function commitTrim(clip: TimelineClip, side: "left" | "right", nextMs: number) {
     const nextStart = side === "left" ? Math.min(nextMs, clip.endMs - MIN_CLIP_MS) : clip.startMs;
     const nextEnd = side === "right" ? Math.max(nextMs, clip.startMs + MIN_CLIP_MS) : clip.endMs;
     if (clip.sourceRef.kind === "cut") {
       const cuts = cutsForClipUpdate(clip, nextStart, nextEnd);
-      if (cuts) runTimelineAction(() => saveCuts(cuts));
+      if (cuts) commitCuts(cuts, `Trim ${clip.label}`);
       return;
     }
     if (clip.sourceRef.kind === "caption_segment") {
       const segments = captionSegmentsForClipUpdate(clip, nextStart, nextEnd);
-      if (segments) runTimelineAction(() => saveCaptionSegments(segments));
+      if (segments) commitCaptionSegments(segments, `Trim ${clip.label}`);
       return;
     }
     if (clip.sourceRef.kind === "broll_slot" && clip.sourceRef.id) {
-      runTimelineAction(() => saveBrollRegion(clip.sourceRef.id!, nextStart, nextEnd));
+      commitBrollRegion(
+        clip.sourceRef.id,
+        { startMs: clip.startMs, endMs: clip.endMs },
+        { startMs: nextStart, endMs: nextEnd },
+        `Trim ${clip.label}`,
+      );
+      return;
+    }
+    if (clip.sourceRef.kind === "music" && clip.sourceRef.regionId) {
+      const regions = musicRegionsWithUpdate(clip.sourceRef.regionId, nextStart, nextEnd);
+      if (regions) commitMusicRegions(regions, `Trim ${clip.label}`);
     }
   }
 
   function commitRegionMove(clip: TimelineClip, nextStartMs: number) {
-    if (clip.sourceRef.kind !== "broll_slot" || !clip.sourceRef.id) {
-      setMessage(
-        clip.sourceRef.kind === "music"
-          ? "Music region dragging is coming soon. Edit music in Audio."
-          : "Drag-to-reorder is not available for this track yet.",
+    const duration = clip.endMs - clip.startMs;
+    const startMs = Math.max(0, Math.min(totalDurationMs - duration, nextStartMs));
+    if (clip.sourceRef.kind === "broll_slot" && clip.sourceRef.id) {
+      commitBrollRegion(
+        clip.sourceRef.id,
+        { startMs: clip.startMs, endMs: clip.endMs },
+        { startMs, endMs: startMs + duration },
+        `Move ${clip.label}`,
       );
       return;
     }
-    const duration = clip.endMs - clip.startMs;
-    const startMs = Math.max(0, Math.min(totalDurationMs - duration, nextStartMs));
-    runTimelineAction(() => saveBrollRegion(clip.sourceRef.id!, startMs, startMs + duration));
+    if (clip.sourceRef.kind === "music" && clip.sourceRef.regionId) {
+      const regions = musicRegionsWithUpdate(clip.sourceRef.regionId, startMs, startMs + duration);
+      if (regions) commitMusicRegions(regions, `Move ${clip.label}`);
+      return;
+    }
+    setMessage("Drag-to-reorder is not available for this track yet.");
+  }
+
+  function commitReorder(clip: TimelineClip, direction: ReorderDirection) {
+    if (clip.sourceRef.kind === "cut") {
+      const cuts = [...(activePlan?.plan.cuts ?? [])];
+      const index = clip.sourceRef.index ?? -1;
+      const nextIndex = index + direction;
+      if (!cuts[index] || !cuts[nextIndex]) {
+        setMessage("No adjacent video clip to reorder.");
+        return;
+      }
+      [cuts[index], cuts[nextIndex]] = [cuts[nextIndex], cuts[index]];
+      commitCuts(cuts, `Reorder ${clip.label}`);
+      return;
+    }
+    if (clip.sourceRef.kind === "caption_segment") {
+      const segments = [...(captionTrack?.segments ?? [])];
+      const index = captionSegmentIndex(clip, segments);
+      const nextIndex = index + direction;
+      if (!segments[index] || !segments[nextIndex]) {
+        setMessage("No adjacent caption to reorder.");
+        return;
+      }
+      [segments[index], segments[nextIndex]] = [segments[nextIndex], segments[index]];
+      commitCaptionSegments(segments, `Reorder ${clip.label}`);
+      return;
+    }
+    setMessage("Cannot reorder this clip type yet.");
   }
 
   function splitSelectedClip() {
     if (!selectedClip) return;
-    runTimelineAction(async () => {
-      if (selectedClip.sourceRef.kind === "music") throw new Error("Cannot split music yet. Edit in Audio.");
-      if (playheadMs <= selectedClip.startMs + MIN_CLIP_MS || playheadMs >= selectedClip.endMs - MIN_CLIP_MS) {
-        throw new Error("Move the playhead inside the selected clip to split.");
+    if (playheadMs <= selectedClip.startMs + MIN_CLIP_MS || playheadMs >= selectedClip.endMs - MIN_CLIP_MS) {
+      setMessage("Move the playhead inside the selected clip to split.");
+      return;
+    }
+    if (selectedClip.sourceRef.kind === "music" && selectedClip.sourceRef.regionId) {
+      const regions = [...(musicSelection?.regions ?? [])];
+      const index = regions.findIndex((region) => region.id === selectedClip.sourceRef.regionId);
+      const current = regions[index];
+      if (!current) {
+        setMessage("Select a music region.");
+        return;
       }
-      if (selectedClip.sourceRef.kind === "cut") {
-        const cuts = [...(activePlan?.plan.cuts ?? [])];
-        const index = selectedClip.sourceRef.index ?? -1;
-        const current = cuts[index];
-        if (!current) throw new Error("Select a generated video clip.");
-        cuts.splice(
-          index,
-          1,
-          { ...current, end_ms: playheadMs },
-          { ...current, start_ms: playheadMs, reason: `${current.reason} split` },
-        );
-        return saveCuts(cuts);
+      regions.splice(
+        index,
+        1,
+        { ...current, end_ms: playheadMs },
+        { ...current, id: `${current.id}-split-${Date.now()}`, start_ms: playheadMs },
+      );
+      commitMusicRegions(regions, `Split ${selectedClip.label}`);
+      return;
+    }
+    if (selectedClip.sourceRef.kind === "cut") {
+      const cuts = [...(activePlan?.plan.cuts ?? [])];
+      const index = selectedClip.sourceRef.index ?? -1;
+      const current = cuts[index];
+      if (!current) {
+        setMessage("Select a generated video clip.");
+        return;
       }
-      if (selectedClip.sourceRef.kind === "caption_segment") {
-        const segments = [...(captionTrack?.segments ?? [])];
-        const index = captionSegmentIndex(selectedClip, segments);
-        const current = segments[index];
-        if (!current) throw new Error("Select a caption segment.");
-        segments.splice(
-          index,
-          1,
-          { ...current, end_ms: playheadMs },
-          { ...current, id: undefined, start_ms: playheadMs },
-        );
-        return saveCaptionSegments(segments);
+      cuts.splice(
+        index,
+        1,
+        { ...current, end_ms: playheadMs },
+        { ...current, start_ms: playheadMs, reason: `${current.reason} split` },
+      );
+      commitCuts(cuts, `Split ${selectedClip.label}`);
+      return;
+    }
+    if (selectedClip.sourceRef.kind === "caption_segment") {
+      const segments = [...(captionTrack?.segments ?? [])];
+      const index = captionSegmentIndex(selectedClip, segments);
+      const current = segments[index];
+      if (!current) {
+        setMessage("Select a caption segment.");
+        return;
       }
-      throw new Error("Cannot split this clip yet.");
-    });
+      segments.splice(
+        index,
+        1,
+        { ...current, end_ms: playheadMs },
+        { ...current, id: undefined, start_ms: playheadMs },
+      );
+      commitCaptionSegments(segments, `Split ${selectedClip.label}`);
+      return;
+    }
+    setMessage("Cannot split this clip yet.");
   }
 
   function deleteSelectedClip() {
     if (!selectedClip) return;
     if (!window.confirm(`Delete ${selectedClip.label}?`)) return;
-    runTimelineAction(async () => {
-      if (selectedClip.sourceRef.kind === "music") throw new Error("Cannot delete music here. Edit in Audio.");
+    if (selectedClip.sourceRef.kind === "music" && selectedClip.sourceRef.regionId) {
+      const regions = [...(musicSelection?.regions ?? [])];
+      const index = regions.findIndex((region) => region.id === selectedClip.sourceRef.regionId);
+      if (regions.length <= 1) {
+        setMessage("At least one music region must remain.");
+        return;
+      }
+      if (!regions[index]) {
+        setMessage("Select a music region.");
+        return;
+      }
+      regions.splice(index, 1);
+      onClipSelect(null);
+      commitMusicRegions(regions, `Delete ${selectedClip.label}`);
+      return;
+    }
       if (selectedClip.sourceRef.kind === "cut") {
         const cuts = [...(activePlan?.plan.cuts ?? [])];
         const index = selectedClip.sourceRef.index ?? -1;
-        if (cuts.length <= 1) throw new Error("At least one video clip must remain.");
-        if (!cuts[index]) throw new Error("Select a generated video clip.");
+        if (cuts.length <= 1) {
+          setMessage("At least one video clip must remain.");
+          return;
+        }
+        if (!cuts[index]) {
+          setMessage("Select a generated video clip.");
+          return;
+        }
         cuts.splice(index, 1);
         onClipSelect(null);
-        return saveCuts(cuts);
+        commitCuts(cuts, `Delete ${selectedClip.label}`);
+        return;
       }
       if (selectedClip.sourceRef.kind === "caption_segment") {
         const segments = [...(captionTrack?.segments ?? [])];
         const index = captionSegmentIndex(selectedClip, segments);
-        if (segments.length <= 1) throw new Error("At least one caption segment must remain.");
-        if (!segments[index]) throw new Error("Select a caption segment.");
+        if (segments.length <= 1) {
+          setMessage("At least one caption segment must remain.");
+          return;
+        }
+        if (!segments[index]) {
+          setMessage("Select a caption segment.");
+          return;
+        }
         segments.splice(index, 1);
         onClipSelect(null);
-        return saveCaptionSegments(segments);
+        commitCaptionSegments(segments, `Delete ${selectedClip.label}`);
+        return;
       }
       if (selectedClip.sourceRef.kind === "broll_slot" && selectedClip.sourceRef.id) {
         onClipSelect(null);
-        return saveBrollRegion(
+        commitBrollRegion(
           selectedClip.sourceRef.id,
-          selectedClip.startMs,
-          selectedClip.endMs,
-          true,
+          { startMs: selectedClip.startMs, endMs: selectedClip.endMs },
+          { startMs: selectedClip.startMs, endMs: selectedClip.endMs, disabled: true },
+          `Delete ${selectedClip.label}`,
         );
+        return;
       }
-      throw new Error("Cannot delete this clip yet.");
-    });
+      setMessage("Cannot delete this clip yet.");
   }
 
   function moveSelectedClip(direction: -1 | 1) {
     if (!selectedClip) return;
-    runTimelineAction(async () => {
-      if (selectedClip.sourceRef.kind === "music") throw new Error("Cannot reorder music. Edit in Audio.");
       if (selectedClip.sourceRef.kind === "cut") {
         const cuts = [...(activePlan?.plan.cuts ?? [])];
         const index = selectedClip.sourceRef.index ?? -1;
         const nextIndex = index + direction;
-        if (!cuts[index] || !cuts[nextIndex]) throw new Error("No adjacent video clip to move.");
+        if (!cuts[index] || !cuts[nextIndex]) {
+          setMessage("No adjacent video clip to move.");
+          return;
+        }
         [cuts[index], cuts[nextIndex]] = [cuts[nextIndex], cuts[index]];
-        return saveCuts(cuts);
+        commitCuts(cuts, `Reorder ${selectedClip.label}`);
+        return;
       }
       if (selectedClip.sourceRef.kind === "caption_segment") {
         const segments = [...(captionTrack?.segments ?? [])];
         const index = captionSegmentIndex(selectedClip, segments);
         const nextIndex = index + direction;
-        if (!segments[index] || !segments[nextIndex]) throw new Error("No adjacent caption to move.");
+        if (!segments[index] || !segments[nextIndex]) {
+          setMessage("No adjacent caption to move.");
+          return;
+        }
         [segments[index], segments[nextIndex]] = [segments[nextIndex], segments[index]];
-        return saveCaptionSegments(segments);
+        commitCaptionSegments(segments, `Reorder ${selectedClip.label}`);
+        return;
       }
       if (selectedClip.sourceRef.kind === "broll_slot" && selectedClip.sourceRef.id) {
         const duration = selectedClip.endMs - selectedClip.startMs;
         const nextStart = Math.max(0, Math.min(totalDurationMs - duration, selectedClip.startMs + direction * NUDGE_MS));
-        return saveBrollRegion(selectedClip.sourceRef.id, nextStart, nextStart + duration);
+        commitBrollRegion(
+          selectedClip.sourceRef.id,
+          { startMs: selectedClip.startMs, endMs: selectedClip.endMs },
+          { startMs: nextStart, endMs: nextStart + duration },
+          `Nudge ${selectedClip.label}`,
+        );
+        return;
       }
-      throw new Error("Cannot move this clip yet.");
-    });
+      if (selectedClip.sourceRef.kind === "music" && selectedClip.sourceRef.regionId) {
+        const duration = selectedClip.endMs - selectedClip.startMs;
+        const nextStart = Math.max(0, Math.min(totalDurationMs - duration, selectedClip.startMs + direction * NUDGE_MS));
+        const regions = musicRegionsWithUpdate(selectedClip.sourceRef.regionId, nextStart, nextStart + duration);
+        if (regions) commitMusicRegions(regions, `Nudge ${selectedClip.label}`);
+        return;
+      }
+      setMessage("Cannot move this clip yet.");
   }
 
   function updateSelectedTiming(startMs: number, endMs: number) {
     if (!selectedClip) return;
-    runTimelineAction(async () => {
-      if (endMs <= startMs) throw new Error("End time must be after start time.");
+    if (endMs <= startMs) {
+      setMessage("End time must be after start time.");
+      return;
+    }
       if (selectedClip.sourceRef.kind === "cut") {
         const cuts = cutsForClipUpdate(selectedClip, startMs, endMs);
-        if (!cuts) throw new Error("Select a generated video clip.");
-        return saveCuts(cuts);
+        if (!cuts) {
+          setMessage("Select a generated video clip.");
+          return;
+        }
+        commitCuts(cuts, `Retiming ${selectedClip.label}`);
+        return;
       }
       if (selectedClip.sourceRef.kind === "caption_segment") {
         const segments = captionSegmentsForClipUpdate(selectedClip, startMs, endMs);
-        if (!segments) throw new Error("Select a caption segment.");
-        return saveCaptionSegments(segments);
+        if (!segments) {
+          setMessage("Select a caption segment.");
+          return;
+        }
+        commitCaptionSegments(segments, `Retiming ${selectedClip.label}`);
+        return;
       }
       if (selectedClip.sourceRef.kind === "broll_slot" && selectedClip.sourceRef.id) {
-        return saveBrollRegion(selectedClip.sourceRef.id, startMs, endMs);
+        commitBrollRegion(
+          selectedClip.sourceRef.id,
+          { startMs: selectedClip.startMs, endMs: selectedClip.endMs },
+          { startMs, endMs },
+          `Retiming ${selectedClip.label}`,
+        );
+        return;
       }
-      throw new Error("Timing for this clip is edited in Audio.");
-    });
+      if (selectedClip.sourceRef.kind === "music" && selectedClip.sourceRef.regionId) {
+        const regions = musicRegionsWithUpdate(selectedClip.sourceRef.regionId, startMs, endMs);
+        if (regions) commitMusicRegions(regions, `Retiming ${selectedClip.label}`);
+        return;
+      }
+      setMessage("Timing for this clip is edited in Audio.");
   }
+
+  const seekBy = useCallback((deltaMs: number) => {
+    const nextMs = Math.max(0, Math.min(totalDurationMs, playheadMs + deltaMs));
+    seekTo(nextMs);
+    setPlayheadMs(nextMs);
+  }, [playheadMs, seekTo, setPlayheadMs, totalDurationMs]);
+
+  const togglePlayback = useCallback((mode: "pause" | "forward" | "backward") => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (mode === "pause") {
+      video.pause();
+      video.playbackRate = 1;
+      return;
+    }
+    if (mode === "backward") {
+      seekBy(-1000);
+      return;
+    }
+    video.playbackRate = video.paused ? 1 : Math.min(4, video.playbackRate * 2 || 1);
+    void video.play();
+  }, [seekBy, videoRef]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isTyping = ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "");
+      if (isTyping) return;
+      if (event.key.toLowerCase() === "j") {
+        event.preventDefault();
+        togglePlayback("backward");
+      } else if (event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        togglePlayback("pause");
+      } else if (event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        togglePlayback("forward");
+      } else if (event.key === "[") {
+        event.preventDefault();
+        if (selectedClip) commitTrim(selectedClip, "left", playheadMs);
+      } else if (event.key === "]") {
+        event.preventDefault();
+        if (selectedClip) commitTrim(selectedClip, "right", playheadMs);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // commitTrim intentionally comes from render scope so bracket trim shortcuts use current clip state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playheadMs, selectedClip, togglePlayback]);
 
   const ticks = rulerTicks(totalDurationMs);
   const selectedCopy = selectedClip
@@ -349,10 +653,17 @@ export function TimelinePanel({
           {formatMs(playheadMs)} <span className="opacity-40">/</span> {formatMs(totalDurationMs)}
         </span>
         <span className="hidden truncate text-[10px] font-bold text-muted-foreground sm:block">
-          {saving ? "Saving timeline..." : message ?? selectedCopy}
+          {saving ? "Saving timeline..." : message ?? currentLabel ?? selectedCopy}
         </span>
         <div className="ml-auto flex items-center gap-1 overflow-x-auto">
           {saving ? <Loader2 className="mr-1 size-3 animate-spin text-primary" /> : null}
+          <TimelineButton onClick={() => { if (canUndo && !saving) void undo(); }} title="Undo" ariaLabel="Undo" disabled={!canUndo || saving}>
+            <Undo2 className="size-3" />
+          </TimelineButton>
+          <TimelineButton onClick={() => { if (canRedo && !saving) void redo(); }} title="Redo" ariaLabel="Redo" disabled={!canRedo || saving}>
+            <Redo2 className="size-3" />
+          </TimelineButton>
+          <span className="mx-1 h-4 w-px bg-border" />
           <TimelineButton onClick={splitSelectedClip} title={selectedClip ? "Split selected clip at playhead" : "Select a clip"} ariaLabel="Split selected clip at playhead" disabled={!selectedClip || saving}>
             <Scissors className="size-3" />
           </TimelineButton>
@@ -463,8 +774,10 @@ export function TimelinePanel({
             </div>
 
             {tracks.map((track, trackIdx) => (
-              <div
+              <DroppableTrack
                 key={track.kind}
+                id={`track:${track.kind}`}
+                data={{ zone: "timeline", trackKind: track.kind, totalDurationMs }}
                 role="list"
                 aria-label={`${track.label} timeline track`}
                 className={cn(
@@ -473,6 +786,9 @@ export function TimelinePanel({
                 )}
                 style={{ height: TRACK_HEIGHT }}
               >
+                {track.kind === "video" ? track.clips.slice(0, -1).map((clip, index) => (
+                  <TransitionDropZone key={`transition-zone-${clip.id}`} index={index} left={pct(clip.endMs)} />
+                )) : null}
                 {track.clips.map((clip) => (
                   <ClipBlock
                     key={clip.id}
@@ -482,12 +798,14 @@ export function TimelinePanel({
                     onSelect={onClipSelect}
                     onTrim={commitTrim}
                     onMove={commitRegionMove}
+                    onReorder={commitReorder}
                     msFromPointer={msFromPointer}
-                    trimDisabled={clip.sourceRef.kind === "music"}
-                    moveDisabled={clip.sourceRef.kind !== "broll_slot"}
+                    trimDisabled={!["cut", "caption_segment", "broll_slot", "music"].includes(clip.sourceRef.kind)}
+                    moveDisabled={!["broll_slot", "music"].includes(clip.sourceRef.kind)}
+                    reorderDisabled={!["cut", "caption_segment"].includes(clip.sourceRef.kind)}
                   />
                 ))}
-              </div>
+              </DroppableTrack>
             ))}
 
             <Playhead pct={pct(playheadMs)} totalHeight={RULER_HEIGHT + tracks.length * TRACK_HEIGHT} />
@@ -613,9 +931,33 @@ interface ClipBlockProps {
   onSelect: (id: string) => void;
   onTrim: (clip: TimelineClip, side: "left" | "right", nextMs: number) => void;
   onMove: (clip: TimelineClip, nextStartMs: number) => void;
+  onReorder: (clip: TimelineClip, direction: ReorderDirection) => void;
   msFromPointer: (clientX: number) => number;
   trimDisabled: boolean;
   moveDisabled: boolean;
+  reorderDisabled: boolean;
+}
+
+function DroppableTrack({ id, data, className, children, ...props }: React.HTMLAttributes<HTMLDivElement> & { id: string; data: Record<string, unknown> }) {
+  const { setNodeRef, isOver } = useDroppable({ id, data });
+  return (
+    <div ref={setNodeRef} {...props} className={cn(className, isOver && "bg-primary/10 ring-1 ring-inset ring-primary/70")}>
+      {children}
+      {isOver ? <span className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-primary" style={{ left: "50%" }} /> : null}
+    </div>
+  );
+}
+
+function TransitionDropZone({ index, left }: { index: number; left: string }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `transition:${index}`,
+    data: { zone: "transition", afterClipIndex: index },
+  });
+  return (
+    <div ref={setNodeRef} className={cn("absolute bottom-0 top-0 z-20 w-5 -translate-x-1/2", isOver && "bg-primary/30")} style={{ left }} aria-label={`Transition drop zone after clip ${index + 1}`}>
+      <span className={cn("absolute bottom-1 top-1 left-1/2 w-px -translate-x-1/2 border-l border-dashed border-cyan-400/50", isOver && "w-1 border-0 bg-primary")} />
+    </div>
+  );
 }
 
 function ClipBlock({
@@ -625,11 +967,17 @@ function ClipBlock({
   onSelect,
   onTrim,
   onMove,
+  onReorder,
   msFromPointer,
   trimDisabled,
   moveDisabled,
+  reorderDisabled,
 }: ClipBlockProps) {
   const widthMs = Math.max(clip.endMs - clip.startMs, 0);
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: `clip:${clip.id}`,
+    data: { zone: "clip", clip },
+  });
 
   function startTrim(side: "left" | "right", event: React.PointerEvent<HTMLDivElement>) {
     event.stopPropagation();
@@ -644,14 +992,23 @@ function ClipBlock({
   function startMove(event: React.PointerEvent<HTMLDivElement>) {
     event.stopPropagation();
     onSelect(clip.id);
-    if (moveDisabled) return;
     const startPointerMs = msFromPointer(event.clientX);
     const startClipMs = clip.startMs;
     const handlePointerUp = (nextEvent: PointerEvent) => {
       window.removeEventListener("pointerup", handlePointerUp);
       const deltaMs = msFromPointer(nextEvent.clientX) - startPointerMs;
       if (Math.abs(deltaMs) < 80) return;
-      onMove(clip, startClipMs + deltaMs);
+      if (!moveDisabled) {
+        onMove(clip, startClipMs + deltaMs);
+        return;
+      }
+      if (!reorderDisabled) {
+        if (deltaMs > REORDER_THRESHOLD_MS) {
+          onReorder(clip, 1);
+        } else if (deltaMs < -REORDER_THRESHOLD_MS) {
+          onReorder(clip, -1);
+        }
+      }
     };
     window.addEventListener("pointerup", handlePointerUp);
   }
@@ -665,11 +1022,18 @@ function ClipBlock({
     } else if (event.key === "ArrowRight" && !moveDisabled) {
       event.preventDefault();
       onMove(clip, clip.startMs + 500);
+    } else if (event.key === "ArrowLeft" && !reorderDisabled && moveDisabled) {
+      event.preventDefault();
+      onReorder(clip, -1);
+    } else if (event.key === "ArrowRight" && !reorderDisabled && moveDisabled) {
+      event.preventDefault();
+      onReorder(clip, 1);
     }
   }
 
   return (
     <div
+      ref={setDropRef}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -683,6 +1047,7 @@ function ClipBlock({
         selected
           ? "ring-2 ring-white shadow-[0_0_0_1px_white,4px_4px_0_rgba(0,0,0,0.22)]"
           : "ring-1 ring-white/10 hover:-translate-y-0.5 hover:brightness-110",
+        isOver && "z-20 ring-2 ring-primary brightness-125",
       )}
       style={{
         left: pct(clip.startMs),
@@ -694,7 +1059,13 @@ function ClipBlock({
         event.stopPropagation();
         onSelect(clip.id);
       }}
-      title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}${moveDisabled ? " | Use toolbar actions" : " | Drag to move"}`}
+      title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}${
+        moveDisabled
+          ? reorderDisabled
+            ? " | Use toolbar actions"
+            : " | Drag left/right to reorder"
+          : " | Drag to move"
+      }`}
     >
       <TrimHandle side="left" disabled={trimDisabled} onPointerDown={(event) => startTrim("left", event)} />
       <span className="flex-1 truncate">{clip.label}</span>

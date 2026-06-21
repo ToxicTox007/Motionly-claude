@@ -25,6 +25,9 @@ const TRACK_COLORS: Record<string, string> = {
   caption: "bg-violet-500/80",
   music:   "bg-rose-500/80",
   zoom:    "bg-sky-500/80",
+  transition: "bg-cyan-500/80",
+  overlay: "bg-fuchsia-500/80",
+  sfx: "bg-orange-500/80",
 };
 
 export interface BuildTimelineInput {
@@ -102,23 +105,48 @@ export function buildTimelineState({
     }),
   );
 
-  // ── Music track: single clip spanning full reel duration ─────────────────
-  const musicClips: TimelineClip[] =
-    musicSelection?.music_track_id
-      ? [
-          {
-            id: "music-main",
-            trackKind: "music" as const,
-            startMs: 0,
-            endMs: totalDurationMs,
-            label:
-              musicSelection.music_track?.title ?? "Background music",
-            colorClass: TRACK_COLORS.music,
-            disabled: false,
-            sourceRef: { kind: "music" as const },
-          },
-        ]
+  // ── Music track: editable regions from the music selection ───────────────
+  const musicRegions = musicSelection?.regions?.length
+    ? musicSelection.regions
+    : musicSelection?.music_track_id
+      ? [{ id: "music-0", start_ms: 0, end_ms: totalDurationMs }]
       : [];
+  const musicClips: TimelineClip[] = musicRegions.map((region) => ({
+    id: `music-${region.id}`,
+    trackKind: "music" as const,
+    startMs: region.start_ms,
+    endMs: region.end_ms,
+    label: musicSelection?.music_track?.title ?? "Background music",
+    colorClass: TRACK_COLORS.music,
+    disabled: region.disabled ?? false,
+    sourceRef: { kind: "music" as const, regionId: region.id },
+  }));
+
+  const manualElements = activePlan?.plan?.manual_elements ?? [];
+  musicClips.push(...manualElements.filter((element) => element.type === "music").map((element) => ({
+    id: `element-${element.id}`,
+    trackKind: "music" as const,
+    startMs: element.start_ms,
+    endMs: element.end_ms,
+    label: element.name,
+    colorClass: TRACK_COLORS.music,
+    disabled: false,
+    sourceRef: { kind: "manual_element" as const, id: element.id },
+  })));
+  const manualClips = (kind: "transition" | "overlay" | "sfx") => manualElements
+    .filter((element) => kind === "overlay"
+      ? ["text", "caption", "overlay", "shape", "graphic"].includes(element.type) && element.zone === "timeline"
+      : element.type === kind)
+    .map((element) => ({
+      id: `element-${element.id}`,
+      trackKind: kind,
+      startMs: element.start_ms,
+      endMs: element.end_ms,
+      label: element.name,
+      colorClass: TRACK_COLORS[kind],
+      disabled: false,
+      sourceRef: { kind: "manual_element" as const, id: element.id },
+    }));
 
   const tracks: TimelineTrack[] = [
     {
@@ -143,9 +171,30 @@ export function buildTimelineState({
       locked: false,
     },
     {
+      kind: "transition",
+      label: "TRANS",
+      clips: manualClips("transition"),
+      muted: false,
+      locked: false,
+    },
+    {
+      kind: "overlay",
+      label: "FX",
+      clips: manualClips("overlay"),
+      muted: false,
+      locked: false,
+    },
+    {
       kind: "music",
       label: "MUSIC",
       clips: musicClips,
+      muted: false,
+      locked: false,
+    },
+    {
+      kind: "sfx",
+      label: "SFX",
+      clips: manualClips("sfx"),
       muted: false,
       locked: false,
     },

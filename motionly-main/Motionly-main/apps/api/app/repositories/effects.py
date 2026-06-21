@@ -15,6 +15,7 @@ from app.schemas.effects import (
     EffectsTextureSettings,
     GradientRampSettings,
     MotionEffectKey,
+    MotionSettings,
     VisualPresetKey,
 )
 
@@ -42,6 +43,7 @@ class EffectsConfigRecord:
     preview_before_url: str | None
     preview_after_url: str | None
     cache_key: str | None
+    motion: MotionSettings = field(default_factory=MotionSettings)
     error_code: str | None = None
     error_message: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -60,6 +62,7 @@ class EffectsConfigRecord:
             lut_intensity=self.lut_intensity,
             texture=self.texture,
             motion_effects=self.motion_effects,
+            motion=self.motion,
             background_removal=self.background_removal,
             gradient_ramp=self.gradient_ramp,
             after_effects_presets=self.after_effects_presets,
@@ -147,6 +150,7 @@ class InMemoryEffectsRepository:
         preview_before_url: str | None,
         preview_after_url: str | None,
         cache_key: str | None,
+        motion: MotionSettings | None = None,
     ) -> EffectsConfigRecord:
         version = (
             max(
@@ -171,6 +175,7 @@ class InMemoryEffectsRepository:
             lut_intensity=lut_intensity,
             texture=texture,
             motion_effects=motion_effects,
+            motion=motion or MotionSettings(),
             background_removal=background_removal,
             gradient_ramp=gradient_ramp,
             after_effects_presets=after_effects_presets,
@@ -242,6 +247,7 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
         preview_before_url: str | None,
         preview_after_url: str | None,
         cache_key: str | None,
+        motion: MotionSettings | None = None,
     ) -> EffectsConfigRecord:
         version = self._next_version(project_id=project_id, workspace_id=workspace_id)
         payload = {
@@ -255,6 +261,7 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
             "lut_intensity": lut_intensity,
             "texture": texture.model_dump(mode="json"),
             "motion_effects": [effect.value for effect in motion_effects],
+            "motion": (motion or MotionSettings()).model_dump(mode="json"),
             "background_removal": background_removal.model_dump(mode="json"),
             "gradient_ramp": gradient_ramp.model_dump(mode="json"),
             "after_effects_presets": [
@@ -356,6 +363,7 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
             lut_intensity=float(row["lut_intensity"]),
             texture=EffectsTextureSettings.model_validate(row.get("texture") or {}),
             motion_effects=[MotionEffectKey(effect) for effect in row.get("motion_effects") or []],
+            motion=MotionSettings.model_validate(row.get("motion") or {}),
             background_removal=BackgroundRemovalSettings.model_validate(
                 row.get("background_removal") or {}
             ),

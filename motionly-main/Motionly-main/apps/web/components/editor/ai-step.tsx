@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Label, Select, TextArea, Slider } from "./ui";
+import { Input, Label, Select, TextArea, Slider } from "./ui";
 import { Button } from "../button";
-import { AlertCircle, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { AlertCircle, History, Loader2, RefreshCw, Save, Sparkles } from "lucide-react";
 import { env } from "@/lib/env";
 import { editorApiRequest } from "@/lib/client-api";
 import type {
@@ -14,6 +14,7 @@ import type {
   EditPlanRecordSummary,
   EditPlanStyleKey,
   MusicSelectionSummary,
+  PlanSnapshotSummary,
   TranscriptSummary,
 } from "@motionly/shared";
 
@@ -94,6 +95,9 @@ export function AIStep({
   const [outputLanguage, setOutputLanguage] = useState("original");
   const [loading, setLoading] = useState(false);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [snapshots, setSnapshots] = useState<PlanSnapshotSummary[]>([]);
+  const [snapshotName, setSnapshotName] = useState("");
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const hasTranscript = transcript?.status === "ready" && Boolean(transcript.words?.length);
 
@@ -110,6 +114,34 @@ export function AIStep({
     if (val < 75) return "medium";
     return "high";
   };
+
+  useEffect(() => {
+    if (!activePlanId) {
+      return;
+    }
+    let canceled = false;
+    async function loadSnapshots() {
+      try {
+        const payload = await editorApiRequest<{ snapshots: PlanSnapshotSummary[] }>(
+          `${env.apiBaseUrl}/projects/${projectId}/plans/snapshots`,
+          {
+            method: "GET",
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+            friendlyError: "Plan snapshots could not be loaded.",
+          },
+        );
+        if (!canceled) setSnapshots(payload.snapshots ?? []);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+    void loadSnapshots();
+    return () => {
+      canceled = true;
+    };
+  }, [activePlanId, apiAccessToken, projectId, userId, workspaceId]);
 
   async function generatePlan() {
     setLoading(true);
@@ -248,6 +280,70 @@ export function AIStep({
       setMessage((error as Error).message);
     } finally {
       setTranscriptLoading(false);
+    }
+  }
+
+  async function saveSnapshot() {
+    if (!activePlan) {
+      setMessage("Generate an AI edit before saving a snapshot.");
+      return;
+    }
+    setSnapshotLoading(true);
+    setMessage(null);
+    try {
+      const payload = await editorApiRequest<{ snapshot: PlanSnapshotSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans/snapshots`,
+        {
+          method: "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Plan snapshot could not be saved.",
+          body: {
+            plan_id: activePlan.id,
+            name: snapshotName.trim() || `Plan v${activePlan.version}`,
+            notes: `Saved from editor with ${activePlan.summary.cut_count} cuts.`,
+          },
+        },
+      );
+      setSnapshots((current) => [
+        payload.snapshot,
+        ...current.filter((snapshot) => snapshot.id !== payload.snapshot.id),
+      ]);
+      setSnapshotName("");
+      setMessage(`Snapshot saved: ${payload.snapshot.name}`);
+      router.refresh();
+    } catch (error) {
+      console.error(error);
+      setMessage((error as Error).message);
+    } finally {
+      setSnapshotLoading(false);
+    }
+  }
+
+  async function restoreSnapshot(snapshotId: string) {
+    setSnapshotLoading(true);
+    setMessage(null);
+    try {
+      const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans/snapshots/${snapshotId}/restore`,
+        {
+          method: "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Plan snapshot could not be restored.",
+          body: {},
+        },
+      );
+      onPlanGenerated(payload.plan);
+      setMessage(`Restored snapshot as plan v${payload.plan.version}.`);
+      router.refresh();
+    } catch (error) {
+      console.error(error);
+      setMessage((error as Error).message);
+    } finally {
+      setSnapshotLoading(false);
     }
   }
 
@@ -399,6 +495,67 @@ export function AIStep({
         )}
         <span className="text-base font-bold">{loading ? "Generating, please wait" : "Generate AI Edit"}</span>
       </Button>
+
+      <div className="space-y-3 border border-border bg-muted/35 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-black">Version History</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Save named EditPlan snapshots and restore them as new active versions.
+            </p>
+          </div>
+          <History className="size-4 text-muted-foreground" />
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            aria-label="Snapshot name"
+            value={snapshotName}
+            onChange={(event) => setSnapshotName(event.target.value)}
+            placeholder={activePlan ? `Plan v${activePlan.version}` : "Snapshot name"}
+            disabled={!activePlan || snapshotLoading}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={saveSnapshot}
+            disabled={!activePlan || snapshotLoading}
+            className="min-h-11 gap-2 whitespace-nowrap"
+          >
+            {snapshotLoading ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            Save
+          </Button>
+        </div>
+        {snapshots.length ? (
+          <div className="space-y-2">
+            {snapshots.slice(0, 5).map((snapshot) => (
+              <div
+                key={snapshot.id}
+                className="flex items-center justify-between gap-3 border border-border bg-surface px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-black">{snapshot.name}</p>
+                  <p className="text-[10px] font-bold text-muted-foreground">
+                    Plan v{snapshot.source_plan_version} · {snapshot.summary.cut_count} cuts
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => restoreSnapshot(snapshot.id)}
+                  disabled={snapshotLoading}
+                  className="min-h-10 px-3 text-xs"
+                >
+                  Restore
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="border border-border bg-background p-3 text-xs font-bold text-muted-foreground">
+            No saved snapshots yet.
+          </p>
+        )}
+      </div>
       
       {message ? (
         <p id="ai-edit-message" role={/failed|could not|try/i.test(message) ? "alert" : "status"} className="border border-border bg-muted p-3 text-sm font-bold text-muted-foreground">
@@ -412,25 +569,28 @@ export function AIStep({
 function defaultCaptionPreset(style: StylePickerValue) {
   switch (style) {
     case "auto":
-      return "founder_clean";
+      return "creator_ticker";
     case "dramatic":
+    case "motivational":
+      return "impact_stamp";
     case "fashion":
       return "vogue_white";
     case "educational":
+      return "educational_card";
     case "clean_minimal":
     case "founder":
       return "founder_clean";
-    case "motivational":
     case "fast_paced":
     case "creator_influencer":
     case "travel":
-      return "bold_influencer";
+      return "creator_ticker";
     case "storytelling":
     case "podcast":
       return "founder_clean";
-    case "emotional":
     case "cinematic":
     case "luxury":
+      return "minimal_line";
+    case "emotional":
     default:
       return "luxury_minimal";
   }

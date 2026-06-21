@@ -6,14 +6,14 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.music import list_music_tracks, select_music
+from app.api.music import list_music_tracks, select_music, update_music_regions
 from app.api.plans import create_plan
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.music import InMemoryMusicRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.captions import LanguageHint
-from app.schemas.music import MusicSelectRequest
+from app.schemas.music import MusicRegion, MusicRegionsUpdateRequest, MusicSelectRequest
 from app.schemas.plans import BrollDensity, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
 from app.services.edit_planner import FixtureEditPlannerProvider
@@ -92,6 +92,57 @@ def test_select_music_creates_selection() -> None:
     assert response.selection.music_track.title == "Ambient Luxury Bed"
     assert response.selection.music_volume == 0.25
     assert response.selection.sfx_intensity == 0.25
+    assert len(response.selection.regions) == 1
+    assert response.selection.regions[0].start_ms == 0
+    assert response.selection.regions[0].end_ms > 0
+
+
+def test_update_music_regions_splits_and_deletes_region() -> None:
+    repository, project_id, workspace_id, user_id = make_music_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    selected = asyncio.run(
+        select_music(
+            project_id=project_id,
+            payload=MusicSelectRequest(),
+            actor=actor,
+            repository=repository,
+            plan_repository=repository.plan_repository,
+            music_queue=MusicQueue(),
+            providers=[FixtureMusicProvider()],
+        )
+    )
+    original = selected.selection.regions[0]
+
+    split = asyncio.run(
+        update_music_regions(
+            project_id=project_id,
+            payload=MusicRegionsUpdateRequest(
+                regions=[
+                    MusicRegion(id=original.id, start_ms=original.start_ms, end_ms=3000),
+                    MusicRegion(id="music-second", start_ms=3000, end_ms=original.end_ms),
+                ]
+            ),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    assert len(split.regions) == 2
+    assert split.regions[0].end_ms == 3000
+    assert split.regions[1].start_ms == 3000
+
+    deleted = asyncio.run(
+        update_music_regions(
+            project_id=project_id,
+            payload=MusicRegionsUpdateRequest(regions=[split.regions[1]]),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    assert len(deleted.regions) == 1
+    assert deleted.regions[0].start_ms == 3000
 
 
 def test_list_music_tracks_returns_clickable_options() -> None:

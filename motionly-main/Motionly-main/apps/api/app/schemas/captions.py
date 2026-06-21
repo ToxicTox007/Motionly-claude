@@ -33,6 +33,18 @@ class CaptionPresetKey(StrEnum):
     VOGUE_WHITE = "vogue_white"
     GOLD_PREMIUM = "gold_premium"
     FOUNDER_CLEAN = "founder_clean"
+    IMPACT_STAMP = "impact_stamp"
+    MINIMAL_LINE = "minimal_line"
+    EDUCATIONAL_CARD = "educational_card"
+    CREATOR_TICKER = "creator_ticker"
+
+
+class CaptionMode(StrEnum):
+    WORD_POP = "word_pop"
+    IMPACT_STAMP = "impact_stamp"
+    MINIMAL_LINE = "minimal_line"
+    EDUCATIONAL_CARD = "educational_card"
+    CREATOR_TICKER = "creator_ticker"
 
 
 class CaptionAnimation(StrEnum):
@@ -41,6 +53,10 @@ class CaptionAnimation(StrEnum):
     TYPE_ON = "type_on"
     GLOW = "glow"
     SLIDE_UP = "slide_up"
+    IMPACT_STAMP = "impact_stamp"
+    MINIMAL_FADE = "minimal_fade"
+    EDU_STEP = "edu_step"
+    TICKER = "ticker"
 
 
 class TranscriptWord(BaseModel):
@@ -92,12 +108,20 @@ class TranscriptionCreateResponse(BaseModel):
 
 
 class CaptionStyle(BaseModel):
+    mode: CaptionMode = CaptionMode.WORD_POP
     font_family: str
     font_size_px: int = Field(gt=0)
     font_weight: int = Field(ge=100, le=900)
     text_case: Literal["normal", "uppercase", "title"]
     text_color: str
     accent_color: str
+    background_color: str | None = None
+    background_opacity: float = Field(default=0, ge=0, le=1)
+    border_color: str | None = None
+    border_radius_px: int = Field(default=0, ge=0, le=999)
+    padding_x_px: int = Field(default=12, ge=0, le=96)
+    padding_y_px: int = Field(default=6, ge=0, le=64)
+    letter_spacing_px: float = Field(default=0, ge=-2, le=12)
     stroke_color: str | None = None
     stroke_width_px: int = Field(default=0, ge=0)
     shadow: str | None = None

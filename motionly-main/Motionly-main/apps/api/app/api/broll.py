@@ -1,6 +1,7 @@
 import time
+from pathlib import Path
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -12,10 +13,12 @@ from app.api.dependencies import (
     get_broll_queue,
     get_broll_repository,
     get_stock_video_providers,
+    get_storage_signer,
 )
 from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
+from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.broll import (
     BROLL_SCHEMA_VERSION,
     BrollGenerateRequest,
@@ -28,13 +31,21 @@ from app.schemas.broll import (
     BrollSwapRequest,
     BrollSwapResponse,
     StockOrientation,
+    StockProviderKey,
+    UserBrollDeleteResponse,
+    UserBrollLibraryResponse,
+    UserBrollUploadCompleteResponse,
+    UserBrollUploadInitRequest,
+    UserBrollUploadInitResponse,
 )
+from app.services.ai_feedback import record_ai_feedback
 from app.services.broll_intelligence import (
     apply_stage4_broll_rules,
     broll_slot_metadata,
     latest_visual_manifest_for_broll,
     visual_manifest_cache_signature,
 )
+from app.services.local_storage import LocalObjectStorage
 from app.services.queue import BrollQueue
 from app.services.stock_video import (
     StockVideoProvider,
@@ -46,6 +57,7 @@ from app.services.stock_video import (
     score_candidate,
     semantic_match_score,
 )
+from app.services.storage import StorageSigner
 
 router = APIRouter(prefix="/projects/{project_id}/broll", tags=["B-roll"])
 
@@ -54,6 +66,163 @@ BrollRepositoryDep = Annotated[InMemoryBrollRepository, Depends(get_broll_reposi
 BillingRepositoryDep = Annotated[InMemoryBillingRepository, Depends(get_billing_repository)]
 BrollQueueDep = Annotated[BrollQueue, Depends(get_broll_queue)]
 StockProvidersDep = Annotated[list[StockVideoProvider], Depends(get_stock_video_providers)]
+StorageSignerDep = Annotated[StorageSigner, Depends(get_storage_signer)]
+
+
+@router.post("/library/init", response_model=UserBrollUploadInitResponse, status_code=201)
+async def init_user_broll_upload(
+    project_id: UUID,
+    payload: UserBrollUploadInitRequest,
+    request: Request,
+    actor: ActorDep,
+    repository: BrollRepositoryDep,
+    storage_signer: StorageSignerDep,
+) -> UserBrollUploadInitResponse:
+    repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
+    suffix = Path(payload.filename).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".webm", ".m4v"}:
+        raise ApiError(
+            422,
+            "library_video_type_unsupported",
+            "Upload MP4, MOV, M4V, or WebM video.",
+        )
+    asset_key = uuid4()
+    bucket = request.app.state.settings.upload_storage_bucket
+    path = f"workspaces/{actor.workspace_id}/projects/{project_id}/broll/{asset_key}{suffix}"
+    signed = storage_signer.create_signed_upload(
+        bucket=bucket,
+        path=path,
+        mime_type=payload.mime_type,
+        expires_in_seconds=request.app.state.settings.upload_signed_url_ttl_seconds,
+    )
+    orientation = (
+        StockOrientation.PORTRAIT if payload.height > payload.width
+        else StockOrientation.LANDSCAPE if payload.width > payload.height
+        else StockOrientation.SQUARE
+    )
+    asset = repository.upsert_asset(
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        provider=StockProviderKey.USER_LIBRARY,
+        provider_asset_id=str(asset_key),
+        title=Path(payload.filename).stem[:160] or "Library clip",
+        thumbnail_url=None,
+        preview_video_url=None,
+        download_url=None,
+        license="user_owned",
+        width=payload.width,
+        height=payload.height,
+        duration_ms=payload.duration_ms,
+        orientation=orientation,
+        score=1.0,
+        raw_metadata={
+            "status": "uploading",
+            "storage_bucket": bucket,
+            "storage_path": path,
+            "mime_type": payload.mime_type,
+            "file_size_bytes": payload.file_size_bytes,
+            "original_filename": payload.filename,
+        },
+    )
+    return UserBrollUploadInitResponse(
+        asset=asset.to_response(),
+        signed_upload_url=signed.url,
+        upload_headers=signed.headers,
+        expires_in_seconds=request.app.state.settings.upload_signed_url_ttl_seconds,
+    )
+
+
+@router.post("/library/{asset_id}/complete", response_model=UserBrollUploadCompleteResponse)
+async def complete_user_broll_upload(
+    project_id: UUID,
+    asset_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    repository: BrollRepositoryDep,
+    storage_signer: StorageSignerDep,
+) -> UserBrollUploadCompleteResponse:
+    asset = repository.get_asset(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        asset_id=asset_id,
+    )
+    if asset.provider != StockProviderKey.USER_LIBRARY:
+        raise ApiError(409, "library_asset_required", "This is not a user library asset.")
+    bucket = str(
+        asset.raw_metadata.get("storage_bucket")
+        or request.app.state.settings.upload_storage_bucket
+    )
+    path = str(asset.raw_metadata.get("storage_path") or "")
+    download = storage_signer.create_signed_download(
+        bucket=bucket,
+        path=path,
+        expires_in_seconds=request.app.state.settings.upload_signed_url_ttl_seconds,
+    )
+    asset = repository.mark_library_asset_ready(asset=asset, download_url=download.url)
+    return UserBrollUploadCompleteResponse(asset=asset.to_response())
+
+
+@router.get("/library", response_model=UserBrollLibraryResponse)
+async def list_user_broll_library(
+    project_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    repository: BrollRepositoryDep,
+    storage_signer: StorageSignerDep,
+) -> UserBrollLibraryResponse:
+    ttl = request.app.state.settings.upload_signed_url_ttl_seconds
+    responses = []
+    for asset in repository.list_library_assets(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    ):
+        response = asset.to_response()
+        path = str(asset.raw_metadata.get("storage_path") or "")
+        bucket = str(
+            asset.raw_metadata.get("storage_bucket")
+            or request.app.state.settings.upload_storage_bucket
+        )
+        if path and asset.raw_metadata.get("status") == "ready":
+            url = storage_signer.create_signed_download(
+                bucket=bucket,
+                path=path,
+                expires_in_seconds=ttl,
+            ).url
+            response = response.model_copy(update={"download_url": url, "preview_video_url": url})
+        responses.append(response)
+    return UserBrollLibraryResponse(assets=responses)
+
+
+@router.delete("/library/{asset_id}", response_model=UserBrollDeleteResponse)
+async def delete_user_broll_library_asset(
+    project_id: UUID,
+    asset_id: UUID,
+    request: Request,
+    actor: ActorDep,
+    repository: BrollRepositoryDep,
+    storage_signer: StorageSignerDep,
+) -> UserBrollDeleteResponse:
+    asset = repository.get_asset(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        asset_id=asset_id,
+    )
+    bucket = str(asset.raw_metadata.get("storage_bucket") or "")
+    path = str(asset.raw_metadata.get("storage_path") or "")
+    if bucket and path:
+        if storage_signer.supabase_url:
+            storage_signer.delete_object(bucket=bucket, path=path)
+        else:
+            LocalObjectStorage(root=request.app.state.settings.media_work_dir).object_path(
+                bucket=bucket,
+                path=path,
+            ).unlink(missing_ok=True)
+    repository.delete_library_asset(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        asset_id=asset_id,
+    )
+    return UserBrollDeleteResponse(asset_id=asset_id)
 
 
 @router.post("/generate", response_model=BrollGenerateResponse, status_code=202)
@@ -279,6 +448,7 @@ async def swap_broll(
     payload: BrollSwapRequest,
     actor: ActorDep,
     repository: BrollRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> BrollSwapResponse:
     slot = repository.get_slot(
         project_id=project_id,
@@ -296,6 +466,22 @@ async def swap_broll(
         asset_id=payload.asset_id,
         disabled=payload.disabled,
     )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=slot.edit_plan_id,
+        event_type=AIEditFeedbackEventType.CHANGED
+        if not payload.disabled
+        else AIEditFeedbackEventType.REJECTED,
+        layer=AIEditLayer.BROLL,
+        source="manual_editor",
+        decision_id=str(slot_id),
+        action="swap_broll",
+        ai_payload=repository.response_for_slot(slot).model_dump(mode="json"),
+        user_payload=repository.response_for_slot(updated).model_dump(mode="json"),
+    )
     return BrollSwapResponse(slot=repository.response_for_slot(updated))
 
 
@@ -306,6 +492,7 @@ async def update_broll_region(
     payload: BrollRegionUpdateRequest,
     actor: ActorDep,
     repository: BrollRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> BrollRegionUpdateResponse:
     slot = repository.get_slot(
         project_id=project_id,
@@ -317,6 +504,22 @@ async def update_broll_region(
         start_ms=payload.start_ms,
         end_ms=payload.end_ms,
         disabled=payload.disabled,
+    )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=slot.edit_plan_id,
+        event_type=AIEditFeedbackEventType.CHANGED
+        if not payload.disabled
+        else AIEditFeedbackEventType.REJECTED,
+        layer=AIEditLayer.BROLL,
+        source="manual_editor",
+        decision_id=str(slot_id),
+        action="update_broll_region",
+        ai_payload=repository.response_for_slot(slot).model_dump(mode="json"),
+        user_payload=repository.response_for_slot(updated).model_dump(mode="json"),
     )
     return BrollRegionUpdateResponse(slot=repository.response_for_slot(updated))
 

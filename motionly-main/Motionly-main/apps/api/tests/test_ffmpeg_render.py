@@ -7,6 +7,8 @@ from app.api.errors import ApiError
 from app.schemas.renders import CutSegment, RenderSpecs
 from app.services import ffmpeg_render
 from app.services.ffmpeg_render import FFmpegCaptionRenderer
+from app.services.local_storage import LocalObjectStorage
+from app.services.render_jobs import _audio_mix_from_manifest
 
 
 def test_ffmpeg_renderer_maps_primary_video_and_optional_audio(
@@ -37,6 +39,59 @@ def test_ffmpeg_renderer_maps_primary_video_and_optional_audio(
     assert command[command.index("-preset") + 1] == "veryfast"
     assert command[command.index("-threads") + 1] == "2"
     assert "-shortest" in command
+
+
+def test_manual_sfx_data_url_is_materialized_for_ffmpeg(tmp_path: Path) -> None:
+    mix = _audio_mix_from_manifest(
+        {
+            "render_props": {
+                "editPlan": {
+                    "manual_elements": [
+                        {
+                            "type": "sfx",
+                            "start_ms": 1250,
+                            "properties": {
+                                "assetUrl": "data:audio/wav;base64,UklGRg==",
+                            },
+                        }
+                    ]
+                }
+            }
+        },
+        storage=LocalObjectStorage(root=tmp_path),
+    )
+
+    assert mix["sfx_cue_ms"] == [1250.0]
+    assert mix["sfx_intensity"] == 0.8
+    assert Path(mix["sfx_sources"][0]).read_bytes() == b"RIFF"
+
+
+def test_ffmpeg_renderer_mixes_sfx_without_unconnected_ducking_branch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        Path(command[-1]).write_bytes(b"mp4")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(ffmpeg_render.subprocess, "run", fake_run)
+    FFmpegCaptionRenderer().render(
+        source_path=tmp_path / "source.mp4",
+        ass_path=None,
+        output_path=tmp_path / "out.mp4",
+        specs=RenderSpecs(),
+        sfx_sources=[tmp_path / "impact.wav"],
+        sfx_intensity=0.8,
+        sfx_cue_ms=[500],
+    )
+
+    filter_graph = captured["command"][captured["command"].index("-filter_complex") + 1]
+    assert "asplit" not in filter_graph
+    assert "adelay=500|500" in filter_graph
 
 
 def test_ffmpeg_renderer_supports_fit_and_custom_framing(
@@ -263,11 +318,43 @@ def test_ffmpeg_renderer_applies_effects_before_caption_filter(
                 "opacity": 0.35,
             },
         },
+        manual_elements=[
+            {
+                "id": "title-1",
+                "type": "text",
+                "name": "Title",
+                "start_ms": 500,
+                "end_ms": 2500,
+                "x_pct": 50,
+                "y_pct": 20,
+                "width_pct": 50,
+                "height_pct": 12,
+                "opacity": 1,
+                "properties": {"content": "Launch day", "color": "#ffffff"},
+            },
+            {
+                "id": "shape-1",
+                "type": "shape",
+                "name": "Rectangle",
+                "start_ms": 500,
+                "end_ms": 2500,
+                "x_pct": 50,
+                "y_pct": 80,
+                "width_pct": 30,
+                "height_pct": 10,
+                "opacity": 0.8,
+                "properties": {"backgroundColor": "#14b8a6"},
+            },
+        ],
     )
 
     command = captured["command"]
     filter_graph = command[command.index("-vf") + 1]
+    assert "lut3d=file=" in filter_graph
+    assert "interp=tetrahedral" in filter_graph
     assert "eq=contrast=" in filter_graph
+    assert "drawtext=text='Launch day'" in filter_graph
+    assert "drawbox=x=iw*0.5000" in filter_graph
     assert "noise=alls=" in filter_graph
     assert "drawbox=x=0:y=0:w=iw:h=ih:color=0x111827" in filter_graph
     assert "rgbashift=" in filter_graph

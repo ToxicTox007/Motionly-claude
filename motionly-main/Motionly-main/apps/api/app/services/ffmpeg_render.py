@@ -20,6 +20,7 @@ class FFmpegCaptionRenderer:
         specs: RenderSpecs,
         broll_assets: list[dict[str, Any]] | None = None,
         effects_config: dict[str, object] | None = None,
+        manual_elements: list[dict[str, object]] | None = None,
         framing: dict[str, object] | None = None,
         music_source: AudioSource | None = None,
         music_volume: float = 0,
@@ -44,6 +45,7 @@ class FFmpegCaptionRenderer:
             ass_path=ass_path,
             broll_assets=broll_assets,
             effects_config=effects_config,
+            manual_elements=manual_elements or [],
             framing=framing,
             keep_segments=safe_keep_segments,
         )
@@ -141,11 +143,13 @@ def _build_video_filter_graph(
     ass_path: Path | None,
     broll_assets: list[dict[str, Any]],
     effects_config: dict[str, object] | None,
+    manual_elements: list[dict[str, object]],
     framing: dict[str, object] | None,
     keep_segments: list[CutSegment],
 ) -> tuple[str, str, str | None]:
     source_steps = _source_framing_filters(specs=specs, framing=framing)
     source_steps.extend(_effects_filters(effects_config))
+    source_steps.extend(_manual_element_filters(manual_elements, specs=specs))
     cut_filters, source_video_label, source_audio_label = _cut_filter_graph(keep_segments)
     if not broll_assets:
         if ass_path is not None:
@@ -326,7 +330,78 @@ def _preset_filter(preset: str, intensity: float) -> str:
         "cinematic_hotel": (1 + amount * 0.18, -0.01, 1 + amount * 0.08),
     }
     contrast, brightness, saturation = values.get(preset, (1.04, 0.0, 1.04))
-    return f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:saturation={saturation:.3f}"
+    eq_filter = (
+        f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:"
+        f"saturation={saturation:.3f}"
+    )
+    lut_path = Path(__file__).with_name("luts") / f"{preset}.cube"
+    if lut_path.is_file():
+        return f"lut3d=file={_ffmpeg_filter_path(lut_path)}:interp=tetrahedral,{eq_filter}"
+    return eq_filter
+
+
+def _manual_element_filters(
+    elements: list[dict[str, object]],
+    *,
+    specs: RenderSpecs,
+) -> list[str]:
+    filters: list[str] = []
+    for element in elements[:80]:
+        element_type = str(element.get("type") or "")
+        if element_type not in {"text", "caption", "overlay", "shape", "graphic"}:
+            continue
+        start_s = max(0, _float(element.get("start_ms"), 0) / 1000)
+        end_s = max(start_s + 0.001, _float(element.get("end_ms"), 0) / 1000)
+        x_pct = min(100, max(0, _float(element.get("x_pct"), 50))) / 100
+        y_pct = min(100, max(0, _float(element.get("y_pct"), 50))) / 100
+        width_pct = min(100, max(1, _float(element.get("width_pct"), 40))) / 100
+        height_pct = min(100, max(1, _float(element.get("height_pct"), 12))) / 100
+        opacity = min(1, max(0, _float(element.get("opacity"), 1)))
+        properties = _dict(element.get("properties"))
+        enable = f"between(t\\,{start_s:.3f}\\,{end_s:.3f})"
+        if element_type in {"overlay", "shape"}:
+            color = _ffmpeg_color(str(properties.get("backgroundColor") or "#14b8a6"))
+            filters.append(
+                f"drawbox=x=iw*{x_pct:.4f}-iw*{width_pct / 2:.4f}:"
+                f"y=ih*{y_pct:.4f}-ih*{height_pct / 2:.4f}:"
+                f"w=iw*{width_pct:.4f}:h=ih*{height_pct:.4f}:"
+                f"color={color}@{opacity:.3f}:t=fill:enable='{enable}'"
+            )
+        if element_type in {"text", "caption", "graphic"}:
+            text = _ffmpeg_drawtext(
+                str(properties.get("content") or element.get("name") or "")
+            )
+            if not text:
+                continue
+            font_size = max(
+                12,
+                min(
+                    specs.height // 4,
+                    round(
+                        _float(properties.get("fontSize"), 32)
+                        * specs.height
+                        / 1080
+                    ),
+                ),
+            )
+            color = _ffmpeg_color(str(properties.get("color") or "#ffffff"))
+            filters.append(
+                f"drawtext=text='{text}':fontsize={font_size}:fontcolor={color}@{opacity:.3f}:"
+                f"x=w*{x_pct:.4f}-text_w/2:y=h*{y_pct:.4f}-text_h/2:"
+                f"enable='{enable}'"
+            )
+    return filters
+
+
+def _ffmpeg_drawtext(value: str) -> str:
+    return (
+        value[:300]
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace(":", "\\:")
+        .replace("%", "\\%")
+        .replace("\n", " ")
+    )
 
 
 def _dict(value: object) -> dict[str, object]:
@@ -370,10 +445,16 @@ def _build_audio_filter_graph(
     if not has_music and active_sfx_count == 0:
         return None
 
-    steps = [
-        f"{source_audio_label}aformat=channel_layouts=stereo,"
-        "volume=1.0,asplit=2[srcmix][srcduck]"
-    ]
+    if has_music and duck_music:
+        steps = [
+            f"{source_audio_label}aformat=channel_layouts=stereo,"
+            "volume=1.0,asplit=2[srcmix][srcduck]"
+        ]
+    else:
+        steps = [
+            f"{source_audio_label}aformat=channel_layouts=stereo,"
+            "volume=1.0[srcmix]"
+        ]
     mix_inputs = ["[srcmix]"]
     if has_music:
         safe_music_volume = max(0, min(1, music_volume))

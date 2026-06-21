@@ -16,12 +16,14 @@ from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.effects import InMemoryEffectsRepository
 from app.repositories.plans import InMemoryPlanRepository
+from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.effects import (
     EffectsConfigRequest,
     EffectsConfigResponse,
     EffectsStatus,
     EffectsUpdateResponse,
 )
+from app.services.ai_feedback import record_ai_feedback
 from app.services.effects import (
     DEFAULT_AFTER_EFFECTS_PRESETS,
     after_effects_handoff_urls,
@@ -66,6 +68,12 @@ async def update_effects(
 ) -> EffectsUpdateResponse:
     premium_requested = (
         bool(payload.motion_effects)
+        or bool(payload.motion.keyframes)
+        or bool(payload.motion.clip_effects)
+        or payload.motion.ken_burns.enabled
+        or payload.motion.speed_ramp.enabled
+        or payload.motion.beat_impact.enabled
+        or payload.motion.auto_reframe.enabled
         or payload.background_removal.enabled
         or payload.gradient_ramp.enabled
         or bool(payload.after_effects_presets)
@@ -108,6 +116,7 @@ async def update_effects(
         if payload.reset_to_defaults
         else payload.motion_effects
     )
+    motion = preset_defaults["motion"] if payload.reset_to_defaults else payload.motion
     background_removal = (
         preset_defaults["background_removal"]
         if payload.reset_to_defaults
@@ -118,8 +127,9 @@ async def update_effects(
         if payload.reset_to_defaults
         else payload.gradient_ramp
     )
-    motion_effects, gradient_ramp = normalize_motion_and_gradient(
+    motion_effects, motion, gradient_ramp = normalize_motion_and_gradient(
         motion_effects=motion_effects,
+        motion=motion,
         gradient_ramp=gradient_ramp,
     )
     after_effects_presets = (
@@ -133,6 +143,7 @@ async def update_effects(
         lut_intensity=lut_intensity,
         texture=texture,
         motion_effects=motion_effects,
+        motion=motion,
         background_removal=background_removal,
         gradient_ramp=gradient_ramp,
         after_effects_presets=after_effects_presets,
@@ -175,15 +186,17 @@ async def update_effects(
         lut_intensity=lut_intensity,
         texture=texture,
         motion_effects=motion_effects,
+        motion=motion,
         background_removal=background_removal,
         gradient_ramp=gradient_ramp,
         after_effects_presets=after_effects_presets,
         after_effects_project_url=after_effects_project_url,
         correction_manifest_url=correction_manifest_url,
-        effect_count_limit_per_30s=effect_count_limit_per_30s(motion_effects),
+        effect_count_limit_per_30s=effect_count_limit_per_30s(motion_effects, motion),
         render_time_impact=render_time_impact(
             texture=texture,
             motion_effects=motion_effects,
+            motion=motion,
             background_removal=background_removal,
             gradient_ramp=gradient_ramp,
             after_effects_presets=after_effects_presets,
@@ -191,6 +204,32 @@ async def update_effects(
         preview_before_url=preview_before_url,
         preview_after_url=preview_after_url,
         cache_key=cache_key,
+    )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=active_plan.id if active_plan else None,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.EFFECTS,
+        source="look_editor",
+        decision_id=f"{active_plan.id if active_plan else project_id}:effects",
+        action="update_effects",
+        ai_payload=(
+            {
+                "color_grade": active_plan.plan.color_grade,
+                "effects": active_plan.plan.effects,
+                "zoom_moments": [
+                    moment.model_dump(mode="json")
+                    for moment in active_plan.plan.zoom_moments
+                ],
+            }
+            if active_plan
+            else {}
+        ),
+        user_payload=repository.response_for_config(config).model_dump(mode="json"),
+        metadata={"reset_to_defaults": payload.reset_to_defaults},
     )
     return EffectsUpdateResponse(config=repository.response_for_config(config), job_id=job.id)
 

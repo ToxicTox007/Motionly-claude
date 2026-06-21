@@ -21,6 +21,7 @@ const defaultRenderProps: MotionlyRenderProps = {
     effects: [],
     color_grade: "clean_founder",
     risk_flags: [],
+    manual_elements: [],
   },
   captions: [],
   words: [],

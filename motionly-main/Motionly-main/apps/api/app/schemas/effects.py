@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.request_body import JsonStringBodyMixin
 
-EFFECTS_SCHEMA_VERSION = 2
+EFFECTS_SCHEMA_VERSION = 3
 
 
 class VisualPresetKey(StrEnum):
@@ -21,7 +21,9 @@ class VisualPresetKey(StrEnum):
 
 class MotionEffectKey(StrEnum):
     ZOOM_PUNCH = "zoom_punch"
+    KEN_BURNS = "ken_burns"
     SPEED_RAMP = "speed_ramp"
+    BEAT_IMPACT = "beat_impact"
     MOTION_BLUR = "motion_blur"
     FLASH = "flash"
     GLITCH = "glitch"
@@ -71,6 +73,79 @@ class GradientRampSettings(BaseModel):
     blend_mode: GradientRampBlendMode = GradientRampBlendMode.SOFT_LIGHT
 
 
+class MotionEasing(StrEnum):
+    LINEAR = "linear"
+    EASE_IN = "ease_in"
+    EASE_OUT = "ease_out"
+    EASE_IN_OUT = "ease_in_out"
+    SPRING = "spring"
+
+
+class MotionTarget(StrEnum):
+    SOURCE = "source"
+    BROLL = "broll"
+    ALL = "all"
+
+
+class MotionKeyframe(BaseModel):
+    target: MotionTarget = MotionTarget.SOURCE
+    clip_id: str | None = Field(default=None, max_length=120)
+    at_ms: int = Field(ge=0)
+    scale: float = Field(default=1, ge=0.5, le=3)
+    x_pct: float = Field(default=50, ge=0, le=100)
+    y_pct: float = Field(default=50, ge=0, le=100)
+    rotation_deg: float = Field(default=0, ge=-45, le=45)
+    opacity: float = Field(default=1, ge=0, le=1)
+    easing: MotionEasing = MotionEasing.EASE_IN_OUT
+
+
+class KenBurnsSettings(BaseModel):
+    enabled: bool = False
+    intensity: float = Field(default=0.08, ge=0, le=0.35)
+    direction: Literal[
+        "push_in",
+        "pull_out",
+        "pan_left",
+        "pan_right",
+        "pan_up",
+        "pan_down",
+    ] = "push_in"
+    easing: MotionEasing = MotionEasing.EASE_IN_OUT
+
+
+class SpeedRampSettings(BaseModel):
+    enabled: bool = False
+    ramp_in_ms: int = Field(default=280, ge=80, le=1200)
+    ramp_out_ms: int = Field(default=320, ge=80, le=1600)
+    peak_speed: float = Field(default=1.35, ge=1, le=3)
+    easing: MotionEasing = MotionEasing.EASE_IN_OUT
+
+
+class BeatImpactSettings(BaseModel):
+    enabled: bool = False
+    intensity: float = Field(default=0.22, ge=0, le=1)
+    shake_px: int = Field(default=10, ge=0, le=48)
+    zoom: float = Field(default=1.035, ge=1, le=1.2)
+    max_impacts: int = Field(default=12, ge=0, le=48)
+
+
+class AutoReframeSettings(BaseModel):
+    enabled: bool = False
+    target_aspect: Literal["9:16", "1:1", "4:5", "16:9"] = "9:16"
+    subject_x_pct: float = Field(default=50, ge=0, le=100)
+    subject_y_pct: float = Field(default=50, ge=0, le=100)
+    smoothing: float = Field(default=0.65, ge=0, le=1)
+
+
+class MotionSettings(BaseModel):
+    keyframes: list[MotionKeyframe] = Field(default_factory=list, max_length=48)
+    ken_burns: KenBurnsSettings = Field(default_factory=KenBurnsSettings)
+    speed_ramp: SpeedRampSettings = Field(default_factory=SpeedRampSettings)
+    beat_impact: BeatImpactSettings = Field(default_factory=BeatImpactSettings)
+    auto_reframe: AutoReframeSettings = Field(default_factory=AutoReframeSettings)
+    clip_effects: dict[str, list[MotionEffectKey]] = Field(default_factory=dict)
+
+
 class AfterEffectsPreset(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     enabled: bool = True
@@ -82,7 +157,8 @@ class EffectsConfigRequest(JsonStringBodyMixin, BaseModel):
     preset: VisualPresetKey
     lut_intensity: float = Field(default=0.75, ge=0.5, le=1)
     texture: EffectsTextureSettings = Field(default_factory=EffectsTextureSettings)
-    motion_effects: list[MotionEffectKey] = Field(default_factory=list, max_length=8)
+    motion_effects: list[MotionEffectKey] = Field(default_factory=list, max_length=10)
+    motion: MotionSettings = Field(default_factory=MotionSettings)
     background_removal: BackgroundRemovalSettings = Field(default_factory=BackgroundRemovalSettings)
     gradient_ramp: GradientRampSettings = Field(default_factory=GradientRampSettings)
     after_effects_presets: list[AfterEffectsPreset] = Field(
@@ -118,6 +194,7 @@ class EffectsConfigResponse(BaseModel):
     lut_intensity: float = Field(ge=0.5, le=1)
     texture: EffectsTextureSettings
     motion_effects: list[MotionEffectKey]
+    motion: MotionSettings
     background_removal: BackgroundRemovalSettings
     gradient_ramp: GradientRampSettings
     after_effects_presets: list[AfterEffectsPreset]

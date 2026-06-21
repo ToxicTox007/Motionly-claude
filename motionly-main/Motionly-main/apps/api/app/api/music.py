@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.dependencies import (
     Actor,
@@ -14,13 +14,17 @@ from app.api.dependencies import (
 from app.api.errors import ApiError
 from app.repositories.music import InMemoryMusicRepository
 from app.repositories.plans import InMemoryPlanRepository
+from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.music import (
+    MusicRegion,
+    MusicRegionsUpdateRequest,
     MusicSelectionResponse,
     MusicSelectionStatus,
     MusicSelectRequest,
     MusicSelectResponse,
     MusicTrackListResponse,
 )
+from app.services.ai_feedback import record_ai_feedback
 from app.services.music import MusicProvider, MusicTrackCandidate
 from app.services.queue import MusicQueue
 
@@ -66,6 +70,7 @@ async def select_music(
     plan_repository: PlanRepositoryDep,
     music_queue: MusicQueueDep,
     providers: MusicProvidersDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> MusicSelectResponse:
     plan = plan_repository.active_plan(project_id=project_id, workspace_id=actor.workspace_id)
     mood = payload.mood or plan.plan.music_mood
@@ -154,6 +159,15 @@ async def select_music(
                 cached=True,
             )
 
+    plan_duration_ms = (
+        max((cut.end_ms for cut in plan.plan.cuts), default=0)
+        or plan.plan.target_duration_s * 1000
+    )
+    regions = (
+        [MusicRegion(id="music-0", start_ms=0, end_ms=plan_duration_ms)]
+        if track and plan_duration_ms > 0
+        else []
+    )
     selection = repository.create_selection(
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -164,12 +178,55 @@ async def select_music(
         sfx_intensity=sfx_intensity,
         rights_confirmed=payload.rights_confirmed,
         cache_key=cache_key,
+        regions=regions,
+    )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=plan.id,
+        event_type=(
+            AIEditFeedbackEventType.REJECTED
+            if not payload.include_music
+            else AIEditFeedbackEventType.CHANGED
+        ),
+        layer=AIEditLayer.MUSIC,
+        source="music_editor",
+        decision_id=f"{plan.id}:music",
+        action="select_music",
+        ai_payload={"music_mood": plan.plan.music_mood},
+        user_payload=repository.response_for_selection(selection).model_dump(mode="json"),
+        metadata={"mood": mood, "force": payload.force},
     )
 
     return MusicSelectResponse(
         selection=repository.response_for_selection(selection),
         job_id=job.id,
     )
+
+
+@router.patch("/regions", response_model=MusicSelectionResponse)
+async def update_music_regions(
+    project_id: UUID,
+    payload: MusicRegionsUpdateRequest,
+    actor: ActorDep,
+    repository: MusicRepositoryDep,
+) -> MusicSelectionResponse:
+    selection = repository.latest_selection(project_id=project_id, workspace_id=actor.workspace_id)
+    if selection is None:
+        raise ApiError(
+            404,
+            "music_selection_not_found",
+            "No music selection exists for this project.",
+        )
+    updated = repository.update_regions(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        selection_id=selection.id,
+        regions=payload.regions,
+    )
+    return repository.response_for_selection(updated)
 
 
 @router.get("/tracks", response_model=MusicTrackListResponse)

@@ -13,6 +13,7 @@ from app.schemas.plans import (
     EditPlanResponse,
     EditPlanStatus,
     EditPlanStyle,
+    PlanSnapshotResponse,
     PlanSummary,
 )
 
@@ -73,10 +74,55 @@ class EditPlanRecord:
         )
 
 
+@dataclass
+class EditPlanSnapshotRecord:
+    id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    source_plan_id: UUID
+    source_plan_version: int
+    transcript_id: UUID
+    schema_version: int
+    style: EditPlanStyle
+    target_duration_s: int
+    broll_density: BrollDensity
+    prompt: str
+    feedback: str | None
+    provider: str
+    model: str
+    cache_key: str
+    schema_hash: str
+    summary: PlanSummary
+    plan: EditPlan
+    name: str
+    notes: str | None
+    created_by_user_id: UUID
+    validation_errors: list[str] = field(default_factory=list)
+    latency_ms: int | None = None
+    cost_estimate_usd: float | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def to_response(self) -> PlanSnapshotResponse:
+        return PlanSnapshotResponse(
+            id=self.id,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            source_plan_id=self.source_plan_id,
+            source_plan_version=self.source_plan_version,
+            name=self.name,
+            notes=self.notes,
+            created_by_user_id=self.created_by_user_id,
+            plan=self.plan,
+            summary=self.summary,
+            created_at=self.created_at,
+        )
+
+
 class InMemoryPlanRepository:
     def __init__(self, caption_repository: InMemoryCaptionRepository) -> None:
         self.caption_repository = caption_repository
         self.plans: dict[UUID, EditPlanRecord] = {}
+        self.snapshots: dict[UUID, EditPlanSnapshotRecord] = {}
 
     def get_project_for_workspace(self, *, project_id: UUID, workspace_id: UUID) -> None:
         self.caption_repository.get_project_for_workspace(
@@ -201,6 +247,122 @@ class InMemoryPlanRepository:
         record.updated_at = datetime.now(UTC)
         return record
 
+    def create_plan_snapshot(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        source_plan: EditPlanRecord,
+        name: str,
+        notes: str | None,
+        created_by_user_id: UUID,
+    ) -> EditPlanSnapshotRecord:
+        self.get_plan(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=source_plan.id,
+        )
+        record = EditPlanSnapshotRecord(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            source_plan_id=source_plan.id,
+            source_plan_version=source_plan.version,
+            transcript_id=source_plan.transcript_id,
+            schema_version=source_plan.schema_version,
+            style=source_plan.style,
+            target_duration_s=source_plan.target_duration_s,
+            broll_density=source_plan.broll_density,
+            prompt=source_plan.prompt,
+            feedback=source_plan.feedback,
+            provider=source_plan.provider,
+            model=source_plan.model,
+            cache_key=source_plan.cache_key,
+            schema_hash=source_plan.schema_hash,
+            summary=source_plan.summary,
+            plan=source_plan.plan,
+            name=name.strip(),
+            notes=notes.strip() if notes else None,
+            created_by_user_id=created_by_user_id,
+            validation_errors=list(source_plan.validation_errors),
+            latency_ms=source_plan.latency_ms,
+            cost_estimate_usd=source_plan.cost_estimate_usd,
+        )
+        self.snapshots[record.id] = record
+        return record
+
+    def list_plan_snapshots(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> list[EditPlanSnapshotRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        return sorted(
+            [
+                snapshot
+                for snapshot in self.snapshots.values()
+                if snapshot.project_id == project_id and snapshot.workspace_id == workspace_id
+            ],
+            key=lambda snapshot: snapshot.created_at,
+            reverse=True,
+        )
+
+    def get_plan_snapshot(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        snapshot_id: UUID,
+    ) -> EditPlanSnapshotRecord:
+        snapshot = self.snapshots.get(snapshot_id)
+        if snapshot is None or snapshot.project_id != project_id:
+            raise ApiError(404, "plan_snapshot_not_found", "Plan snapshot was not found.")
+        if snapshot.workspace_id != workspace_id:
+            raise ApiError(
+                403,
+                "workspace_access_denied",
+                "You do not have access to this snapshot.",
+            )
+        return snapshot
+
+    def restore_plan_snapshot(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        snapshot_id: UUID,
+    ) -> EditPlanRecord:
+        snapshot = self.get_plan_snapshot(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            snapshot_id=snapshot_id,
+        )
+        return self.create_plan(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            transcript_id=snapshot.transcript_id,
+            schema_version=snapshot.schema_version,
+            status=EditPlanStatus.READY,
+            style=snapshot.style,
+            target_duration_s=snapshot.target_duration_s,
+            broll_density=snapshot.broll_density,
+            prompt=snapshot.prompt,
+            feedback=snapshot.feedback,
+            provider="motionly_snapshot",
+            model=f"snapshot:{snapshot.id}",
+            cache_key=f"snapshot:{snapshot.id}:{snapshot.cache_key}",
+            schema_hash=snapshot.schema_hash,
+            latency_ms=None,
+            cost_estimate_usd=None,
+            validation_errors=[
+                *snapshot.validation_errors,
+                f"restored_from_snapshot:{snapshot.id}",
+            ],
+            summary=snapshot.summary,
+            plan=snapshot.plan,
+        )
+
 
 class SupabasePlanRepository(InMemoryPlanRepository):
     def __init__(
@@ -306,6 +468,119 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         self._raise_for_supabase(response)
         return self._plan_from_row(response.json()[0])
 
+    def create_plan_snapshot(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        source_plan: EditPlanRecord,
+        name: str,
+        notes: str | None,
+        created_by_user_id: UUID,
+    ) -> EditPlanSnapshotRecord:
+        self.get_plan(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=source_plan.id,
+        )
+        payload = self._snapshot_payload(
+            source_plan=source_plan,
+            name=name,
+            notes=notes,
+            created_by_user_id=created_by_user_id,
+        )
+        response = httpx.post(
+            f"{self.rest_url}/edit_plan_snapshots",
+            headers=self.headers,
+            json=payload,
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._snapshot_from_row(response.json()[0])
+
+    def list_plan_snapshots(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> list[EditPlanSnapshotRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        response = httpx.get(
+            f"{self.rest_url}/edit_plan_snapshots",
+            headers=self.headers,
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": "*",
+                "order": "created_at.desc",
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._snapshot_from_row(row) for row in response.json()]
+
+    def get_plan_snapshot(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        snapshot_id: UUID,
+    ) -> EditPlanSnapshotRecord:
+        response = httpx.get(
+            f"{self.rest_url}/edit_plan_snapshots",
+            headers=self.headers,
+            params={
+                "id": f"eq.{snapshot_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": "*",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "plan_snapshot_not_found", "Plan snapshot was not found.")
+        return self._snapshot_from_row(rows[0])
+
+    def restore_plan_snapshot(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        snapshot_id: UUID,
+    ) -> EditPlanRecord:
+        snapshot = self.get_plan_snapshot(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            snapshot_id=snapshot_id,
+        )
+        return self.create_plan(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            transcript_id=snapshot.transcript_id,
+            schema_version=snapshot.schema_version,
+            status=EditPlanStatus.READY,
+            style=snapshot.style,
+            target_duration_s=snapshot.target_duration_s,
+            broll_density=snapshot.broll_density,
+            prompt=snapshot.prompt,
+            feedback=snapshot.feedback,
+            provider="motionly_snapshot",
+            model=f"snapshot:{snapshot.id}",
+            cache_key=f"snapshot:{snapshot.id}:{snapshot.cache_key}",
+            schema_hash=snapshot.schema_hash,
+            latency_ms=None,
+            cost_estimate_usd=None,
+            validation_errors=[
+                *snapshot.validation_errors,
+                f"restored_from_snapshot:{snapshot.id}",
+            ],
+            summary=snapshot.summary,
+            plan=snapshot.plan,
+        )
+
     def activate_plan(
         self,
         *,
@@ -391,6 +666,73 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             plan=EditPlan.model_validate(row.get("plan") or {}),
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),
+        )
+
+    def _snapshot_payload(
+        self,
+        *,
+        source_plan: EditPlanRecord,
+        name: str,
+        notes: str | None,
+        created_by_user_id: UUID,
+    ) -> dict[str, object]:
+        return self._json_safe(
+            {
+                "workspace_id": source_plan.workspace_id,
+                "project_id": source_plan.project_id,
+                "source_plan_id": source_plan.id,
+                "source_plan_version": source_plan.version,
+                "transcript_id": source_plan.transcript_id,
+                "schema_version": source_plan.schema_version,
+                "style": source_plan.style,
+                "target_duration_s": source_plan.target_duration_s,
+                "broll_density": source_plan.broll_density,
+                "prompt": source_plan.prompt,
+                "feedback": source_plan.feedback,
+                "provider": source_plan.provider,
+                "model": source_plan.model,
+                "cache_key": source_plan.cache_key,
+                "schema_hash": source_plan.schema_hash,
+                "summary": source_plan.summary,
+                "plan": source_plan.plan,
+                "name": name.strip(),
+                "notes": notes.strip() if notes else None,
+                "created_by_user_id": created_by_user_id,
+                "validation_errors": source_plan.validation_errors,
+                "latency_ms": source_plan.latency_ms,
+                "cost_estimate_usd": source_plan.cost_estimate_usd,
+            }
+        )
+
+    def _snapshot_from_row(self, row: dict[str, object]) -> EditPlanSnapshotRecord:
+        return EditPlanSnapshotRecord(
+            id=UUID(str(row["id"])),
+            workspace_id=UUID(str(row["workspace_id"])),
+            project_id=UUID(str(row["project_id"])),
+            source_plan_id=UUID(str(row["source_plan_id"])),
+            source_plan_version=int(row["source_plan_version"]),
+            transcript_id=UUID(str(row["transcript_id"])),
+            schema_version=int(row["schema_version"]),
+            style=EditPlanStyle(str(row["style"])),
+            target_duration_s=int(row["target_duration_s"]),
+            broll_density=BrollDensity(str(row["broll_density"])),
+            prompt=str(row.get("prompt") or ""),
+            feedback=str(row["feedback"]) if row.get("feedback") else None,
+            provider=str(row["provider"]),
+            model=str(row["model"]),
+            cache_key=str(row["cache_key"]),
+            schema_hash=str(row["schema_hash"]),
+            summary=PlanSummary.model_validate(row.get("summary") or {}),
+            plan=EditPlan.model_validate(row.get("plan") or {}),
+            name=str(row["name"]),
+            notes=str(row["notes"]) if row.get("notes") else None,
+            created_by_user_id=UUID(str(row["created_by_user_id"])),
+            validation_errors=[
+                str(error) for error in row.get("validation_errors", []) if isinstance(error, str)
+            ],
+            latency_ms=row.get("latency_ms"),
+            cost_estimate_usd=self._cost_estimate_from_row(row),
+            created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
         )
 
     def _json_safe(self, values: dict[str, object]) -> dict[str, object]:

@@ -68,6 +68,19 @@ class StorageSigner:
 
         return SignedDownload(url=self._local_object_url(bucket=bucket, path=path))
 
+    def delete_object(self, *, bucket: str, path: str) -> None:
+        if not self.supabase_url or not self.service_role_key:
+            return
+        response = httpx.request(
+            "DELETE",
+            f"{self.supabase_url}/storage/v1/object/{bucket}",
+            headers=self._storage_headers(),
+            json={"prefixes": [path]},
+            timeout=10,
+        )
+        if response.status_code >= 400 and response.status_code != 404:
+            raise ApiError(502, "storage_delete_failed", "Library video could not be deleted.")
+
     def _local_object_url(self, *, bucket: str, path: str) -> str:
         encoded_bucket = quote(bucket, safe="")
         encoded_path = quote(path, safe="/")

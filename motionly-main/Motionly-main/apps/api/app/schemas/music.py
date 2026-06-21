@@ -15,6 +15,19 @@ class MusicProviderKey(StrEnum):
     LICENSED_CATALOG = "licensed_catalog"
 
 
+class MusicRegion(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    disabled: bool = False
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "MusicRegion":
+        if self.end_ms < self.start_ms:
+            raise ValueError("end_ms must be greater than or equal to start_ms")
+        return self
+
+
 class MusicTrackResponse(BaseModel):
     id: UUID
     workspace_id: UUID
@@ -68,6 +81,7 @@ class MusicSelectionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     music_track: MusicTrackResponse | None = None
+    regions: list[MusicRegion] = Field(default_factory=list)
 
 
 class MusicSelectResponse(BaseModel):
@@ -75,6 +89,15 @@ class MusicSelectResponse(BaseModel):
     job_id: str
     status: Literal["ready"] = "ready"
     cached: bool = False
+
+
+class MusicRegionsUpdateRequest(JsonStringBodyMixin, BaseModel):
+    regions: list[MusicRegion] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: object) -> object:
+        return cls._coerce_json_string_body(data)
 
 
 class MusicTrackListResponse(BaseModel):

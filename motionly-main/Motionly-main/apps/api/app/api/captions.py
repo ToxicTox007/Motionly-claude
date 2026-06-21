@@ -14,6 +14,7 @@ from app.api.dependencies import (
 )
 from app.api.errors import ApiError
 from app.repositories.captions import InMemoryCaptionRepository
+from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.captions import (
     CaptionGenerateRequest,
     CaptionGenerateResponse,
@@ -28,6 +29,7 @@ from app.schemas.captions import (
     TranscriptWord,
 )
 from app.schemas.uploads import UploadStatus
+from app.services.ai_feedback import record_ai_feedback
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import (
     CAPTION_SCHEMA_VERSION,
@@ -132,10 +134,14 @@ async def generate_captions(
             409,
             str(transcript.status),
             transcript.error_message or "Transcript is not ready.",
-        )
+    )
 
     preset = get_caption_preset(payload.preset)
-    segments = chunk_caption_words(transcript.words, hide_filler_words=payload.hide_filler_words)
+    segments = chunk_caption_words(
+        transcript.words,
+        hide_filler_words=payload.hide_filler_words,
+        style=preset.style,
+    )
     segments = translate_segments_if_requested(
         segments=segments,
         source_language=transcript.language,
@@ -205,9 +211,17 @@ async def update_caption_track(
     )
     preset = get_caption_preset(preset_key)
     style = payload.style or preset.style
-    should_rechunk = hide_filler_words != track.hide_filler_words
+    should_rechunk = (
+        hide_filler_words != track.hide_filler_words
+        or preset_key != track.preset
+        or style.mode != track.style.mode
+    )
     segments = (
-        chunk_caption_words(transcript.words, hide_filler_words=hide_filler_words)
+        chunk_caption_words(
+            transcript.words,
+            hide_filler_words=hide_filler_words,
+            style=style,
+        )
         if should_rechunk
         else track.segments
     )
@@ -229,6 +243,28 @@ async def update_caption_track(
         hide_filler_words=hide_filler_words,
         segments=segments,
     )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=None,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.CAPTIONS,
+        source="caption_editor",
+        decision_id=f"{track_id}:style",
+        action="update_caption_style",
+        ai_payload={
+            "preset": track.preset.value,
+            "style": track.style.model_dump(mode="json"),
+            "hide_filler_words": track.hide_filler_words,
+        },
+        user_payload={
+            "preset": preset_key.value,
+            "style": style.model_dump(mode="json"),
+            "hide_filler_words": hide_filler_words,
+        },
+    )
     return CaptionGenerateResponse(track=updated.to_response(), job_id=job.id)
 
 
@@ -239,6 +275,7 @@ async def update_caption_segments(
     payload: CaptionSegmentsUpdateRequest,
     actor: ActorDep,
     repository: CaptionRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> CaptionSegmentsUpdateResponse:
     track = repository.get_caption_track(
         track_id=track_id,
@@ -248,6 +285,24 @@ async def update_caption_segments(
     updated = repository.replace_caption_segments(
         track=track,
         segments=payload.segments,
+    )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=None,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.CAPTIONS,
+        source="caption_editor",
+        decision_id=f"{track_id}:segments",
+        action="update_caption_segments",
+        ai_payload={
+            "segments": [segment.model_dump(mode="json") for segment in track.segments],
+        },
+        user_payload={
+            "segments": [segment.model_dump(mode="json") for segment in payload.segments],
+        },
     )
     return CaptionSegmentsUpdateResponse(track=updated.to_response())
 

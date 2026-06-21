@@ -8,7 +8,16 @@ from fastapi.exceptions import RequestValidationError
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError, request_validation_error_handler
-from app.api.plans import activate_plan, create_plan, list_plans, update_plan_cuts
+from app.api.plans import (
+    activate_plan,
+    create_plan,
+    create_plan_snapshot,
+    list_plan_snapshots,
+    list_plans,
+    restore_plan_snapshot,
+    update_plan_cuts,
+    update_plan_manual_elements,
+)
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
@@ -17,8 +26,11 @@ from app.schemas.captions import LanguageHint
 from app.schemas.plans import (
     BrollDensity,
     EditPlanStyle,
+    ManualElement,
     PlanCreateRequest,
     PlanCutsUpdateRequest,
+    PlanManualElementsUpdateRequest,
+    PlanSnapshotCreateRequest,
     StyleClassification,
 )
 from app.schemas.uploads import UploadStatus
@@ -107,6 +119,45 @@ def test_create_plan_returns_valid_structured_plan() -> None:
     assert all(cut.end_ms <= 12_000 for cut in response.plan.plan.cuts)
     assert response.plan.summary.cut_count == len(response.plan.plan.cuts)
     assert response.job_id.startswith(f"plan--{project_id}--")
+
+
+def test_manual_elements_persist_in_versioned_edit_plan() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    created = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    element = ManualElement(
+        id="title-1",
+        type="text",
+        name="Title Card",
+        zone="canvas",
+        start_ms=500,
+        end_ms=3500,
+        x_pct=50,
+        y_pct=20,
+        properties={"content": "Launch day", "color": "#ffffff"},
+    )
+
+    updated = asyncio.run(
+        update_plan_manual_elements(
+            project_id=project_id,
+            plan_id=created.plan.id,
+            payload=PlanManualElementsUpdateRequest(manual_elements=[element]),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+        )
+    )
+
+    assert updated.plan.version == created.plan.version
+    assert updated.plan.plan.schema_version == 2
+    assert updated.plan.plan.manual_elements[0].properties["content"] == "Launch day"
 
 
 def test_create_plan_reuses_cache_without_force() -> None:
@@ -438,6 +489,71 @@ def test_activate_plan_restores_previous_version() -> None:
     assert second.plan.is_active is True
     assert restored.plan.id == first.plan.id
     assert listed.active_plan_id == first.plan.id
+
+
+def test_plan_snapshot_save_list_and_restore_creates_new_active_plan() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    created = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    trimmed_cuts = [
+        {
+            "start_ms": cut.start_ms,
+            "end_ms": cut.end_ms,
+            "reason": f"snapshot {index}",
+        }
+        for index, cut in enumerate(created.plan.plan.cuts[:2])
+    ]
+    updated = asyncio.run(
+        update_plan_cuts(
+            project_id=project_id,
+            plan_id=created.plan.id,
+            payload=PlanCutsUpdateRequest(cuts=trimmed_cuts),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    snapshot = asyncio.run(
+        create_plan_snapshot(
+            project_id=project_id,
+            payload=PlanSnapshotCreateRequest(
+                plan_id=created.plan.id,
+                name="Client-approved draft",
+                notes="Keep this cut order.",
+            ),
+            actor=actor,
+            repository=repository,
+        )
+    )
+    listed = asyncio.run(
+        list_plan_snapshots(project_id=project_id, actor=actor, repository=repository)
+    )
+    restored = asyncio.run(
+        restore_plan_snapshot(
+            project_id=project_id,
+            snapshot_id=snapshot.snapshot.id,
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    assert snapshot.snapshot.name == "Client-approved draft"
+    assert snapshot.snapshot.source_plan_id == created.plan.id
+    assert listed.snapshots[0].id == snapshot.snapshot.id
+    assert restored.plan.id != created.plan.id
+    assert restored.plan.is_active is True
+    assert restored.plan.version == created.plan.version + 1
+    assert restored.plan.plan.cuts[0].reason == updated.plan.plan.cuts[0].reason
+    assert restored.plan.provider == "motionly_snapshot"
 
 
 def test_update_plan_cuts_persists_trim_split_delete_and_reorder() -> None:

@@ -36,6 +36,22 @@ const presets: { value: CaptionPresetKey; label: string }[] = [
   { value: "vogue_white", label: "Editorial" },
   { value: "gold_premium", label: "Gold Accent" },
   { value: "founder_clean", label: "Clean Blue" },
+  { value: "impact_stamp", label: "Impact Stamp" },
+  { value: "minimal_line", label: "Minimal Line" },
+  { value: "educational_card", label: "Education Card" },
+  { value: "creator_ticker", label: "Creator Ticker" },
+];
+
+const animations: { value: CaptionStyle["animation"]; label: string }[] = [
+  { value: "fade_up", label: "Fade Up" },
+  { value: "pop", label: "Pop" },
+  { value: "type_on", label: "Type On" },
+  { value: "glow", label: "Glow" },
+  { value: "slide_up", label: "Slide Up" },
+  { value: "impact_stamp", label: "Impact Stamp" },
+  { value: "minimal_fade", label: "Minimal Fade" },
+  { value: "edu_step", label: "Step Card" },
+  { value: "ticker", label: "Ticker" },
 ];
 
 const outputLanguages = [
@@ -238,6 +254,12 @@ export function CaptionsTab({
     setStyle((current) => current ? { ...current, ...update } : current);
   }
 
+  function handlePresetChange(value: string) {
+    const nextPreset = value as CaptionPresetKey;
+    setPreset(nextPreset);
+    setStyle((current) => current ? applyPresetDefaults(current, nextPreset) : current);
+  }
+
   return (
     <div className="space-y-3 sm:space-y-4" aria-live="polite">
       <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
@@ -245,7 +267,7 @@ export function CaptionsTab({
           <div className="grid gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="caption-preset" className="mb-0">Caption Preset</Label>
-              <Select id="caption-preset" label="Caption Preset" value={preset} onChange={(val) => setPreset(val as CaptionPresetKey)} options={presets} />
+              <Select id="caption-preset" label="Caption Preset" value={preset} onChange={handlePresetChange} options={presets} />
             </div>
 
             <div className="space-y-1.5">
@@ -269,6 +291,24 @@ export function CaptionsTab({
         {style ? (
           <PanelSection title="Advanced">
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <Select
+                label="Caption mode"
+                value={style.mode}
+                onChange={(value) => updateStyle({ mode: value as CaptionStyle["mode"] })}
+                options={[
+                  { value: "word_pop", label: "Word Pop" },
+                  { value: "impact_stamp", label: "Impact Stamp" },
+                  { value: "minimal_line", label: "Minimal Line" },
+                  { value: "educational_card", label: "Education Card" },
+                  { value: "creator_ticker", label: "Creator Ticker" },
+                ]}
+              />
+              <Select
+                label="Caption animation"
+                value={style.animation}
+                onChange={(value) => updateStyle({ animation: value as CaptionStyle["animation"] })}
+                options={animations}
+              />
               <Input aria-label="Caption font family" value={style.font_family} onChange={(event) => updateStyle({ font_family: event.target.value })} />
               <Input
                 aria-label="Caption text color"
@@ -284,6 +324,13 @@ export function CaptionsTab({
                 onChange={(event) => updateStyle({ accent_color: event.target.value })}
                 className="px-2"
               />
+              <Input
+                aria-label="Caption background color"
+                type="color"
+                value={style.background_color ?? "#000000"}
+                onChange={(event) => updateStyle({ background_color: event.target.value })}
+                className="px-2"
+              />
               <Select
                 label="Caption placement"
                 value={style.placement}
@@ -296,6 +343,15 @@ export function CaptionsTab({
               />
             </div>
             <Slider label="Font Size" value={style.font_size_px} min={24} max={80} onChange={(value) => updateStyle({ font_size_px: value })} />
+            <Slider
+              label="Background Opacity"
+              value={Math.round((style.background_opacity ?? 0) * 100)}
+              min={0}
+              max={100}
+              onChange={(value) => updateStyle({ background_opacity: value / 100 })}
+            />
+            <Slider label="Corner Radius" value={style.border_radius_px ?? 0} min={0} max={64} onChange={(value) => updateStyle({ border_radius_px: value })} />
+            <Slider label="Letter Spacing" value={Math.round(style.letter_spacing_px ?? 0)} min={0} max={12} onChange={(value) => updateStyle({ letter_spacing_px: value })} />
             <PlacementPad style={style} onChange={updateStyle} />
           </PanelSection>
         ) : null}
@@ -487,6 +543,9 @@ function PlacementPad({
       role="slider"
       tabIndex={0}
       aria-label="Caption placement"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(style.position_y_pct ?? (style.placement === "upper" ? 18 : style.placement === "middle" ? 50 : 82))}
       aria-valuetext={`X ${style.position_x_pct ?? 50} percent, Y ${style.position_y_pct ?? (style.placement === "upper" ? 18 : style.placement === "middle" ? 50 : 82)} percent`}
       onKeyDown={updateFromKeyboard}
       onPointerDown={(event) => {
@@ -531,4 +590,85 @@ function uniqueWords(text: string, dedupe = true) {
     .map((word) => word.replace(/[^\w'-]/g, "").trim())
     .filter(Boolean);
   return dedupe ? Array.from(new Set(words)) : words;
+}
+
+function applyPresetDefaults(style: CaptionStyle, preset: CaptionPresetKey): CaptionStyle {
+  const base = { ...style, mode: modeForPreset(preset), animation: animationForPreset(preset) };
+  switch (preset) {
+    case "impact_stamp":
+      return {
+        ...base,
+        text_case: "uppercase",
+        font_weight: 900,
+        font_size_px: 58,
+        accent_color: "#ef4444",
+        background_color: "#111827",
+        background_opacity: 0.72,
+        border_color: "#ef4444",
+        border_radius_px: 2,
+        letter_spacing_px: 2,
+        placement: "middle",
+      };
+    case "minimal_line":
+      return {
+        ...base,
+        text_case: "normal",
+        font_weight: 500,
+        font_size_px: 38,
+        accent_color: "#94a3b8",
+        background_color: null,
+        background_opacity: 0,
+        border_radius_px: 0,
+        letter_spacing_px: 0,
+        placement: "lower",
+      };
+    case "educational_card":
+      return {
+        ...base,
+        text_case: "normal",
+        font_weight: 800,
+        font_size_px: 40,
+        text_color: "#0f172a",
+        accent_color: "#2563eb",
+        background_color: "#f8fafc",
+        background_opacity: 0.94,
+        border_color: "#bfdbfe",
+        border_radius_px: 14,
+        placement: "lower",
+      };
+    case "creator_ticker":
+      return {
+        ...base,
+        font_weight: 900,
+        font_size_px: 44,
+        accent_color: "#22c55e",
+        background_color: "#111827",
+        background_opacity: 0.84,
+        border_color: "#22c55e",
+        border_radius_px: 64,
+        placement: "lower",
+      };
+    default:
+      return base;
+  }
+}
+
+function modeForPreset(preset: CaptionPresetKey): CaptionStyle["mode"] {
+  if (preset === "impact_stamp") return "impact_stamp";
+  if (preset === "minimal_line") return "minimal_line";
+  if (preset === "educational_card") return "educational_card";
+  if (preset === "creator_ticker") return "creator_ticker";
+  return "word_pop";
+}
+
+function animationForPreset(preset: CaptionPresetKey): CaptionStyle["animation"] {
+  if (preset === "impact_stamp") return "impact_stamp";
+  if (preset === "minimal_line") return "minimal_fade";
+  if (preset === "educational_card") return "edu_step";
+  if (preset === "creator_ticker") return "ticker";
+  if (preset === "bold_influencer") return "pop";
+  if (preset === "vogue_white") return "type_on";
+  if (preset === "gold_premium") return "glow";
+  if (preset === "founder_clean") return "slide_up";
+  return "fade_up";
 }

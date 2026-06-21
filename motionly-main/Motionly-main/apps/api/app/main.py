@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin import router as admin_router
+from app.api.analytics import router as analytics_router
 from app.api.billing import router as billing_router
 from app.api.broll import router as broll_router
 from app.api.captions import router as captions_router
@@ -22,6 +23,7 @@ from app.api.visual import router as visual_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import InMemoryRateLimiter, rate_limit_middleware, request_id_middleware
+from app.repositories.analytics import InMemoryAnalyticsRepository, SupabaseAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository, SupabaseBillingRepository
 from app.repositories.broll import InMemoryBrollRepository, SupabaseBrollRepository
 from app.repositories.captions import InMemoryCaptionRepository, SupabaseCaptionRepository
@@ -176,6 +178,14 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryBillingRepository()
     )
+    app.state.analytics_repository = (
+        SupabaseAnalyticsRepository(
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryAnalyticsRepository()
+    )
     app.state.visual_repository = (
         SupabaseVisualRepository(
             upload_repository=upload_repository,
@@ -309,6 +319,7 @@ def create_app() -> FastAPI:
     app.include_router(regeneration_router)
     app.include_router(renders_router)
     app.include_router(billing_router)
+    app.include_router(analytics_router)
     app.include_router(internal_jobs_router)
     app.include_router(internal_renders_router)
     app.include_router(local_storage_router)

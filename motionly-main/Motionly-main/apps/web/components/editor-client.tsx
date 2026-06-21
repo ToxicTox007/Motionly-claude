@@ -1,6 +1,19 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  pointerWithin,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+  type CollisionDetection,
+} from "@dnd-kit/core";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -17,7 +30,13 @@ import { ThemeMenu } from "./theme-menu";
 import { UploadPanel } from "./upload-panel";
 import { AIStep } from "./editor/ai-step";
 import { CaptionsTab } from "./editor/tabs/captions-tab";
-import { LeftMediaPanel } from "./editor/left-panel/LeftMediaPanel";
+import { ElementPalette } from "./editor/dnd/ElementPalette";
+import { type PaletteElement } from "./editor/dnd/element-catalog";
+import { PropertiesInspector } from "./editor/PropertiesInspector";
+import {
+  EditorHistoryProvider,
+  useEditorHistory,
+} from "./editor/history-context";
 import {
   VideoPreview,
   type PreviewAudioState,
@@ -34,7 +53,11 @@ import type {
   EffectsConfigSummary,
   ExportSummary,
   MusicSelectionSummary,
+  ManualElement,
+  MotionEffectKey,
   RenderJobSummary,
+  TimelineClip,
+  TimelineState,
   TranscriptSummary,
   UploadedVideoSummary,
   VisualPresetKey,
@@ -141,8 +164,28 @@ export function EditorClient(props: EditorClientProps) {
       }),
     [upload, activePlan, localCaptionTracks, localBrollSlots, localMusicSelection],
   );
+  const selectedTimelineClip = useMemo(
+    () =>
+      timelineState.tracks
+        .flatMap((track) => track.clips)
+        .find((clip) => clip.id === selectedClipId) ?? null,
+    [selectedClipId, timelineState],
+  );
+  const activePreviewLook = useMemo(() => {
+    const base = previewLook ?? previewLookFromEffectsConfig(localEffectsConfig);
+    if (!base) return null;
+    if (!selectedTimelineClip || selectedTimelineClip.sourceRef.kind !== "cut") return base;
+    if (base.selectedSourceClipId) return base;
+    return {
+      ...base,
+      selectedSourceClipId: selectedTimelineClip.id,
+      selectedSourceClipStartMs: selectedTimelineClip.startMs,
+      selectedSourceClipEndMs: selectedTimelineClip.endMs,
+    };
+  }, [localEffectsConfig, previewLook, selectedTimelineClip]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- server refresh can replace transcript props while local polling owns interim state
     setLocalTranscript(transcript);
   }, [transcript]);
 
@@ -296,25 +339,335 @@ export function EditorClient(props: EditorClientProps) {
 
   // ── Phase 3: full 5-panel editor ─────────────────────────────────────────
   return (
+    <EditorHistoryProvider>
+      <EditorClientEditor
+        {...props}
+        localEditPlans={localEditPlans}
+        localActivePlanId={localActivePlanId}
+        localCaptionTracks={localCaptionTracks}
+        localTranscript={localTranscript}
+        localBrollSlots={localBrollSlots}
+        localMusicSelection={localMusicSelection}
+        localEffectsConfig={localEffectsConfig}
+        draftCaptionTrack={draftCaptionTrack}
+        previewAudio={previewAudio}
+        previewBroll={previewBroll}
+        previewLook={previewLook}
+        previewExport={previewExport}
+        activePlan={activePlan}
+        timelineState={timelineState}
+        selectedTimelineClip={selectedTimelineClip}
+        activePreviewLook={activePreviewLook}
+        setLocalEditPlans={setLocalEditPlans}
+        setLocalActivePlanId={setLocalActivePlanId}
+        setLocalCaptionTracks={setLocalCaptionTracks}
+        setLocalTranscript={setLocalTranscript}
+        setLocalBrollSlots={setLocalBrollSlots}
+        setLocalMusicSelection={setLocalMusicSelection}
+        setLocalEffectsConfig={setLocalEffectsConfig}
+        setDraftCaptionTrack={setDraftCaptionTrack}
+        setPreviewAudio={setPreviewAudio}
+        setPreviewBroll={setPreviewBroll}
+        setPreviewLook={setPreviewLook}
+        setPreviewExport={setPreviewExport}
+        setPlayheadMs={setPlayheadMs}
+        setSelectedClipId={setSelectedClipId}
+        setInspectorTab={setInspectorTab}
+        handlePlanGenerated={handlePlanGenerated}
+        handlePlanUpdated={handlePlanUpdated}
+        handleCaptionTrackUpdated={handleCaptionTrackUpdated}
+        handleBrollSlotUpdated={handleBrollSlotUpdated}
+        handleBrollSlotsUpdated={handleBrollSlotsUpdated}
+        handleMusicSelectionUpdated={handleMusicSelectionUpdated}
+        handleEffectsConfigUpdated={handleEffectsConfigUpdated}
+        saveProjectTitle={saveProjectTitle}
+      />
+    </EditorHistoryProvider>
+  );
+}
+
+interface EditorClientEditorProps extends EditorClientProps {
+  localEditPlans: EditPlanRecordSummary[];
+  localActivePlanId: string | null;
+  localCaptionTracks: CaptionTrackSummary[];
+  localTranscript: TranscriptSummary | null;
+  localBrollSlots: BrollSlotSummary[];
+  localMusicSelection: MusicSelectionSummary | null;
+  localEffectsConfig: EffectsConfigSummary | null;
+  draftCaptionTrack: CaptionTrackSummary | null;
+  previewAudio: PreviewAudioState | null;
+  previewBroll: PreviewBrollState | null;
+  previewLook: PreviewLookState | null;
+  previewExport: PreviewExportState | null;
+  activePlan: EditPlanRecordSummary | null;
+  timelineState: TimelineState;
+  selectedTimelineClip: TimelineClip | null;
+  activePreviewLook: PreviewLookState | null;
+  setLocalEditPlans: React.Dispatch<React.SetStateAction<EditPlanRecordSummary[]>>;
+  setLocalActivePlanId: React.Dispatch<React.SetStateAction<string | null>>;
+  setLocalCaptionTracks: React.Dispatch<React.SetStateAction<CaptionTrackSummary[]>>;
+  setLocalTranscript: React.Dispatch<React.SetStateAction<TranscriptSummary | null>>;
+  setLocalBrollSlots: React.Dispatch<React.SetStateAction<BrollSlotSummary[]>>;
+  setLocalMusicSelection: React.Dispatch<React.SetStateAction<MusicSelectionSummary | null>>;
+  setLocalEffectsConfig: React.Dispatch<React.SetStateAction<EffectsConfigSummary | null>>;
+  setDraftCaptionTrack: React.Dispatch<React.SetStateAction<CaptionTrackSummary | null>>;
+  setPreviewAudio: React.Dispatch<React.SetStateAction<PreviewAudioState | null>>;
+  setPreviewBroll: React.Dispatch<React.SetStateAction<PreviewBrollState | null>>;
+  setPreviewLook: React.Dispatch<React.SetStateAction<PreviewLookState | null>>;
+  setPreviewExport: React.Dispatch<React.SetStateAction<PreviewExportState | null>>;
+  setPlayheadMs: React.Dispatch<React.SetStateAction<number>>;
+  setSelectedClipId: React.Dispatch<React.SetStateAction<string | null>>;
+  setInspectorTab: React.Dispatch<React.SetStateAction<InspectorTab>>;
+  handlePlanGenerated: (plan: EditPlanRecordSummary) => void;
+  handlePlanUpdated: (plan: EditPlanRecordSummary) => void;
+  handleCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
+  handleBrollSlotUpdated: (slot: BrollSlotSummary) => void;
+  handleBrollSlotsUpdated: (slots: BrollSlotSummary[]) => void;
+  handleMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
+  handleEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
+  saveProjectTitle: (nextTitle: string) => Promise<void>;
+}
+
+function EditorClientEditor(props: EditorClientEditorProps) {
+  const {
+    projectId, workspaceId, userId, apiAccessToken, title,
+    upload, uploadAssetUrls, transcript, captionTracks,
+    brollSlots, musicSelection, effectsConfig, renderJobs, exports,
+    localEditPlans, localActivePlanId, localCaptionTracks, localTranscript,
+    localBrollSlots, localMusicSelection, localEffectsConfig, draftCaptionTrack,
+    previewAudio, previewBroll, previewLook, previewExport,
+    activePlan, timelineState, selectedTimelineClip, activePreviewLook,
+    setLocalEditPlans, setLocalActivePlanId, setLocalCaptionTracks, setLocalTranscript,
+    setLocalBrollSlots, setLocalMusicSelection, setLocalEffectsConfig,
+    setDraftCaptionTrack, setPreviewAudio, setPreviewBroll, setPreviewLook, setPreviewExport,
+    setPlayheadMs, setSelectedClipId, setInspectorTab,
+    handlePlanGenerated, handlePlanUpdated, handleCaptionTrackUpdated,
+    handleBrollSlotUpdated, handleBrollSlotsUpdated, handleMusicSelectionUpdated,
+    handleEffectsConfigUpdated, saveProjectTitle,
+  } = props;
+  const router = useRouter();
+  const { undo, redo, canUndo, canRedo, pushHistory } = useEditorHistory();
+  const [localTitle, setLocalTitle] = useState(title);
+  const [saveStatus, setSaveStatus] = useState<"saving" | "saved" | "error">("saved");
+  const lastSavedTitleRef = useRef(title);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [playheadMs, setLocalPlayheadMs] = useState(0);
+  const [selectedClipId, setLocalSelectedClipId] = useState<string | null>(null);
+  const [inspectorTab, setLocalInspectorTab] = useState<InspectorTab>(() =>
+    localActivePlanId ? "captions" : "ai",
+  );
+  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+  const [activePaletteElement, setActivePaletteElement] = useState<PaletteElement | null>(null);
+  const [elementSaving, setElementSaving] = useState(false);
+  const [dropMessage, setDropMessage] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor),
+  );
+  const manualElements = useMemo(
+    () => activePlan?.plan.manual_elements ?? [],
+    [activePlan?.plan.manual_elements],
+  );
+  const selectedManualElement = manualElements.find((element) => element.id === selectedElementId) ?? null;
+
+  const setPlayheadMsWrapped = useCallback((ms: number | ((prev: number) => number)) => {
+    setLocalPlayheadMs(ms);
+    setPlayheadMs(ms);
+  }, [setPlayheadMs]);
+
+  const setSelectedClipIdWrapped = useCallback((id: string | null) => {
+    setLocalSelectedClipId(id);
+    setSelectedClipId(id);
+  }, [setSelectedClipId]);
+
+  const setInspectorTabWrapped = useCallback((tab: InspectorTab) => {
+    setLocalInspectorTab(tab);
+    setInspectorTab(tab);
+  }, [setInspectorTab]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isTyping = ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName ?? "");
+      if (isTyping) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          if (canRedo) void redo();
+        } else {
+          if (canUndo) void undo();
+        }
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        if (canRedo) void redo();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canRedo, canUndo, redo, undo]);
+
+  const persistManualElements = useCallback(async (elements: ManualElement[]) => {
+    if (!activePlan) throw new Error("Generate an AI edit before placing elements.");
+    const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+      `${env.apiBaseUrl}/projects/${projectId}/plans/${activePlan.id}/manual-elements`,
+      { method: "PATCH", workspaceId, userId, accessToken: apiAccessToken, friendlyError: "Element changes could not be saved.", body: { manual_elements: elements } },
+    );
+    handlePlanUpdated(payload.plan);
+    return payload.plan;
+  }, [activePlan, apiAccessToken, handlePlanUpdated, projectId, userId, workspaceId]);
+
+  const commitManualElements = useCallback(async (next: ManualElement[], label: string, before = manualElements) => {
+    setElementSaving(true);
+    setDropMessage(null);
+    try {
+      await persistManualElements(next);
+      pushHistory({
+        id: `element-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label,
+        undo: async () => { await persistManualElements(before); return `${label} undone.`; },
+        redo: async () => { await persistManualElements(next); return `${label} redone.`; },
+      });
+      setDropMessage(`${label} saved.`);
+    } catch (error) {
+      setDropMessage((error as Error).message);
+    } finally {
+      setElementSaving(false);
+    }
+  }, [manualElements, persistManualElements, pushHistory]);
+
+  const runAIElement = useCallback(async (entry: PaletteElement, clip: TimelineClip | null) => {
+    if (!entry.aiAction) return;
+    setElementSaving(true);
+    setDropMessage(`Running ${entry.name}…`);
+    try {
+      if (entry.aiAction === "auto_caption") {
+        const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(`${env.apiBaseUrl}/projects/${projectId}/captions/generate`, { method: "POST", workspaceId, userId, accessToken: apiAccessToken, friendlyError: "Auto-captioning failed.", body: { preset: "bold_influencer", hide_filler_words: false } });
+        handleCaptionTrackUpdated(payload.track);
+      } else if (entry.aiAction === "smart_broll") {
+        const payload = await editorApiRequest<{ slots: BrollSlotSummary[] }>(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, { method: "POST", workspaceId, userId, accessToken: apiAccessToken, friendlyError: "Smart B-roll fill failed.", body: { density: "from_plan", force: true } });
+        handleBrollSlotsUpdated(payload.slots);
+      } else if (entry.aiAction === "music_match") {
+        const payload = await editorApiRequest<{ selection: MusicSelectionSummary }>(`${env.apiBaseUrl}/projects/${projectId}/music/select`, { method: "POST", workspaceId, userId, accessToken: apiAccessToken, friendlyError: "AI music matching failed.", body: { mood: activePlan?.plan.music_mood, include_music: true, music_volume: .25, sfx_intensity: .25, rights_confirmed: true, force: true } });
+        handleMusicSelectionUpdated(payload.selection);
+      } else {
+        const prompt = entry.aiAction === "highlight_reel"
+          ? `Create the strongest 30-60 second highlight reel${clip ? ` emphasizing ${clip.startMs}-${clip.endMs}ms` : ""}.`
+          : "Re-analyze the audio and visual style, then update captions, grade, motion, and pacing.";
+        const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, { method: "POST", workspaceId, userId, accessToken: apiAccessToken, friendlyError: `${entry.name} failed.`, body: { prompt, target_duration_s: entry.aiAction === "highlight_reel" ? 45 : activePlan?.target_duration_s ?? 35, broll_density: activePlan?.broll_density ?? "medium", force: true } });
+        handlePlanGenerated(payload.plan);
+      }
+      setDropMessage(`${entry.name} complete.`);
+    } catch (error) {
+      setDropMessage((error as Error).message);
+    } finally {
+      setElementSaving(false);
+    }
+  }, [activePlan, apiAccessToken, handleBrollSlotsUpdated, handleCaptionTrackUpdated, handleMusicSelectionUpdated, handlePlanGenerated, projectId, userId, workspaceId]);
+
+  const applyClipEffect = useCallback(async (entry: PaletteElement, clip: TimelineClip, applyAll: boolean) => {
+    const current = localEffectsConfig;
+    const motionEffect = entry.motionEffect;
+    const clipEffects = { ...(current?.motion.clip_effects ?? {}) };
+    if (motionEffect) {
+      if (applyAll) timelineState.tracks.find((track) => track.kind === "video")?.clips.forEach((item) => { clipEffects[item.id] = unique([...(clipEffects[item.id] ?? []), motionEffect]); });
+      else clipEffects[clip.id] = unique([...(clipEffects[clip.id] ?? []), motionEffect]);
+    }
+    const body = effectsRequestBody(current, entry.grade, motionEffect, clipEffects);
+    setElementSaving(true);
+    try {
+      const payload = await editorApiRequest<{ config: EffectsConfigSummary }>(`${env.apiBaseUrl}/projects/${projectId}/effects`, { method: "PATCH", workspaceId, userId, accessToken: apiAccessToken, friendlyError: "Clip effect could not be applied.", body });
+      handleEffectsConfigUpdated(payload.config);
+      setSelectedClipIdWrapped(clip.id);
+      setInspectorTabWrapped("look");
+      setDropMessage(`${entry.name} applied ${applyAll ? "to all clips" : `to ${clip.label}`}.`);
+    } catch (error) { setDropMessage((error as Error).message); }
+    finally { setElementSaving(false); }
+  }, [apiAccessToken, handleEffectsConfigUpdated, localEffectsConfig, projectId, setInspectorTabWrapped, setSelectedClipIdWrapped, timelineState.tracks, userId, workspaceId]);
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const data = event.active.data.current;
+    setActivePaletteElement(data?.kind === "palette" ? data.element as PaletteElement : null);
+  }, []);
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    setActivePaletteElement(null);
+    const over = event.over;
+    if (!over) return;
+    const activeData = event.active.data.current;
+    const overData = over.data.current;
+    const activator = event.activatorEvent as MouseEvent | KeyboardEvent;
+    const fineSnap = Boolean(activator?.shiftKey);
+    const duplicate = Boolean(activator?.ctrlKey || activator?.metaKey);
+    const applyAll = Boolean(activator?.altKey);
+    if (activeData?.kind === "placed") {
+      const placed = activeData.element as ManualElement;
+      if (String(over.id) !== "canvas") return;
+      const center = event.active.rect.current.translated;
+      if (!center) return;
+      const step = fineSnap ? 1 : 5;
+      const nextElement = { ...placed, id: duplicate ? `${placed.id}-copy-${Date.now()}` : placed.id, x_pct: snap(((center.left + center.width / 2 - over.rect.left) / over.rect.width) * 100, step, 0, 100), y_pct: snap(((center.top + center.height / 2 - over.rect.top) / over.rect.height) * 100, step, 0, 100) };
+      const next = duplicate ? [...manualElements, nextElement] : manualElements.map((item) => item.id === placed.id ? nextElement : item);
+      setSelectedElementId(nextElement.id);
+      void commitManualElements(next, duplicate ? `Duplicate ${placed.name}` : `Move ${placed.name}`);
+      return;
+    }
+    if (activeData?.kind !== "palette") return;
+    const entry = activeData.element as PaletteElement;
+    const zone = String(overData?.zone ?? (String(over.id) === "canvas" ? "canvas" : ""));
+    const acceptedZone = zone === "transition" ? "transition" : zone;
+    if (!entry.accepts.includes(acceptedZone as never)) { setDropMessage(`${entry.name} cannot be dropped on ${zone || "this target"}.`); return; }
+    const clip = (overData?.clip as TimelineClip | undefined) ?? null;
+    if (entry.elementType === "ai") { void runAIElement(entry, clip); return; }
+    if ((entry.grade || entry.motionEffect) && clip) { void applyClipEffect(entry, clip, applyAll); return; }
+    if (!activePlan) { setDropMessage("Generate an AI edit before placing elements."); return; }
+    const translated = event.active.rect.current.translated;
+    let startMs = clip?.startMs ?? playheadMs;
+    let endMs = clip?.endMs ?? Math.min(timelineState.totalDurationMs, startMs + (entry.durationMs ?? 3000));
+    let xPct = 50, yPct = 50;
+    if (zone === "canvas" && translated) {
+      const step = fineSnap ? 1 : 5;
+      xPct = snap(((translated.left + translated.width / 2 - over.rect.left) / over.rect.width) * 100, step, 0, 100);
+      yPct = snap(((translated.top + translated.height / 2 - over.rect.top) / over.rect.height) * 100, step, 0, 100);
+    } else if (zone === "timeline" && translated) {
+      const stepMs = fineSnap ? 100 : 500;
+      const rawStartMs = ((translated.left + translated.width / 2 - over.rect.left) / over.rect.width) * timelineState.totalDurationMs;
+      const boundaries = timelineState.tracks.flatMap((track) => track.clips.flatMap((item) => [item.startMs, item.endMs]));
+      startMs = snapTimelineMs(rawStartMs, stepMs, fineSnap ? 60 : 260, boundaries, timelineState.totalDurationMs);
+      endMs = Math.min(timelineState.totalDurationMs, startMs + (entry.durationMs ?? 3000));
+    } else if (zone === "transition") {
+      const afterIndex = Number(overData?.afterClipIndex ?? 0);
+      const boundary = timelineState.tracks.find((track) => track.kind === "video")?.clips[afterIndex]?.endMs ?? playheadMs;
+      const duration = Math.max(1, entry.durationMs ?? 350);
+      startMs = Math.max(0, boundary - Math.floor(duration / 2)); endMs = Math.min(timelineState.totalDurationMs, startMs + duration);
+    }
+    if (endMs <= startMs) endMs = startMs + 1;
+    const element: ManualElement = { id: `${entry.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, type: entry.elementType as ManualElement["type"], name: entry.name, zone: zone === "transition" ? "timeline" : zone as ManualElement["zone"], start_ms: Math.round(startMs), end_ms: Math.round(endMs), x_pct: xPct, y_pct: yPct, width_pct: entry.elementType === "shape" ? 24 : 48, height_pct: entry.elementType === "shape" ? 18 : 14, rotation_deg: 0, opacity: 1, clip_id: clip?.id ?? null, properties: { ...(entry.properties ?? {}), durationMs: entry.durationMs }, ai_reason: null, confidence: null };
+    setSelectedElementId(element.id);
+    void commitManualElements([...manualElements, element], `Add ${entry.name}`);
+  }, [activePlan, applyClipEffect, commitManualElements, manualElements, playheadMs, runAIElement, timelineState]);
+
+  if (!upload || upload.status !== "ready") {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="size-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  return (
+    <DndContext sensors={sensors} collisionDetection={editorCollisionDetection} onDragStart={handleDragStart} onDragCancel={() => setActivePaletteElement(null)} onDragEnd={handleDragEnd}>
     <EditorLayout
       title={localTitle}
       onTitleChange={setLocalTitle}
       onTitleCommit={saveProjectTitle}
-      saveStatus={saveStatus}
-      onExport={() => setInspectorTab("export")}
-      onAiEdit={() => setInspectorTab("ai")}
+      saveStatus={elementSaving ? "saving" : saveStatus}
+      onExport={() => setInspectorTabWrapped("export")}
+      onAiEdit={() => setInspectorTabWrapped("ai")}
     >
       {{
         leftPanel: (
-          <LeftMediaPanel
-            upload={upload}
-            thumbnailUrl={uploadAssetUrls.thumbnail_url}
-            sourceVideoUrl={uploadAssetUrls.source_video_url}
-            activePlan={activePlan}
-            brollSlots={localBrollSlots}
-            musicSelection={localMusicSelection}
-            captionTracks={localCaptionTracks}
-          />
+          <ElementPalette projectId={projectId} workspaceId={workspaceId} userId={userId} apiAccessToken={apiAccessToken} />
         ),
 
         centerPanel: (
@@ -330,15 +683,25 @@ export function EditorClient(props: EditorClientProps) {
             totalDurationMs={timelineState.totalDurationMs}
             previewAudio={previewAudio}
             previewBroll={previewBroll}
-            previewLook={previewLook}
+            previewLook={activePreviewLook}
             previewExport={previewExport}
+            manualElements={manualElements}
+            selectedElementId={selectedElementId}
+            onElementSelect={setSelectedElementId}
           />
         ),
 
         rightPanel: (
-          <InspectorPanel
+          selectedManualElement ? <PropertiesInspector
+            key={`${selectedManualElement.id}:${activePlan?.version ?? 0}`}
+            element={selectedManualElement}
+            saving={elementSaving}
+            onClose={() => setSelectedElementId(null)}
+            onChange={async (element) => { await commitManualElements(manualElements.map((item) => item.id === element.id ? element : item), `Update ${element.name}`); }}
+            onDelete={async (id) => { setSelectedElementId(null); await commitManualElements(manualElements.filter((item) => item.id !== id), `Delete ${selectedManualElement.name}`); }}
+          /> : <InspectorPanel
             tab={inspectorTab}
-            onTabChange={setInspectorTab}
+            onTabChange={setInspectorTabWrapped}
             hasActivePlan={Boolean(localActivePlanId)}
             projectId={projectId}
             workspaceId={workspaceId}
@@ -353,6 +716,7 @@ export function EditorClient(props: EditorClientProps) {
             brollSlots={localBrollSlots}
             musicSelection={localMusicSelection}
             effectsConfig={localEffectsConfig}
+            selectedTimelineClip={selectedTimelineClip}
             renderJobs={renderJobs}
             exports={exports}
             onTranscriptUpdated={setLocalTranscript}
@@ -376,22 +740,29 @@ export function EditorClient(props: EditorClientProps) {
             state={timelineState}
             videoRef={videoRef}
             playheadMs={playheadMs}
-            setPlayheadMs={setPlayheadMs}
+            setPlayheadMs={setPlayheadMsWrapped}
             selectedClipId={selectedClipId}
-            onClipSelect={setSelectedClipId}
+            onClipSelect={(id) => { setSelectedClipIdWrapped(id); if (id?.startsWith("element-")) setSelectedElementId(id.slice("element-".length)); }}
             projectId={projectId}
             workspaceId={workspaceId}
             userId={userId}
             apiAccessToken={apiAccessToken}
             activePlan={activePlan}
             captionTrack={localCaptionTracks[0] ?? null}
+            musicSelection={localMusicSelection}
             onPlanUpdated={handlePlanUpdated}
             onCaptionTrackUpdated={handleCaptionTrackUpdated}
             onBrollSlotUpdated={handleBrollSlotUpdated}
+            onMusicSelectionUpdated={handleMusicSelectionUpdated}
           />
         ),
       }}
     </EditorLayout>
+    <DragOverlay dropAnimation={{ duration: 160, easing: "ease-out" }}>
+      {activePaletteElement ? <div className="w-32 border-2 border-primary bg-background/95 p-2 text-xs font-black shadow-xl">{activePaletteElement.preview || activePaletteElement.name}<span className="mt-1 block truncate text-[10px]">{activePaletteElement.name}</span></div> : null}
+    </DragOverlay>
+    {dropMessage ? <div className="pointer-events-none fixed bottom-4 left-1/2 z-[100] -translate-x-1/2 border border-border bg-background px-3 py-2 text-xs font-bold shadow-xl" aria-live="polite">{dropMessage}</div> : null}
+    </DndContext>
   );
 }
 
@@ -414,6 +785,7 @@ interface InspectorPanelProps {
   brollSlots:       BrollSlotSummary[];
   musicSelection:   MusicSelectionSummary | null;
   effectsConfig:    EffectsConfigSummary | null;
+  selectedTimelineClip: TimelineClip | null;
   renderJobs:       RenderJobSummary[];
   exports:          ExportSummary[];
   onTranscriptUpdated: (transcript: TranscriptSummary | null) => void;
@@ -450,7 +822,7 @@ function InspectorPanel({
   projectId, workspaceId, userId, apiAccessToken,
   upload, transcript, captionTracks, localEditPlans, localActivePlanId,
   activePlan, brollSlots, musicSelection, effectsConfig,
-  renderJobs, exports, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onPreviewCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated, onPreviewBrollUpdated,
+  selectedTimelineClip, renderJobs, exports, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onPreviewCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated, onPreviewBrollUpdated,
   onMusicSelectionUpdated, onPreviewAudioUpdated, onEffectsConfigUpdated, onPreviewLookUpdated, onPreviewExportUpdated,
 }: InspectorPanelProps) {
   const brollDensity = activePlan?.broll_density ?? null;
@@ -534,6 +906,13 @@ function InspectorPanel({
         className="min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-2 sm:p-4"
       >
         <h2 className="sr-only">{activeTabMeta.label}</h2>
+        <SelectedElementInsight
+          clip={selectedTimelineClip}
+          activePlan={activePlan}
+          captionTracks={captionTracks}
+          brollSlots={brollSlots}
+          musicSelection={musicSelection}
+        />
         {tab === "ai" && (
           <AIStep
             projectId={projectId}
@@ -597,6 +976,7 @@ function InspectorPanel({
             apiAccessToken={apiAccessToken}
             initialConfig={effectsConfig}
             suggestedPreset={suggestedPreset}
+            selectedTimelineClip={selectedTimelineClip}
             onConfigUpdated={onEffectsConfigUpdated}
             onPreviewLookUpdated={onPreviewLookUpdated}
           />
@@ -621,12 +1001,202 @@ function InspectorPanel({
   );
 }
 
+function previewLookFromEffectsConfig(
+  config: EffectsConfigSummary | null,
+): PreviewLookState | null {
+  if (!config) return null;
+  return {
+    preset: config.preset,
+    intensity: Math.round(config.lut_intensity * 100),
+    grain: config.texture.grain,
+    vignette: config.texture.vignette,
+    lightLeak: config.texture.light_leak,
+    gradientRamp: {
+      enabled: config.gradient_ramp.enabled,
+      startColor: config.gradient_ramp.start_color,
+      endColor: config.gradient_ramp.end_color,
+      opacity: config.gradient_ramp.opacity,
+      angleDeg: config.gradient_ramp.angle_deg,
+    },
+    motionEffects: config.motion_effects,
+    motion: config.motion,
+    selectedSourceClipId: null,
+    reducedMotion: false,
+  };
+}
+
+function SelectedElementInsight({
+  clip,
+  activePlan,
+  captionTracks,
+  brollSlots,
+  musicSelection,
+}: {
+  clip: TimelineClip | null;
+  activePlan: EditPlanRecordSummary | null;
+  captionTracks: CaptionTrackSummary[];
+  brollSlots: BrollSlotSummary[];
+  musicSelection: MusicSelectionSummary | null;
+}) {
+  if (!clip) return null;
+  const insight = selectedElementInsight({
+    clip,
+    activePlan,
+    captionTracks,
+    brollSlots,
+    musicSelection,
+  });
+  return (
+    <div className="mb-3 border border-primary/20 bg-primary/5 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-black uppercase tracking-wide text-primary">
+          Selected {clip.trackKind}
+        </p>
+        {insight.confidence !== null ? (
+          <span className="border border-border bg-surface px-2 py-1 text-[10px] font-black text-foreground">
+            {Math.round(insight.confidence * 100)}% confidence
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-2 text-xs font-bold text-foreground">
+        AI reason: {insight.reason}
+      </p>
+      {insight.detail ? (
+        <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
+          {insight.detail}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function selectedElementInsight({
+  clip,
+  activePlan,
+  captionTracks,
+  brollSlots,
+  musicSelection,
+}: {
+  clip: TimelineClip;
+  activePlan: EditPlanRecordSummary | null;
+  captionTracks: CaptionTrackSummary[];
+  brollSlots: BrollSlotSummary[];
+  musicSelection: MusicSelectionSummary | null;
+}) {
+  if (clip.sourceRef.kind === "cut") {
+    const cut = activePlan?.plan.cuts[clip.sourceRef.index ?? -1];
+    return {
+      reason: cut?.reason || clip.label,
+      detail: activePlan?.summary.style_classification
+        ? `Style: ${activePlan.summary.style_classification.effective_style}`
+        : activePlan?.summary.source_topic,
+      confidence: activePlan?.summary.style_classification?.confidence ?? null,
+    };
+  }
+  if (clip.sourceRef.kind === "caption_segment") {
+    const segment = captionTracks[0]?.segments.find((item) =>
+      clip.sourceRef.id ? item.id === clip.sourceRef.id : item.index === clip.sourceRef.index,
+    );
+    const confidenceValues = segment?.words
+      .map((word) => word.confidence)
+      .filter((value): value is number => typeof value === "number");
+    const confidence = confidenceValues?.length
+      ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+      : null;
+    return {
+      reason: segment?.highlight_words?.length
+        ? `Highlighted words: ${segment.highlight_words.join(", ")}`
+        : "Caption segment generated from word-level transcript timing.",
+      detail: segment?.text,
+      confidence,
+    };
+  }
+  if (clip.sourceRef.kind === "broll_slot") {
+    const slot = brollSlots.find((item) => item.id === clip.sourceRef.id);
+    return {
+      reason: slot?.intent || slot?.keywords?.join(", ") || "AI-selected supporting B-roll.",
+      detail: slot?.selected_asset?.title ?? slot?.keywords?.join(", "),
+      confidence: typeof slot?.score === "number" ? slot.score : null,
+    };
+  }
+  if (clip.sourceRef.kind === "music") {
+    return {
+      reason: activePlan?.summary.music_mood || "Music selected to match the edit plan mood.",
+      detail: musicSelection?.music_track?.title ?? "Background music",
+      confidence: musicSelection?.music_track?.energy ?? null,
+    };
+  }
+  return {
+    reason: clip.label,
+    detail: null,
+    confidence: null,
+  };
+}
+
 function InspectorLoading() {
   return (
     <div className="flex min-h-40 items-center justify-center">
       <Loader2 className="size-5 animate-spin text-primary" />
     </div>
   );
+}
+
+function unique<T>(items: T[]): T[] {
+  return [...new Set(items)];
+}
+
+function snap(value: number, step: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, Math.round(value / step) * step));
+}
+
+function snapTimelineMs(value: number, gridMs: number, boundaryToleranceMs: number, boundaries: number[], totalMs: number) {
+  const nearest = boundaries.reduce<number | null>((best, boundary) =>
+    best == null || Math.abs(boundary - value) < Math.abs(best - value) ? boundary : best,
+  null);
+  if (nearest != null && Math.abs(nearest - value) <= boundaryToleranceMs) {
+    return Math.max(0, Math.min(totalMs - 1, nearest));
+  }
+  return snap(value, gridMs, 0, totalMs - 1);
+}
+
+const editorCollisionDetection: CollisionDetection = (args) => {
+  const activeData = args.active.data.current;
+  const allowed = activeData?.kind === "placed"
+    ? ["canvas"]
+    : (activeData?.element as PaletteElement | undefined)?.accepts ?? [];
+  const containers = args.droppableContainers.filter((container) => {
+    const zone = String(container.data.current?.zone ?? (String(container.id) === "canvas" ? "canvas" : ""));
+    return allowed.includes(zone as never);
+  });
+  const scoped = { ...args, droppableContainers: containers };
+  return pointerWithin(scoped).length ? pointerWithin(scoped) : closestCenter(scoped);
+};
+
+function effectsRequestBody(
+  config: EffectsConfigSummary | null,
+  grade: VisualPresetKey | undefined,
+  motionEffect: MotionEffectKey | undefined,
+  clipEffects: Record<string, MotionEffectKey[]>,
+) {
+  const motionEffects = unique([...(config?.motion_effects ?? []), ...(motionEffect ? [motionEffect] : [])]);
+  return {
+    preset: grade ?? config?.preset ?? "clean_founder",
+    lut_intensity: config?.lut_intensity ?? .75,
+    texture: config?.texture ?? { grain: .08, vignette: .08, light_leak: 0, anamorphic_flare: false },
+    motion_effects: motionEffects,
+    motion: {
+      keyframes: config?.motion?.keyframes ?? [],
+      ken_burns: config?.motion?.ken_burns ?? { enabled: motionEffect === "ken_burns", intensity: .08, direction: "push_in", easing: "ease_in_out" },
+      speed_ramp: config?.motion?.speed_ramp ?? { enabled: motionEffect === "speed_ramp", ramp_in_ms: 280, ramp_out_ms: 320, peak_speed: 1.35, easing: "ease_in_out" },
+      beat_impact: config?.motion?.beat_impact ?? { enabled: motionEffect === "beat_impact", intensity: .22, shake_px: 10, zoom: 1.035, max_impacts: 12 },
+      auto_reframe: config?.motion?.auto_reframe ?? { enabled: false, target_aspect: "9:16", subject_x_pct: 50, subject_y_pct: 50, smoothing: .65 },
+      clip_effects: clipEffects,
+    },
+    background_removal: config?.background_removal ?? { enabled: false, apply_to_broll: true, feather_px: 18, spill_suppression: .45, replacement: "gradient_ramp" },
+    gradient_ramp: config?.gradient_ramp ?? { enabled: false, start_color: "#0f172a", end_color: "#f59e0b", angle_deg: 135, opacity: .28, blend_mode: "soft-light" },
+    after_effects_presets: config?.after_effects_presets ?? [],
+    force: true,
+  };
 }
 
 // ── Upload screen (phase 1 — no video yet) ────────────────────────────────────

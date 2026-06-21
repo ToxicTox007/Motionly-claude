@@ -77,7 +77,7 @@ export type RenderEngine = "ffmpeg_basic" | "remotion_premium";
 export type BrollDensity = "none" | "low" | "medium" | "high";
 export type EditPlanStatus = "ready" | "failed";
 export type BrollSlotStatus = "ready" | "disabled" | "failed";
-export type StockProviderKey = "fixture" | "pexels" | "pixabay";
+export type StockProviderKey = "fixture" | "pexels" | "pixabay" | "user_library";
 export type MusicProviderKey = "fixture" | "licensed_catalog";
 export type MusicSelectionStatus = "ready" | "failed";
 export type VisualPresetKey =
@@ -89,7 +89,9 @@ export type VisualPresetKey =
   | "cinematic_hotel";
 export type MotionEffectKey =
   | "zoom_punch"
+  | "ken_burns"
   | "speed_ramp"
+  | "beat_impact"
   | "motion_blur"
   | "flash"
   | "glitch"
@@ -111,7 +113,14 @@ export type RegenerationAction =
   | "less_broll"
   | "change_music";
 export type DurationPreset = "short" | "medium" | "long";
-export type PlatformPreset = "instagram" | "tiktok" | "shorts";
+export type PlatformPreset =
+  | "instagram"
+  | "tiktok"
+  | "shorts"
+  | "youtube_landscape"
+  | "instagram_post"
+  | "x_landscape"
+  | "custom";
 export type ExportResolution = "720p" | "1080p" | "4k";
 export type OutputAspect = "original" | "9:16" | "1:1" | "4:5" | "16:9";
 export type ExportFitMode = "fit" | "fill" | "custom";
@@ -130,7 +139,29 @@ export type CaptionPresetKey =
   | "bold_influencer"
   | "vogue_white"
   | "gold_premium"
-  | "founder_clean";
+  | "founder_clean"
+  | "impact_stamp"
+  | "minimal_line"
+  | "educational_card"
+  | "creator_ticker";
+
+export type CaptionMode =
+  | "word_pop"
+  | "impact_stamp"
+  | "minimal_line"
+  | "educational_card"
+  | "creator_ticker";
+
+export type CaptionAnimation =
+  | "fade_up"
+  | "pop"
+  | "type_on"
+  | "glow"
+  | "slide_up"
+  | "impact_stamp"
+  | "minimal_fade"
+  | "edu_step"
+  | "ticker";
 
 export interface ProjectSummary {
   id: string;
@@ -315,12 +346,20 @@ export interface VideoManifestSummary {
 }
 
 export interface CaptionStyle {
+  mode: CaptionMode;
   font_family: string;
   font_size_px: number;
   font_weight: number;
   text_case: "normal" | "uppercase" | "title";
   text_color: string;
   accent_color: string;
+  background_color?: string | null;
+  background_opacity: number;
+  border_color?: string | null;
+  border_radius_px: number;
+  padding_x_px: number;
+  padding_y_px: number;
+  letter_spacing_px: number;
   stroke_color?: string | null;
   stroke_width_px: number;
   shadow?: string | null;
@@ -328,7 +367,7 @@ export interface CaptionStyle {
   position_x_pct?: number | null;
   position_y_pct?: number | null;
   placement: "lower" | "middle" | "upper";
-  animation: "fade_up" | "pop" | "type_on" | "glow" | "slide_up";
+  animation: CaptionAnimation;
   max_lines: number;
   contrast_guardrail: string;
 }
@@ -439,6 +478,13 @@ export interface BrollSlotSummary {
   updated_at: string;
 }
 
+export interface MusicRegion {
+  id: string;
+  start_ms: number;
+  end_ms: number;
+  disabled?: boolean;
+}
+
 export interface MusicSelectionSummary {
   id: string;
   workspace_id: string;
@@ -453,6 +499,7 @@ export interface MusicSelectionSummary {
   created_at: string;
   updated_at: string;
   music_track?: MusicTrackSummary | null;
+  regions: MusicRegion[];
 }
 
 export interface MusicTrackSummary {
@@ -509,6 +556,62 @@ export interface GradientRampSettings {
   blend_mode: "screen" | "overlay" | "soft-light" | "normal";
 }
 
+export type MotionEasing = "linear" | "ease_in" | "ease_out" | "ease_in_out" | "spring";
+export type MotionTarget = "source" | "broll" | "all";
+
+export interface MotionKeyframe {
+  target: MotionTarget;
+  clip_id?: string | null;
+  at_ms: number;
+  scale: number;
+  x_pct: number;
+  y_pct: number;
+  rotation_deg: number;
+  opacity: number;
+  easing: MotionEasing;
+}
+
+export interface KenBurnsSettings {
+  enabled: boolean;
+  intensity: number;
+  direction: "push_in" | "pull_out" | "pan_left" | "pan_right" | "pan_up" | "pan_down";
+  easing: MotionEasing;
+}
+
+export interface SpeedRampSettings {
+  enabled: boolean;
+  ramp_in_ms: number;
+  ramp_out_ms: number;
+  peak_speed: number;
+  easing: MotionEasing;
+}
+
+export interface BeatImpactSettings {
+  enabled: boolean;
+  intensity: number;
+  shake_px: number;
+  zoom: number;
+  max_impacts: number;
+}
+
+export interface AutoReframeSettings {
+  enabled: boolean;
+  target_aspect: "9:16" | "1:1" | "4:5" | "16:9";
+  subject_x_pct: number;
+  subject_y_pct: number;
+  smoothing: number;
+}
+
+export interface MotionSettings {
+  keyframes: MotionKeyframe[];
+  ken_burns: KenBurnsSettings;
+  speed_ramp: SpeedRampSettings;
+  beat_impact: BeatImpactSettings;
+  auto_reframe: AutoReframeSettings;
+  /** Per-clip motion effects keyed by timeline clip ID (e.g. `cut-0`, `broll-<uuid>`). */
+  clip_effects?: Record<string, MotionEffectKey[]>;
+}
+
 export interface AfterEffectsPresetSummary {
   name: string;
   enabled: boolean;
@@ -528,6 +631,7 @@ export interface EffectsConfigSummary {
   lut_intensity: number;
   texture: EffectsTextureSettings;
   motion_effects: MotionEffectKey[];
+  motion: MotionSettings;
   background_removal: BackgroundRemovalSettings;
   gradient_ramp: GradientRampSettings;
   after_effects_presets: AfterEffectsPresetSummary[];
@@ -548,6 +652,38 @@ export interface ZoomMoment {
   timestamp_ms: number;
   intensity: number;
   reason: string;
+}
+
+export type ManualElementType =
+  | "text"
+  | "caption"
+  | "overlay"
+  | "shape"
+  | "graphic"
+  | "broll"
+  | "transition"
+  | "sfx"
+  | "music"
+  | "motion"
+  | "grade";
+
+export interface ManualElement {
+  id: string;
+  type: ManualElementType;
+  name: string;
+  zone: "canvas" | "timeline" | "clip";
+  start_ms: number;
+  end_ms: number;
+  x_pct: number;
+  y_pct: number;
+  width_pct: number;
+  height_pct: number;
+  rotation_deg: number;
+  opacity: number;
+  clip_id?: string | null;
+  properties: Record<string, unknown>;
+  ai_reason?: string | null;
+  confidence?: number | null;
 }
 
 export interface StyleClassification {
@@ -572,6 +708,7 @@ export interface EditPlan {
   effects: string[];
   color_grade: string;
   risk_flags: string[];
+  manual_elements: ManualElement[];
 }
 
 export interface EditPlanSummary {
@@ -615,6 +752,20 @@ export interface EditPlanRecordSummary {
   plan: EditPlan;
   created_at: string;
   updated_at: string;
+}
+
+export interface PlanSnapshotSummary {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  source_plan_id: string;
+  source_plan_version: number;
+  name: string;
+  notes?: string | null;
+  created_by_user_id: string;
+  plan: EditPlan;
+  summary: EditPlanSummary;
+  created_at: string;
 }
 
 export interface RenderSpecs {
@@ -815,11 +966,72 @@ export interface BillingStatusSummary {
   entitlements: PlanEntitlements;
 }
 
+export type AIEditLayer = "cuts" | "captions" | "broll" | "music" | "effects" | "render";
+export type AIEditFeedbackEventType = "ai_suggested" | "kept" | "changed" | "rejected";
+export type FineTuningSignal = "positive" | "correction" | "rejection";
+
+export interface AIEditFeedbackEventSummary {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  edit_plan_id?: string | null;
+  user_id: string;
+  event_type: AIEditFeedbackEventType;
+  layer: AIEditLayer;
+  decision_id?: string | null;
+  action?: string | null;
+  source: string;
+  ai_payload: Record<string, unknown>;
+  user_payload: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AIEditLayerAnalyticsSummary {
+  layer: AIEditLayer;
+  suggested: number;
+  kept: number;
+  changed: number;
+  rejected: number;
+  keep_rate: number;
+}
+
+export interface AIEditAnalyticsSummary {
+  total_events: number;
+  training_example_count: number;
+  layers: AIEditLayerAnalyticsSummary[];
+}
+
+export interface AIEditAnalyticsResponse {
+  summary: AIEditAnalyticsSummary;
+  events: AIEditFeedbackEventSummary[];
+}
+
+export interface FineTuningExampleSummary {
+  event_id: string;
+  project_id: string;
+  edit_plan_id?: string | null;
+  layer: AIEditLayer;
+  signal: FineTuningSignal;
+  weight: number;
+  decision_id?: string | null;
+  input: Record<string, unknown>;
+  ideal_output: Record<string, unknown>;
+  rejected_output?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface FineTuningDatasetSummary {
+  project_id: string;
+  example_count: number;
+  examples: FineTuningExampleSummary[];
+}
+
 // ---------------------------------------------------------------------------
 // Timeline editor types
 // ---------------------------------------------------------------------------
 
-export type TimelineTrackKind = "video" | "broll" | "caption" | "music" | "zoom";
+export type TimelineTrackKind = "video" | "broll" | "caption" | "transition" | "overlay" | "music" | "sfx" | "zoom";
 
 export interface TimelineClip {
   id: string;
@@ -831,9 +1043,10 @@ export interface TimelineClip {
   colorClass: string;
   disabled: boolean;
   sourceRef: {
-    kind: "cut" | "caption_segment" | "broll_slot" | "music" | "zoom_marker";
+    kind: "cut" | "caption_segment" | "broll_slot" | "music" | "zoom_marker" | "manual_element";
     index?: number; // positional index in array (cuts)
     id?: string;    // UUID (segments, slots)
+    regionId?: string; // music region id
   };
 }
 

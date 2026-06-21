@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import Header, Request
 
 from app.api.errors import ApiError
+from app.repositories.analytics import InMemoryAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
 from app.repositories.captions import InMemoryCaptionRepository
@@ -183,6 +184,10 @@ def get_broll_repository(request: Request) -> InMemoryBrollRepository:
 
 def get_billing_repository(request: Request) -> InMemoryBillingRepository:
     return request.app.state.billing_repository
+
+
+def get_analytics_repository(request: Request) -> InMemoryAnalyticsRepository:
+    return request.app.state.analytics_repository
 
 
 def get_visual_repository(request: Request) -> InMemoryVisualRepository:

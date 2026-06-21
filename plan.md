@@ -182,7 +182,7 @@ B-roll sources (pluggable `StockVideoProvider` interface):
 
 ### Stage 5 — Kinetic Caption System
 
-**Current state:** Shipped. Multiple presets, word-level animation via Remotion.
+**Current state:** Shipped with mode-aware kinetic captions across API, web preview, Remotion export, and FFmpeg fallback.
 
 Captions are rendered as composited visual elements — not subtitle tracks. The `apps/renderer` Remotion composition renders `AnimatedCaptions` against the video with per-word timing.
 
@@ -195,17 +195,27 @@ Captions are rendered as composited visual elements — not subtitle tracks. The
 | `vogue_white` | Georgia 700, title case, editorial feel |
 | `gold_premium` | Gold accent, premium feel |
 | `founder_clean` | Clean blue, professional |
+| `impact_stamp` | Full-width uppercase stamp with shake, strong stroke, red active-word accent |
+| `minimal_line` | Quiet single-line bottom-third with long fade and subtle underline highlights |
+| `educational_card` | Rounded step card with badge, high-contrast text, and instructional pacing |
+| `creator_ticker` | Pill-shaped creator ticker with active word color chips |
 
-**Caption animation types (`CaptionAnimation`):** `FADE_UP`, `POP`, and additional variants in the Remotion `AnimatedCaptions` component.
+**Caption animation types (`CaptionAnimation`):** `fade_up`, `pop`, `type_on`, `glow`, `slide_up`, `impact_stamp`, `minimal_fade`, `edu_step`, and `ticker`.
 
-**Next version target:** Add remaining caption modes:
+Mode-aware implementation details:
+- `CaptionStyle` now carries `mode`, background/card styling, border radius, padding, and letter spacing.
+- `CAPTION_SCHEMA_VERSION = 2`; existing style JSON remains backward-compatible through Pydantic defaults.
+- Caption chunking is mode-aware: impact stamps stay short, minimal lines stay single-line, education cards use step-sized phrases, and creator ticker stays compact.
+- Remotion `AnimatedCaptions` renders the four mode layouts directly with per-segment entrance timing.
+- FFmpeg `.ass` fallback receives matching static style metadata, including background boxes and educational step labels.
+- The web editor exposes all Stage 5 presets, mode/animation controls, card/ticker styling, and preview rendering.
 
 | Caption Mode | Target Style Classes | Look |
 |---|---|---|
-| `impact-stamp` | dramatic, motivational | Full-width, uppercase, film-style stamp with shake |
-| `minimal-line` | luxury, cinematic | Lowercase, thin font, long fade, bottom-third |
-| `educational-card` | educational | Rounded label, icon prefix, step indicator |
-| `creator-ticker` | creator/influencer | Colored word highlight, emoji-capable, casual |
+| `impact_stamp` | dramatic, motivational | Full-width, uppercase, film-style stamp with shake |
+| `minimal_line` | luxury, cinematic | Lowercase, thin font, long fade, bottom-third |
+| `educational_card` | educational | Rounded label, icon prefix, step indicator |
+| `creator_ticker` | creator/influencer | Colored word highlight, emoji-capable, casual |
 
 Caption highlight system (emphasis on high-emotion words) is already shipped in the `EditPlan` via `caption_highlights[]` with effects: `pulse`, `underline`, `color_pop`, `scale`, `none`.
 
@@ -361,7 +371,7 @@ The Edit Manifest is the single source of truth for the entire project. It is ve
 | Video Preview | `<video>` element sync via `usePlaybackSync` hook |
 | Timeline UI | Custom DOM-based timeline (`TimelinePanel.tsx`) |
 | Real-time | Page router refresh polling (WebSocket planned) |
-| Drag & Drop | Not yet implemented (planned Phase 3) |
+| Drag & Drop | dnd-kit palette → canvas/timeline/clip with snapping and accessible drag overlays |
 | Error tracking | GlitchTip/Sentry (`instrumentation.ts`, `instrumentation-client.ts`) |
 
 ### Page Structure (Shipped)
@@ -382,7 +392,7 @@ The Edit Manifest is the single source of truth for the entire project. It is ve
 
 ### Editor Layout (Current)
 
-The current editor (`EditorClient.tsx`) uses a tabbed inspector panel on the right with tabs: `ai`, `captions`, `broll`, `audio`, `look`, `export`. The center shows a `<video>` preview element. The bottom has `TimelinePanel`. There is no left element palette yet.
+The current editor (`EditorClient.tsx`) uses a searchable dnd-kit element palette on the left and a contextual properties/tabbed inspector on the right. The WebGL-backed center preview composites manifest elements locally, and `TimelinePanel` exposes video, B-roll, caption, transition, FX, music, and SFX drop tracks.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -434,7 +444,7 @@ The current editor (`EditorClient.tsx`) uses a tabbed inspector panel on the rig
 
 ### Live Preview System (Target)
 
-Current: `<video>` element with `usePlaybackSync` hook for playhead sync. Timeline scrubbing updates the video `currentTime` directly.
+Current: `<video>` decoding with `usePlaybackSync` feeds a WebGL2 compositing canvas; manifest-driven captions, placed elements, grades, motion, and drop previews redraw locally while timeline scrubbing updates `currentTime` directly.
 
 Target (Phase 3):
 - WebGL canvas compositing for caption + effects preview in real-time
@@ -692,7 +702,7 @@ broll_slots {
 - [x] Audio pipeline: Groq Whisper word-level transcription, language hint
 - [x] Edit Manifest schema v1: EditPlan Pydantic model, Supabase tables
 - [x] LLM edit planner: OpenRouter HTTP provider + fixture fallback + repair layer
-- [x] Caption system: 5 presets, word-level segments, Remotion animated rendering
+- [x] Caption system: 9 presets, mode-aware segments, Remotion animated rendering
 - [x] FFmpeg export pipeline: cuts + B-roll + ASS captions + audio mix
 - [x] Remotion premium render path: 7 templates, visual grades, music/SFX mix
 - [x] B-roll engine: Pexels + Pixabay providers, slot assignment
@@ -727,26 +737,26 @@ The current editor has all AI pipeline controls but lacks the full manual editin
 
 ### Phase 3 — Full Manual Editor + Drag-and-Drop System (Weeks 17–24)
 
-- [ ] WebGL preview canvas — manifest-driven, zero-latency frame redraws
-- [ ] Element Palette sidebar (left): all categories, searchable, thumbnails
-- [ ] Drag-to-Canvas: text elements, overlays, shapes, graphics
-- [ ] Drag-to-Timeline: B-roll, transitions, SFX, music, captions (dnd-kit)
-- [ ] Drag-to-Clip: color grades, motion effects
-- [ ] Ghost/shadow preview while dragging
-- [ ] Snap system: grid snap on canvas, boundary snap on timeline
-- [ ] Drop zone highlight: canvas grid + timeline insert indicator
-- [ ] Transition drop zones between clips
-- [ ] Properties Inspector: live editing panel for every element type
-- [ ] Element palette search and filter
-- [ ] Palette thumbnail previews for grades, caption styles, transitions
-- [ ] AI Elements in palette: Auto-Caption Clip, Smart B-roll Fill, AI Music Match, Re-analyze Style, AI Highlight Reel
+- [x] WebGL preview canvas — manifest-driven, zero-latency frame redraws
+- [x] Element Palette sidebar (left): all categories, searchable, thumbnails
+- [x] Drag-to-Canvas: text elements, overlays, shapes, graphics
+- [x] Drag-to-Timeline: B-roll, transitions, SFX, music, captions (dnd-kit)
+- [x] Drag-to-Clip: color grades, motion effects
+- [x] Ghost/shadow preview while dragging
+- [x] Snap system: grid snap on canvas, boundary snap on timeline
+- [x] Drop zone highlight: canvas grid + timeline insert indicator
+- [x] Transition drop zones between clips
+- [x] Properties Inspector: live editing panel for every element type
+- [x] Element palette search and filter
+- [x] Palette thumbnail previews for grades, caption styles, transitions
+- [x] AI Elements in palette: Auto-Caption Clip, Smart B-roll Fill, AI Music Match, Re-analyze Style, AI Highlight Reel
 - [x] Visual intelligence pipeline: CLIP embeddings, BLIP-2 captions, scene classification
 - [x] CLIP-based B-roll semantic search (replace keyword text search)
-- [ ] User B-roll library upload + management
-- [ ] Speaker diarization (pyannote.audio) for podcast/interview content
+- [x] User B-roll library upload + management
+- [x] Speaker diarization (pyannote.audio) for podcast/interview content
 - [x] Additional style classes: `motivational`, `emotional`, `cinematic`, `educational`, `dramatic`, `fast-paced`, `clean minimal`, `creator/influencer`
-- [ ] Remaining caption modes: `impact-stamp`, `minimal-line`, `educational-card`, `creator-ticker`
-- [ ] Full LUT-based color grading in export path
+- [x] Remaining caption modes: `impact_stamp`, `minimal_line`, `educational_card`, `creator_ticker`
+- [x] Full LUT-based color grading in export path
 
 **Milestone:** Full manual editing capability. Every AI decision overridable. Spatial element palette. Live WebGL preview. Expanded style system.
 
@@ -1158,4 +1168,4 @@ type DragSession = {
 
 ---
 
-*Document version: 2.0 | Last updated: June 2026 | Status: Active development — Phase 2*
+*Document version: 2.0 | Last updated: June 2026 | Status: Phase 3 complete*

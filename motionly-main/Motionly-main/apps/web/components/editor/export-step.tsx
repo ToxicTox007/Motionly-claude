@@ -46,6 +46,10 @@ const platforms: { value: PlatformPreset; label: string }[] = [
   { value: "instagram", label: "Instagram Reel" },
   { value: "tiktok", label: "TikTok" },
   { value: "shorts", label: "YouTube Shorts" },
+  { value: "youtube_landscape", label: "YouTube Landscape" },
+  { value: "instagram_post", label: "Instagram Post" },
+  { value: "x_landscape", label: "X Landscape" },
+  { value: "custom", label: "Custom Download" },
 ];
 
 const resolutions: { value: ExportResolution; label: string }[] = [
@@ -99,6 +103,11 @@ export function ExportStep({
   const [resolution, setResolution] = useState<ExportResolution>("1080p");
   const [outputAspect, setOutputAspect] = useState<OutputAspect>("9:16");
   const [fitMode, setFitMode] = useState<ExportFitMode>("fill");
+  const [bulkPlatforms, setBulkPlatforms] = useState<PlatformPreset[]>([
+    "tiktok",
+    "shorts",
+    "youtube_landscape",
+  ]);
   const [cropX, setCropX] = useState(50);
   const [cropY, setCropY] = useState(50);
   const [cropZoom, setCropZoom] = useState(100);
@@ -107,6 +116,7 @@ export function ExportStep({
   const [exports, setExports] = useState(initialExports);
   const [message, setMessage] = useState<string | null>(null);
   const [streamingJobId, setStreamingJobId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const streamAbortRef = useRef<AbortController | null>(null);
 
   const latestJob = jobs[0];
@@ -115,6 +125,7 @@ export function ExportStep({
   const isRendering = latestJob && activeStatuses.includes(latestJob.status);
   const renderUiState = getRenderUiState(latestJob);
   const progress = getDisplayProgress(latestJob);
+  const etaLabel = estimateRenderEta(latestJob, nowMs);
   const retryableJob = latestJob?.status === "failed" ? latestJob : null;
   const canceledJob = latestJob?.status === "canceled" ? latestJob : null;
   const primaryRenderAction = getPrimaryRenderAction({
@@ -151,6 +162,12 @@ export function ExportStep({
     });
   }, [cropX, cropY, cropZoom, fitMode, onPreviewExportUpdated, outputAspect]);
 
+  useEffect(() => {
+    if (!isRendering) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, [isRendering]);
+
   async function startRender() {
     setLoading(true);
     setMessage(null);
@@ -185,6 +202,54 @@ export function ExportStep({
       ]);
       setMessage(`Render queued: ${payload.queue_job_id}`);
       setStreamingJobId(payload.job.id);
+    } catch (error) {
+      console.error(error);
+      setMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startBulkRender() {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const payload = await editorApiRequest<{
+        jobs: RenderJobSummary[];
+        queue_job_ids: string[];
+      }>(
+        `${env.apiBaseUrl}/projects/${projectId}/renders/bulk`,
+        {
+        method: "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Bulk export could not be started. Please try again.",
+          body: {
+            caption_track_id: captionTrackId ?? null,
+            edit_plan_id: activePlanId ?? null,
+            template_id: templateId,
+            duration_preset: "medium",
+            include_captions: true,
+            include_broll: true,
+            export_targets: bulkPlatforms.map((targetPlatform) => ({
+              platform: targetPlatform,
+              resolution,
+              format: "mp4",
+              framing: {
+                ...framing,
+                output_aspect: defaultAspectForPlatform(targetPlatform),
+              },
+            })),
+          },
+        },
+      );
+      setJobs((current) => [
+        ...payload.jobs,
+        ...current.filter((job) => !payload.jobs.some((next) => next.id === job.id)),
+      ]);
+      setMessage(`Queued ${payload.jobs.length} export targets.`);
+      setStreamingJobId(payload.jobs[0]?.id ?? null);
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);
@@ -468,9 +533,43 @@ export function ExportStep({
                 id="target-platform"
                 label="Target Platform"
                 value={platform}
-                onChange={(val) => setPlatform(val as PlatformPreset)}
+                onChange={(val) => {
+                  const nextPlatform = val as PlatformPreset;
+                  setPlatform(nextPlatform);
+                  setOutputAspect(defaultAspectForPlatform(nextPlatform));
+                }}
                 options={platforms}
               />
+            </div>
+          </div>
+          <div className="mt-3 border-t border-border pt-3">
+            <Label className="mb-2">Bulk Targets</Label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {platforms
+                .filter((item) => item.value !== "custom")
+                .map((item) => {
+                  const checked = bulkPlatforms.includes(item.value);
+                  return (
+                    <label
+                      key={item.value}
+                      className="flex min-h-11 cursor-pointer items-center justify-between gap-2 border border-border bg-muted/25 px-3 text-xs font-bold text-muted-foreground"
+                    >
+                      {item.label}
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          setBulkPlatforms((current) =>
+                            event.target.checked
+                              ? current.includes(item.value) ? current : [...current, item.value]
+                              : current.filter((target) => target !== item.value),
+                          );
+                        }}
+                        className="size-5 accent-primary"
+                      />
+                    </label>
+                  );
+                })}
             </div>
           </div>
         </ExportStepSection>
@@ -563,6 +662,21 @@ export function ExportStep({
           {primaryRenderAction.label}
         </span>
       </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={startBulkRender}
+        disabled={loading || Boolean(isRendering) || !captionTrackId || bulkPlatforms.length === 0}
+        aria-busy={loading || Boolean(isRendering)}
+        className="h-12 w-full"
+      >
+        {loading || isRendering ? (
+          <Loader2 className="mr-2 size-4 animate-spin" />
+        ) : (
+          <Download className="mr-2 size-4" />
+        )}
+        Queue Selected Formats
+      </Button>
 
       {latestJob ? (
         <div className="space-y-3 border border-border bg-muted/40 p-3" aria-live="polite">
@@ -577,7 +691,14 @@ export function ExportStep({
               </div>
             </div>
             {renderUiState === "queued" || renderUiState === "rendering" || renderUiState === "completed" ? (
-              <span className="text-sm font-black">{progress}%</span>
+              <span className="text-right text-sm font-black">
+                {progress}%
+                {etaLabel ? (
+                  <span className="block text-[10px] font-bold text-muted-foreground">
+                    ETA {etaLabel}
+                  </span>
+                ) : null}
+              </span>
             ) : null}
           </div>
           {renderUiState === "queued" || renderUiState === "rendering" || renderUiState === "completed" ? (
@@ -764,6 +885,13 @@ function getRenderUiState(job?: RenderJobSummary): RenderUiState {
   return "rendering";
 }
 
+function defaultAspectForPlatform(platform: PlatformPreset): OutputAspect {
+  if (platform === "youtube_landscape" || platform === "x_landscape") return "16:9";
+  if (platform === "instagram_post") return "4:5";
+  if (platform === "custom") return "original";
+  return "9:16";
+}
+
 function uiStateLabel(state: RenderUiState) {
   const labels: Record<RenderUiState, string> = {
     idle: "Idle",
@@ -781,6 +909,28 @@ function getDisplayProgress(job?: RenderJobSummary) {
   if (job.status === "complete") return 100;
   if (job.status === "failed" || job.status === "canceled") return 0;
   return Math.max(0, Math.min(100, job.progress_pct ?? 0));
+}
+
+function estimateRenderEta(job: RenderJobSummary | undefined, nowMs: number) {
+  if (!job || job.status === "complete" || job.status === "failed" || job.status === "canceled") {
+    return null;
+  }
+  const progress = getDisplayProgress(job);
+  if (progress < 5) return "calculating";
+  const startedAt = Date.parse(job.created_at);
+  if (!Number.isFinite(startedAt)) return "calculating";
+  const elapsedMs = Math.max(1, nowMs - startedAt);
+  const totalMs = elapsedMs / (progress / 100);
+  const remainingMs = Math.max(0, totalMs - elapsedMs);
+  return formatDuration(remainingMs);
+}
+
+function formatDuration(ms: number) {
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
 function getPrimaryRenderAction({

@@ -1,8 +1,19 @@
 "use client";
 
 import { Menu, Moon, Sun, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
+
+function initialTheme(): "light" | "dark" {
+  if (typeof document !== "undefined") {
+    const rootTheme = document.documentElement.dataset.theme;
+    if (rootTheme === "light" || rootTheme === "dark") return rootTheme;
+  }
+  if (typeof window !== "undefined") {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "light";
+}
 
 export function ThemeMenu({
   items,
@@ -12,16 +23,7 @@ export function ThemeMenu({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-
-  useEffect(() => {
-    const rootTheme = document.documentElement.dataset.theme;
-    if (rootTheme === "light" || rootTheme === "dark") {
-      setTheme(rootTheme);
-      return;
-    }
-    setTheme(window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  }, []);
+  const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
 
   function applyTheme(nextTheme: "light" | "dark") {
     setTheme(nextTheme);

@@ -32,6 +32,10 @@ class PlatformPreset(StrEnum):
     INSTAGRAM = "instagram"
     TIKTOK = "tiktok"
     SHORTS = "shorts"
+    YOUTUBE_LANDSCAPE = "youtube_landscape"
+    INSTAGRAM_POST = "instagram_post"
+    X_LANDSCAPE = "x_landscape"
+    CUSTOM = "custom"
 
 
 class ExportResolution(StrEnum):
@@ -127,6 +131,23 @@ class RenderCreateRequest(JsonStringBodyMixin, BaseModel):
         return cls._coerce_json_string_body(data)
 
 
+class RenderBulkCreateRequest(JsonStringBodyMixin, BaseModel):
+    caption_track_id: UUID | None = None
+    include_captions: bool = True
+    include_broll: bool = True
+    edit_plan_id: UUID | None = None
+    template_id: RenderTemplateId | None = None
+    adjustment_action: RenderAdjustmentAction | None = None
+    duration_preset: DurationPreset = DurationPreset.MEDIUM
+    export_targets: list[ExportOptions] = Field(min_length=1, max_length=6)
+    force: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
+
+
 class RenderJobEventResponse(BaseModel):
     id: UUID
     render_job_id: UUID
@@ -174,6 +195,13 @@ class RenderCreateResponse(BaseModel):
     job_id: UUID
     queue_job_id: str
     status: RenderJobStatus
+
+
+class RenderBulkCreateResponse(BaseModel):
+    jobs: list[RenderJobResponse]
+    job_ids: list[UUID]
+    queue_job_ids: list[str]
+    status: Literal["queued"] = "queued"
 
 
 class RenderListResponse(BaseModel):

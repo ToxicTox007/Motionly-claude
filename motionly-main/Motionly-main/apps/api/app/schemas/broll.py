@@ -20,6 +20,7 @@ class StockProviderKey(StrEnum):
     FIXTURE = "fixture"
     PEXELS = "pexels"
     PIXABAY = "pixabay"
+    USER_LIBRARY = "user_library"
 
 
 class StockOrientation(StrEnum):
@@ -145,3 +146,37 @@ class BrollSearchResponse(BaseModel):
     slot: BrollSlotResponse
     candidates: list[StockVideoAssetResponse]
     query: str
+
+
+class UserBrollUploadInitRequest(JsonStringBodyMixin, BaseModel):
+    filename: str = Field(min_length=1, max_length=240)
+    mime_type: str = Field(pattern=r"^video/")
+    file_size_bytes: int = Field(gt=0, le=536_870_912)
+    width: int = Field(default=1080, ge=1, le=8192)
+    height: int = Field(default=1920, ge=1, le=8192)
+    duration_ms: int = Field(default=0, ge=0, le=3_600_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
+
+
+class UserBrollUploadInitResponse(BaseModel):
+    asset: StockVideoAssetResponse
+    signed_upload_url: str
+    upload_headers: dict[str, str]
+    expires_in_seconds: int
+
+
+class UserBrollUploadCompleteResponse(BaseModel):
+    asset: StockVideoAssetResponse
+
+
+class UserBrollLibraryResponse(BaseModel):
+    assets: list[StockVideoAssetResponse]
+
+
+class UserBrollDeleteResponse(BaseModel):
+    asset_id: UUID
+    status: Literal["deleted"] = "deleted"

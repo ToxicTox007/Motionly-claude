@@ -7,6 +7,8 @@ def caption_track_to_ass(*, segments: list[CaptionSegment], style: CaptionStyle)
     primary = _ass_color(style.text_color)
     accent = _ass_color(style.accent_color)
     stroke = _ass_color(style.stroke_color or "#0f172a")
+    back = _ass_color(style.background_color or "#000000", opacity=style.background_opacity)
+    border_style = 3 if style.background_color and style.background_opacity > 0 else 1
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -15,14 +17,17 @@ def caption_track_to_ass(*, segments: list[CaptionSegment], style: CaptionStyle)
         "",
         "[V4+ Styles]",
         (
-            "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, Bold, "
-            "Alignment, MarginL, MarginR, MarginV, Outline, Shadow"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+            "ScaleY, Spacing, Angle, BorderStyle, Alignment, MarginL, MarginR, "
+            "MarginV, Outline, Shadow, Encoding"
         ),
         (
             "Style: Motionly,"
-            f"{style.font_family},{style.font_size_px},{primary},{stroke},"
-            f"{-1 if style.font_weight >= 700 else 0},{alignment},64,64,{margin_v},"
-            f"{style.stroke_width_px},1"
+            f"{style.font_family},{style.font_size_px},{primary},{accent},{stroke},{back},"
+            f"{-1 if style.font_weight >= 700 else 0},0,0,0,100,100,"
+            f"{style.letter_spacing_px},0,{border_style},{alignment},64,64,{margin_v},"
+            f"{style.stroke_width_px},{1 if style.shadow else 0},1"
         ),
         "",
         "[Events]",
@@ -30,7 +35,7 @@ def caption_track_to_ass(*, segments: list[CaptionSegment], style: CaptionStyle)
     ]
     for segment in segments:
         text = _format_text(
-            segment.text,
+            _mode_text(segment=segment, style=style),
             style,
             primary=primary,
             accent=accent,
@@ -63,12 +68,21 @@ def _format_text(
     return text.replace("\n", r"\N").replace(",", r"\,")
 
 
-def _ass_color(hex_color: str) -> str:
+def _mode_text(*, segment: CaptionSegment, style: CaptionStyle) -> str:
+    if style.mode == "educational_card":
+        return f"Step {segment.index + 1}: {segment.text}"
+    if style.mode == "creator_ticker":
+        return f"> {segment.text}"
+    return segment.text
+
+
+def _ass_color(hex_color: str, *, opacity: float = 1) -> str:
     normalized = hex_color.lstrip("#")
     if len(normalized) != 6:
         return "&H00FFFFFF"
     red, green, blue = normalized[0:2], normalized[2:4], normalized[4:6]
-    return f"&H00{blue}{green}{red}"
+    alpha = max(0, min(255, round(255 * (1 - opacity))))
+    return f"&H{alpha:02X}{blue}{green}{red}"
 
 
 def _ass_time(ms: int) -> str:

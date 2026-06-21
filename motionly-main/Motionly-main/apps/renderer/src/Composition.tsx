@@ -8,6 +8,7 @@ import {
 import type React from "react";
 import { AnimatedCaptions } from "./components/Captions";
 import { VideoScene } from "./components/VideoScene";
+import { ManualElements } from "./components/ManualElements";
 import { getTemplate } from "./templates/registry";
 import type { MotionlyRenderProps } from "./types";
 
@@ -20,6 +21,7 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
         <VideoScene input={input} template={template} />
       </VisualGrade>
       <MusicAndSfxMix input={input} />
+      <ManualElements elements={input.editPlan.manual_elements} />
       <AnimatedCaptions
         segments={input.captions}
         words={input.words}

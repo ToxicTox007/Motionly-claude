@@ -25,6 +25,7 @@ from app.schemas.captions import (
     TranscriptWord,
 )
 from app.schemas.uploads import UploadStatus
+from app.services.ass_captions import caption_track_to_ass
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
 from app.services.queue import TranscriptionQueue
@@ -108,9 +109,52 @@ def test_transcription_and_caption_generation_happy_path() -> None:
 
     assert captions.status == "ready"
     assert captions.track.preset == CaptionPresetKey.BOLD_INFLUENCER
-    assert captions.track.schema_version == 1
+    assert captions.track.schema_version == CAPTION_SCHEMA_VERSION
     assert captions.track.segments
     assert all(segment.end_ms - segment.start_ms >= 450 for segment in captions.track.segments)
+
+
+def test_stage_5_caption_modes_generate_mode_specific_tracks() -> None:
+    repository, project_id, workspace_id, user_id = make_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    transcription = asyncio.run(
+        create_transcription(
+            project_id=project_id,
+            payload=TranscriptionCreateRequest(language_hint=LanguageHint.ENGLISH),
+            request=make_request(),
+            actor=actor,
+            repository=repository,
+            transcription_provider=FixtureTranscriptionProvider(),
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+    assert transcription.transcript_id is not None
+
+    captions = asyncio.run(
+        generate_captions(
+            project_id=project_id,
+            payload=CaptionGenerateRequest(preset=CaptionPresetKey.EDUCATIONAL_CARD),
+            actor=actor,
+            repository=repository,
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+
+    assert captions.track.schema_version == CAPTION_SCHEMA_VERSION
+    assert captions.track.preset == CaptionPresetKey.EDUCATIONAL_CARD
+    assert captions.track.style.mode == "educational_card"
+    assert captions.track.style.animation == "edu_step"
+    assert captions.track.style.background_opacity > 0.9
+    assert captions.track.segments
+    assert all(
+        segment.line_count <= captions.track.style.max_lines
+        for segment in captions.track.segments
+    )
+    assert any(segment.highlight_words for segment in captions.track.segments)
+
+    ass = caption_track_to_ass(segments=captions.track.segments[:1], style=captions.track.style)
+    assert "Step 1" in ass
+    assert "BackColour" in ass
 
 
 def test_transcription_preserves_expanded_language_hint() -> None:

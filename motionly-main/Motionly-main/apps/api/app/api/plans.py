@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.api.dependencies import (
     Actor,
@@ -12,6 +12,7 @@ from app.api.dependencies import (
 )
 from app.api.errors import ApiError
 from app.repositories.plans import InMemoryPlanRepository
+from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.captions import TranscriptStatus
 from app.schemas.plans import (
     EDIT_PLAN_SCHEMA_VERSION,
@@ -24,8 +25,15 @@ from app.schemas.plans import (
     PlanCutsUpdateRequest,
     PlanCutsUpdateResponse,
     PlanListResponse,
+    PlanManualElementsUpdateRequest,
+    PlanManualElementsUpdateResponse,
+    PlanSnapshotCreateRequest,
+    PlanSnapshotCreateResponse,
+    PlanSnapshotListResponse,
+    PlanSnapshotRestoreResponse,
 )
 from app.schemas.visual import VideoManifest
+from app.services.ai_feedback import record_ai_feedback, record_plan_suggestions
 from app.services.edit_planner import (
     PLANNER_SCHEMA_HASH,
     EditPlannerProvider,
@@ -52,6 +60,7 @@ async def create_plan(
     repository: PlanRepositoryDep,
     planner_provider: EditPlannerProviderDep,
     plan_queue: PlanQueueDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> PlanCreateResponse:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
     transcript = repository.latest_transcript(
@@ -138,6 +147,13 @@ async def create_plan(
         summary=summarize_plan(plan, style_classification=style_classification),
         plan=plan,
     )
+    record_plan_suggestions(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        plan=record,
+    )
     return PlanCreateResponse(plan=record.to_response(), job_id=job.id)
 
 
@@ -152,6 +168,88 @@ async def list_plans(
     return PlanListResponse(
         plans=[plan.to_response() for plan in plans],
         active_plan_id=active.id if active else None,
+    )
+
+
+@router.get("/snapshots", response_model=PlanSnapshotListResponse)
+async def list_plan_snapshots(
+    project_id: UUID,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+) -> PlanSnapshotListResponse:
+    snapshots = repository.list_plan_snapshots(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    return PlanSnapshotListResponse(
+        snapshots=[snapshot.to_response() for snapshot in snapshots],
+    )
+
+
+@router.post("/snapshots", response_model=PlanSnapshotCreateResponse, status_code=201)
+async def create_plan_snapshot(
+    project_id: UUID,
+    payload: PlanSnapshotCreateRequest,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+) -> PlanSnapshotCreateResponse:
+    source_plan = (
+        repository.get_plan(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            plan_id=payload.plan_id,
+        )
+        if payload.plan_id
+        else repository.active_plan(project_id=project_id, workspace_id=actor.workspace_id)
+    )
+    snapshot = repository.create_plan_snapshot(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        source_plan=source_plan,
+        name=payload.name,
+        notes=payload.notes,
+        created_by_user_id=actor.user_id,
+    )
+    return PlanSnapshotCreateResponse(snapshot=snapshot.to_response())
+
+
+@router.post(
+    "/snapshots/{snapshot_id}/restore",
+    response_model=PlanSnapshotRestoreResponse,
+    status_code=201,
+)
+async def restore_plan_snapshot(
+    project_id: UUID,
+    snapshot_id: UUID,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
+) -> PlanSnapshotRestoreResponse:
+    plan = repository.restore_plan_snapshot(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        snapshot_id=snapshot_id,
+    )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=plan.id,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.CUTS,
+        source="version_history",
+        decision_id=f"{plan.id}:snapshot_restore",
+        action="restore_snapshot",
+        user_payload={
+            "snapshot_id": str(snapshot_id),
+            "cuts": [cut.model_dump(mode="json") for cut in plan.plan.cuts],
+        },
+        metadata={"plan_version": plan.version},
+    )
+    return PlanSnapshotRestoreResponse(
+        plan=plan.to_response(),
+        snapshot_id=snapshot_id,
     )
 
 
@@ -177,6 +275,7 @@ async def update_plan_cuts(
     payload: PlanCutsUpdateRequest,
     actor: ActorDep,
     repository: PlanRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> PlanCutsUpdateResponse:
     record = repository.get_plan(
         project_id=project_id,
@@ -204,6 +303,21 @@ async def update_plan_cuts(
         ),
         target_duration_s=target_duration_s,
     )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=plan_id,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.CUTS,
+        source="manual_editor",
+        decision_id=f"{plan_id}:cuts",
+        action="update_cuts",
+        ai_payload={"cuts": [cut.model_dump(mode="json") for cut in record.plan.cuts]},
+        user_payload={"cuts": [cut.model_dump(mode="json") for cut in payload.cuts]},
+        metadata={"previous_version": record.version, "target_duration_s": target_duration_s},
+    )
     return PlanCutsUpdateResponse(plan=updated.to_response())
 
 
@@ -214,6 +328,7 @@ async def update_plan_caption_highlights(
     payload: PlanCaptionHighlightsUpdateRequest,
     actor: ActorDep,
     repository: PlanRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> PlanCaptionHighlightsUpdateResponse:
     record = repository.get_plan(
         project_id=project_id,
@@ -234,7 +349,82 @@ async def update_plan_caption_highlights(
         ),
         target_duration_s=record.target_duration_s,
     )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=plan_id,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.CAPTIONS,
+        source="manual_editor",
+        decision_id=f"{plan_id}:caption_highlights",
+        action="update_caption_highlights",
+        ai_payload={
+            "caption_highlights": [
+                highlight.model_dump(mode="json") for highlight in record.plan.caption_highlights
+            ],
+        },
+        user_payload={
+            "caption_highlights": [
+                highlight.model_dump(mode="json") for highlight in payload.caption_highlights
+            ],
+        },
+        metadata={"previous_version": record.version},
+    )
     return PlanCaptionHighlightsUpdateResponse(plan=updated.to_response())
+
+
+@router.patch("/{plan_id}/manual-elements", response_model=PlanManualElementsUpdateResponse)
+async def update_plan_manual_elements(
+    project_id: UUID,
+    plan_id: UUID,
+    payload: PlanManualElementsUpdateRequest,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
+) -> PlanManualElementsUpdateResponse:
+    record = repository.get_plan(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+    )
+    plan = record.plan.model_copy(update={"manual_elements": payload.manual_elements})
+    updated = repository.update_plan_cuts(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+        plan=plan,
+        summary=summarize_plan(
+            plan,
+            style_classification=record.summary.style_classification,
+        ),
+        target_duration_s=record.target_duration_s,
+    )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=plan_id,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.EFFECTS,
+        source="manual_editor",
+        decision_id=f"{plan_id}:manual_elements",
+        action="update_manual_elements",
+        ai_payload={
+            "manual_elements": [
+                item.model_dump(mode="json") for item in record.plan.manual_elements
+            ]
+        },
+        user_payload={
+            "manual_elements": [
+                item.model_dump(mode="json") for item in payload.manual_elements
+            ]
+        },
+        metadata={"previous_version": record.version},
+    )
+    return PlanManualElementsUpdateResponse(plan=updated.to_response())
 
 
 def _latest_visual_manifest(

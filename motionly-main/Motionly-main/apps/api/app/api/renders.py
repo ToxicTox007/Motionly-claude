@@ -33,6 +33,8 @@ from app.schemas.renders import (
     ExportListResponse,
     ExportRestoreResponse,
     RenderAdjustmentAction,
+    RenderBulkCreateRequest,
+    RenderBulkCreateResponse,
     RenderCreateRequest,
     RenderCreateResponse,
     RenderEngine,
@@ -41,6 +43,7 @@ from app.schemas.renders import (
     RenderListResponse,
 )
 from app.schemas.uploads import UploadStatus
+from app.services.ai_feedback import record_render_kept_signals
 from app.services.ass_captions import caption_track_to_ass
 from app.services.billing import PLAN_DEFINITIONS
 from app.services.cut_planning import PLANNER_VERSION, build_crop_warnings, plan_keep_segments
@@ -134,6 +137,54 @@ def beat_sync_summary(
         "aligned_cuts": aligned[:12],
         "strategy": "report alignment; speech cuts are not moved by the FFmpeg fallback",
     }
+
+
+def apply_motion_design_export_settings(
+    *,
+    export_settings: dict[str, object],
+    source_metadata,
+    effects_config,
+) -> tuple[dict[str, object], dict[str, object]]:
+    motion = effects_config.motion
+    motion_design: dict[str, object] = {
+        "schema_version": 1,
+        "keyframe_count": len(motion.keyframes),
+        "ken_burns": motion.ken_burns.model_dump(mode="json"),
+        "speed_ramp": motion.speed_ramp.model_dump(mode="json"),
+        "beat_impact": motion.beat_impact.model_dump(mode="json"),
+        "auto_reframe": {
+            **motion.auto_reframe.model_dump(mode="json"),
+            "applied": False,
+            "crop": None,
+        },
+    }
+    if not motion.auto_reframe.enabled:
+        return export_settings, motion_design
+
+    updated = dict(export_settings)
+    framing = dict(updated.get("framing") or {})
+    output_aspect = str(framing.get("output_aspect") or "9:16")
+    if output_aspect != motion.auto_reframe.target_aspect:
+        return updated, motion_design
+
+    crop = dict(framing.get("crop") or {})
+    crop["x"] = round(motion.auto_reframe.subject_x_pct / 100, 4)
+    crop["y"] = round(motion.auto_reframe.subject_y_pct / 100, 4)
+    crop["zoom"] = max(1, min(3, float(crop.get("zoom") or 1)))
+    framing["fit_mode"] = "custom"
+    framing["crop"] = crop
+    updated["framing"] = framing
+
+    source_width = getattr(source_metadata, "width", None)
+    source_height = getattr(source_metadata, "height", None)
+    motion_design["auto_reframe"] = {
+        **motion.auto_reframe.model_dump(mode="json"),
+        "applied": True,
+        "source_width": source_width,
+        "source_height": source_height,
+        "crop": crop,
+    }
+    return updated, motion_design
 
 
 @router.post(
@@ -299,6 +350,35 @@ async def create_render(
                 "score": slot.score,
             }
         )
+    if edit_plan_record and payload.include_broll:
+        for element in edit_plan_record.plan.manual_elements:
+            if element.type != "broll":
+                continue
+            src = element.properties.get("assetUrl") or element.properties.get("src")
+            if not isinstance(src, str) or not src:
+                continue
+            retimed_range = retime_range_for_keep_segments(
+                start_ms=element.start_ms,
+                end_ms=element.end_ms,
+                keep_segments=keep_segments,
+            )
+            if retimed_range is None:
+                continue
+            active_broll_assets.append(
+                {
+                    "id": element.id,
+                    "kind": "video",
+                    "src": src,
+                    "start_ms": retimed_range[0],
+                    "end_ms": retimed_range[1],
+                    "source_start_ms": element.start_ms,
+                    "source_end_ms": element.end_ms,
+                    "provider": str(element.properties.get("source") or "manual"),
+                    "license": str(element.properties.get("license") or "user_owned"),
+                    "crossfade_ms": 220,
+                    "score": 1,
+                }
+            )
     music_repository = getattr(request.app.state, "music_repository", None)
     music_selection = None
     music_props = None
@@ -321,6 +401,9 @@ async def create_render(
             ),
             "music_volume": music_selection.music_volume,
             "sfx_intensity": music_selection.sfx_intensity,
+            "regions": [
+                region.model_dump(mode="json") for region in music_selection.regions
+            ],
         }
         if music_selection.music_track_id and music_repository:
             music_track = music_repository.get_track(
@@ -347,6 +430,7 @@ async def create_render(
     effects_repository = getattr(request.app.state, "effects_repository", None)
     effects_config = None
     effects_props = None
+    motion_design_manifest = None
     if effects_repository:
         effects_config = effects_repository.latest_config(
             project_id=project_id,
@@ -356,6 +440,15 @@ async def create_render(
         effects_config = None
     if effects_config:
         effects_props = effects_config.to_response().model_dump(mode="json")
+        render_export_settings, motion_design_manifest = apply_motion_design_export_settings(
+            export_settings=render_export_settings,
+            source_metadata=upload.metadata,
+            effects_config=effects_config,
+        )
+        render_props_export_settings = {
+            **specs.model_dump(mode="json"),
+            **render_export_settings,
+        }
     render_edit_plan = (
         edit_plan_record.plan.model_dump(mode="json")
         if edit_plan_record
@@ -374,6 +467,7 @@ async def create_render(
             "effects": [],
             "color_grade": template.default_color_grade,
             "risk_flags": [],
+            "manual_elements": [],
         }
     )
     render_edit_plan = apply_render_adjustment(
@@ -418,6 +512,7 @@ async def create_render(
         "edit_plan_id": str(edit_plan_record.id) if edit_plan_record else None,
         "music_selection_id": str(music_selection.id) if music_selection else None,
         "effects_config_id": str(effects_config.id) if effects_config else None,
+        "motion_design": motion_design_manifest,
         "after_effects_handoff": (
             {
                 "project_file_url": effects_config.after_effects_project_url,
@@ -520,6 +615,15 @@ async def create_render(
         ],
         progress_pct=5,
     )
+    record_render_kept_signals(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=edit_plan_record.id if edit_plan_record else None,
+        render_job_id=job.id,
+        render_props=render_props,
+    )
     if request.app.state.settings.billing_enabled:
         record_render_usage(
             workspace_id=actor.workspace_id,
@@ -562,6 +666,53 @@ async def create_render(
         job_id=job.id,
         queue_job_id=queue_job.id,
         status=job.status,
+    )
+
+
+@router.post(
+    "/projects/{project_id}/renders/bulk",
+    response_model=RenderBulkCreateResponse,
+    status_code=202,
+)
+async def create_bulk_render(
+    project_id: UUID,
+    payload: RenderBulkCreateRequest,
+    request: Request,
+    actor: ActorDep,
+    repository: RenderRepositoryDep,
+    billing_repository: BillingRepositoryDep,
+    plan_repository: PlanRepositoryDep,
+    render_queue: RenderQueueDep,
+    broll_repository: BrollRepositoryDep = None,  # type: ignore[assignment]
+) -> RenderBulkCreateResponse:
+    responses: list[RenderCreateResponse] = []
+    for export_options in payload.export_targets:
+        response = await create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(
+                caption_track_id=payload.caption_track_id,
+                include_captions=payload.include_captions,
+                include_broll=payload.include_broll,
+                edit_plan_id=payload.edit_plan_id,
+                template_id=payload.template_id,
+                adjustment_action=payload.adjustment_action,
+                duration_preset=payload.duration_preset,
+                export_options=export_options,
+                force=payload.force,
+            ),
+            request=request,
+            actor=actor,
+            repository=repository,
+            billing_repository=billing_repository,
+            plan_repository=plan_repository,
+            render_queue=render_queue,
+            broll_repository=broll_repository,
+        )
+        responses.append(response)
+    return RenderBulkCreateResponse(
+        jobs=[response.job for response in responses],
+        job_ids=[response.job_id for response in responses],
+        queue_job_ids=[response.queue_job_id for response in responses],
     )
 
 

@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import subprocess
 from pathlib import Path
@@ -94,6 +95,7 @@ def complete_render_job(
                     specs=job.specs,
                     broll_assets=broll_assets,
                     effects_config=effects_config,
+                    manual_elements=_manual_elements_from_manifest(job.manifest),
                     framing=_framing_from_manifest(job.manifest),
                     keep_segments=job.keep_segments,
                     **audio_mix,
@@ -118,6 +120,7 @@ def complete_render_job(
                     specs=fallback_specs,
                     broll_assets=broll_assets,
                     effects_config=effects_config,
+                    manual_elements=_manual_elements_from_manifest(job.manifest),
                     framing=_framing_from_manifest(job.manifest),
                     keep_segments=job.keep_segments,
                     **audio_mix,
@@ -429,6 +432,19 @@ def _effects_config_from_manifest(manifest: dict) -> dict[str, object] | None:
     return effects_config if isinstance(effects_config, dict) else None
 
 
+def _manual_elements_from_manifest(manifest: dict) -> list[dict[str, object]]:
+    render_props = manifest.get("render_props")
+    if not isinstance(render_props, dict):
+        return []
+    edit_plan = render_props.get("editPlan")
+    if not isinstance(edit_plan, dict):
+        return []
+    elements = edit_plan.get("manual_elements")
+    if not isinstance(elements, list):
+        return []
+    return [item for item in elements if isinstance(item, dict)]
+
+
 def _audio_mix_from_manifest(
     manifest: dict,
     *,
@@ -438,12 +454,13 @@ def _audio_mix_from_manifest(
     render_props = manifest.get("render_props")
     if not isinstance(render_props, dict):
         return {}
+    manual_sfx, manual_cues = _manual_sfx_from_render_props(render_props, storage=storage)
     selection = render_props.get("musicSelection")
     if not isinstance(selection, dict):
-        return {}
+        return _manual_sfx_mix(manual_sfx, manual_cues)
     track = selection.get("track")
     if not isinstance(track, dict):
-        return {}
+        return _manual_sfx_mix(manual_sfx, manual_cues)
     raw_metadata = track.get("raw_metadata")
     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     music_source = _audio_source_from_metadata(
@@ -463,8 +480,10 @@ def _audio_mix_from_manifest(
         for source in [_usable_external_source(item)]
         if source is not None
     ]
+    catalog_sfx_count = len(sfx_sources)
+    sfx_sources.extend(manual_sfx)
     music_volume = float(selection.get("music_volume") or 0)
-    sfx_intensity = float(selection.get("sfx_intensity") or 0)
+    sfx_intensity = max(float(selection.get("sfx_intensity") or 0), 0.8 if manual_sfx else 0)
     if not sfx_sources and sfx_intensity > 0 and (
         allow_fixture_media
         and (str(track.get("provider") or "") == "fixture" or metadata.get("source") == "fixture")
@@ -473,12 +492,86 @@ def _audio_mix_from_manifest(
     if music_source is None and not sfx_sources:
         return {}
     beat_map = track.get("beat_map")
+    cue_ms = (
+        [float(item) for item in beat_map[:catalog_sfx_count]]
+        if isinstance(beat_map, list)
+        else []
+    )
+    while len(cue_ms) < catalog_sfx_count:
+        cue_ms.append(0)
+    cue_ms.extend(manual_cues)
     return {
         "music_source": music_source,
         "music_volume": music_volume if music_source is not None else 0,
         "sfx_sources": sfx_sources,
         "sfx_intensity": sfx_intensity,
-        "sfx_cue_ms": beat_map if isinstance(beat_map, list) else [],
+        "sfx_cue_ms": cue_ms,
+        "duck_music": True,
+    }
+
+
+def _manual_sfx_from_render_props(
+    render_props: dict,
+    *,
+    storage: LocalObjectStorage,
+) -> tuple[list[str | Path], list[float]]:
+    edit_plan = render_props.get("editPlan")
+    if not isinstance(edit_plan, dict):
+        return [], []
+    elements = edit_plan.get("manual_elements")
+    if not isinstance(elements, list):
+        return [], []
+    sources: list[str | Path] = []
+    cues: list[float] = []
+    for element in elements[:64]:
+        if not isinstance(element, dict) or element.get("type") != "sfx":
+            continue
+        properties = element.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        value = properties.get("assetUrl") or properties.get("src")
+        if not isinstance(value, str):
+            continue
+        source = _materialize_audio_data_url(value, storage=storage)
+        if source is None:
+            source = _usable_external_source(value)
+        if source is None:
+            continue
+        sources.append(source)
+        cues.append(float(element.get("start_ms") or 0))
+    return sources, cues
+
+
+def _materialize_audio_data_url(value: str, *, storage: LocalObjectStorage) -> Path | None:
+    prefix = "data:audio/wav;base64,"
+    if not value.startswith(prefix):
+        return None
+    encoded = value.removeprefix(prefix)
+    if len(encoded) > 1_500_000:
+        return None
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        return None
+    target = storage.object_path(
+        bucket="tmp",
+        path=f"manual-sfx-{hashlib.sha256(content).hexdigest()[:16]}.wav",
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.write_bytes(content)
+    return target
+
+
+def _manual_sfx_mix(sources: list[str | Path], cues: list[float]) -> dict[str, object]:
+    if not sources:
+        return {}
+    return {
+        "music_source": None,
+        "music_volume": 0,
+        "sfx_sources": sources,
+        "sfx_intensity": 0.8,
+        "sfx_cue_ms": cues,
         "duck_music": True,
     }
 

@@ -8,6 +8,7 @@ from app.api.errors import ApiError
 from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.music import (
     MusicProviderKey,
+    MusicRegion,
     MusicSelectionResponse,
     MusicSelectionStatus,
     MusicTrackResponse,
@@ -68,6 +69,7 @@ class MusicSelectionRecord:
     sfx_intensity: float
     rights_confirmed: bool
     cache_key: str | None
+    regions: list[MusicRegion] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -86,6 +88,7 @@ class MusicSelectionRecord:
             created_at=self.created_at,
             updated_at=self.updated_at,
             music_track=track.to_response() if track else None,
+            regions=self.regions,
         )
 
 
@@ -196,6 +199,7 @@ class InMemoryMusicRepository:
         sfx_intensity: float,
         rights_confirmed: bool,
         cache_key: str | None,
+        regions: list[MusicRegion] | None = None,
     ) -> MusicSelectionRecord:
         version = max(
             [
@@ -219,6 +223,7 @@ class InMemoryMusicRepository:
             sfx_intensity=sfx_intensity,
             rights_confirmed=rights_confirmed,
             cache_key=cache_key,
+            regions=regions or [],
         )
         self.selections[record.id] = record
         if cache_key:
@@ -228,6 +233,30 @@ class InMemoryMusicRepository:
     def response_for_selection(self, selection: MusicSelectionRecord) -> MusicSelectionResponse:
         track = self.tracks.get(selection.music_track_id) if selection.music_track_id else None
         return selection.to_response(track)
+
+    def update_regions(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        selection_id: UUID,
+        regions: list[MusicRegion],
+    ) -> MusicSelectionRecord:
+        selection = next(
+            (
+                item
+                for item in self.selections.values()
+                if item.id == selection_id
+                and item.project_id == project_id
+                and item.workspace_id == workspace_id
+            ),
+            None,
+        )
+        if selection is None:
+            raise ApiError(404, "music_selection_not_found", "Music selection was not found.")
+        selection.regions = regions
+        selection.updated_at = datetime.now(UTC)
+        return selection
 
 
 class SupabaseMusicRepository(InMemoryMusicRepository):
@@ -295,6 +324,7 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         sfx_intensity: float,
         rights_confirmed: bool,
         cache_key: str | None,
+        regions: list[MusicRegion] | None = None,
     ) -> MusicSelectionRecord:
         version = self._next_selection_version(project_id=project_id, workspace_id=workspace_id)
         payload = {
@@ -309,6 +339,7 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
             "sfx_intensity": sfx_intensity,
             "rights_confirmed": rights_confirmed,
             "cache_key": cache_key,
+            "regions": [region.model_dump(mode="json") for region in (regions or [])],
         }
         response = httpx.post(
             f"{self.rest_url}/project_music_selections",
@@ -402,6 +433,31 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         )
         return selection.to_response(track)
 
+    def update_regions(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        selection_id: UUID,
+        regions: list[MusicRegion],
+    ) -> MusicSelectionRecord:
+        response = httpx.patch(
+            f"{self.rest_url}/project_music_selections",
+            headers=self.headers,
+            params={
+                "id": f"eq.{selection_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+            },
+            json={"regions": [region.model_dump(mode="json") for region in regions]},
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "music_selection_not_found", "Music selection was not found.")
+        return self._selection_from_row(rows[0])
+
     def _next_selection_version(self, *, project_id: UUID, workspace_id: UUID) -> int:
         response = httpx.get(
             f"{self.rest_url}/project_music_selections",
@@ -440,6 +496,12 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         )
 
     def _selection_from_row(self, row: dict[str, object]) -> MusicSelectionRecord:
+        raw_regions = row.get("regions") or []
+        regions = (
+            [MusicRegion(**item) for item in raw_regions]
+            if isinstance(raw_regions, list)
+            else []
+        )
         return MusicSelectionRecord(
             id=UUID(row["id"]),
             workspace_id=UUID(row["workspace_id"]),
@@ -453,6 +515,7 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
             sfx_intensity=float(row["sfx_intensity"]),
             rights_confirmed=bool(row["rights_confirmed"]),
             cache_key=row.get("cache_key"),
+            regions=regions,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
