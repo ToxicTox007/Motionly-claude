@@ -108,9 +108,7 @@ class Settings(BaseSettings):
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
     remotion_enabled: bool = Field(default=False, alias="REMOTION_ENABLED")
     publish_sync_completion: bool = Field(default=False, alias="PUBLISH_SYNC_COMPLETION")
-    publish_oauth_state_secret: str | None = Field(
-        default=None, alias="PUBLISH_OAUTH_STATE_SECRET"
-    )
+    publish_oauth_state_secret: str | None = Field(default=None, alias="PUBLISH_OAUTH_STATE_SECRET")
     tiktok_client_key: str | None = Field(default=None, alias="TIKTOK_CLIENT_KEY")
     tiktok_client_secret: str | None = Field(default=None, alias="TIKTOK_CLIENT_SECRET")
     meta_app_id: str | None = Field(default=None, alias="META_APP_ID")
@@ -118,6 +116,10 @@ class Settings(BaseSettings):
     meta_graph_api_version: str = Field(default="v22.0", alias="META_GRAPH_API_VERSION")
     google_client_id: str | None = Field(default=None, alias="GOOGLE_CLIENT_ID")
     google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
+    stem_separation_provider: str = Field(default="demucs", alias="STEM_SEPARATION_PROVIDER")
+    demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
+    runway_api_key: str | None = Field(default=None, alias="RUNWAY_API_KEY")
+    runway_model: str = Field(default="gen3a_turbo", alias="RUNWAY_MODEL")
 
     @property
     def cors_origin_list(self) -> list[str]:

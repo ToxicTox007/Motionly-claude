@@ -468,13 +468,14 @@ def _audio_mix_from_manifest(
     render_props = manifest.get("render_props")
     if not isinstance(render_props, dict):
         return {}
+    dialogue_source = _stem_dialogue_source(render_props=render_props, storage=storage)
     manual_sfx, manual_cues = _manual_sfx_from_render_props(render_props, storage=storage)
     selection = render_props.get("musicSelection")
     if not isinstance(selection, dict):
-        return _manual_sfx_mix(manual_sfx, manual_cues)
+        return _manual_sfx_mix(manual_sfx, manual_cues, dialogue_source=dialogue_source)
     track = selection.get("track")
     if not isinstance(track, dict):
-        return _manual_sfx_mix(manual_sfx, manual_cues)
+        return _manual_sfx_mix(manual_sfx, manual_cues, dialogue_source=dialogue_source)
     raw_metadata = track.get("raw_metadata")
     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     music_source = _audio_source_from_metadata(
@@ -482,10 +483,7 @@ def _audio_mix_from_manifest(
         storage=storage,
         fixture_id=str(track.get("provider_track_id") or track.get("title") or "fixture-music"),
         fixture_enabled=allow_fixture_media
-        and (
-            str(track.get("provider") or "") == "fixture"
-            or metadata.get("source") == "fixture"
-        ),
+        and (str(track.get("provider") or "") == "fixture" or metadata.get("source") == "fixture"),
     )
     sfx_sources = [
         source
@@ -498,23 +496,28 @@ def _audio_mix_from_manifest(
     sfx_sources.extend(manual_sfx)
     music_volume = float(selection.get("music_volume") or 0)
     sfx_intensity = max(float(selection.get("sfx_intensity") or 0), 0.8 if manual_sfx else 0)
-    if not sfx_sources and sfx_intensity > 0 and (
-        allow_fixture_media
-        and (str(track.get("provider") or "") == "fixture" or metadata.get("source") == "fixture")
+    if (
+        not sfx_sources
+        and sfx_intensity > 0
+        and (
+            allow_fixture_media
+            and (
+                str(track.get("provider") or "") == "fixture" or metadata.get("source") == "fixture"
+            )
+        )
     ):
         sfx_sources = [_fixture_sfx_audio(storage=storage)]
     if music_source is None and not sfx_sources:
-        return {}
+        return {"dialogue_source": dialogue_source} if dialogue_source else {}
     beat_map = track.get("beat_map")
     cue_ms = (
-        [float(item) for item in beat_map[:catalog_sfx_count]]
-        if isinstance(beat_map, list)
-        else []
+        [float(item) for item in beat_map[:catalog_sfx_count]] if isinstance(beat_map, list) else []
     )
     while len(cue_ms) < catalog_sfx_count:
         cue_ms.append(0)
     cue_ms.extend(manual_cues)
     return {
+        "dialogue_source": dialogue_source,
         "music_source": music_source,
         "music_volume": music_volume if music_source is not None else 0,
         "sfx_sources": sfx_sources,
@@ -577,10 +580,16 @@ def _materialize_audio_data_url(value: str, *, storage: LocalObjectStorage) -> P
     return target
 
 
-def _manual_sfx_mix(sources: list[str | Path], cues: list[float]) -> dict[str, object]:
+def _manual_sfx_mix(
+    sources: list[str | Path],
+    cues: list[float],
+    *,
+    dialogue_source: str | Path | None = None,
+) -> dict[str, object]:
     if not sources:
-        return {}
+        return {"dialogue_source": dialogue_source} if dialogue_source else {}
     return {
+        "dialogue_source": dialogue_source,
         "music_source": None,
         "music_volume": 0,
         "sfx_sources": sources,
@@ -588,6 +597,23 @@ def _manual_sfx_mix(sources: list[str | Path], cues: list[float]) -> dict[str, o
         "sfx_cue_ms": cues,
         "duck_music": True,
     }
+
+
+def _stem_dialogue_source(*, render_props: dict, storage: LocalObjectStorage) -> str | Path | None:
+    stems = render_props.get("sourceStems")
+    if not isinstance(stems, dict):
+        return None
+    vocals = stems.get("vocals")
+    if not isinstance(vocals, dict):
+        return None
+    bucket = vocals.get("bucket")
+    path = vocals.get("path")
+    if not isinstance(bucket, str) or not isinstance(path, str):
+        return None
+    try:
+        return storage.ensure_object(bucket=bucket, path=path)
+    except ApiError:
+        return None
 
 
 def _audio_source_from_metadata(
@@ -837,8 +863,10 @@ def complete_remotion_render_job(
         message="Registering Remotion export.",
     )
 
-    output_duration_ms = duration_ms if duration_ms is not None else sum(
-        seg.end_ms - seg.start_ms for seg in (job.keep_segments or [])
+    output_duration_ms = (
+        duration_ms
+        if duration_ms is not None
+        else sum(seg.end_ms - seg.start_ms for seg in (job.keep_segments or []))
     )
 
     export = repository.create_export(

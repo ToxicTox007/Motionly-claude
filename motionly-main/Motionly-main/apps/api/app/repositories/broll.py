@@ -206,7 +206,7 @@ class InMemoryBrollRepository:
                 for asset in self.assets.values()
                 if asset.project_id == project_id
                 and asset.workspace_id == workspace_id
-                and asset.provider == StockProviderKey.USER_LIBRARY
+                and asset.provider in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}
             ],
             key=lambda asset: asset.created_at,
             reverse=True,
@@ -220,14 +220,10 @@ class InMemoryBrollRepository:
         asset.raw_metadata = {**asset.raw_metadata, "status": "ready"}
         return asset
 
-    def delete_library_asset(
-        self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID
-    ) -> None:
-        asset = self.get_asset(
-            project_id=project_id, workspace_id=workspace_id, asset_id=asset_id
-        )
-        if asset.provider != StockProviderKey.USER_LIBRARY:
-            raise ApiError(409, "library_asset_required", "Only library assets can be deleted.")
+    def delete_library_asset(self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID) -> None:
+        asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
+        if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
+            raise ApiError(409, "library_asset_required", "Only owned assets can be deleted.")
         self.assets.pop(asset_id, None)
 
     def update_slot_selection(
@@ -442,7 +438,7 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "provider": f"eq.{StockProviderKey.USER_LIBRARY.value}",
+                "provider": "in.(user_library,runway)",
                 "select": "*",
                 "order": "created_at.desc",
             },
@@ -468,12 +464,10 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         self._raise_for_supabase(response)
         return self._asset_from_row(response.json()[0])
 
-    def delete_library_asset(
-        self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID
-    ) -> None:
+    def delete_library_asset(self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID) -> None:
         asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
-        if asset.provider != StockProviderKey.USER_LIBRARY:
-            raise ApiError(409, "library_asset_required", "Only library assets can be deleted.")
+        if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
+            raise ApiError(409, "library_asset_required", "Only owned assets can be deleted.")
         response = httpx.delete(
             f"{self.rest_url}/stock_assets",
             headers=self.headers,

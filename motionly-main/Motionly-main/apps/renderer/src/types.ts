@@ -31,6 +31,11 @@ export type MotionlyRenderProps = {
     height: number;
     duration_ms: number;
   };
+  sourceStems?: {
+    provider?: string;
+    vocals?: { src?: string; bucket?: string; path?: string };
+    no_vocals?: { src?: string; bucket?: string; path?: string };
+  } | null;
   editPlan: EditPlan;
   captions: CaptionSegment[];
   captionStyle?: CaptionStyle | null;

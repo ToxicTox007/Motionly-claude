@@ -311,9 +311,7 @@ async def create_render(
         else []
     )
     if edit_plan_record:
-        broll_slots = [
-            slot for slot in broll_slots if slot.edit_plan_id == edit_plan_record.id
-        ]
+        broll_slots = [slot for slot in broll_slots if slot.edit_plan_id == edit_plan_record.id]
     active_broll_assets = []
     for slot in broll_slots if payload.include_broll else []:
         if (
@@ -334,11 +332,20 @@ async def create_render(
         )
         if retimed_range is None:
             continue
+        asset_source = asset.download_url or asset.preview_video_url or ""
+        storage_path = asset.raw_metadata.get("storage_path")
+        storage_bucket = asset.raw_metadata.get("storage_bucket")
+        if storage_path and storage_bucket:
+            asset_source = request.app.state.storage_signer.create_signed_download(
+                bucket=str(storage_bucket),
+                path=str(storage_path),
+                expires_in_seconds=3600,
+            ).url
         active_broll_assets.append(
             {
                 "id": str(asset.id),
                 "kind": "video",
-                "src": asset.download_url or asset.preview_video_url or "",
+                "src": asset_source,
                 "start_ms": retimed_range[0],
                 "end_ms": retimed_range[1],
                 "source_start_ms": slot.start_ms,
@@ -387,11 +394,7 @@ async def create_render(
             project_id=project_id,
             workspace_id=actor.workspace_id,
         )
-    if (
-        music_selection
-        and edit_plan_record
-        and music_selection.edit_plan_id != edit_plan_record.id
-    ):
+    if music_selection and edit_plan_record and music_selection.edit_plan_id != edit_plan_record.id:
         music_selection = None
     if music_selection:
         music_props = {
@@ -401,9 +404,7 @@ async def create_render(
             ),
             "music_volume": music_selection.music_volume,
             "sfx_intensity": music_selection.sfx_intensity,
-            "regions": [
-                region.model_dump(mode="json") for region in music_selection.regions
-            ],
+            "regions": [region.model_dump(mode="json") for region in music_selection.regions],
         }
         if music_selection.music_track_id and music_repository:
             music_track = music_repository.get_track(
@@ -493,6 +494,11 @@ async def create_render(
         "watermark": billing_status.current_plan.entitlements.watermark,
         "musicSelection": music_props,
         "effectsConfig": effects_props,
+        "sourceStems": _source_stems_for_render(
+            request=request,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        ),
     }
     props_hash = build_props_hash(render_props)
     selected_engine = _select_render_engine(
@@ -536,9 +542,7 @@ async def create_render(
         "render_engine": selected_engine.value,
         "compute_tier": compute_tier,
         "video_encoder": (
-            request.app.state.settings.ffmpeg_gpu_encoder
-            if compute_tier == "gpu"
-            else "libx264"
+            request.app.state.settings.ffmpeg_gpu_encoder if compute_tier == "gpu" else "libx264"
         ),
         "renderer_version": _RENDERER_VERSIONS[selected_engine],
         "props_hash": props_hash,
@@ -1086,3 +1090,19 @@ async def restore_export_version(
         export=export.to_response(),
         restored_from_export_id=export_id,
     )
+
+
+def _source_stems_for_render(
+    *, request: Request, project_id: UUID, workspace_id: UUID
+) -> dict[str, object] | None:
+    scale_repository = getattr(request.app.state, "scale_repository", None)
+    if scale_repository is None:
+        return None
+    resource = scale_repository.latest(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        kind="stem_separation",
+    )
+    if resource is None or resource.status.value != "ready":
+        return None
+    return resource.result

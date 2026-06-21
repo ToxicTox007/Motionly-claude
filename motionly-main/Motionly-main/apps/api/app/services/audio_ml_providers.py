@@ -86,6 +86,10 @@ class Wav2VecEmotionProvider:
                 logits = model(**inputs).logits
                 probabilities = torch.softmax(logits, dim=-1)[0]
             score, label_index = torch.max(probabilities, dim=0)
+            emotion_scores = _emotion_scores(
+                probabilities=[float(value) for value in probabilities],
+                labels=labels,
+            )
             windows.append(
                 {
                     "start_ms": round(start / sample_rate * 1000),
@@ -93,7 +97,10 @@ class Wav2VecEmotionProvider:
                         min(start + window_samples, waveform.shape[-1]) / sample_rate * 1000
                     ),
                     "emotion": str(labels.get(int(label_index), int(label_index))),
-                    "intensity": round(float(score), 3),
+                    "joy": emotion_scores["joy"],
+                    "sadness": emotion_scores["sadness"],
+                    "urgency": emotion_scores["urgency"],
+                    "intensity": round(max(float(score), 1 - emotion_scores["neutral"]), 3),
                 }
             )
         return windows
@@ -109,10 +116,7 @@ class Wav2VecEmotionProvider:
             raise ApiError(
                 503,
                 "wav2vec_dependency_missing",
-                (
-                    "Install torch, torchaudio, and transformers before enabling "
-                    "wav2vec emotion."
-                ),
+                ("Install torch, torchaudio, and transformers before enabling wav2vec emotion."),
             ) from exc
         self._loaded = {
             "torch": torch,
@@ -121,6 +125,22 @@ class Wav2VecEmotionProvider:
             "model": AutoModelForAudioClassification.from_pretrained(self.model),
         }
         return self._loaded
+
+
+def _emotion_scores(*, probabilities: list[float], labels: dict) -> dict[str, float]:
+    buckets = {"joy": 0.0, "sadness": 0.0, "urgency": 0.0, "neutral": 0.0}
+    for index, probability in enumerate(probabilities):
+        label = str(labels.get(index, index)).lower()
+        if any(term in label for term in ("joy", "happy", "positive", "excite", "surprise")):
+            buckets["joy"] += probability
+        elif any(term in label for term in ("sad", "grief", "negative", "disappoint")):
+            buckets["sadness"] += probability
+        elif any(term in label for term in ("ang", "fear", "urgent", "stress", "disgust")):
+            buckets["urgency"] += probability
+        else:
+            buckets["neutral"] += probability
+    total = sum(buckets.values()) or 1
+    return {key: round(value / total, 3) for key, value in buckets.items()}
 
 
 class YamnetSoundClassifier:

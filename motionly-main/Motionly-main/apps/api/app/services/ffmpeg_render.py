@@ -23,6 +23,7 @@ class FFmpegCaptionRenderer:
         manual_elements: list[dict[str, object]] | None = None,
         framing: dict[str, object] | None = None,
         music_source: AudioSource | None = None,
+        dialogue_source: AudioSource | None = None,
         music_volume: float = 0,
         sfx_sources: list[AudioSource] | None = None,
         sfx_intensity: float = 0,
@@ -51,23 +52,41 @@ class FFmpegCaptionRenderer:
             framing=framing,
             keep_segments=safe_keep_segments,
             watermark=watermark,
+            include_source_audio=dialogue_source is None,
         )
         active_sfx_sources = (sfx_sources or [])[:6] if sfx_intensity > 0 else []
         has_music = music_source is not None and music_volume > 0
+        dialogue_input = 1 + len(broll_assets)
+        dialogue_filter, dialogue_audio_map = (
+            _dialogue_audio_filter(
+                input_index=dialogue_input,
+                keep_segments=safe_keep_segments,
+            )
+            if dialogue_source is not None
+            else (None, source_audio_map or "[0:a]")
+        )
         audio_filter = _build_audio_filter_graph(
             has_music=has_music,
-            first_music_input=1 + len(broll_assets),
+            first_music_input=dialogue_input + (1 if dialogue_source is not None else 0),
             sfx_count=len(active_sfx_sources),
             music_volume=music_volume,
             sfx_intensity=sfx_intensity,
             sfx_cue_ms=sfx_cue_ms or [],
             duck_music=duck_music,
-            source_audio_label=source_audio_map or "[0:a]",
+            source_audio_label=(
+                dialogue_audio_map
+                if dialogue_audio_map.startswith("[")
+                else f"[{dialogue_audio_map}]"
+            ),
         )
-        uses_filter_complex = bool(broll_assets or audio_filter or source_audio_map)
-        if audio_filter and not broll_assets and not source_audio_map:
+        uses_filter_complex = bool(
+            broll_assets or audio_filter or source_audio_map or dialogue_filter
+        )
+        if (audio_filter or dialogue_filter) and not broll_assets and not source_audio_map:
             filter_graph = f"[0:v]{filter_graph}[vout]"
             video_map = "[vout]"
+        if dialogue_filter:
+            filter_graph = f"{filter_graph};{dialogue_filter}"
         if audio_filter:
             filter_graph = f"{filter_graph};{audio_filter}"
         command = [
@@ -81,6 +100,8 @@ class FFmpegCaptionRenderer:
         ]
         for asset in broll_assets:
             command.extend(["-stream_loop", "-1", "-i", str(asset["src"])])
+        if dialogue_source is not None:
+            command.extend(["-i", str(dialogue_source)])
         if has_music:
             command.extend(["-stream_loop", "-1", "-i", str(music_source)])
         for source in active_sfx_sources:
@@ -92,7 +113,13 @@ class FFmpegCaptionRenderer:
                 "-map",
                 video_map,
                 "-map",
-                "[aout]" if audio_filter else (source_audio_map or "0:a?"),
+                "[aout]"
+                if audio_filter
+                else (
+                    dialogue_audio_map
+                    if dialogue_source is not None
+                    else (source_audio_map or "0:a?")
+                ),
                 "-r",
                 str(specs.fps),
                 *_video_encoder_args(video_encoder),
@@ -133,13 +160,37 @@ class FFmpegCaptionRenderer:
 def _video_encoder_args(video_encoder: str) -> list[str]:
     if video_encoder == "h264_nvenc":
         return [
-            "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq",
-            "-rc", "vbr", "-cq", "21", "-b:v", "0", "-spatial-aq", "1",
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p4",
+            "-tune",
+            "hq",
+            "-rc",
+            "vbr",
+            "-cq",
+            "21",
+            "-b:v",
+            "0",
+            "-spatial-aq",
+            "1",
         ]
     if video_encoder == "hevc_nvenc":
         return [
-            "-c:v", "hevc_nvenc", "-preset", "p4", "-tune", "hq",
-            "-rc", "vbr", "-cq", "23", "-b:v", "0", "-spatial-aq", "1",
+            "-c:v",
+            "hevc_nvenc",
+            "-preset",
+            "p4",
+            "-tune",
+            "hq",
+            "-rc",
+            "vbr",
+            "-cq",
+            "23",
+            "-b:v",
+            "0",
+            "-spatial-aq",
+            "1",
         ]
     return ["-c:v", "libx264", "-preset", "veryfast", "-threads", "2"]
 
@@ -159,6 +210,7 @@ def _build_video_filter_graph(
     framing: dict[str, object] | None,
     keep_segments: list[CutSegment],
     watermark: bool,
+    include_source_audio: bool,
 ) -> tuple[str, str, str | None]:
     source_steps = _source_framing_filters(specs=specs, framing=framing)
     source_steps.extend(_effects_filters(effects_config))
@@ -169,7 +221,10 @@ def _build_video_filter_graph(
             "x=w-text_w-w*0.035:y=h-text_h-h*0.025:"
             "box=1:boxcolor=black@0.38:boxborderw=10"
         )
-    cut_filters, source_video_label, source_audio_label = _cut_filter_graph(keep_segments)
+    cut_filters, source_video_label, source_audio_label = _cut_filter_graph(
+        keep_segments,
+        include_audio=include_source_audio,
+    )
     if not broll_assets:
         if ass_path is not None:
             source_steps.append(f"ass={_ffmpeg_filter_path(ass_path)}")
@@ -222,7 +277,9 @@ def _build_video_filter_graph(
     return ";".join(filters), f"[{current}]", source_audio_label
 
 
-def _cut_filter_graph(keep_segments: list[CutSegment]) -> tuple[str, str, str | None]:
+def _cut_filter_graph(
+    keep_segments: list[CutSegment], *, include_audio: bool = True
+) -> tuple[str, str, str | None]:
     if not keep_segments:
         return "", "[0:v]", None
 
@@ -236,26 +293,32 @@ def _cut_filter_graph(keep_segments: list[CutSegment]) -> tuple[str, str, str | 
         video_label = f"vcut{index}"
         audio_label = f"acut{index}"
         video_parts.append(
-            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},"
-            f"setpts=PTS-STARTPTS[{video_label}]"
+            f"[0:v]trim=start={start_s:.3f}:end={end_s:.3f},setpts=PTS-STARTPTS[{video_label}]"
         )
-        audio_parts.append(
-            f"[0:a]atrim=start={start_s:.3f}:end={end_s:.3f},"
-            f"asetpts=PTS-STARTPTS[{audio_label}]"
-        )
+        if include_audio:
+            audio_parts.append(
+                f"[0:a]atrim=start={start_s:.3f}:end={end_s:.3f},"
+                f"asetpts=PTS-STARTPTS[{audio_label}]"
+            )
         video_labels.append(f"[{video_label}]")
-        audio_labels.append(f"[{audio_label}]")
+        if include_audio:
+            audio_labels.append(f"[{audio_label}]")
 
     if len(keep_segments) == 1:
-        return ";".join([*video_parts, *audio_parts]), video_labels[0], audio_labels[0]
+        return (
+            ";".join([*video_parts, *audio_parts]),
+            video_labels[0],
+            audio_labels[0] if include_audio else None,
+        )
 
-    video_parts.append(
-        f"{''.join(video_labels)}concat=n={len(keep_segments)}:v=1:a=0[vcut]"
+    video_parts.append(f"{''.join(video_labels)}concat=n={len(keep_segments)}:v=1:a=0[vcut]")
+    if include_audio:
+        audio_parts.append(f"{''.join(audio_labels)}concat=n={len(keep_segments)}:v=0:a=1[acut]")
+    return (
+        ";".join([*video_parts, *audio_parts]),
+        "[vcut]",
+        "[acut]" if include_audio else None,
     )
-    audio_parts.append(
-        f"{''.join(audio_labels)}concat=n={len(keep_segments)}:v=0:a=1[acut]"
-    )
-    return ";".join([*video_parts, *audio_parts]), "[vcut]", "[acut]"
 
 
 def _effects_filters(effects_config: dict[str, object] | None) -> list[str]:
@@ -290,17 +353,13 @@ def _effects_filters(effects_config: dict[str, object] | None) -> list[str]:
         opacity = min(0.14, _float(gradient.get("opacity"), 0.28) * 0.35)
         start_color = _ffmpeg_color(str(gradient.get("start_color", "#0f172a")))
         end_color = _ffmpeg_color(str(gradient.get("end_color", "#f59e0b")))
-        filters.append(
-            f"drawbox=x=0:y=0:w=iw:h=ih:color={start_color}@{opacity:.3f}:t=fill"
-        )
+        filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color={start_color}@{opacity:.3f}:t=fill")
         filters.append(
             f"drawbox=x=0:y=ih*0.55:w=iw:h=ih*0.45:color={end_color}@{opacity:.3f}:t=fill"
         )
     if _float(texture.get("light_leak"), 0) > 0 or "flash" in motion_effects:
         opacity = min(0.16, _float(texture.get("light_leak"), 0.08) * 0.55 + 0.03)
-        filters.append(
-            f"drawbox=x=iw*0.62:y=0:w=iw*0.38:h=ih:color=0xffd08a@{opacity:.3f}:t=fill"
-        )
+        filters.append(f"drawbox=x=iw*0.62:y=0:w=iw*0.38:h=ih:color=0xffd08a@{opacity:.3f}:t=fill")
     if bool(texture.get("anamorphic_flare")):
         filters.append("drawbox=x=0:y=ih*0.43:w=iw:h=26:color=white@0.105:t=fill")
     if bool(background.get("enabled")):
@@ -350,8 +409,7 @@ def _preset_filter(preset: str, intensity: float) -> str:
     }
     contrast, brightness, saturation = values.get(preset, (1.04, 0.0, 1.04))
     eq_filter = (
-        f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:"
-        f"saturation={saturation:.3f}"
+        f"eq=contrast={contrast:.3f}:brightness={brightness:.3f}:saturation={saturation:.3f}"
     )
     lut_path = Path(__file__).with_name("luts") / f"{preset}.cube"
     if lut_path.is_file():
@@ -387,20 +445,14 @@ def _manual_element_filters(
                 f"color={color}@{opacity:.3f}:t=fill:enable='{enable}'"
             )
         if element_type in {"text", "caption", "graphic"}:
-            text = _ffmpeg_drawtext(
-                str(properties.get("content") or element.get("name") or "")
-            )
+            text = _ffmpeg_drawtext(str(properties.get("content") or element.get("name") or ""))
             if not text:
                 continue
             font_size = max(
                 12,
                 min(
                     specs.height // 4,
-                    round(
-                        _float(properties.get("fontSize"), 32)
-                        * specs.height
-                        / 1080
-                    ),
+                    round(_float(properties.get("fontSize"), 32) * specs.height / 1080),
                 ),
             )
             color = _ffmpeg_color(str(properties.get("color") or "#ffffff"))
@@ -470,10 +522,7 @@ def _build_audio_filter_graph(
             "volume=1.0,asplit=2[srcmix][srcduck]"
         ]
     else:
-        steps = [
-            f"{source_audio_label}aformat=channel_layouts=stereo,"
-            "volume=1.0[srcmix]"
-        ]
+        steps = [f"{source_audio_label}aformat=channel_layouts=stereo,volume=1.0[srcmix]"]
     mix_inputs = ["[srcmix]"]
     if has_music:
         safe_music_volume = max(0, min(1, music_volume))
@@ -509,6 +558,24 @@ def _build_audio_filter_graph(
     return ";".join(steps)
 
 
+def _dialogue_audio_filter(
+    *, input_index: int, keep_segments: list[CutSegment]
+) -> tuple[str | None, str]:
+    if not keep_segments:
+        return None, f"{input_index}:a"
+    steps = []
+    labels = []
+    for index, segment in enumerate(keep_segments):
+        label = f"dialogue{index}"
+        labels.append(f"[{label}]")
+        steps.append(
+            f"[{input_index}:a]atrim=start={segment.start_ms / 1000:.3f}:"
+            f"end={segment.end_ms / 1000:.3f},asetpts=PTS-STARTPTS[{label}]"
+        )
+    steps.append(f"{''.join(labels)}concat=n={len(labels)}:v=0:a=1[dialoguecut]")
+    return ";".join(steps), "[dialoguecut]"
+
+
 def _tail_for_diagnostics(output: str, *, limit: int = 1200) -> str:
     compact = "\n".join(line.strip() for line in output.splitlines() if line.strip())
     if len(compact) <= limit:
@@ -517,9 +584,7 @@ def _tail_for_diagnostics(output: str, *, limit: int = 1200) -> str:
 
 
 def _normalize_keep_segments(segments: list[CutSegment] | None) -> list[CutSegment]:
-    normalized = [
-        segment for segment in (segments or []) if segment.end_ms - segment.start_ms >= 1
-    ]
+    normalized = [segment for segment in (segments or []) if segment.end_ms - segment.start_ms >= 1]
     if not normalized:
         return []
     return sorted(normalized, key=lambda segment: (segment.start_ms, segment.end_ms))

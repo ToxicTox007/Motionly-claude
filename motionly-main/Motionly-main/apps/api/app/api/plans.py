@@ -16,7 +16,9 @@ from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.captions import TranscriptStatus
 from app.schemas.plans import (
     EDIT_PLAN_SCHEMA_VERSION,
+    BrollDensity,
     EditPlanStatus,
+    EditPlanStyle,
     PlanActivateResponse,
     PlanCaptionHighlightsUpdateRequest,
     PlanCaptionHighlightsUpdateResponse,
@@ -32,6 +34,7 @@ from app.schemas.plans import (
     PlanSnapshotListResponse,
     PlanSnapshotRestoreResponse,
 )
+from app.schemas.scale import ScaleResourceStatus
 from app.schemas.visual import VideoManifest
 from app.services.ai_feedback import record_ai_feedback, record_plan_suggestions
 from app.services.edit_planner import (
@@ -63,6 +66,11 @@ async def create_plan(
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanCreateResponse:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
+    payload = _apply_phase5_learning(
+        payload=payload,
+        request=request,
+        workspace_id=actor.workspace_id,
+    )
     transcript = repository.latest_transcript(
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -155,6 +163,67 @@ async def create_plan(
         plan=record,
     )
     return PlanCreateResponse(plan=record.to_response(), job_id=job.id)
+
+
+def _apply_phase5_learning(
+    *,
+    payload: PlanCreateRequest,
+    request: Request | None,
+    workspace_id: UUID,
+) -> PlanCreateRequest:
+    state = getattr(getattr(request, "app", None), "state", None)
+    scale_repository = getattr(state, "scale_repository", None)
+    if scale_repository is None:
+        return payload
+    updates: dict[str, object] = {}
+    direction_parts = [payload.prompt.strip()] if payload.prompt.strip() else []
+    if payload.saved_template_id:
+        template = scale_repository.get(
+            resource_id=payload.saved_template_id,
+            workspace_id=workspace_id,
+        )
+        if template.kind != "saved_template":
+            raise ApiError(409, "saved_template_required", "Selected resource is not a template.")
+        settings = template.payload.get("settings") or {}
+        if isinstance(settings, dict):
+            if not payload.style and settings.get("style"):
+                updates["style"] = EditPlanStyle(str(settings["style"]))
+            if settings.get("target_duration_s"):
+                updates["target_duration_s"] = int(settings["target_duration_s"])
+            if settings.get("broll_density"):
+                updates["broll_density"] = BrollDensity(str(settings["broll_density"]))
+            if settings.get("direction"):
+                direction_parts.append(str(settings["direction"]))
+    if payload.style_profile_id:
+        profile = scale_repository.get(
+            resource_id=payload.style_profile_id,
+            workspace_id=workspace_id,
+        )
+        if profile.kind != "style_profile" or profile.status != ScaleResourceStatus.READY:
+            raise ApiError(409, "style_profile_not_ready", "Train the custom style first.")
+        learned = profile.result.get("learned_settings") or {}
+        if isinstance(learned, dict):
+            if learned.get("style"):
+                updates["style"] = EditPlanStyle(str(learned["style"]))
+            if learned.get("target_duration_s"):
+                updates["target_duration_s"] = max(10, min(90, int(learned["target_duration_s"])))
+            if learned.get("broll_density"):
+                updates["broll_density"] = BrollDensity(str(learned["broll_density"]))
+            direction_parts.append(
+                "Custom style profile: " + str(learned.get("caption_direction") or learned)
+            )
+    adapter = scale_repository.latest(
+        workspace_id=workspace_id,
+        kind="model_training",
+        status=ScaleResourceStatus.READY,
+    )
+    if adapter and adapter.result.get("preferences"):
+        direction_parts.append(
+            "Workspace learned preferences: " + str(adapter.result["preferences"])
+        )
+    if direction_parts:
+        updates["prompt"] = "\n".join(direction_parts)[:1200]
+    return payload.model_copy(update=updates)
 
 
 @router.get("", response_model=PlanListResponse)
@@ -418,9 +487,7 @@ async def update_plan_manual_elements(
             ]
         },
         user_payload={
-            "manual_elements": [
-                item.model_dump(mode="json") for item in payload.manual_elements
-            ]
+            "manual_elements": [item.model_dump(mode="json") for item in payload.manual_elements]
         },
         metadata={"previous_version": record.version},
     )

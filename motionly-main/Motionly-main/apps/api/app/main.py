@@ -19,6 +19,7 @@ from app.api.projects import router as projects_router
 from app.api.publishing import router as publishing_router
 from app.api.regeneration import router as regeneration_router
 from app.api.renders import router as renders_router
+from app.api.scale import router as scale_router
 from app.api.uploads import router as uploads_router
 from app.api.visual import router as visual_router
 from app.core.config import get_settings
@@ -38,6 +39,7 @@ from app.repositories.regeneration import (
     SupabaseRegenerationRepository,
 )
 from app.repositories.renders import InMemoryRenderRepository, SupabaseRenderRepository
+from app.repositories.scale import InMemoryScaleRepository, SupabaseScaleRepository
 from app.repositories.uploads import InMemoryUploadRepository, SupabaseUploadRepository
 from app.repositories.visual import InMemoryVisualRepository, SupabaseVisualRepository
 from app.services.audio_ml_providers import (
@@ -60,8 +62,15 @@ from app.services.queue import (
     QueueRegistry,
     RegenerationQueue,
     RenderQueue,
+    ScaleQueue,
     TranscriptionQueue,
     VisualQueue,
+)
+from app.services.scale import (
+    DemucsStemSeparator,
+    FixtureRunwayProvider,
+    FixtureStemSeparator,
+    RunwayGen3Provider,
 )
 from app.services.stock_video import (
     FixtureStockVideoProvider,
@@ -198,6 +207,14 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryAnalyticsRepository()
     )
+    app.state.scale_repository = (
+        SupabaseScaleRepository(
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryScaleRepository()
+    )
     app.state.visual_repository = (
         SupabaseVisualRepository(
             upload_repository=upload_repository,
@@ -233,8 +250,20 @@ def create_app() -> FastAPI:
     app.state.broll_queue = BrollQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)
     app.state.publish_queue = PublishQueue(app.state.queue_registry)
+    app.state.scale_queue = ScaleQueue(app.state.queue_registry)
     app.state.social_publishing_client = SocialPublishingClient(
         meta_graph_api_version=settings.meta_graph_api_version
+    )
+    app.state.stem_separator = (
+        FixtureStemSeparator()
+        if settings.stem_separation_provider == "fixture"
+        or (settings.app_env != "production" and settings.allow_fixture_providers)
+        else DemucsStemSeparator()
+    )
+    app.state.runway_provider = (
+        RunwayGen3Provider(api_key=settings.runway_api_key, model=settings.runway_model)
+        if settings.runway_api_key
+        else FixtureRunwayProvider()
     )
     transcription_provider_key = settings.transcription_provider.strip().lower()
     edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
@@ -335,6 +364,7 @@ def create_app() -> FastAPI:
     app.include_router(regeneration_router)
     app.include_router(renders_router)
     app.include_router(publishing_router)
+    app.include_router(scale_router)
     app.include_router(billing_router)
     app.include_router(analytics_router)
     app.include_router(internal_jobs_router)
@@ -378,6 +408,8 @@ def _validate_production_settings(settings) -> None:
 
     if settings.allow_fixture_providers:
         raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
+    if settings.stem_separation_provider != "demucs":
+        raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
 
     transcription_provider_key = settings.transcription_provider.strip().lower()
     edit_planner_provider_key = settings.edit_planner_provider.strip().lower()

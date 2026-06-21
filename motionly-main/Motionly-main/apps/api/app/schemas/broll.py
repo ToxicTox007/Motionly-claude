@@ -21,6 +21,7 @@ class StockProviderKey(StrEnum):
     PEXELS = "pexels"
     PIXABAY = "pixabay"
     USER_LIBRARY = "user_library"
+    RUNWAY = "runway"
 
 
 class StockOrientation(StrEnum):

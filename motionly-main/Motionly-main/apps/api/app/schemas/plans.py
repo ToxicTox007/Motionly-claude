@@ -150,6 +150,8 @@ class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
     broll_density: BrollDensity = BrollDensity.MEDIUM
     feedback: str | None = Field(default=None, max_length=800)
     force: bool = False
+    style_profile_id: UUID | None = None
+    saved_template_id: UUID | None = None
 
     @model_validator(mode="before")
     @classmethod

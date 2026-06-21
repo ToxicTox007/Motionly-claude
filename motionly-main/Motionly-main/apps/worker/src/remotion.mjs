@@ -198,6 +198,19 @@ async function assembleRenderProps(renderProps) {
     }
   }
 
+  let resolvedStems = renderProps.sourceStems ?? null;
+  if (resolvedStems?.vocals?.bucket && resolvedStems?.vocals?.path) {
+    resolvedStems = {
+      ...resolvedStems,
+      vocals: {
+        ...resolvedStems.vocals,
+        src: await resolveSrc(
+          `supabase://${resolvedStems.vocals.bucket}/${resolvedStems.vocals.path}`,
+        ),
+      },
+    };
+  }
+
   return {
     sourceVideo: {
       ...renderProps.sourceVideo,
@@ -211,6 +224,7 @@ async function assembleRenderProps(renderProps) {
     exportSettings: renderProps.exportSettings ?? {},
     musicSelection: resolvedMusic,
     effectsConfig: renderProps.effectsConfig ?? null,
+    sourceStems: resolvedStems,
     watermark: Boolean(renderProps.watermark),
   };
 }

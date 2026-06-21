@@ -32,6 +32,10 @@ def test_audio_intelligence_extracts_keywords_and_style_signals() -> None:
     assert payload["speaker_diarization"]["segments"]
     assert payload["emotion_pacing"]["aggregate_emotion"] == "positive"
     assert payload["emotion_pacing"]["windows"]
+    first_window = payload["emotion_pacing"]["windows"][0]
+    assert {"joy", "sadness", "urgency", "intensity"} <= first_window.keys()
+    assert payload["emotion_pacing"]["speech_rhythm"]["bpm_equivalent"] > 0
+    assert isinstance(payload["emotion_pacing"]["pause_map"], list)
     assert payload["sound_classification"]["labels"][0]["label"] == "speech"
 
 
@@ -61,6 +65,7 @@ def test_audio_intelligence_splits_speaker_segments_on_long_pauses() -> None:
     payload = build_audio_intelligence_payload(words=words, duration_ms=4000)
 
     assert payload["emotion_pacing"]["pause_count"] == 1
+    assert payload["emotion_pacing"]["pause_map"][0]["duration_ms"] == 1800
     assert len(payload["speaker_diarization"]["segments"]) == 2
 
 

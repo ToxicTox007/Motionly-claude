@@ -11,6 +11,7 @@ const allQueueNames = [
   "render",
   "render_gpu",
   "publish",
+  "intelligence",
 ];
 
 export const queueNames = env("WORKER_QUEUES")

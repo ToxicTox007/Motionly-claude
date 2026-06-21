@@ -20,6 +20,7 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
       <VisualGrade input={input}>
         <VideoScene input={input} template={template} />
       </VisualGrade>
+      {input.sourceStems?.vocals?.src ? <Audio src={input.sourceStems.vocals.src} /> : null}
       <MusicAndSfxMix input={input} />
       <ManualElements elements={input.editPlan.manual_elements} />
       <AnimatedCaptions

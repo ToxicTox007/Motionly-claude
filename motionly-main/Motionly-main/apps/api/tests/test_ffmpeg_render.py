@@ -41,6 +41,38 @@ def test_ffmpeg_renderer_maps_primary_video_and_optional_audio(
     assert "-shortest" in command
 
 
+def test_ffmpeg_renderer_uses_demucs_dialogue_stem_and_retimes_cuts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        Path(command[-1]).write_bytes(b"mp4")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(ffmpeg_render.subprocess, "run", fake_run)
+    vocal_stem = tmp_path / "vocals.wav"
+    vocal_stem.write_bytes(b"wav")
+
+    FFmpegCaptionRenderer().render(
+        source_path=tmp_path / "source.mp4",
+        ass_path=None,
+        output_path=tmp_path / "out.mp4",
+        specs=RenderSpecs(),
+        dialogue_source=vocal_stem,
+        keep_segments=[CutSegment(start_ms=500, end_ms=1500, reason="keep dialogue")],
+    )
+
+    command = captured["command"]
+    graph = command[command.index("-filter_complex") + 1]
+    assert str(vocal_stem) in command
+    assert "[1:a]atrim=start=0.500:end=1.500" in graph
+    assert command[command.index("-map", command.index("-map") + 1) + 1] == "[dialoguecut]"
+
+
 def test_ffmpeg_renderer_uses_nvenc_and_renders_free_plan_watermark(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -94,6 +126,24 @@ def test_manual_sfx_data_url_is_materialized_for_ffmpeg(tmp_path: Path) -> None:
     assert mix["sfx_cue_ms"] == [1250.0]
     assert mix["sfx_intensity"] == 0.8
     assert Path(mix["sfx_sources"][0]).read_bytes() == b"RIFF"
+
+
+def test_demucs_vocal_stem_is_resolved_from_render_manifest(tmp_path: Path) -> None:
+    storage = LocalObjectStorage(root=tmp_path)
+    storage.write_object(bucket="raw-uploads", path="stems/vocals.wav", content=b"vocal")
+
+    mix = _audio_mix_from_manifest(
+        {
+            "render_props": {
+                "sourceStems": {
+                    "vocals": {"bucket": "raw-uploads", "path": "stems/vocals.wav"}
+                }
+            }
+        },
+        storage=storage,
+    )
+
+    assert Path(mix["dialogue_source"]).read_bytes() == b"vocal"
 
 
 def test_ffmpeg_renderer_mixes_sfx_without_unconnected_ducking_branch(

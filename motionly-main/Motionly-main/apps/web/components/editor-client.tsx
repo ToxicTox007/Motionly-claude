@@ -19,7 +19,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Sparkles, Type, Layers, Music2, Palette, Download,
-  Film, Loader2, ChevronLeft, History,
+  Film, Loader2, ChevronLeft, History, Network,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
@@ -34,6 +34,7 @@ import { ElementPalette } from "./editor/dnd/ElementPalette";
 import { type PaletteElement } from "./editor/dnd/element-catalog";
 import { PropertiesInspector } from "./editor/PropertiesInspector";
 import { VersionHistoryPanel } from "./editor/VersionHistoryPanel";
+import { ScalePanel } from "./editor/ScalePanel";
 import {
   EditorHistoryProvider,
   useEditorHistory,
@@ -85,7 +86,7 @@ interface EditorClientProps {
   exports:         ExportSummary[];
 }
 
-type InspectorTab = "ai" | "captions" | "broll" | "audio" | "look" | "history" | "export";
+type InspectorTab = "ai" | "captions" | "broll" | "audio" | "look" | "history" | "scale" | "export";
 
 const BrollTab = dynamic(
   () => import("./editor/tabs/broll-tab").then((mod) => mod.BrollTab),
@@ -816,6 +817,7 @@ const INSPECTOR_TABS: Array<{
   { id: "audio",   label: "Audio",   icon: Music2,     requiresPlan: false },
   { id: "look",    label: "Look",    icon: Palette,    requiresPlan: false },
   { id: "history", label: "History", icon: History, requiresPlan: true },
+  { id: "scale",   label: "Scale",   icon: Network, requiresPlan: false },
   { id: "export",  label: "Export",  icon: Download,   requiresPlan: false },
 ];
 
@@ -1000,6 +1002,9 @@ function InspectorPanel({
         )}
         {tab === "history" && (
           <VersionHistoryPanel projectId={projectId} workspaceId={workspaceId} userId={userId} apiAccessToken={apiAccessToken} activePlan={activePlan} onPlanRestored={onPlanUpdated} />
+        )}
+        {tab === "scale" && (
+          <ScalePanel projectId={projectId} workspaceId={workspaceId} userId={userId} apiAccessToken={apiAccessToken} activePlan={activePlan} onPlanUpdated={onPlanUpdated} />
         )}
       </div>
     </div>

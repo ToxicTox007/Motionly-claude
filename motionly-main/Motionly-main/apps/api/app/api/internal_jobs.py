@@ -8,6 +8,7 @@ from app.schemas.renders import RenderJobStatus
 from app.services.publishing import execute_publish_job
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob, QueueJobStatus, QueueRegistry
 from app.services.render_jobs import complete_render_job_by_id
+from app.services.scale import execute_scale_resource
 from app.services.transcription_jobs import (
     queue_transcription_for_upload,
     run_transcription_for_upload,
@@ -189,6 +190,26 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             "publish_status": published.status.value,
             "external_post_id": published.external_post_id,
             "failed": published.status.value == "failed",
+        }
+
+    if job.kind == "phase5":
+        resource = execute_scale_resource(
+            repository=request.app.state.scale_repository,
+            resource_id=job.resource_id,
+            workspace_id=job.workspace_id,
+            settings=settings,
+            upload_repository=request.app.state.upload_repository,
+            broll_repository=request.app.state.broll_repository,
+            visual_provider=request.app.state.visual_intelligence_provider,
+            analytics_repository=request.app.state.analytics_repository,
+            stem_separator=request.app.state.stem_separator,
+            runway_provider=request.app.state.runway_provider,
+        )
+        return {
+            "resource_id": str(resource.id),
+            "resource_kind": resource.kind,
+            "resource_status": resource.status.value,
+            "failed": resource.status.value == "failed",
         }
 
     return {

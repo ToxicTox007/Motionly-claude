@@ -81,9 +81,7 @@ class QueueRegistry:
         job = self.jobs[job_id]
         attempts = job.attempts + 1
         status = (
-            QueueJobStatus.DEAD_LETTER
-            if attempts >= job.max_attempts
-            else QueueJobStatus.QUEUED
+            QueueJobStatus.DEAD_LETTER if attempts >= job.max_attempts else QueueJobStatus.QUEUED
         )
         retried = EnqueuedJob(
             id=job.id,
@@ -118,9 +116,7 @@ class QueueRegistry:
         job = self.jobs[job_id]
         attempts = job.attempts + 1
         status = (
-            QueueJobStatus.DEAD_LETTER
-            if attempts >= job.max_attempts
-            else QueueJobStatus.QUEUED
+            QueueJobStatus.DEAD_LETTER if attempts >= job.max_attempts else QueueJobStatus.QUEUED
         )
         failed = EnqueuedJob(
             id=job.id,
@@ -244,8 +240,7 @@ class BullMQQueueRegistry:
         current = Path(__file__).resolve()
         candidates = [Path("/app/apps/worker/src/queue-bridge.mjs")]
         candidates.extend(
-            parent / "apps" / "worker" / "src" / "queue-bridge.mjs"
-            for parent in current.parents
+            parent / "apps" / "worker" / "src" / "queue-bridge.mjs" for parent in current.parents
         )
         for candidate in candidates:
             if candidate.exists():
@@ -596,6 +591,25 @@ class PublishQueue(BaseQueue):
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=publish_job_id,
+        )
+
+
+class ScaleQueue(BaseQueue):
+    queue_name = "intelligence"
+    kind = "phase5"
+
+    def enqueue_resource(
+        self,
+        *,
+        resource_id: UUID,
+        workspace_id: UUID,
+        project_id: UUID | None,
+    ) -> EnqueuedJob:
+        return self._enqueue(
+            job_id=self._job_id("phase5", resource_id),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            resource_id=resource_id,
         )
 
 

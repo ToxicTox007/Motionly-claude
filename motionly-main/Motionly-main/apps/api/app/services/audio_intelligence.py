@@ -123,10 +123,7 @@ def build_audio_intelligence_payload(
 
     return {
         "schema_version": 1,
-        "keywords": [
-            {"text": text, "score": score}
-            for text, score in keyword_scores[:10]
-        ],
+        "keywords": [{"text": text, "score": score} for text, score in keyword_scores[:10]],
         "style_signals": {
             "predicted_style": predicted_style,
             "tone": _tone(tokens),
@@ -147,6 +144,8 @@ def build_audio_intelligence_payload(
         "emotion_pacing": {
             "aggregate_emotion": _aggregate_emotion(tokens),
             "pause_count": pause_count,
+            "pause_map": _pause_map(words),
+            "speech_rhythm": _speech_rhythm(words=words, duration_ms=duration_ms),
             "windows": _emotion_windows(words=words, duration_ms=duration_ms),
         },
         "sound_classification": _sound_classification(
@@ -195,8 +194,8 @@ def _merge_ml_insights(
         emotion_pacing = dict(merged.get("emotion_pacing") or {})
         emotion_pacing["provider"] = "wav2vec2_emotion"
         emotion_pacing["windows"] = emotion_windows
-        if emotion_windows and isinstance(emotion_windows[0], dict):
-            emotion_pacing["aggregate_emotion"] = emotion_windows[0].get("emotion", "unknown")
+        if emotion_windows:
+            emotion_pacing["aggregate_emotion"] = _dominant_window_emotion(emotion_windows)
         merged["emotion_pacing"] = emotion_pacing
     return merged
 
@@ -260,6 +259,67 @@ def _pause_count(words: list[TranscriptWord]) -> int:
         for current, next_word in zip(words, words[1:], strict=False)
         if next_word.start_ms - current.end_ms >= 700
     )
+
+
+def _pause_map(words: list[TranscriptWord]) -> list[dict[str, int]]:
+    return [
+        {
+            "start_ms": current.end_ms,
+            "end_ms": next_word.start_ms,
+            "duration_ms": next_word.start_ms - current.end_ms,
+        }
+        for current, next_word in zip(words, words[1:], strict=False)
+        if next_word.start_ms - current.end_ms >= 250
+    ]
+
+
+def _speech_rhythm(*, words: list[TranscriptWord], duration_ms: int | None) -> dict[str, Any]:
+    if not words:
+        return {
+            "bpm_equivalent": None,
+            "onset_count": 0,
+            "mean_interval_ms": None,
+            "interval_variability": None,
+            "energy_curve": [],
+        }
+    intervals = [
+        next_word.start_ms - current.start_ms
+        for current, next_word in zip(words, words[1:], strict=False)
+        if next_word.start_ms > current.start_ms
+    ]
+    mean_interval = sum(intervals) / len(intervals) if intervals else None
+    variance = (
+        sum((value - mean_interval) ** 2 for value in intervals) / len(intervals)
+        if intervals and mean_interval is not None
+        else None
+    )
+    end_ms = duration_ms or max(word.end_ms for word in words)
+    energy_curve = []
+    for start_ms in range(0, max(end_ms, 1), 500):
+        active = [
+            word for word in words if word.start_ms < start_ms + 500 and word.end_ms >= start_ms
+        ]
+        voiced_ms = sum(
+            max(0, min(word.end_ms, start_ms + 500) - max(word.start_ms, start_ms))
+            for word in active
+        )
+        energy_curve.append(
+            {
+                "start_ms": start_ms,
+                "end_ms": min(start_ms + 500, end_ms),
+                "speech_density": round(min(1, voiced_ms / 500), 3),
+                "word_onsets": len([word for word in active if word.start_ms >= start_ms]),
+            }
+        )
+    return {
+        "bpm_equivalent": round(60_000 / mean_interval) if mean_interval else None,
+        "onset_count": len(words),
+        "mean_interval_ms": round(mean_interval) if mean_interval else None,
+        "interval_variability": round(math.sqrt(variance) / mean_interval, 3)
+        if variance is not None and mean_interval
+        else None,
+        "energy_curve": energy_curve,
+    }
 
 
 def _pace_label(words_per_minute: int | None) -> str:
@@ -342,25 +402,47 @@ def _emotion_windows(
     windows = []
     for start_ms in range(0, max(end_ms, 1), 500):
         window_words = [
-            word
-            for word in words
-            if word.start_ms < start_ms + 500 and word.end_ms >= start_ms
+            word for word in words if word.start_ms < start_ms + 500 and word.end_ms >= start_ms
         ]
         if not window_words:
             continue
         tokens = [_normalise_token(word.text) for word in window_words]
         tokens = [token for token in tokens if token]
         intensity = min(1.0, round((len(window_words) / 4) + _emotion_bonus(tokens), 3))
+        emotion = _aggregate_emotion(tokens)
+        joy = 0.65 if emotion == "positive" else 0.08
+        sadness = (
+            0.55 if any(token in {"sad", "loss", "hurt", "miss"} for token in tokens) else 0.08
+        )
+        urgency = 0.7 if emotion == "urgent" else 0.08
         windows.append(
             {
                 "start_ms": start_ms,
                 "end_ms": min(start_ms + 500, end_ms),
-                "emotion": _aggregate_emotion(tokens),
+                "emotion": emotion,
+                "joy": joy,
+                "sadness": sadness,
+                "urgency": urgency,
                 "intensity": intensity,
                 "word_count": len(window_words),
             }
         )
     return windows
+
+
+def _dominant_window_emotion(windows: list[object]) -> str:
+    scores = Counter()
+    labels = Counter()
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        if window.get("emotion"):
+            labels[str(window["emotion"])] += 1
+        for key in ("joy", "sadness", "urgency"):
+            scores[key] += float(window.get(key) or 0)
+    if scores and sum(scores.values()) > 0:
+        return scores.most_common(1)[0][0]
+    return labels.most_common(1)[0][0] if labels else "unknown"
 
 
 def _emotion_bonus(tokens: list[str]) -> float:

@@ -73,7 +73,7 @@ export function VideoScene({ input, template }: VideoSceneProps) {
       ) : null}
       <OffthreadVideo
         src={input.sourceVideo.src}
-        muted={false}
+        muted={Boolean(input.sourceStems?.vocals?.src)}
         playbackRate={sourceMotion.playbackRate}
         style={sourceStyle}
       />

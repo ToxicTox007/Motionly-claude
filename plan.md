@@ -178,7 +178,7 @@ B-roll sources (pluggable `StockVideoProvider` interface):
 - Pexels API ✅ (shipped)
 - Pixabay API ✅ (shipped)
 - User's own B-roll library (planned Phase 3)
-- AI-generated video clips via Runway Gen-3 (planned Phase 5, premium tier)
+- AI-generated video clips via Runway Gen-3 ✅ (premium tier)
 
 ### Stage 5 — Kinetic Caption System
 
@@ -774,16 +774,16 @@ The current editor has all AI pipeline controls but lacks the full manual editin
 
 ### Phase 5 — Intelligence & Scale (Weeks 29–36)
 
-- [ ] Emotion detection: wav2vec2-based per-500ms window (joy, sadness, intensity, urgency)
-- [ ] Pacing analysis: BPM-equivalent speech rhythm + pause map
-- [ ] Audio stem separation (Demucs) for source videos with embedded music
-- [ ] AI-generated B-roll via Runway Gen-3 (premium tier)
-- [ ] Custom style training (user uploads 5 reference videos → AI learns style)
-- [ ] Batch processing (multiple videos, same style)
-- [ ] Real-time collaboration (shared manifest, presence indicators)
-- [ ] Template library (save AI edit settings as reusable templates)
-- [ ] Analytics: which AI edits users keep vs. change
-- [ ] Model fine-tuning loop: improve AI decisions based on user overrides
+- [x] Emotion detection: wav2vec2-based per-500ms window (joy, sadness, intensity, urgency)
+- [x] Pacing analysis: BPM-equivalent speech rhythm + pause map
+- [x] Audio stem separation (Demucs) for source videos with embedded music
+- [x] AI-generated B-roll via Runway Gen-3 (premium tier)
+- [x] Custom style training (user uploads 5 reference videos → AI learns style)
+- [x] Batch processing (multiple videos, same style)
+- [x] Real-time collaboration (shared manifest, presence indicators)
+- [x] Template library (save AI edit settings as reusable templates)
+- [x] Analytics: which AI edits users keep vs. change
+- [x] Model fine-tuning loop: improve AI decisions based on user overrides
 
 ---
 
@@ -868,7 +868,7 @@ The current editor has all AI pipeline controls but lacks the full manual editin
 
 1. **AI-generated B-roll:** At what quality bar does generated B-roll feel premium vs. uncanny? Needs user testing before production.
 2. **Vertical vs. Landscape:** Should the AI automatically reframe 16:9 footage to 9:16 for short-form? How to handle complex scenes with multiple subjects?
-3. **User audio:** If the user uploads footage with background music already embedded, how do we cleanly separate stems for ducking? (Demucs / Spleeter — evaluate quality tradeoff.) Currently the pipeline processes the full audio; stem separation is Phase 5.
+3. **User audio:** Demucs two-stem separation is integrated for embedded source music, with isolated vocals wired into both FFmpeg and Remotion renders. Continue evaluating separation quality across difficult mixes.
 4. **Multiple speakers:** Diarization-aware caption positioning for interview/podcast-style content — show speaker labels? Planned via pyannote.audio in Phase 3.
 5. **Long-form input:** Pipeline is optimized for short-form output. For a 10-minute input file, should the AI produce a 60-second highlight reel, or edit the full length? The `RegenerationLayer.cuts` path supports AI re-trim; full-length editing needs explicit product decision.
 6. **Copyright of source video:** Does Motionly need content moderation before pipeline runs? (NSFW detection, watermark detection.) Not currently implemented.
@@ -891,11 +891,11 @@ The current editor has all AI pipeline controls but lacks the full manual editin
 | Remotion | Premium caption render layer | ✅ Integrated (optional) |
 | Redis / BullMQ | Job queue | ✅ Core |
 | GlitchTip | Error tracking (Sentry-compatible) | ✅ Integrated |
-| Runway Gen-3 API | AI-generated B-roll | Phase 5 |
+| Runway Gen-3 API | AI-generated B-roll | ✅ Integrated (premium tier) |
 | pyannote.audio | Speaker diarization | ✅ Dependency + worker provider integrated |
 | wav2vec2 / YAMNet | Emotion and background sound analysis | ✅ Dependency + worker providers integrated |
 | CLIP / BLIP-2 / YOLO / MediaPipe | Visual intelligence embeddings, captions, objects, faces | ✅ Integrated |
-| Demucs / Spleeter | Audio stem separation | Phase 5 |
+| Demucs | Audio stem separation | ✅ Integrated |
 | Artlist / Storyblocks | Licensed music partnerships | Phase 4 |
 
 ---
