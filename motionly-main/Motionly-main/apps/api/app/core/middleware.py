@@ -1,11 +1,13 @@
+import os
 from collections.abc import Awaitable, Callable
-from time import monotonic, perf_counter
+from time import monotonic, perf_counter, time
 from uuid import uuid4
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
 from app.core.logging import get_logger
+from app.services.auth import verify_supabase_jwt, verify_supabase_token_with_auth_api
 
 logger = get_logger(__name__)
 
@@ -41,7 +43,7 @@ class InMemoryRateLimiter:
     def __init__(self) -> None:
         self._hits: dict[str, list[float]] = {}
 
-    def allow(self, *, key: str, limit: int, window_seconds: int = 60) -> tuple[bool, int]:
+    async def allow(self, *, key: str, limit: int, window_seconds: int = 60) -> tuple[bool, int]:
         if limit <= 0:
             return True, limit
         now = monotonic()
@@ -55,6 +57,27 @@ class InMemoryRateLimiter:
         return True, max(0, limit - len(hits))
 
 
+class RedisRateLimiter:
+    def __init__(self, redis_url: str) -> None:
+        from redis.asyncio import Redis
+
+        self.redis = Redis.from_url(redis_url, decode_responses=True)
+
+    async def allow(
+        self, *, key: str, limit: int, window_seconds: int = 60
+    ) -> tuple[bool, int]:
+        if limit <= 0:
+            return True, limit
+        window = int(time()) // window_seconds
+        redis_key = f"motionly:rate-limit:{window}:{key}"
+        async with self.redis.pipeline(transaction=True) as pipeline:
+            pipeline.incr(redis_key)
+            pipeline.expire(redis_key, window_seconds + 2)
+            count, _ = await pipeline.execute()
+        count = int(count)
+        return count <= limit, max(0, limit - count)
+
+
 async def rate_limit_middleware(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
@@ -63,15 +86,11 @@ async def rate_limit_middleware(
         return await call_next(request)
 
     settings = request.app.state.settings
-    limiter: InMemoryRateLimiter = request.app.state.rate_limiter
+    limiter: InMemoryRateLimiter | RedisRateLimiter = request.app.state.rate_limiter
     client_host = request.client.host if request.client else "anonymous"
-    actor_key = (
-        request.headers.get("x-motionly-workspace-id")
-        or request.headers.get("x-motionly-user-id")
-        or client_host
-    )
+    actor_key = _verified_identity(request) or f"ip:{client_host}"
     key = f"{actor_key}:{request.url.path}"
-    allowed, remaining = limiter.allow(key=key, limit=settings.rate_limit_per_minute)
+    allowed, remaining = await limiter.allow(key=key, limit=settings.rate_limit_per_minute)
     if not allowed:
         request_id = getattr(request.state, "request_id", f"req_{uuid4().hex}")
         return JSONResponse(
@@ -89,3 +108,31 @@ async def rate_limit_middleware(
     response = await call_next(request)
     response.headers["x-ratelimit-remaining"] = str(remaining)
     return response
+
+
+def _verified_identity(request: Request) -> str | None:
+    settings = request.app.state.settings
+    authorization = request.headers.get("authorization")
+    if (
+        settings.supabase_jwt_secret
+        and authorization
+        and authorization.lower().startswith("bearer ")
+    ):
+        token = authorization.split(" ", 1)[1].strip()
+        try:
+            verified = verify_supabase_jwt(token=token, jwt_secret=settings.supabase_jwt_secret)
+        except Exception:
+            if not settings.supabase_url or not settings.supabase_service_role_key:
+                return None
+            try:
+                verified = verify_supabase_token_with_auth_api(
+                    token=token,
+                    supabase_url=str(settings.supabase_url),
+                    service_role_key=settings.supabase_service_role_key,
+                )
+            except Exception:
+                return None
+        return f"user:{verified.user_id}"
+    if os.getenv("SKIP_API_AUTH") == "true" and settings.app_env != "production":
+        return "user:local-development"
+    return None

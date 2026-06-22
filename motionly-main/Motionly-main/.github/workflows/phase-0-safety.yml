@@ -58,3 +58,49 @@ jobs:
           --volume "$PWD:/repo"
           zricethezav/gitleaks:v8.24.2
           detect --source=/repo --no-git --redact --exit-code=1
+
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Scan production JavaScript dependencies
+        run: pnpm audit --prod --audit-level low
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Scan API Python dependencies
+        working-directory: apps/api
+        run: |
+          python -m pip install --upgrade pip pip-audit .
+          python -m pip_audit .
+
+  security-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install locked JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run web authorization and editor security tests
+        run: pnpm --filter @motionly/web test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run API security and publishing tests
+        working-directory: apps/api
+        run: |
+          python -m pip install '.[dev]'
+          python -m pytest -q tests/test_phase6_security.py tests/test_publishing.py tests/test_auth_projects_storage.py

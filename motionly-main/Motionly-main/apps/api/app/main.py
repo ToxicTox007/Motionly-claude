@@ -12,6 +12,7 @@ from app.api.errors import ApiError, api_error_handler, request_validation_error
 from app.api.health import router as health_router
 from app.api.internal_jobs import router as internal_jobs_router
 from app.api.internal_renders import router as internal_renders_router
+from app.api.internal_retention import router as internal_retention_router
 from app.api.local_storage import router as local_storage_router
 from app.api.music import router as music_router
 from app.api.plans import router as plans_router
@@ -24,7 +25,12 @@ from app.api.uploads import router as uploads_router
 from app.api.visual import router as visual_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.core.middleware import InMemoryRateLimiter, rate_limit_middleware, request_id_middleware
+from app.core.middleware import (
+    InMemoryRateLimiter,
+    RedisRateLimiter,
+    rate_limit_middleware,
+    request_id_middleware,
+)
 from app.repositories.analytics import InMemoryAnalyticsRepository, SupabaseAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository, SupabaseBillingRepository
 from app.repositories.broll import InMemoryBrollRepository, SupabaseBrollRepository
@@ -50,7 +56,7 @@ from app.services.audio_ml_providers import (
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
-from app.services.publishing import SocialPublishingClient
+from app.services.publishing import PublishOAuthClient, SocialPublishingClient
 from app.services.queue import (
     BrollQueue,
     BullMQQueueRegistry,
@@ -78,6 +84,7 @@ from app.services.stock_video import (
     PixabayStockVideoProvider,
 )
 from app.services.storage import StorageSigner
+from app.services.token_cipher import TokenCipher
 from app.services.transcription_provider import (
     FixtureTranscriptionProvider,
     WhisperCompatibleHttpProvider,
@@ -138,14 +145,23 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryRenderRepository(app.state.caption_repository)
     )
+    token_encryption_key = settings.publish_token_encryption_key
+    if not token_encryption_key:
+        if settings.app_env == "production":
+            raise RuntimeError("PUBLISH_TOKEN_ENCRYPTION_KEY is required in production")
+        token_encryption_key = "motionly-local-publish-token-key-change-me"
+    app.state.publish_token_cipher = TokenCipher(token_encryption_key)
     app.state.publishing_repository = (
         SupabasePublishingRepository(
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            token_cipher=app.state.publish_token_cipher,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryPublishingRepository()
     )
+    if isinstance(app.state.publishing_repository, SupabasePublishingRepository):
+        app.state.publishing_repository.encrypt_legacy_tokens()
     app.state.plan_repository = (
         SupabasePlanRepository(
             caption_repository=app.state.caption_repository,
@@ -231,7 +247,9 @@ def create_app() -> FastAPI:
         supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
         service_role_key=settings.supabase_service_role_key,
     )
-    app.state.rate_limiter = InMemoryRateLimiter()
+    app.state.rate_limiter = (
+        RedisRateLimiter(settings.redis_url) if settings.redis_url else InMemoryRateLimiter()
+    )
     if settings.redis_url:
         app.state.queue_registry = BullMQQueueRegistry(
             redis_url=settings.redis_url,
@@ -254,6 +272,7 @@ def create_app() -> FastAPI:
     app.state.social_publishing_client = SocialPublishingClient(
         meta_graph_api_version=settings.meta_graph_api_version
     )
+    app.state.publish_oauth_client = PublishOAuthClient(settings)
     app.state.stem_separator = (
         FixtureStemSeparator()
         if settings.process_role == "api"
@@ -374,6 +393,7 @@ def create_app() -> FastAPI:
     app.include_router(billing_router)
     app.include_router(analytics_router)
     app.include_router(internal_jobs_router)
+    app.include_router(internal_retention_router)
     app.include_router(internal_renders_router)
     app.include_router(local_storage_router)
     app.include_router(admin_router)

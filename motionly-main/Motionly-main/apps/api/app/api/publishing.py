@@ -172,6 +172,7 @@ async def create_publish_job(
             render_repository=request.app.state.render_repository,
             storage_signer=request.app.state.storage_signer,
             client=request.app.state.social_publishing_client,
+            oauth_client=request.app.state.publish_oauth_client,
             job_id=record.id,
             workspace_id=actor.workspace_id,
         )

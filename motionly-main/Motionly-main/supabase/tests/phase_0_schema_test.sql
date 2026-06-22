@@ -1,5 +1,5 @@
 begin;
-select plan(32);
+select plan(41);
 
 select has_column('public', 'render_jobs', 'uploaded_video_id', 'render jobs reference uploads');
 select has_column('public', 'render_jobs', 'caption_track_id', 'render jobs reference captions');
@@ -23,6 +23,19 @@ select ok(
    where table_schema = 'public' and table_name = 'render_jobs'
      and column_name = 'uploaded_video_id'),
   'fresh render jobs require uploaded_video_id'
+);
+select has_table('public', 'storage_deletion_queue', 'storage deletion is durable');
+select has_function(
+  'public', 'queue_deleted_storage_object', array[]::text[],
+  'storage records queue object cleanup before cascade deletion'
+);
+select has_trigger(
+  'public', 'uploaded_videos', 'uploaded_videos_queue_storage_delete',
+  'source deletion queues storage cleanup'
+);
+select has_trigger(
+  'public', 'exports', 'exports_queue_storage_delete',
+  'export deletion queues storage cleanup'
 );
 select ok(
   (select is_nullable = 'NO' from information_schema.columns
@@ -54,6 +67,20 @@ select has_index('public', 'usage_ledger', 'usage_ledger_workspace_created_at_id
 select hasnt_table('public', 'audit_logs', 'unused audit logs table is removed');
 select hasnt_table('public', 'launch_feedback', 'unused launch feedback table is removed');
 select hasnt_table('public', 'launch_ops_events', 'unused launch ops table is removed');
+
+select has_column('public', 'profiles', 'company', 'profiles store company identity');
+select has_column('public', 'profiles', 'role', 'profiles store creator role');
+select has_function(
+  'public',
+  'update_own_profile',
+  array['text', 'text', 'text'],
+  'profile updates use one transactional function'
+);
+select has_table('public', 'retention_runs', 'retention execution is persisted');
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.retention_runs'::regclass),
+  'retention execution records are service-role only'
+);
 
 select has_function(
   'public',

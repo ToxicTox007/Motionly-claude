@@ -1236,7 +1236,10 @@ async def get_export_download_url(
     storage_signer: StorageSignerDep,
 ) -> ExportDownloadUrlResponse:
     export = repository.get_export(export_id=export_id, workspace_id=actor.workspace_id)
-    ttl = request.app.state.settings.export_signed_url_ttl_seconds
+    ttl = min(
+        request.app.state.settings.export_signed_url_ttl_seconds,
+        StorageSigner.MAX_DOWNLOAD_TTL_SECONDS,
+    )
     signed = storage_signer.create_signed_download(
         bucket=export.storage_bucket,
         path=export.storage_path,

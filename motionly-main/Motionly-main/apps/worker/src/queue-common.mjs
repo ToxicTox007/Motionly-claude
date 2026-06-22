@@ -15,6 +15,7 @@ export const allQueueNames = [
   "intelligence",
   "audio_demucs",
   "provider_calls",
+  "maintenance",
 ];
 const defaultQueueNames = ["render_remotion"];
 

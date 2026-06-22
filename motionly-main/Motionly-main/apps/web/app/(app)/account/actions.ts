@@ -14,12 +14,10 @@ export async function updateProfile(formData: FormData) {
   const role = String(formData.get("role") ?? "").trim();
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.updateUser({
-    data: {
-      full_name: fullName,
-      company,
-      role,
-    },
+  const { error } = await supabase.rpc("update_own_profile", {
+    profile_full_name: fullName,
+    profile_company: company,
+    profile_role: role,
   });
 
   if (error) {

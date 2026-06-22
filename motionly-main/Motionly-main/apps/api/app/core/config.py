@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     export_storage_bucket: str = Field(default="exports", alias="EXPORT_STORAGE_BUCKET")
     export_signed_url_ttl_seconds: int = Field(default=300, alias="EXPORT_SIGNED_URL_TTL_SECONDS")
     media_work_dir: str = Field(default="/var/data/motionly/storage", alias="MEDIA_WORK_DIR")
+    retention_source_days: int = Field(default=365, alias="RETENTION_SOURCE_DAYS")
+    retention_generated_asset_days: int = Field(
+        default=90, alias="RETENTION_GENERATED_ASSET_DAYS"
+    )
+    retention_transcript_days: int = Field(default=365, alias="RETENTION_TRANSCRIPT_DAYS")
+    retention_analytics_days: int = Field(default=365, alias="RETENTION_ANALYTICS_DAYS")
+    retention_export_days: int = Field(default=30, alias="RETENTION_EXPORT_DAYS")
+    retention_local_cache_days: int = Field(default=7, alias="RETENTION_LOCAL_CACHE_DAYS")
     render_execute_ffmpeg: bool = Field(default=True, alias="RENDER_EXECUTE_FFMPEG")
     ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
     ffmpeg_gpu_encoder: str = Field(default="h264_nvenc", alias="FFMPEG_GPU_ENCODER")
@@ -44,6 +52,9 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(default=3, alias="WORKER_CONCURRENCY")
     render_worker_concurrency: int = Field(default=1, alias="RENDER_WORKER_CONCURRENCY")
     rate_limit_per_minute: int = Field(default=120, alias="RATE_LIMIT_PER_MINUTE")
+    publish_token_encryption_key: str | None = Field(
+        default=None, alias="PUBLISH_TOKEN_ENCRYPTION_KEY"
+    )
     admin_api_token: str | None = Field(default=None, alias="ADMIN_API_TOKEN")
     admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
     admin_workspace_ids: str = Field(default="", alias="ADMIN_WORKSPACE_IDS")

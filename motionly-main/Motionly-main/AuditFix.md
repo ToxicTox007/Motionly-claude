@@ -98,12 +98,12 @@ Phases are ordered by **dependency**, not by audit severity. Fixing the renderer
 
 *Editing by hand means editing the same object the AI produced, immediately reflected on re-render. No special-casing.*
 
-- [ ] Wire every editor mutation (trim, split, B-roll swap, caption edit, manual element) to write into the Phase 1 canonical timeline, not a side structure.
-- [ ] Make local undo/redo durable across page reloads (today it's in-memory only).
-- [ ] Fix the processing-screen reload bug: the screen claims it auto-refreshes but has no polling/subscription on direct load or reload — only uploads initiated in-session poll correctly today.
-- [ ] Collapse the two nested editor client components with overlapping title/save/playhead/selection/tab state into one normalized store; derive preview/timeline projections from the canonical timeline instead of parallel local state.
-- [ ] Apply saved caption/effect template settings — currently stored in the template schema but ignored by the learning hook and not populated by the UI save path. Either finish the wiring or remove the promise from the UI.
-- [ ] Decide the collaboration model deliberately: today's whole-document, optimistic-revision approach (reject on stale revision, no field-level merge) is a reasonable v1 — just document it as such instead of implying conflict-free concurrent editing it doesn't do.
+- [x] Wire every editor mutation (trim, split, B-roll swap, caption edit, manual element) to write into the Phase 1 canonical timeline, not a side structure.
+- [x] Make local undo/redo durable across page reloads (today it's in-memory only).
+- [x] Fix the processing-screen reload bug: the screen claims it auto-refreshes but has no polling/subscription on direct load or reload — only uploads initiated in-session poll correctly today.
+- [x] Collapse the two nested editor client components with overlapping title/save/playhead/selection/tab state into one normalized store; derive preview/timeline projections from the canonical timeline instead of parallel local state.
+- [x] Apply saved caption/effect template settings — currently stored in the template schema but ignored by the learning hook and not populated by the UI save path. Either finish the wiring or remove the promise from the UI.
+- [x] Decide the collaboration model deliberately: today's whole-document, optimistic-revision approach (reject on stale revision, no field-level merge) is a reasonable v1 — just document it as such instead of implying conflict-free concurrent editing it doesn't do.
 
 **Done when:** a manual edit, followed by re-render, produces a video that matches the edit — verified by the same test suite from Phase 2.
 
@@ -113,12 +113,12 @@ Phases are ordered by **dependency**, not by audit severity. Fixing the renderer
 
 *Nothing here is optional before real users touch this. (Admin route auth is already fixed in Phase 0 — confirm its negative tests are in CI before moving past this phase.)*
 
-- [ ] Encrypt social publishing access/refresh tokens at rest (currently plain database values in a service-role-only table). Implement the refresh-token workflow — today expired connections simply break and require full manual reconnection.
-- [ ] Move rate limiting off in-memory-per-process keyed by caller-provided workspace identifiers (spoofable before auth resolves) to a distributed scheme keyed on verified identity.
-- [ ] Fix account-update writes to land in the `profiles` table — today they only update Supabase auth metadata, so identity data can silently diverge between the two.
-- [ ] Confirm signed storage URLs are treated as bearer credentials everywhere: short TTLs, especially on export download links (currently five minutes by default — keep it that way or shorter).
-- [ ] Stream the YouTube publish upload instead of downloading the full export and building the multipart request body in memory.
-- [ ] Define and schedule retention/deletion for source video, generated assets, transcripts, analytics events, and local processing caches — none of this currently has a lifecycle beyond manual project deletion.
+- [x] Encrypt social publishing access/refresh tokens at rest (currently plain database values in a service-role-only table). Implement the refresh-token workflow — today expired connections simply break and require full manual reconnection.
+- [x] Move rate limiting off in-memory-per-process keyed by caller-provided workspace identifiers (spoofable before auth resolves) to a distributed scheme keyed on verified identity.
+- [x] Fix account-update writes to land in the `profiles` table — today they only update Supabase auth metadata, so identity data can silently diverge between the two.
+- [x] Confirm signed storage URLs are treated as bearer credentials everywhere: short TTLs, especially on export download links (currently five minutes by default — keep it that way or shorter).
+- [x] Stream the YouTube publish upload instead of downloading the full export and building the multipart request body in memory.
+- [x] Define and schedule retention/deletion for source video, generated assets, transcripts, analytics events, and local processing caches — none of this currently has a lifecycle beyond manual project deletion.
 
 **Done when:** a secret scan and dependency scan both run clean in CI, and social tokens/refresh flows are covered by tests.
 

@@ -12,6 +12,7 @@ from app.schemas.publishing import (
     PublishPlatform,
     PublishStatus,
 )
+from app.services.token_cipher import TokenCipher
 
 
 @dataclass
@@ -109,6 +110,19 @@ class InMemoryPublishingRepository:
         self.get_connection(connection_id=connection_id, workspace_id=workspace_id)
         del self.connections[connection_id]
 
+    def update_connection_tokens(
+        self,
+        *,
+        connection: PublishConnectionRecord,
+        access_token: str,
+        refresh_token: str | None,
+        token_expires_at: datetime | None,
+    ) -> PublishConnectionRecord:
+        connection.access_token = access_token
+        connection.refresh_token = refresh_token
+        connection.token_expires_at = token_expires_at
+        return connection
+
     def create_job(self, **values: object) -> PublishJobRecord:
         now = datetime.now(UTC)
         record = PublishJobRecord(
@@ -150,7 +164,9 @@ class InMemoryPublishingRepository:
 
 
 class SupabasePublishingRepository(InMemoryPublishingRepository):
-    def __init__(self, *, supabase_url: str, service_role_key: str) -> None:
+    def __init__(
+        self, *, supabase_url: str, service_role_key: str, token_cipher: TokenCipher
+    ) -> None:
         super().__init__()
         self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
         self.headers = {
@@ -159,16 +175,17 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
             "content-type": "application/json",
             "prefer": "return=representation",
         }
+        self.token_cipher = token_cipher
 
     def create_connection(self, **values: object) -> PublishConnectionRecord:
-        return self._write_connection("POST", "/publish_connections", values)
+        return self._write_connection("POST", "/publish_connections", self._encrypt_tokens(values))
 
     def upsert_connection(self, **values: object) -> PublishConnectionRecord:
         response = httpx.post(
             f"{self.rest_url}/publish_connections",
             headers={**self.headers, "prefer": "resolution=merge-duplicates,return=representation"},
             params={"on_conflict": "workspace_id,platform,external_account_id"},
-            json=self._json(values),
+            json=self._json(self._encrypt_tokens(values)),
             timeout=15,
         )
         if response.status_code >= 400:
@@ -250,6 +267,52 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
         )
         return self._job(rows[0])
 
+    def update_connection_tokens(
+        self,
+        *,
+        connection: PublishConnectionRecord,
+        access_token: str,
+        refresh_token: str | None,
+        token_expires_at: datetime | None,
+    ) -> PublishConnectionRecord:
+        rows = self._request(
+            "PATCH",
+            "/publish_connections",
+            params={"id": f"eq.{connection.id}"},
+            json=self._json(
+                self._encrypt_tokens(
+                    {
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "token_expires_at": token_expires_at,
+                    }
+                )
+            ),
+        )
+        return self._connection(rows[0])
+
+    def encrypt_legacy_tokens(self) -> int:
+        """One-way startup migration for rows written before encrypted envelopes existed."""
+        rows = self._request("GET", "/publish_connections", params={"select": "*"})
+        migrated = 0
+        for row in rows:
+            access_token = str(row.get("access_token") or "")
+            refresh_token = str(row["refresh_token"]) if row.get("refresh_token") else None
+            if self.token_cipher.is_encrypted(access_token) and (
+                not refresh_token or self.token_cipher.is_encrypted(refresh_token)
+            ):
+                continue
+            self._request(
+                "PATCH",
+                "/publish_connections",
+                params={"id": f"eq.{row['id']}"},
+                json=self._encrypt_tokens(
+                    {"access_token": access_token, "refresh_token": refresh_token}
+                ),
+            )
+            migrated += 1
+        return migrated
+
     def _write_connection(
         self, method: str, path: str, values: dict[str, object]
     ) -> PublishConnectionRecord:
@@ -283,23 +346,36 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
             for key, value in values.items()
         }
 
-    @staticmethod
-    def _connection(row: dict[str, object]) -> PublishConnectionRecord:
+    def _connection(self, row: dict[str, object]) -> PublishConnectionRecord:
         return PublishConnectionRecord(
             id=UUID(str(row["id"])),
             workspace_id=UUID(str(row["workspace_id"])),
             platform=PublishPlatform(str(row["platform"])),
-            access_token=str(row["access_token"]),
+            access_token=self.token_cipher.decrypt(str(row["access_token"])) or "",
             external_account_id=str(row["external_account_id"]),
             account_name=str(row["account_name"]),
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
-            refresh_token=str(row["refresh_token"]) if row.get("refresh_token") else None,
+            refresh_token=self.token_cipher.decrypt(str(row["refresh_token"]))
+            if row.get("refresh_token")
+            else None,
             token_expires_at=(
                 datetime.fromisoformat(str(row["token_expires_at"]).replace("Z", "+00:00"))
                 if row.get("token_expires_at")
                 else None
             ),
         )
+
+    def _encrypt_tokens(self, values: dict[str, object]) -> dict[str, object]:
+        encrypted = dict(values)
+        if "access_token" in encrypted:
+            encrypted["access_token"] = self.token_cipher.encrypt(
+                str(encrypted["access_token"])
+            )
+        if encrypted.get("refresh_token"):
+            encrypted["refresh_token"] = self.token_cipher.encrypt(
+                str(encrypted["refresh_token"])
+            )
+        return encrypted
 
     @staticmethod
     def _job(row: dict[str, object]) -> PublishJobRecord:

@@ -32,9 +32,14 @@ export default async function AccountPage({
 
     if (user) {
       email = user.email ?? email;
-      fullName = String(user.user_metadata.full_name ?? user.user_metadata.name ?? "");
-      company = String(user.user_metadata.company ?? "");
-      role = String(user.user_metadata.role ?? "");
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name,company,role")
+        .eq("id", user.id)
+        .maybeSingle();
+      fullName = String(profile?.full_name ?? user.user_metadata.full_name ?? "");
+      company = String(profile?.company ?? "");
+      role = String(profile?.role ?? "");
 
       const { data: membership } = await supabase
         .from("workspace_members")

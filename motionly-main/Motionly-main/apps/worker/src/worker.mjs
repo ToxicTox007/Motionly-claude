@@ -4,11 +4,15 @@ import { join, resolve } from "node:path";
 import { Worker } from "bullmq";
 import {
   bullConnection,
+  apiBaseUrl,
+  hasApiConfig,
   hasQueueConfig,
   isProduction,
   queueNames,
+  queueFor,
   stalledIntervalMs,
   workerConcurrency,
+  workerToken,
   writeBuildStamp,
 } from "./queue-common.mjs";
 
@@ -106,6 +110,18 @@ async function runDomainJob(job) {
   });
 }
 
+async function runRetentionJob() {
+  if (!hasApiConfig()) {
+    throw new Error("maintenance retention requires WORKER_API_BASE_URL and WORKER_API_TOKEN");
+  }
+  const response = await fetch(`${apiBaseUrl()}/internal/retention/run`, {
+    method: "POST",
+    headers: { "x-motionly-worker-token": workerToken() },
+  });
+  if (!response.ok) throw new Error(`retention endpoint returned HTTP ${response.status}`);
+  return response.json();
+}
+
 function processEnv() {
   return { ...globalThis.process.env };
 }
@@ -127,7 +143,9 @@ async function runJob(job) {
 
   await job.updateProgress(1);
   const result =
-    job.data.kind === "render"
+    job.data.kind === "retention"
+      ? await runRetentionJob()
+      : job.data.kind === "render"
       ? job.data.render_engine === "remotion_premium"
         ? await runRenderJob(job)
         : await runDomainJob(job)
@@ -275,6 +293,15 @@ async function main() {
   }
 
   const connection = bullConnection();
+  let maintenanceQueue = null;
+  if (queueNames.includes("maintenance")) {
+    maintenanceQueue = queueFor("maintenance", connection);
+    await maintenanceQueue.add(
+      "daily-retention",
+      { kind: "retention", queue_name: "maintenance" },
+      { jobId: "daily-retention", repeat: { pattern: env("RETENTION_CRON", "0 3 * * *") } },
+    );
+  }
   const workers = queueNames.map((queueName) => createWorker(queueName, connection));
   let shuttingDown = false;
   const shutdown = async (signal) => {
@@ -282,6 +309,7 @@ async function main() {
     shuttingDown = true;
     console.log(`Received ${signal}; closing BullMQ workers.`);
     await Promise.allSettled(workers.map((worker) => worker.close()));
+    if (maintenanceQueue) await maintenanceQueue.close();
     for (const state of pythonExecutors.values()) state.child.stdin.end();
     await connection.quit();
     process.exit(0);

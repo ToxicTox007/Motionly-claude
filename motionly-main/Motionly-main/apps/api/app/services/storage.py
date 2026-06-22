@@ -18,6 +18,9 @@ class SignedDownload:
 
 
 class StorageSigner:
+    MAX_DOWNLOAD_TTL_SECONDS = 300
+    MAX_UPLOAD_TTL_SECONDS = 900
+
     def __init__(
         self,
         base_url: str = "https://api.motionly.invalid",
@@ -36,6 +39,7 @@ class StorageSigner:
         mime_type: str,
         expires_in_seconds: int,
     ) -> SignedUpload:
+        expires_in_seconds = max(1, min(expires_in_seconds, self.MAX_UPLOAD_TTL_SECONDS))
         if self.supabase_url and self.service_role_key:
             signed_url = self._create_supabase_signed_upload_url(bucket=bucket, path=path)
             return SignedUpload(
@@ -58,6 +62,7 @@ class StorageSigner:
         path: str,
         expires_in_seconds: int,
     ) -> SignedDownload:
+        expires_in_seconds = max(1, min(expires_in_seconds, self.MAX_DOWNLOAD_TTL_SECONDS))
         if self.supabase_url and self.service_role_key:
             signed_url = self._create_supabase_signed_download_url(
                 bucket=bucket,

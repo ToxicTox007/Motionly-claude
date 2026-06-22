@@ -90,10 +90,8 @@ export function TimelinePanel({
 }: TimelinePanelProps) {
   const router = useRouter();
   const { totalDurationMs, tracks } = state;
-  const sourceClips = useMemo(
-    () => activePlan?.plan.timeline?.clips ?? [],
-    [activePlan?.plan.timeline?.clips],
-  );
+  const timelineClips = activePlan?.plan.timeline?.clips;
+  const sourceClips = useMemo(() => timelineClips ?? [], [timelineClips]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
@@ -230,6 +228,8 @@ export function TimelinePanel({
         label,
         undo: () => saveCuts(before),
         redo: () => saveCuts(after),
+        undoAction: historyAction(`/projects/${projectId}/plans/${activePlan!.id}/cuts`, { cuts: before }, "plan", "Video cuts restored."),
+        redoAction: historyAction(`/projects/${projectId}/plans/${activePlan!.id}/cuts`, { cuts: after }, "plan", "Video cuts reapplied."),
       },
     );
   }
@@ -244,6 +244,8 @@ export function TimelinePanel({
         label,
         undo: () => saveCaptionSegments(before),
         redo: () => saveCaptionSegments(after),
+        undoAction: historyAction(`/projects/${projectId}/captions/${captionTrack!.id}/segments`, { segments: before }, "caption", "Caption timing restored."),
+        redoAction: historyAction(`/projects/${projectId}/captions/${captionTrack!.id}/segments`, { segments: after }, "caption", "Caption timing reapplied."),
       },
     );
   }
@@ -261,6 +263,8 @@ export function TimelinePanel({
         label,
         undo: () => saveBrollRegion(slotId, before.startMs, before.endMs, before.disabled),
         redo: () => saveBrollRegion(slotId, after.startMs, after.endMs, after.disabled),
+        undoAction: historyAction(`/projects/${projectId}/broll/${slotId}/region`, brollHistoryBody(before, sourceClips), "broll", "B-roll timing restored."),
+        redoAction: historyAction(`/projects/${projectId}/broll/${slotId}/region`, brollHistoryBody(after, sourceClips), "broll", "B-roll timing reapplied."),
       },
     );
   }
@@ -279,6 +283,8 @@ export function TimelinePanel({
         label,
         undo: () => saveMusicRegions(before),
         redo: () => saveMusicRegions(after),
+        undoAction: historyAction(`/projects/${projectId}/music/regions`, { regions: before }, "music", "Music regions restored."),
+        redoAction: historyAction(`/projects/${projectId}/music/regions`, { regions: after }, "music", "Music regions reapplied."),
       },
     );
   }
@@ -834,6 +840,26 @@ export function TimelinePanel({
       </div>
     </div>
   );
+}
+
+function historyAction(
+  path: string,
+  body: Record<string, unknown>,
+  resultKind: "plan" | "caption" | "broll" | "music",
+  successLabel: string,
+) {
+  return { path, body, resultKind, successLabel } as const;
+}
+
+function brollHistoryBody(
+  snapshot: BrollRegionSnapshot,
+  sourceClips: NonNullable<EditPlanRecordSummary["plan"]["timeline"]>["clips"],
+) {
+  return {
+    start_ms: outputMsToSourceMs(snapshot.startMs, sourceClips),
+    end_ms: outputMsToSourceMs(snapshot.endMs, sourceClips, "end"),
+    disabled: snapshot.disabled,
+  };
 }
 
 function captionSegmentIndex(clip: TimelineClip, segments: CaptionSegment[]) {

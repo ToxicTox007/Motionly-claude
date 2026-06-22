@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -38,6 +38,7 @@ import { ScalePanel } from "./editor/ScalePanel";
 import {
   EditorHistoryProvider,
   useEditorHistory,
+  type DurableHistoryAction,
 } from "./editor/history-context";
 import {
   VideoPreview,
@@ -92,6 +93,27 @@ interface EditorClientProps {
 
 type InspectorTab = "ai" | "captions" | "broll" | "audio" | "look" | "history" | "scale" | "export";
 
+type EditorUiState = {
+  title: string;
+  saveStatus: "saving" | "saved" | "error";
+  playheadMs: number;
+  selectedClipId: string | null;
+  inspectorTab: InspectorTab;
+};
+
+type EditorUiAction = {
+  key: keyof EditorUiState;
+  value: unknown;
+};
+
+function editorUiReducer(state: EditorUiState, action: EditorUiAction): EditorUiState {
+  const current = state[action.key];
+  const value = typeof action.value === "function"
+    ? (action.value as (previous: typeof current) => typeof current)(current)
+    : action.value;
+  return { ...state, [action.key]: value } as EditorUiState;
+}
+
 const BrollTab = dynamic(
   () => import("./editor/tabs/broll-tab").then((mod) => mod.BrollTab),
   { loading: () => <InspectorLoading /> },
@@ -119,8 +141,19 @@ export function EditorClient(props: EditorClientProps) {
     maxExportResolution, visualStatus,
   } = props;
   const router = useRouter();
-  const [localTitle, setLocalTitle] = useState(title);
-  const [saveStatus, setSaveStatus] = useState<"saving" | "saved" | "error">("saved");
+  const [editorUi, dispatchEditorUi] = useReducer(editorUiReducer, {
+    title,
+    saveStatus: "saved",
+    playheadMs: 0,
+    selectedClipId: null,
+    inspectorTab: props.activePlanId ? "captions" : "ai",
+  });
+  const { title: localTitle, saveStatus, playheadMs, selectedClipId, inspectorTab } = editorUi;
+  const setLocalTitle = useCallback<React.Dispatch<React.SetStateAction<string>>>((value) => dispatchEditorUi({ key: "title", value }), []);
+  const setSaveStatus = useCallback<React.Dispatch<React.SetStateAction<"saving" | "saved" | "error">>>((value) => dispatchEditorUi({ key: "saveStatus", value }), []);
+  const setPlayheadMs = useCallback<React.Dispatch<React.SetStateAction<number>>>((value) => dispatchEditorUi({ key: "playheadMs", value }), []);
+  const setSelectedClipId = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((value) => dispatchEditorUi({ key: "selectedClipId", value }), []);
+  const setInspectorTab = useCallback<React.Dispatch<React.SetStateAction<InspectorTab>>>((value) => dispatchEditorUi({ key: "inspectorTab", value }), []);
   const lastSavedTitleRef = useRef(title);
 
   // Local mutable copies of server state so the UI updates immediately
@@ -149,13 +182,6 @@ export function EditorClient(props: EditorClientProps) {
   const activePlan = useMemo(
     () => localEditPlans.find((p) => p.id === localActivePlanId) ?? null,
     [localEditPlans, localActivePlanId],
-  );
-
-  // Timeline + playback state
-  const [playheadMs, setPlayheadMs] = useState(0);
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
-  const [inspectorTab, setInspectorTab]     = useState<InspectorTab>(() =>
-    localActivePlanId ? "captions" : "ai",
   );
 
   // Timeline data derived from all current project state
@@ -255,7 +281,7 @@ export function EditorClient(props: EditorClientProps) {
     });
     setLocalActivePlanId(plan.id);
     setInspectorTab("captions");
-  }, []);
+  }, [setInspectorTab]);
 
   const handlePlanUpdated = useCallback((plan: EditPlanRecordSummary) => {
     setLocalEditPlans((prev) => {
@@ -325,6 +351,26 @@ export function EditorClient(props: EditorClientProps) {
     void synchronizeCanonicalTimeline();
   }, [synchronizeCanonicalTimeline]);
 
+  const executeHistoryAction = useCallback(async (action: DurableHistoryAction) => {
+    const payload = await editorApiRequest<Record<string, any>>(
+      `${env.apiBaseUrl}${action.path}`,
+      {
+        method: "PATCH",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "The saved editor history action could not be applied.",
+        body: action.body,
+      },
+    );
+    if (action.resultKind === "plan" && payload.plan) handlePlanUpdated(payload.plan);
+    if (action.resultKind === "caption" && payload.track) handleCaptionTrackUpdated(payload.track);
+    if (action.resultKind === "broll" && payload.slot) handleBrollSlotUpdated(payload.slot);
+    if (action.resultKind === "music") handleMusicSelectionUpdated(payload as unknown as MusicSelectionSummary);
+    router.refresh();
+    return action.successLabel;
+  }, [apiAccessToken, handleBrollSlotUpdated, handleCaptionTrackUpdated, handleMusicSelectionUpdated, handlePlanUpdated, router, userId, workspaceId]);
+
   const saveProjectTitle = useCallback(
     async (nextTitle: string) => {
       const trimmed = nextTitle.trim() || "Untitled reel";
@@ -354,7 +400,7 @@ export function EditorClient(props: EditorClientProps) {
         setSaveStatus("error");
       }
     },
-    [apiAccessToken, projectId, router, userId, workspaceId],
+    [apiAccessToken, projectId, router, setLocalTitle, setSaveStatus, userId, workspaceId],
   );
 
   // ── Phase 1: no upload yet ───────────────────────────────────────────────
@@ -377,7 +423,10 @@ export function EditorClient(props: EditorClientProps) {
 
   // ── Phase 3: full 5-panel editor ─────────────────────────────────────────
   return (
-    <EditorHistoryProvider>
+    <EditorHistoryProvider
+      storageKey={`motionly:editor-history:${workspaceId}:${projectId}`}
+      executeAction={executeHistoryAction}
+    >
       <EditorClientEditor
         {...props}
         localEditPlans={localEditPlans}
@@ -574,6 +623,18 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         label,
         undo: async () => { await persistManualElements(before); return `${label} undone.`; },
         redo: async () => { await persistManualElements(next); return `${label} redone.`; },
+        undoAction: {
+          path: `/projects/${projectId}/plans/${activePlan!.id}/manual-elements`,
+          body: { manual_elements: before },
+          resultKind: "plan",
+          successLabel: `${label} undone.`,
+        },
+        redoAction: {
+          path: `/projects/${projectId}/plans/${activePlan!.id}/manual-elements`,
+          body: { manual_elements: next },
+          resultKind: "plan",
+          successLabel: `${label} redone.`,
+        },
       });
       setDropMessage(`${label} saved.`);
     } catch (error) {
@@ -581,7 +642,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     } finally {
       setElementSaving(false);
     }
-  }, [manualElements, persistManualElements, pushHistory]);
+  }, [activePlan, manualElements, persistManualElements, projectId, pushHistory]);
 
   const runAIElement = useCallback(async (entry: PaletteElement, clip: TimelineClip | null) => {
     if (!entry.aiAction) return;
@@ -1060,7 +1121,18 @@ function InspectorPanel({
           <VersionHistoryPanel projectId={projectId} workspaceId={workspaceId} userId={userId} apiAccessToken={apiAccessToken} activePlan={activePlan} onPlanRestored={onPlanUpdated} />
         )}
         {tab === "scale" && (
-          <ScalePanel projectId={projectId} workspaceId={workspaceId} userId={userId} apiAccessToken={apiAccessToken} activePlan={activePlan} onPlanUpdated={onPlanUpdated} />
+          <ScalePanel
+            projectId={projectId}
+            workspaceId={workspaceId}
+            userId={userId}
+            apiAccessToken={apiAccessToken}
+            activePlan={activePlan}
+            captionTrack={captionTracks[0] ?? null}
+            effectsConfig={effectsConfig}
+            onPlanUpdated={onPlanUpdated}
+            onCaptionTrackUpdated={onCaptionTrackUpdated}
+            onEffectsConfigUpdated={onEffectsConfigUpdated}
+          />
         )}
       </div>
     </div>
@@ -1316,6 +1388,21 @@ function UploadScreen({
 // ── Processing screen (phase 2 — upload processing) ───────────────────────────
 
 function ProcessingScreen({ title, status }: { title: string; status: string }) {
+  const router = useRouter();
+
+  useEffect(() => {
+    const refresh = () => router.refresh();
+    const timer = window.setInterval(refresh, 4000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [router]);
+
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
       <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">

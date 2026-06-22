@@ -16,5 +16,12 @@
     "supabase": "^2.104.0",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "@opentelemetry/core@<2.8.0": "2.8.0",
+      "postcss@<8.5.10": "8.5.10",
+      "ws@>=8.0.0 <8.21.0": "8.21.0"
+    }
   }
 }

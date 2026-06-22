@@ -222,7 +222,10 @@ async def get_upload_asset_urls(
             "Finish the source video upload before opening a preview.",
         )
 
-    ttl = request.app.state.settings.upload_signed_url_ttl_seconds
+    ttl = min(
+        request.app.state.settings.upload_signed_url_ttl_seconds,
+        StorageSigner.MAX_DOWNLOAD_TTL_SECONDS,
+    )
     source = storage_signer.create_signed_download(
         bucket=upload.storage_bucket,
         path=upload.storage_path,

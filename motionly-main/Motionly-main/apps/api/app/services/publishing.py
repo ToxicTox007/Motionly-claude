@@ -183,6 +183,59 @@ class PublishOAuthClient:
             name=str((channel.get("snippet") or {}).get("title") or "YouTube channel"),
         )
 
+    def refresh(self, connection: PublishConnectionRecord) -> OAuthAccount:
+        client_id, client_secret = self._credentials(connection.platform)
+        if connection.platform == PublishPlatform.YOUTUBE:
+            if not connection.refresh_token:
+                raise ApiError(
+                    401,
+                    "publish_reauthorization_required",
+                    "YouTube authorization expired. Reconnect the account.",
+                )
+            token = self._post_form(
+                "https://oauth2.googleapis.com/token",
+                {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": connection.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+        elif connection.platform == PublishPlatform.TIKTOK:
+            if not connection.refresh_token:
+                raise ApiError(
+                    401,
+                    "publish_reauthorization_required",
+                    "TikTok authorization expired. Reconnect the account.",
+                )
+            token = self._post_form(
+                "https://open.tiktokapis.com/v2/oauth/token/",
+                {
+                    "client_key": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": connection.refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+        else:
+            # Meta long-lived user/page tokens are renewed using the current token.
+            token = self._get_json(
+                f"https://graph.facebook.com/{self.settings.meta_graph_api_version}/oauth/access_token",
+                params={
+                    "grant_type": "fb_exchange_token",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "fb_exchange_token": connection.access_token,
+                },
+            )
+        if not token.get("refresh_token") and connection.refresh_token:
+            token["refresh_token"] = connection.refresh_token
+        return self._account(
+            token=token,
+            external_id=connection.external_account_id,
+            name=connection.account_name,
+        )
+
     def _credentials(self, platform: PublishPlatform) -> tuple[str, str]:
         values = {
             PublishPlatform.TIKTOK: (
@@ -426,32 +479,36 @@ class SocialPublishingClient:
     def _youtube(
         self, *, connection: PublishConnectionRecord, job: PublishJobRecord, video_url: str
     ) -> PublishedPost:
-        media = httpx.get(video_url, timeout=120)
-        media.raise_for_status()
         privacy = "unlisted" if job.privacy == "unlisted" else job.privacy
         metadata = {
             "snippet": {"title": job.title, "description": job.caption},
             "status": {"privacyStatus": privacy},
         }
-        boundary = f"motionly-{uuid.uuid4().hex}"
-        body = (
-            (
-                f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
-                f"{json.dumps(metadata)}\r\n--{boundary}\r\n"
-                f"Content-Type: {media.headers.get('content-type', 'video/mp4')}\r\n\r\n"
-            ).encode()
-            + media.content
-            + f"\r\n--{boundary}--\r\n".encode()
-        )
-        response = httpx.post(
-            "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
+        initiation = httpx.post(
+            "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
             headers={
                 "authorization": f"Bearer {connection.access_token}",
-                "content-type": f"multipart/related; boundary={boundary}",
+                "content-type": "application/json; charset=UTF-8",
             },
-            content=body,
-            timeout=300,
+            json=metadata,
+            timeout=30,
         )
+        if initiation.status_code >= 400:
+            self._json_response(initiation)
+        upload_url = initiation.headers.get("location")
+        if not upload_url:
+            raise ApiError(502, "social_publish_failed", "YouTube did not start the upload.")
+        with httpx.stream("GET", video_url, timeout=120) as media:
+            media.raise_for_status()
+            headers = {"content-type": media.headers.get("content-type", "video/mp4")}
+            if media.headers.get("content-length"):
+                headers["content-length"] = media.headers["content-length"]
+            response = httpx.put(
+                upload_url,
+                headers=headers,
+                content=media.iter_bytes(chunk_size=1024 * 1024),
+                timeout=300,
+            )
         post_id = str(self._json_response(response).get("id") or "")
         if not post_id:
             raise ApiError(502, "social_publish_failed", "YouTube did not return a video id.")
@@ -469,6 +526,12 @@ class SocialPublishingClient:
                 or detail.get("error")
                 or "The social platform rejected the publish request."
             )
+            if response.status_code in {401, 403}:
+                raise ApiError(
+                    401,
+                    "publish_token_expired",
+                    "Publishing authorization expired. Refreshing the connection is required.",
+                )
             raise ApiError(502, "social_publish_failed", message[:500])
         try:
             return response.json()
@@ -484,6 +547,7 @@ def execute_publish_job(
     render_repository,
     storage_signer,
     client: SocialPublishingClient,
+    oauth_client: PublishOAuthClient | None = None,
     job_id,
     workspace_id,
 ) -> PublishJobRecord:
@@ -493,13 +557,37 @@ def execute_publish_job(
     connection = publishing_repository.get_connection(
         connection_id=job.connection_id, workspace_id=workspace_id
     )
+    if (
+        oauth_client is not None
+        and connection.token_expires_at is not None
+        and connection.token_expires_at <= datetime.now(UTC) + timedelta(minutes=5)
+    ):
+        refreshed = oauth_client.refresh(connection)
+        connection = publishing_repository.update_connection_tokens(
+            connection=connection,
+            access_token=refreshed.access_token,
+            refresh_token=refreshed.refresh_token,
+            token_expires_at=refreshed.token_expires_at,
+        )
     export = render_repository.get_export(export_id=job.export_id, workspace_id=workspace_id)
     publishing_repository.update_job(job=job, status=PublishStatus.PUBLISHING, error_message=None)
     download = storage_signer.create_signed_download(
         bucket=export.storage_bucket, path=export.storage_path, expires_in_seconds=3600
     )
     try:
-        result = client.publish(connection=connection, job=job, video_url=download.url)
+        try:
+            result = client.publish(connection=connection, job=job, video_url=download.url)
+        except ApiError as exc:
+            if exc.code != "publish_token_expired" or oauth_client is None:
+                raise
+            refreshed = oauth_client.refresh(connection)
+            connection = publishing_repository.update_connection_tokens(
+                connection=connection,
+                access_token=refreshed.access_token,
+                refresh_token=refreshed.refresh_token,
+                token_expires_at=refreshed.token_expires_at,
+            )
+            result = client.publish(connection=connection, job=job, video_url=download.url)
     except Exception as exc:
         message = exc.message if isinstance(exc, ApiError) else "Publishing failed unexpectedly."
         publishing_repository.update_job(
