@@ -8,7 +8,7 @@ export default function PrivacyPage() {
       sections={[
         {
           title: "Data we process",
-          body: "Motionly processes account details, workspace activity, uploaded video files, generated transcripts, edit plans, renders, billing state, and support messages needed to provide the service.",
+          body: "Motionly processes account details, workspace activity, uploaded video files, generated transcripts, AI-populated timelines, renders, billing state, and support messages needed to provide the service.",
         },
         {
           title: "How data is used",

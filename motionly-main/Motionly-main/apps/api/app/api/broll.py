@@ -96,8 +96,10 @@ async def init_user_broll_upload(
         expires_in_seconds=request.app.state.settings.upload_signed_url_ttl_seconds,
     )
     orientation = (
-        StockOrientation.PORTRAIT if payload.height > payload.width
-        else StockOrientation.LANDSCAPE if payload.width > payload.height
+        StockOrientation.PORTRAIT
+        if payload.height > payload.width
+        else StockOrientation.LANDSCAPE
+        if payload.width > payload.height
         else StockOrientation.SQUARE
     )
     asset = repository.upsert_asset(
@@ -149,8 +151,7 @@ async def complete_user_broll_upload(
     if asset.provider != StockProviderKey.USER_LIBRARY:
         raise ApiError(409, "library_asset_required", "This is not a user library asset.")
     bucket = str(
-        asset.raw_metadata.get("storage_bucket")
-        or request.app.state.settings.upload_storage_bucket
+        asset.raw_metadata.get("storage_bucket") or request.app.state.settings.upload_storage_bucket
     )
     path = str(asset.raw_metadata.get("storage_path") or "")
     download = storage_signer.create_signed_download(
@@ -236,10 +237,13 @@ async def generate_broll(
     broll_queue: BrollQueueDep,
     providers: StockProvidersDep,
 ) -> BrollGenerateResponse:
-    if request.app.state.settings.billing_enabled and not build_billing_status(
-        actor.workspace_id,
-        billing_repository,
-    ).entitlements.broll:
+    if (
+        request.app.state.settings.billing_enabled
+        and not build_billing_status(
+            actor.workspace_id,
+            billing_repository,
+        ).entitlements.broll
+    ):
         raise ApiError(
             402,
             "broll_plan_required",
@@ -250,7 +254,7 @@ async def generate_broll(
             503,
             "stock_provider_unavailable",
             "No stock video provider is configured for B-roll generation.",
-    )
+        )
     started = time.perf_counter()
     plan = repository.active_plan(project_id=project_id, workspace_id=actor.workspace_id)
     visual_manifest = latest_visual_manifest_for_broll(
@@ -284,11 +288,7 @@ async def generate_broll(
         schema_version=BROLL_SCHEMA_VERSION,
         semantic_context=visual_manifest_cache_signature(visual_manifest),
     )
-    job = broll_queue.enqueue_broll(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        edit_plan_id=plan.id,
-    )
+    execution_id = f"sync-complete--broll--{project_id}--{plan.id}"
     if not payload.force:
         cached = repository.find_cached_slots(
             project_id=project_id,
@@ -298,7 +298,7 @@ async def generate_broll(
         if cached:
             return BrollGenerateResponse(
                 slots=[repository.response_for_slot(slot) for slot in cached],
-                job_id=job.id,
+                job_id=execution_id,
                 cached=True,
             )
 
@@ -389,9 +389,7 @@ async def generate_broll(
                 "keywords": [query, *broll_request.keywords][:8],
                 "intent": f"Support transcript moment with {query}",
                 "density": (
-                    payload.density
-                    if payload.density != "from_plan"
-                    else plan.broll_density.value
+                    payload.density if payload.density != "from_plan" else plan.broll_density.value
                 ),
                 "priority": broll_request.priority,
                 "selected_asset_id": selected.id if selected else None,
@@ -423,7 +421,7 @@ async def generate_broll(
     )
     return BrollGenerateResponse(
         slots=[repository.response_for_slot(slot) for slot in records],
-        job_id=job.id,
+        job_id=execution_id,
     )
 
 
@@ -552,13 +550,13 @@ async def search_broll_candidates(
         or slot.intent
     ).strip()
     raw_embedding = metadata.get("semantic_embedding")
-    semantic_embedding = [
-        float(value) for value in raw_embedding if isinstance(value, (int, float))
-    ] if isinstance(raw_embedding, list) else []
+    semantic_embedding = (
+        [float(value) for value in raw_embedding if isinstance(value, (int, float))]
+        if isinstance(raw_embedding, list)
+        else []
+    )
     target_shot_type = (
-        str(metadata.get("shot_type")).strip().lower()
-        if metadata.get("shot_type")
-        else None
+        str(metadata.get("shot_type")).strip().lower() if metadata.get("shot_type") else None
     )
     duplicate_provider_asset_ids: set[str] = set()
     used_shot_types: set[str] = set()

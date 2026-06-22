@@ -100,6 +100,26 @@ class InMemoryVisualRepository:
             return None
         return sorted(matches, key=lambda manifest: manifest.updated_at, reverse=True)[0]
 
+    def latest_for_upload(
+        self,
+        *,
+        uploaded_video_id: UUID,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> VideoManifestRecord | None:
+        matches = [
+            manifest
+            for manifest in self.manifests.values()
+            if manifest.uploaded_video_id == uploaded_video_id
+            and manifest.project_id == project_id
+            and manifest.workspace_id == workspace_id
+        ]
+        return (
+            sorted(matches, key=lambda manifest: manifest.updated_at, reverse=True)[0]
+            if matches
+            else None
+        )
+
     def create_manifest(
         self,
         *,
@@ -129,6 +149,22 @@ class InMemoryVisualRepository:
             error_message=error_message,
         )
         self.manifests[record.id] = record
+        return record
+
+    def transition_manifest(
+        self,
+        *,
+        record: VideoManifestRecord,
+        status: VisualManifestStatus,
+        manifest: VideoManifest | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> VideoManifestRecord:
+        record.status = status
+        record.manifest = manifest
+        record.error_code = error_code
+        record.error_message = error_message
+        record.updated_at = datetime.now(UTC)
         return record
 
     def _next_version(self, *, project_id: UUID, workspace_id: UUID) -> int:
@@ -204,6 +240,30 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
         rows = response.json()
         return self._record_from_row(rows[0]) if rows else None
 
+    def latest_for_upload(
+        self,
+        *,
+        uploaded_video_id: UUID,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> VideoManifestRecord | None:
+        response = httpx.get(
+            f"{self.rest_url}/video_manifests",
+            headers=self.headers,
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "uploaded_video_id": f"eq.{uploaded_video_id}",
+                "select": "*",
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._record_from_row(rows[0]) if rows else None
+
     def create_manifest(
         self,
         *,
@@ -233,6 +293,31 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
                 "manifest": manifest.model_dump(mode="json") if manifest else None,
                 "error_code": error_code,
                 "error_message": error_message,
+            },
+            timeout=20,
+        )
+        self._raise_for_supabase(response)
+        return self._record_from_row(response.json()[0])
+
+    def transition_manifest(
+        self,
+        *,
+        record: VideoManifestRecord,
+        status: VisualManifestStatus,
+        manifest: VideoManifest | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> VideoManifestRecord:
+        response = httpx.patch(
+            f"{self.rest_url}/video_manifests",
+            headers=self.headers,
+            params={"id": f"eq.{record.id}", "select": "*"},
+            json={
+                "status": status.value,
+                "manifest": manifest.model_dump(mode="json") if manifest else None,
+                "error_code": error_code,
+                "error_message": error_message,
+                "updated_at": datetime.now(UTC).isoformat(),
             },
             timeout=20,
         )

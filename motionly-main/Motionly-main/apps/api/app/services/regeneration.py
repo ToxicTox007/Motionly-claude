@@ -55,11 +55,7 @@ def affected_layers_for_request(payload: RegenerateRequest) -> list[Regeneration
     if controls.duration_preset is not None:
         roots.add(RegenerationLayer.PLAN)
 
-    affected = {
-        layer
-        for root in roots
-        for layer in DOWNSTREAM_DEPENDENCIES[root]
-    }
+    affected = {layer for root in roots for layer in DOWNSTREAM_DEPENDENCIES[root]}
     if affected and RegenerationLayer.RENDER not in affected:
         affected.add(RegenerationLayer.RENDER)
     return [layer for layer in PIPELINE_LAYERS if layer in affected]

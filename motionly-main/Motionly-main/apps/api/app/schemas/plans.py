@@ -128,6 +128,75 @@ class ManualElement(BaseModel):
         return self
 
 
+class TimelineSourceClip(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    source_video_id: UUID | None = None
+    source_start_ms: int = Field(ge=0)
+    source_end_ms: int = Field(gt=0)
+    output_start_ms: int = Field(ge=0)
+    output_end_ms: int = Field(gt=0)
+    reason: str = Field(default="timeline clip", min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "TimelineSourceClip":
+        if self.source_end_ms <= self.source_start_ms:
+            raise ValueError("source clip end must be after its start")
+        if self.output_end_ms <= self.output_start_ms:
+            raise ValueError("output clip end must be after its start")
+        if self.source_end_ms - self.source_start_ms != self.output_end_ms - self.output_start_ms:
+            raise ValueError("source and output clip durations must match")
+        return self
+
+
+class TimelineCaptionLayer(BaseModel):
+    id: str
+    index: int = Field(ge=0)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    text: str
+    words: list[dict[str, Any]] = Field(default_factory=list)
+    line_count: int = Field(default=1, ge=1)
+    highlight_words: list[str] = Field(default_factory=list)
+    style: dict[str, Any] = Field(default_factory=dict)
+
+
+class TimelineBrollLayer(BaseModel):
+    id: str
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    src: str = ""
+    source_start_ms: int | None = None
+    source_end_ms: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TimelineAudioLayer(BaseModel):
+    source_stems: dict[str, Any] | None = None
+    music: dict[str, Any] | None = None
+    sfx: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TimelineEffectsLayer(BaseModel):
+    color_grade: str = "clean_founder"
+    effects: list[str] = Field(default_factory=list)
+    zoom_moments: list[ZoomMoment] = Field(default_factory=list)
+    keyframes: list[dict[str, Any]] = Field(default_factory=list)
+    config: dict[str, Any] | None = None
+
+
+class TimelineDocument(BaseModel):
+    schema_version: Literal[1] = 1
+    duration_ms: int = Field(ge=1)
+    clips: list[TimelineSourceClip] = Field(default_factory=list, min_length=1, max_length=200)
+    captions: list[TimelineCaptionLayer] = Field(default_factory=list, max_length=1000)
+    broll: list[TimelineBrollLayer] = Field(default_factory=list, max_length=200)
+    audio: TimelineAudioLayer = Field(default_factory=TimelineAudioLayer)
+    manual_layers: list[ManualElement] = Field(default_factory=list, max_length=200)
+    transitions: list[ManualElement] = Field(default_factory=list, max_length=100)
+    effects: TimelineEffectsLayer = Field(default_factory=TimelineEffectsLayer)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class EditPlan(BaseModel):
     schema_version: int = EDIT_PLAN_SCHEMA_VERSION
     style: EditPlanStyle
@@ -141,6 +210,7 @@ class EditPlan(BaseModel):
     color_grade: str = Field(min_length=1, max_length=80)
     risk_flags: list[str] = Field(default_factory=list, max_length=10)
     manual_elements: list[ManualElement] = Field(default_factory=list, max_length=200)
+    timeline: TimelineDocument | None = None
 
 
 class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
@@ -265,6 +335,19 @@ class PlanManualElementsUpdateRequest(JsonStringBodyMixin, BaseModel):
 
 
 class PlanManualElementsUpdateResponse(BaseModel):
+    plan: EditPlanResponse
+
+
+class TimelineUpdateRequest(JsonStringBodyMixin, BaseModel):
+    timeline: TimelineDocument
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: Any) -> Any:
+        return cls._coerce_json_string_body(data)
+
+
+class TimelineUpdateResponse(BaseModel):
     plan: EditPlanResponse
     status: Literal["updated"] = "updated"
 

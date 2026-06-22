@@ -126,7 +126,7 @@ def test_generate_broll_creates_scored_vertical_slots() -> None:
     )
 
     assert response.status == "ready"
-    assert response.job_id.startswith(f"broll:{project_id}:")
+    assert response.job_id.startswith(f"sync-complete--broll--{project_id}--")
     assert len(response.slots) == 2
     assert all(slot.selected_asset for slot in response.slots)
     assert all(

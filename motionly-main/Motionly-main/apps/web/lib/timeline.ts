@@ -17,6 +17,7 @@ import type {
   TimelineState,
   TimelineTrack,
 } from "@motionly/shared";
+export { outputMsToSourceMs } from "@/lib/timeline-time.mjs";
 
 // ── Track accent colours (Tailwind utility strings) ──────────────────────────
 const TRACK_COLORS: Record<string, string> = {
@@ -47,15 +48,16 @@ export function buildTimelineState({
   brollSlots,
   musicSelection,
 }: BuildTimelineInput): TimelineState {
-  const totalDurationMs = upload?.duration_ms ?? 30_000;
+  const document = activePlan?.plan?.timeline ?? null;
+  const totalDurationMs = document?.duration_ms ?? upload?.duration_ms ?? 30_000;
 
   // ── Video track: one clip per cut in the edit plan ───────────────────────
-  const cuts = activePlan?.plan?.cuts ?? [];
+  const cuts = document?.clips ?? activePlan?.plan?.cuts ?? [];
   const videoClips: TimelineClip[] = cuts.map((cut, idx) => ({
     id: `cut-${idx}`,
     trackKind: "video",
-    startMs: cut.start_ms,
-    endMs: cut.end_ms,
+    startMs: "output_start_ms" in cut ? cut.output_start_ms : cut.start_ms,
+    endMs: "output_end_ms" in cut ? cut.output_end_ms : cut.end_ms,
     label: cut.reason?.slice(0, 32) ?? `Clip ${idx + 1}`,
     colorClass: TRACK_COLORS.video,
     disabled: false,
@@ -77,7 +79,18 @@ export function buildTimelineState({
   }
 
   // ── B-roll track: one clip per enabled slot ──────────────────────────────
-  const brollClips: TimelineClip[] = brollSlots
+  const brollClips: TimelineClip[] = document?.broll?.length
+    ? document.broll.map((layer) => ({
+        id: `broll-${layer.id}`,
+        trackKind: "broll" as const,
+        startMs: layer.start_ms,
+        endMs: layer.end_ms,
+        label: String(layer.metadata?.label ?? "B-roll").slice(0, 28),
+        colorClass: TRACK_COLORS.broll,
+        disabled: false,
+        sourceRef: { kind: "broll_slot" as const, id: layer.id },
+      }))
+    : brollSlots
     .filter((s) => s.status !== "disabled")
     .map((slot) => ({
       id: `broll-${slot.id}`,
@@ -92,7 +105,10 @@ export function buildTimelineState({
     }));
 
   // ── Caption track: one clip per segment ─────────────────────────────────
-  const captionClips: TimelineClip[] = (captionTrack?.segments ?? []).map(
+  const captionSegments = document?.captions?.length
+    ? document.captions
+    : captionTrack?.segments ?? [];
+  const captionClips: TimelineClip[] = captionSegments.map(
     (seg) => ({
       id: `caption-${seg.id ?? seg.index}`,
       trackKind: "caption" as const,
@@ -122,7 +138,9 @@ export function buildTimelineState({
     sourceRef: { kind: "music" as const, regionId: region.id },
   }));
 
-  const manualElements = activePlan?.plan?.manual_elements ?? [];
+  const manualElements = document
+    ? [...document.manual_layers, ...document.transitions]
+    : activePlan?.plan?.manual_elements ?? [];
   musicClips.push(...manualElements.filter((element) => element.type === "music").map((element) => ({
     id: `element-${element.id}`,
     trackKind: "music" as const,

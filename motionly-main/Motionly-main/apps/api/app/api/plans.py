@@ -33,6 +33,8 @@ from app.schemas.plans import (
     PlanSnapshotCreateResponse,
     PlanSnapshotListResponse,
     PlanSnapshotRestoreResponse,
+    TimelineUpdateRequest,
+    TimelineUpdateResponse,
 )
 from app.schemas.scale import ScaleResourceStatus
 from app.schemas.visual import VideoManifest
@@ -46,6 +48,11 @@ from app.services.edit_planner import (
 )
 from app.services.queue import PlanQueue
 from app.services.style_classifier import classify_edit_style
+from app.services.timeline_compiler import (
+    compile_timeline,
+    migrate_legacy_plan_to_timeline,
+    project_timeline_to_legacy_plan,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/plans", tags=["AI plans"])
 
@@ -86,7 +93,7 @@ async def create_plan(
 
     upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
     video_duration_ms = upload.metadata.duration_ms or transcript.duration_ms or 0
-    visual_manifest = _latest_visual_manifest(
+    visual_manifest, visual_context_flag = _visual_context(
         repository=repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -108,11 +115,7 @@ async def create_plan(
         visual_manifest=visual_manifest,
         style_classification=style_classification,
     )
-    job = plan_queue.enqueue_plan(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        transcript_id=transcript.id,
-    )
+    execution_id = f"sync-complete--plan--{project_id}--{transcript.id}"
     if not payload.force:
         cached = repository.find_cached_plan(
             project_id=project_id,
@@ -120,7 +123,21 @@ async def create_plan(
             cache_key=cache_key,
         )
         if cached:
-            return PlanCreateResponse(plan=cached.to_response(), job_id=job.id, cached=True)
+            migrated = migrate_legacy_plan_to_timeline(
+                plan=cached.plan,
+                source_video_id=upload.id,
+                source_duration_ms=video_duration_ms or cached.target_duration_s * 1000,
+            )
+            if migrated is not cached.plan:
+                cached = repository.update_plan_cuts(
+                    project_id=project_id,
+                    workspace_id=actor.workspace_id,
+                    plan_id=cached.id,
+                    plan=migrated,
+                    summary=cached.summary,
+                    target_duration_s=cached.target_duration_s,
+                )
+            return PlanCreateResponse(plan=cached.to_response(), job_id=execution_id, cached=True)
 
     result = planner_provider.create_plan(
         transcript=transcript,
@@ -133,6 +150,13 @@ async def create_plan(
         plan=result.plan,
         words=transcript.words,
         duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
+    )
+    if visual_context_flag and visual_context_flag not in plan.risk_flags:
+        plan = plan.model_copy(update={"risk_flags": [*plan.risk_flags, visual_context_flag][:10]})
+    plan = migrate_legacy_plan_to_timeline(
+        plan=plan,
+        source_video_id=upload.id,
+        source_duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
     )
     record = repository.create_plan(
         workspace_id=actor.workspace_id,
@@ -162,7 +186,7 @@ async def create_plan(
         user_id=actor.user_id,
         plan=record,
     )
-    return PlanCreateResponse(plan=record.to_response(), job_id=job.id)
+    return PlanCreateResponse(plan=record.to_response(), job_id=execution_id)
 
 
 def _apply_phase5_learning(
@@ -361,6 +385,24 @@ async def update_plan_cuts(
             "target_duration_s": target_duration_s,
         }
     )
+    plan = project_timeline_to_legacy_plan(
+        plan=plan,
+        timeline=compile_timeline(
+            plan=plan,
+            source_video_id=repository.get_active_upload(
+                project_id=project_id,
+                workspace_id=actor.workspace_id,
+            ).id,
+            source_duration_ms=(
+                repository.get_active_upload(
+                    project_id=project_id,
+                    workspace_id=actor.workspace_id,
+                ).metadata.duration_ms
+                or target_duration_s * 1000
+            ),
+            preserve_layers_from=record.plan.timeline,
+        ),
+    )
     updated = repository.update_plan_cuts(
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -459,6 +501,19 @@ async def update_plan_manual_elements(
         plan_id=plan_id,
     )
     plan = record.plan.model_copy(update={"manual_elements": payload.manual_elements})
+    upload = repository.get_active_upload(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    plan = project_timeline_to_legacy_plan(
+        plan=plan,
+        timeline=compile_timeline(
+            plan=plan,
+            source_video_id=upload.id,
+            source_duration_ms=upload.metadata.duration_ms or record.target_duration_s * 1000,
+            preserve_layers_from=record.plan.timeline,
+        ),
+    )
     updated = repository.update_plan_cuts(
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -494,19 +549,160 @@ async def update_plan_manual_elements(
     return PlanManualElementsUpdateResponse(plan=updated.to_response())
 
 
-def _latest_visual_manifest(
+@router.patch("/{plan_id}/timeline", response_model=TimelineUpdateResponse)
+async def update_project_timeline(
+    project_id: UUID,
+    plan_id: UUID,
+    payload: TimelineUpdateRequest,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
+) -> TimelineUpdateResponse:
+    record = repository.get_plan(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+    )
+    plan = project_timeline_to_legacy_plan(plan=record.plan, timeline=payload.timeline)
+    updated = repository.update_plan_cuts(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+        plan=plan,
+        summary=summarize_plan(
+            plan,
+            style_classification=record.summary.style_classification,
+        ),
+        target_duration_s=plan.target_duration_s,
+    )
+    record_ai_feedback(
+        request=request,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        edit_plan_id=plan_id,
+        event_type=AIEditFeedbackEventType.CHANGED,
+        layer=AIEditLayer.CUTS,
+        source="canonical_timeline",
+        decision_id=f"{plan_id}:timeline",
+        action="update_timeline",
+        user_payload={"timeline": payload.timeline.model_dump(mode="json")},
+        metadata={"timeline_schema_version": payload.timeline.schema_version},
+    )
+    return TimelineUpdateResponse(plan=updated.to_response())
+
+
+@router.post("/{plan_id}/compile-timeline", response_model=TimelineUpdateResponse)
+async def compile_project_timeline(
+    project_id: UUID,
+    plan_id: UUID,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+    request: Request,
+) -> TimelineUpdateResponse:
+    record = repository.get_plan(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+    )
+    upload = repository.get_active_upload(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    caption_tracks = repository.caption_repository.list_caption_tracks(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    caption_track = caption_tracks[0] if caption_tracks else None
+    broll_layers: list[dict[str, object]] = []
+    broll_repository = getattr(request.app.state, "broll_repository", None)
+    if broll_repository is not None:
+        for slot in broll_repository.list_slots(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        ):
+            if str(slot.status) == "disabled" or not slot.selected_asset_id:
+                continue
+            asset = broll_repository.get_asset(
+                project_id=project_id,
+                workspace_id=actor.workspace_id,
+                asset_id=slot.selected_asset_id,
+            )
+            broll_layers.append(
+                {
+                    "id": str(slot.id),
+                    "start_ms": slot.start_ms,
+                    "end_ms": slot.end_ms,
+                    "src": asset.download_url or asset.preview_video_url or "",
+                    "selected_asset_id": str(asset.id),
+                    "keywords": slot.keywords,
+                }
+            )
+    music = None
+    music_repository = getattr(request.app.state, "music_repository", None)
+    if music_repository is not None:
+        selection = music_repository.latest_selection(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
+        if selection is not None:
+            music = selection.to_response().model_dump(mode="json")
+    effects = None
+    effects_repository = getattr(request.app.state, "effects_repository", None)
+    if effects_repository is not None:
+        config = effects_repository.latest_config(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
+        if config is not None:
+            effects = config.to_response().model_dump(mode="json")
+    timeline = compile_timeline(
+        plan=record.plan,
+        source_video_id=upload.id,
+        source_duration_ms=upload.metadata.duration_ms or record.target_duration_s * 1000,
+        captions=caption_track.segments if caption_track else [],
+        caption_style=(caption_track.style.model_dump(mode="json") if caption_track else {}),
+        broll=broll_layers,
+        music=music,
+        effects_config=effects,
+        preserve_layers_from=record.plan.timeline,
+    )
+    plan = project_timeline_to_legacy_plan(plan=record.plan, timeline=timeline)
+    updated = repository.update_plan_cuts(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+        plan=plan,
+        summary=summarize_plan(
+            plan,
+            style_classification=record.summary.style_classification,
+        ),
+        target_duration_s=plan.target_duration_s,
+    )
+    return TimelineUpdateResponse(plan=updated.to_response())
+
+
+def _visual_context(
     *,
     repository: InMemoryPlanRepository,
     project_id: UUID,
     workspace_id: UUID,
     uploaded_video_id: UUID,
-) -> VideoManifest | None:
+) -> tuple[VideoManifest | None, str | None]:
     visual_repository = getattr(repository, "visual_repository", None)
     if visual_repository is None:
-        return None
+        return None, "visual_context_unavailable"
+    latest = visual_repository.latest_for_upload(
+        uploaded_video_id=uploaded_video_id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
     record = visual_repository.latest_ready_for_upload(
         uploaded_video_id=uploaded_video_id,
         project_id=project_id,
         workspace_id=workspace_id,
     )
-    return record.manifest if record and record.manifest else None
+    if record and record.manifest:
+        return record.manifest, None
+    status = latest.status.value if latest else "unavailable"
+    return None, f"visual_context_{status}"

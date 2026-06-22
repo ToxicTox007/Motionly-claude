@@ -129,12 +129,23 @@ class BeatImpactSettings(BaseModel):
     max_impacts: int = Field(default=12, ge=0, le=48)
 
 
+class SubjectTrackPoint(BaseModel):
+    timestamp_ms: int = Field(ge=0)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(ge=0, le=1)
+    height: float = Field(ge=0, le=1)
+    confidence: float = Field(ge=0, le=1)
+    source: Literal["face", "object"]
+
+
 class AutoReframeSettings(BaseModel):
     enabled: bool = False
     target_aspect: Literal["9:16", "1:1", "4:5", "16:9"] = "9:16"
     subject_x_pct: float = Field(default=50, ge=0, le=100)
     subject_y_pct: float = Field(default=50, ge=0, le=100)
     smoothing: float = Field(default=0.65, ge=0, le=1)
+    subject_track: list[SubjectTrackPoint] = Field(default_factory=list, max_length=10000)
 
 
 class MotionSettings(BaseModel):

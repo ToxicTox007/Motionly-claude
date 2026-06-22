@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     )
 
     app_env: str = Field(default="production", alias="APP_ENV")
+    process_role: str = Field(default="api", alias="PROCESS_ROLE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     api_cors_origins: str = Field(default="", alias="API_CORS_ORIGINS")
     api_public_base_url: AnyHttpUrl = Field(
@@ -32,8 +33,6 @@ class Settings(BaseSettings):
     export_storage_bucket: str = Field(default="exports", alias="EXPORT_STORAGE_BUCKET")
     export_signed_url_ttl_seconds: int = Field(default=300, alias="EXPORT_SIGNED_URL_TTL_SECONDS")
     media_work_dir: str = Field(default="/var/data/motionly/storage", alias="MEDIA_WORK_DIR")
-    upload_sync_processing: bool = Field(default=False, alias="UPLOAD_SYNC_PROCESSING")
-    render_sync_completion: bool = Field(default=False, alias="RENDER_SYNC_COMPLETION")
     render_execute_ffmpeg: bool = Field(default=True, alias="RENDER_EXECUTE_FFMPEG")
     ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
     ffmpeg_gpu_encoder: str = Field(default="h264_nvenc", alias="FFMPEG_GPU_ENCODER")
@@ -46,6 +45,7 @@ class Settings(BaseSettings):
     render_worker_concurrency: int = Field(default=1, alias="RENDER_WORKER_CONCURRENCY")
     rate_limit_per_minute: int = Field(default=120, alias="RATE_LIMIT_PER_MINUTE")
     admin_api_token: str | None = Field(default=None, alias="ADMIN_API_TOKEN")
+    admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
     admin_workspace_ids: str = Field(default="", alias="ADMIN_WORKSPACE_IDS")
     transcription_provider: str = Field(default="groq", alias="TRANSCRIPTION_PROVIDER")
     transcription_model: str = Field(default="whisper-large-v3-turbo", alias="TRANSCRIPTION_MODEL")
@@ -98,7 +98,6 @@ class Settings(BaseSettings):
     stripe_price_pro: str | None = Field(default=None, alias="STRIPE_PRICE_PRO")
     stripe_price_agency: str | None = Field(default=None, alias="STRIPE_PRICE_AGENCY")
     billing_enabled: bool = Field(default=False, alias="BILLING_ENABLED")
-    personal_use_mode: bool = Field(default=True, alias="PERSONAL_USE_MODE")
     billing_success_url: AnyHttpUrl | None = Field(default=None, alias="BILLING_SUCCESS_URL")
     billing_cancel_url: AnyHttpUrl | None = Field(default=None, alias="BILLING_CANCEL_URL")
     billing_portal_return_url: AnyHttpUrl | None = Field(
@@ -130,19 +129,17 @@ class Settings(BaseSettings):
         ]
 
     @property
-    def should_complete_renders_synchronously(self) -> bool:
-        return self.render_sync_completion
-
-    @property
-    def should_process_uploads_synchronously(self) -> bool:
-        return self.upload_sync_processing
-
-    @property
     def admin_workspace_id_list(self) -> set[str]:
         return {
             workspace_id.strip().lower()
             for workspace_id in self.admin_workspace_ids.split(",")
             if workspace_id.strip()
+        }
+
+    @property
+    def admin_user_id_list(self) -> set[str]:
+        return {
+            user_id.strip().lower() for user_id in self.admin_user_ids.split(",") if user_id.strip()
         }
 
 

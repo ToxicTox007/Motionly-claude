@@ -7,7 +7,7 @@ import pytest
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.api.internal_jobs import run_queue_job
-from app.api.visual import analyze_visual_manifest, get_visual_manifest
+from app.api.visual import analyze_visual_manifest, get_visual_manifest, get_visual_status
 from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
 from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.uploads import UploadStatus, VideoMetadata
@@ -34,17 +34,30 @@ def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> N
             actor=context.actor,
             repository=context.visual_repository,
             visual_queue=context.visual_queue,
-            provider=context.provider,
         )
     )
 
     assert first.cached is False
     assert first.job_id == f"visual--{context.project_id}--{upload.id}--{context.workspace_id}"
-    assert first.manifest.status == VisualManifestStatus.READY
+    assert first.manifest.status == VisualManifestStatus.QUEUED
     assert first.manifest.uploaded_video_id == upload.id
-    assert first.manifest.manifest is not None
+    assert first.manifest.manifest is None
 
-    manifest = first.manifest.manifest
+    asyncio.run(
+        run_queue_job(
+            queue_job_id=first.job_id,
+            request=context.request,
+            x_motionly_worker_token="worker-secret",
+        )
+    )
+    ready = context.visual_repository.latest_ready_for_upload(
+        uploaded_video_id=upload.id,
+        project_id=context.project_id,
+        workspace_id=context.workspace_id,
+    )
+    assert ready is not None and ready.manifest is not None
+
+    manifest = ready.manifest
     assert manifest.provider == "fixture_visual"
     assert manifest.sample_rate_fps == 2.0
     assert manifest.frame_count == len(manifest.frame_samples)
@@ -86,12 +99,11 @@ def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> N
             actor=context.actor,
             repository=context.visual_repository,
             visual_queue=context.visual_queue,
-            provider=context.provider,
         )
     )
 
     assert second.cached is True
-    assert second.manifest.id == first.manifest.id
+    assert second.manifest.id == ready.id
     assert second.manifest.version == first.manifest.version
 
     fetched = asyncio.run(
@@ -101,7 +113,7 @@ def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> N
             repository=context.visual_repository,
         )
     )
-    assert fetched.id == first.manifest.id
+    assert fetched.id == ready.id
     assert fetched.manifest is not None
     assert fetched.manifest.summary["top_objects"]
 
@@ -118,7 +130,13 @@ def test_visual_analysis_force_creates_new_manifest_version(tmp_path) -> None:
             actor=context.actor,
             repository=context.visual_repository,
             visual_queue=context.visual_queue,
-            provider=context.provider,
+        )
+    )
+    asyncio.run(
+        run_queue_job(
+            queue_job_id=first.job_id,
+            request=context.request,
+            x_motionly_worker_token="worker-secret",
         )
     )
     forced = asyncio.run(
@@ -129,15 +147,14 @@ def test_visual_analysis_force_creates_new_manifest_version(tmp_path) -> None:
             actor=context.actor,
             repository=context.visual_repository,
             visual_queue=context.visual_queue,
-            provider=context.provider,
         )
     )
 
     assert forced.cached is False
     assert forced.manifest.id != first.manifest.id
     assert forced.manifest.version == first.manifest.version + 1
-    assert forced.manifest.manifest is not None
-    assert forced.manifest.manifest.sample_rate_fps == 1.0
+    assert forced.manifest.status == VisualManifestStatus.QUEUED
+    assert forced.manifest.manifest is None
 
 
 def test_visual_analysis_rejects_upload_that_is_not_ready(tmp_path) -> None:
@@ -153,7 +170,6 @@ def test_visual_analysis_rejects_upload_that_is_not_ready(tmp_path) -> None:
                 actor=context.actor,
                 repository=context.visual_repository,
                 visual_queue=context.visual_queue,
-                provider=context.provider,
             )
         )
 
@@ -191,6 +207,45 @@ def test_worker_runs_visual_analysis_job(tmp_path) -> None:
     assert latest is not None
     assert latest.manifest is not None
     assert latest.manifest.scenes
+
+
+def test_visual_status_is_processing_then_ready(tmp_path) -> None:
+    context = _make_visual_context(tmp_path)
+    _seed_upload(context, status=UploadStatus.READY)
+    scheduled = asyncio.run(
+        analyze_visual_manifest(
+            project_id=context.project_id,
+            payload=VisualAnalyzeRequest(),
+            request=context.request,
+            actor=context.actor,
+            repository=context.visual_repository,
+            visual_queue=context.visual_queue,
+        )
+    )
+    processing = asyncio.run(
+        get_visual_status(
+            project_id=context.project_id,
+            actor=context.actor,
+            repository=context.visual_repository,
+        )
+    )
+    assert processing.status == "processing"
+    asyncio.run(
+        run_queue_job(
+            queue_job_id=scheduled.job_id,
+            request=context.request,
+            x_motionly_worker_token="worker-secret",
+        )
+    )
+    ready = asyncio.run(
+        get_visual_status(
+            project_id=context.project_id,
+            actor=context.actor,
+            repository=context.visual_repository,
+        )
+    )
+    assert ready.status == "ready"
+    assert ready.manifest and ready.manifest.manifest
 
 
 def _make_visual_context(tmp_path) -> SimpleNamespace:

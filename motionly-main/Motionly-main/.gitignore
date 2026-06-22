@@ -7,6 +7,7 @@ coverage
 .env
 .env.local
 .env.*.local
+env.local.txt
 __pycache__
 .pytest_cache
 .ruff_cache

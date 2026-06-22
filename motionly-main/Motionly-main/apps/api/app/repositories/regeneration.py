@@ -95,14 +95,17 @@ class InMemoryRegenerationRepository:
         export_options: ExportOptions,
         settings_summary: dict[str, object],
     ) -> ControlSettingsRecord:
-        version = max(
-            [
-                record.version
-                for record in self.control_settings.values()
-                if record.workspace_id == workspace_id and record.project_id == project_id
-            ],
-            default=0,
-        ) + 1
+        version = (
+            max(
+                [
+                    record.version
+                    for record in self.control_settings.values()
+                    if record.workspace_id == workspace_id and record.project_id == project_id
+                ],
+                default=0,
+            )
+            + 1
+        )
         record = ControlSettingsRecord(
             id=uuid4(),
             workspace_id=workspace_id,
@@ -280,9 +283,7 @@ class SupabaseRegenerationRepository(InMemoryRegenerationRepository):
             action=RegenerationAction(str(row["action"])) if row.get("action") else None,
             export_options=ExportOptions.model_validate(row.get("export_options") or {}),
             settings_summary=(
-                row.get("settings_summary")
-                if isinstance(row.get("settings_summary"), dict)
-                else {}
+                row.get("settings_summary") if isinstance(row.get("settings_summary"), dict) else {}
             ),
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
         )
@@ -302,9 +303,7 @@ class SupabaseRegenerationRepository(InMemoryRegenerationRepository):
             ),
             cache_key=str(row["cache_key"]),
             settings_summary=(
-                row.get("settings_summary")
-                if isinstance(row.get("settings_summary"), dict)
-                else {}
+                row.get("settings_summary") if isinstance(row.get("settings_summary"), dict) else {}
             ),
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
         )

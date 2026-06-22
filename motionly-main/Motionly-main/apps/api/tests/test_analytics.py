@@ -111,8 +111,7 @@ def test_plan_suggestions_and_manual_cut_overrides_create_feedback_events() -> N
         limit=20,
     )
     assert any(
-        event.event_type == AIEditFeedbackEventType.AI_SUGGESTED
-        and event.layer == AIEditLayer.CUTS
+        event.event_type == AIEditFeedbackEventType.AI_SUGGESTED and event.layer == AIEditLayer.CUTS
         for event in suggested
     )
 

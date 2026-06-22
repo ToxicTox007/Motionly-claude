@@ -15,6 +15,7 @@ from app.services.transcription_jobs import (
 )
 from app.services.upload_jobs import complete_upload_preprocessing_by_id
 from app.services.visual_intelligence import run_visual_analysis_for_upload
+from app.services.visual_jobs import queue_visual_analysis_for_upload, visual_provider_identity
 
 router = APIRouter(prefix="/internal/jobs", tags=["internal jobs"])
 
@@ -44,7 +45,19 @@ async def run_queue_job(
     x_motionly_worker_token: str | None = Header(default=None),
 ) -> WorkerJobRunResponse:
     await require_worker_token(request, x_motionly_worker_token)
+    if getattr(request.app.state.settings, "app_env", "test") == "production":
+        raise ApiError(
+            410,
+            "direct_worker_execution_required",
+            "Media jobs execute from BullMQ workers and cannot run through the API process.",
+        )
     registry: QueueRegistry = request.app.state.queue_registry
+    if isinstance(registry, BullMQQueueRegistry):
+        raise ApiError(
+            410,
+            "direct_worker_execution_required",
+            "BullMQ jobs execute in dedicated workers and cannot run through the API process.",
+        )
     try:
         job = registry.jobs[queue_job_id]
     except KeyError as exc:
@@ -112,6 +125,22 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
                     "transcript_status": transcript.status.value,
                 }
             )
+        if all(hasattr(request.app.state, name) for name in ("visual_repository", "visual_queue")):
+            provider_name, model = visual_provider_identity(settings)
+            scheduled = queue_visual_analysis_for_upload(
+                upload=upload,
+                repository=request.app.state.visual_repository,
+                visual_queue=request.app.state.visual_queue,
+                provider=provider_name,
+                model=model,
+            )
+            result.update(
+                {
+                    "visual_manifest_id": str(scheduled.manifest.id),
+                    "visual_status": scheduled.manifest.status.value,
+                    "visual_job_id": scheduled.job.id if scheduled.job else None,
+                }
+            )
         return result
 
     if job.kind == "transcription":
@@ -135,9 +164,16 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         }
 
     if job.kind == "visual_analysis":
+        provider = request.app.state.visual_intelligence_provider
+        if getattr(provider, "provider_name", "") != "fixture_visual":
+            raise ApiError(
+                409,
+                "visual_gpu_worker_required",
+                "Production visual inference must run in the dedicated GPU/ML worker.",
+            )
         record = run_visual_analysis_for_upload(
             repository=request.app.state.visual_repository,
-            provider=request.app.state.visual_intelligence_provider,
+            provider=provider,
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             video_id=job.resource_id,

@@ -3,12 +3,14 @@
 import { Job } from "bullmq";
 import {
   bullConnection,
+  allQueueNames,
   bullPriority,
   defaultJobOptions,
   normalizeJobRecord,
   queueFor,
-  queueNames,
 } from "./queue-common.mjs";
+
+const queueNames = allQueueNames;
 
 async function readStdinJson() {
   const chunks = [];
@@ -94,23 +96,78 @@ async function cancel(connection, payload) {
   return normalizeJobRecord(job, state);
 }
 
+async function markStuckDeadLetter(connection, payload) {
+  const cutoff = Date.now() - Math.max(1, Number(payload.timeout_seconds || 1)) * 1000;
+  const transitioned = [];
+  for (const queueName of queueNames) {
+    const queue = queueFor(queueName, connection);
+    const active = await queue.getJobs(["active"], 0, 499, true);
+    for (const job of active) {
+      const startedAt = Number(job.processedOn || job.timestamp || Date.now());
+      if (startedAt > cutoff) continue;
+      await job.updateData({
+        ...job.data,
+        status: "dead_letter",
+        dead_lettered_at: new Date().toISOString(),
+        dead_letter_reason: "stuck_timeout",
+      });
+      transitioned.push(normalizeJobRecord(job, "active"));
+    }
+  }
+  return transitioned;
+}
+
+async function execute(command, connection, payload) {
+  return command === "enqueue"
+    ? enqueue(connection, payload)
+    : command === "jobs"
+      ? jobs(connection)
+      : command === "retry"
+        ? retry(connection, payload)
+      : command === "cancel"
+        ? cancel(connection, payload)
+        : markStuckDeadLetter(connection, payload);
+}
+
+async function serve(connection) {
+  process.stdin.setEncoding("utf8");
+  let buffer = "";
+  for await (const chunk of process.stdin) {
+    buffer += chunk;
+    let newline;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      let request = {};
+      try {
+        request = JSON.parse(line);
+        const result = await execute(request.command, connection, request.payload || {});
+        process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+      } catch (error) {
+        process.stdout.write(`${JSON.stringify({
+          id: request.id || null,
+          error: error instanceof Error ? error.message : String(error),
+        })}\n`);
+      }
+    }
+  }
+}
+
 async function main() {
   const command = process.argv[2];
-  if (!["enqueue", "jobs", "retry", "cancel"].includes(command)) {
-    throw new Error("Usage: queue-bridge.mjs [enqueue|jobs|retry|cancel]");
+  if (!["enqueue", "jobs", "retry", "cancel", "mark-stuck-dead-letter", "serve"].includes(command)) {
+    throw new Error("Usage: queue-bridge.mjs [enqueue|jobs|retry|cancel|mark-stuck-dead-letter|serve]");
   }
-  const payload = await readStdinJson();
   const connection = bullConnection();
   try {
-    const result =
-      command === "enqueue"
-        ? await enqueue(connection, payload)
-        : command === "jobs"
-          ? await jobs(connection)
-          : command === "retry"
-            ? await retry(connection, payload)
-            : await cancel(connection, payload);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (command === "serve") {
+      await serve(connection);
+    } else {
+      const payload = await readStdinJson();
+      const result = await execute(command, connection, payload);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    }
   } finally {
     await connection.quit();
   }

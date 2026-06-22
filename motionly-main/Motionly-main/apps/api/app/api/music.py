@@ -140,11 +140,7 @@ async def select_music(
         sfx_intensity=sfx_intensity,
         track_id=track.id if track else None,
     )
-    job = music_queue.enqueue_music_selection(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        edit_plan_id=plan.id,
-    )
+    execution_id = f"sync-complete--music--{project_id}--{plan.id}"
 
     if not payload.force:
         cached = repository.find_cached_selection(
@@ -155,13 +151,12 @@ async def select_music(
         if cached:
             return MusicSelectResponse(
                 selection=repository.response_for_selection(cached),
-                job_id=job.id,
+                job_id=execution_id,
                 cached=True,
             )
 
     plan_duration_ms = (
-        max((cut.end_ms for cut in plan.plan.cuts), default=0)
-        or plan.plan.target_duration_s * 1000
+        max((cut.end_ms for cut in plan.plan.cuts), default=0) or plan.plan.target_duration_s * 1000
     )
     regions = (
         [MusicRegion(id="music-0", start_ms=0, end_ms=plan_duration_ms)]
@@ -202,7 +197,7 @@ async def select_music(
 
     return MusicSelectResponse(
         selection=repository.response_for_selection(selection),
-        job_id=job.id,
+        job_id=execution_id,
     )
 
 

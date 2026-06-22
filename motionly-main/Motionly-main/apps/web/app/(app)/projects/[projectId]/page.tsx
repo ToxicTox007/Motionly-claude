@@ -1,13 +1,16 @@
 import type {
   BrollSlotSummary,
+  BillingStatusSummary,
   CaptionTrackSummary,
   EditPlanRecordSummary,
   EffectsConfigSummary,
   ExportSummary,
+  ExportResolution,
   MusicSelectionSummary,
   RenderJobSummary,
   TranscriptSummary,
   UploadedVideoSummary,
+  VisualAnalysisStatusSummary,
 } from "@motionly/shared";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
@@ -89,6 +92,8 @@ export default async function ProjectDetailsPage({
     effectsConfig,
     rendersPayload,
     exportsPayload,
+    billingStatus,
+    visualStatus,
   ] = await Promise.all([
     upload
       ? apiGet<{ source_video_url?: string; thumbnail_url?: string | null }>(
@@ -107,6 +112,8 @@ export default async function ProjectDetailsPage({
     apiGet<EffectsConfigSummary>(`/projects/${projectId}/effects`, headers),
     apiGet<{ jobs?: RenderJobSummary[] }>(`/projects/${projectId}/renders`, headers),
     apiGet<{ exports?: ExportSummary[] }>(`/projects/${projectId}/exports`, headers),
+    apiGet<BillingStatusSummary>(`/billing/status`, headers),
+    apiGet<VisualAnalysisStatusSummary>(`/projects/${projectId}/visual/status`, headers),
   ]);
 
   const editPlans = plansPayload?.plans ?? [];
@@ -134,8 +141,16 @@ export default async function ProjectDetailsPage({
       effectsConfig={effectsConfig}
       renderJobs={rendersPayload?.jobs ?? []}
       exports={exportsPayload?.exports ?? []}
+      maxExportResolution={toExportResolution(
+        billingStatus?.entitlements.max_resolution,
+      )}
+      visualStatus={visualStatus ?? { status: "unavailable", message: "Visual context is unavailable; editing will continue using transcript and audio." }}
     />
   );
+}
+
+function toExportResolution(value: string | undefined): ExportResolution {
+  return value === "4k" || value === "1080p" ? value : "720p";
 }
 
 async function getApiContext(projectId: string): Promise<ApiContext> {

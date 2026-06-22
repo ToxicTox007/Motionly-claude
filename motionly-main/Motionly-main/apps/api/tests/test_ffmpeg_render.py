@@ -1,4 +1,7 @@
+import hashlib
+import subprocess
 from pathlib import Path
+from shutil import which as system_which
 from types import SimpleNamespace
 
 import pytest
@@ -135,9 +138,7 @@ def test_demucs_vocal_stem_is_resolved_from_render_manifest(tmp_path: Path) -> N
     mix = _audio_mix_from_manifest(
         {
             "render_props": {
-                "sourceStems": {
-                    "vocals": {"bucket": "raw-uploads", "path": "stems/vocals.wav"}
-                }
+                "sourceStems": {"vocals": {"bucket": "raw-uploads", "path": "stems/vocals.wav"}}
             }
         },
         storage=storage,
@@ -291,6 +292,83 @@ def test_ffmpeg_renderer_trims_and_concats_keep_segments(
     assert "concat=n=2:v=0:a=1[acut]" in filter_graph
     assert command[command.index("-map") + 1] == "[vout]"
     assert command[command.index("-map", command.index("-map") + 1) + 1] == "[acut]"
+
+
+@pytest.mark.skipif(
+    system_which("ffmpeg") is None or system_which("ffprobe") is None,
+    reason="FFmpeg integration tools are required",
+)
+def test_editing_cut_changes_encoded_ffmpeg_frames_and_timing(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=160x90:rate=10:duration=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=44100:duration=4",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            str(source),
+        ],
+        check=True,
+    )
+    renderer = FFmpegCaptionRenderer()
+    outputs = [tmp_path / "opening.mp4", tmp_path / "payoff.mp4"]
+    for output, segment in zip(
+        outputs,
+        [
+            CutSegment(start_ms=0, end_ms=1000, reason="opening"),
+            CutSegment(start_ms=2500, end_ms=3500, reason="payoff"),
+        ],
+        strict=True,
+    ):
+        renderer.render(
+            source_path=source,
+            ass_path=None,
+            output_path=output,
+            specs=RenderSpecs(width=160, height=90, fps=10),
+            keep_segments=[segment],
+        )
+
+    hashes = [hashlib.sha256(output.read_bytes()).hexdigest() for output in outputs]
+    durations = [
+        float(
+            subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        for output in outputs
+    ]
+    assert hashes[0] != hashes[1]
+    assert all(0.9 <= duration <= 1.2 for duration in durations)
 
 
 def test_ffmpeg_renderer_preserves_stderr_tail_on_failure(

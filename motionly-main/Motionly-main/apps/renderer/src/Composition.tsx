@@ -11,6 +11,7 @@ import { VideoScene } from "./components/VideoScene";
 import { ManualElements } from "./components/ManualElements";
 import { getTemplate } from "./templates/registry";
 import type { MotionlyRenderProps } from "./types";
+import { sourceTimelineClips } from "./timeline";
 
 export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
   const template = getTemplate(input.templateId);
@@ -20,7 +21,7 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
       <VisualGrade input={input}>
         <VideoScene input={input} template={template} />
       </VisualGrade>
-      {input.sourceStems?.vocals?.src ? <Audio src={input.sourceStems.vocals.src} /> : null}
+      <CutMappedVocalStem input={input} />
       <MusicAndSfxMix input={input} />
       <ManualElements elements={input.editPlan.manual_elements} />
       <AnimatedCaptions
@@ -35,6 +36,34 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
         </div>
       ) : null}
     </AbsoluteFill>
+  );
+}
+
+function CutMappedVocalStem({ input }: { input: MotionlyRenderProps }) {
+  const source = input.sourceStems?.vocals?.src;
+  const { fps } = useVideoConfig();
+  if (!source) return null;
+  return (
+    <>
+      {sourceTimelineClips(input).map((clip) => (
+        <Sequence
+          key={`vocals-${clip.id}`}
+          from={Math.round((clip.output_start_ms / 1000) * fps)}
+          durationInFrames={Math.max(
+            1,
+            Math.round(
+              ((clip.output_end_ms - clip.output_start_ms) / 1000) * fps,
+            ),
+          )}
+        >
+          <Audio
+            src={source}
+            startFrom={Math.round((clip.source_start_ms / 1000) * fps)}
+            endAt={Math.round((clip.source_end_ms / 1000) * fps)}
+          />
+        </Sequence>
+      ))}
+    </>
   );
 }
 

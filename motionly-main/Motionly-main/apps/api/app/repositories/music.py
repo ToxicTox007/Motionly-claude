@@ -201,15 +201,17 @@ class InMemoryMusicRepository:
         cache_key: str | None,
         regions: list[MusicRegion] | None = None,
     ) -> MusicSelectionRecord:
-        version = max(
-            [
-                selection.version
-                for selection in self.selections.values()
-                if selection.project_id == project_id
-                and selection.workspace_id == workspace_id
-            ],
-            default=0,
-        ) + 1
+        version = (
+            max(
+                [
+                    selection.version
+                    for selection in self.selections.values()
+                    if selection.project_id == project_id and selection.workspace_id == workspace_id
+                ],
+                default=0,
+            )
+            + 1
+        )
         record = MusicSelectionRecord(
             id=uuid4(),
             workspace_id=workspace_id,
@@ -498,9 +500,7 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
     def _selection_from_row(self, row: dict[str, object]) -> MusicSelectionRecord:
         raw_regions = row.get("regions") or []
         regions = (
-            [MusicRegion(**item) for item in raw_regions]
-            if isinstance(raw_regions, list)
-            else []
+            [MusicRegion(**item) for item in raw_regions] if isinstance(raw_regions, list) else []
         )
         return MusicSelectionRecord(
             id=UUID(row["id"]),

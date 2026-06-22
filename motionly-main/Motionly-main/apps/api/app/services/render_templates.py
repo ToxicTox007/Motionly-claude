@@ -18,7 +18,7 @@ from app.schemas.renders import (
 )
 from app.schemas.uploads import VideoMetadata
 
-RENDERER_VERSION = "remotion-premium-v1"
+RENDERER_VERSION = "remotion-timeline-v2"
 
 
 @dataclass(frozen=True)

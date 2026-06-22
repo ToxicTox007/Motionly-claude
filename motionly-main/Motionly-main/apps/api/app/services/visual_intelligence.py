@@ -81,6 +81,30 @@ class FixtureVisualIntelligenceProvider:
         )
 
 
+class WorkerOnlyVisualIntelligenceProvider:
+    """Control-plane sentinel: production inference belongs to the ML worker image."""
+
+    provider_name = "gpu_ml_worker"
+
+    def __init__(self, *, model: str) -> None:
+        self.model = model
+
+    def analyze(
+        self,
+        *,
+        source_path: Path,
+        metadata: VideoMetadata,
+        sample_rate_fps: float,
+        scene_threshold: float,
+    ) -> VideoManifest:
+        del source_path, metadata, sample_rate_fps, scene_threshold
+        raise ApiError(
+            409,
+            "visual_gpu_worker_required",
+            "Visual inference runs only in the dedicated GPU/ML worker.",
+        )
+
+
 class LocalMLVisualIntelligenceProvider:
     provider_name = "local_ml_visual"
 
@@ -280,6 +304,28 @@ def run_visual_analysis_for_upload(
             "source_video_not_ready",
             "Finish upload preprocessing before running visual analysis.",
         )
+    record = repository.latest_for_upload(
+        uploaded_video_id=video_id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    if record is not None and record.status == VisualManifestStatus.READY and record.manifest:
+        return record
+    if record is None:
+        record = repository.create_manifest(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            uploaded_video_id=video_id,
+            status=VisualManifestStatus.PROCESSING,
+            provider=provider.provider_name,
+            model=provider.model,
+            manifest=None,
+        )
+    else:
+        record = repository.transition_manifest(
+            record=record,
+            status=VisualManifestStatus.PROCESSING,
+        )
     storage = create_object_storage(
         root=media_work_dir,
         supabase_url=supabase_url,
@@ -294,25 +340,30 @@ def run_visual_analysis_for_upload(
             scene_threshold=scene_threshold,
         )
     except ApiError as exc:
-        repository.create_manifest(
-            workspace_id=workspace_id,
-            project_id=project_id,
-            uploaded_video_id=video_id,
+        repository.transition_manifest(
+            record=record,
             status=VisualManifestStatus.FAILED,
-            provider=provider.provider_name,
-            model=provider.model,
             manifest=None,
             error_code=exc.code,
             error_message=exc.message,
         )
         raise
-    return repository.create_manifest(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        uploaded_video_id=video_id,
+    except Exception as exc:
+        repository.transition_manifest(
+            record=record,
+            status=VisualManifestStatus.FAILED,
+            manifest=None,
+            error_code="visual_analysis_failed",
+            error_message="Visual analysis failed; planning will continue without visual context.",
+        )
+        raise ApiError(
+            502,
+            "visual_analysis_failed",
+            "Visual analysis failed; planning will continue without visual context.",
+        ) from exc
+    return repository.transition_manifest(
+        record=record,
         status=VisualManifestStatus.READY,
-        provider=provider.provider_name,
-        model=provider.model,
         manifest=manifest,
     )
 
@@ -338,12 +389,16 @@ def _fixture_frame_sample(
             box=BoundingBox(x=0.28, y=0.18, width=0.44, height=0.56),
         )
     ]
-    faces = [
-        FaceDetection(
-            confidence=0.76,
-            box=BoundingBox(x=0.38, y=0.16, width=0.22, height=0.18),
-        )
-    ] if index % 2 == 0 else []
+    faces = (
+        [
+            FaceDetection(
+                confidence=0.76,
+                box=BoundingBox(x=0.38, y=0.16, width=0.22, height=0.18),
+            )
+        ]
+        if index % 2 == 0
+        else []
+    )
     scene_type = SceneType.TALKING_HEAD if faces else SceneType.PRODUCT
     return FrameSample(
         timestamp_ms=timestamp_ms,
@@ -487,10 +542,7 @@ def _mediapipe_faces(*, face_detector, rgb) -> list[FaceDetection]:
 def _dominant_colors(*, image) -> list[DominantColor]:
     small = image.resize((64, 64)).convert("RGB")
     pixels = list(small.getdata())
-    quantized = [
-        (round(r / 32) * 32, round(g / 32) * 32, round(b / 32) * 32)
-        for r, g, b in pixels
-    ]
+    quantized = [(round(r / 32) * 32, round(g / 32) * 32, round(b / 32) * 32) for r, g, b in pixels]
     total = max(len(quantized), 1)
     colors = []
     for (r, g, b), count in sorted(

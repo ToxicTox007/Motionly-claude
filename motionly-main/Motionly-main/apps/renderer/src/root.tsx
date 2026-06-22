@@ -1,6 +1,7 @@
 import { Composition } from "remotion";
 import { MotionlyPremiumComposition } from "./Composition";
 import type { MotionlyRenderProps } from "./types";
+import { outputDurationMs } from "./timeline";
 
 const defaultRenderProps: MotionlyRenderProps = {
   sourceVideo: {
@@ -61,6 +62,6 @@ export function RemotionRoot() {
 function durationInFrames(props: MotionlyRenderProps) {
   return Math.max(
     1,
-    Math.ceil((props.sourceVideo.duration_ms / 1000) * props.exportSettings.fps),
+    Math.ceil((outputDurationMs(props) / 1000) * props.exportSettings.fps),
   );
 }

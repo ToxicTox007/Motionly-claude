@@ -110,6 +110,7 @@ async def separate_audio_stems(
         resource_id=record.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
+        resource_kind=record.kind,
     )
     return record.to_response()
 
@@ -151,6 +152,7 @@ async def generate_runway_broll(
         resource_id=record.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
+        resource_kind=record.kind,
     )
     return record.to_response()
 
@@ -288,6 +290,7 @@ async def train_style_profile(
         resource_id=profile.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
+        resource_kind=profile.kind,
     )
     return profile.to_response()
 
@@ -442,6 +445,7 @@ async def start_model_training(
         resource_id=record.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
+        resource_kind=record.kind,
     )
     return record.to_response()
 

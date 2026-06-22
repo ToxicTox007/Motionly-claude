@@ -26,6 +26,7 @@ from app.repositories.renders import InMemoryRenderRepository
 from app.schemas.billing import BillingPlanKey
 from app.schemas.broll import BrollSlotStatus
 from app.schemas.captions import CaptionSegment, TranscriptWord
+from app.schemas.plans import EditPlan
 from app.schemas.renders import (
     CutSegment,
     DurationPreset,
@@ -48,7 +49,6 @@ from app.services.ass_captions import caption_track_to_ass
 from app.services.billing import PLAN_DEFINITIONS
 from app.services.cut_planning import PLANNER_VERSION, build_crop_warnings, plan_keep_segments
 from app.services.queue import RenderQueue
-from app.services.render_jobs import complete_render_job
 from app.services.render_templates import (
     build_props_hash,
     cap_keep_segments_to_duration,
@@ -58,7 +58,9 @@ from app.services.render_templates import (
     select_template,
 )
 from app.services.storage import StorageSigner
+from app.services.timeline_compiler import compile_timeline
 from app.services.upload_validation import assert_video_render_ready
+from app.services.visual_tracking import subject_track_from_manifest
 
 router = APIRouter(tags=["render and exports"])
 
@@ -71,8 +73,8 @@ RenderQueueDep = Annotated[RenderQueue, Depends(get_render_queue)]
 StorageSignerDep = Annotated[StorageSigner, Depends(get_storage_signer)]
 
 _RENDERER_VERSIONS: dict[RenderEngine, str] = {
-    RenderEngine.FFMPEG_BASIC: "ffmpeg-caption-broll-v2",
-    RenderEngine.REMOTION_PREMIUM: "remotion-premium-v1",
+    RenderEngine.FFMPEG_BASIC: "ffmpeg-timeline-v3",
+    RenderEngine.REMOTION_PREMIUM: "remotion-timeline-v2",
 }
 
 
@@ -83,12 +85,15 @@ def _select_render_engine(
     has_active_broll: bool,
     has_music: bool,
     has_effects: bool,
+    caption_animation: str = "none",
+    manual_element_types: set[str] | None = None,
+    has_template_motion: bool = False,
 ) -> RenderEngine:
     """
     Promotes to REMOTION_PREMIUM when:
     - REMOTION_ENABLED=true in settings
     - user is on a paid plan (or billing is disabled / personal mode)
-    - at least one premium feature is active (B-roll, music, or visual effects)
+    - at least one feature that needs the premium renderer is active
 
     Falls back to FFMPEG_BASIC in all other cases (zero regression risk).
     """
@@ -97,10 +102,96 @@ def _select_render_engine(
     paid_plans = {"creator", "pro", "agency"}
     billing_disabled = not getattr(settings, "billing_enabled", False)
     is_eligible = billing_plan_key in paid_plans or billing_disabled
-    has_premium_feature = has_active_broll or has_music or has_effects
+    features = requested_renderer_features(
+        has_active_broll=has_active_broll,
+        has_music=has_music,
+        has_effects=has_effects,
+        caption_animation=caption_animation,
+        manual_element_types=manual_element_types or set(),
+        has_template_motion=has_template_motion,
+    )
+    has_premium_feature = bool(features)
     if is_eligible and has_premium_feature:
         return RenderEngine.REMOTION_PREMIUM
     return RenderEngine.FFMPEG_BASIC
+
+
+def requested_renderer_features(
+    *,
+    has_active_broll: bool,
+    has_music: bool,
+    has_effects: bool,
+    caption_animation: str,
+    manual_element_types: set[str],
+    has_template_motion: bool,
+) -> set[str]:
+    features: set[str] = set()
+    if has_active_broll:
+        features.add("broll")
+    if has_music:
+        features.add("catalog_music")
+    if has_effects:
+        features.add("visual_effects")
+    if caption_animation not in {"", "none", "static"}:
+        features.add(f"animated_captions:{caption_animation}")
+    if has_template_motion:
+        features.add("template_intro_outro")
+    features.update(
+        f"manual_{element_type}"
+        for element_type in manual_element_types
+        if element_type in {"transition", "music", "sfx", "broll"}
+    )
+    return features
+
+
+def renderer_feature_compatibility(
+    *, engine: RenderEngine, requested_features: set[str]
+) -> dict[str, object]:
+    ffmpeg_unsupported = {
+        "template_intro_outro",
+        "manual_transition",
+        "manual_music",
+    }
+    unsupported = {
+        feature
+        for feature in requested_features
+        if feature in ffmpeg_unsupported or feature.startswith("animated_captions:")
+    }
+    if engine == RenderEngine.REMOTION_PREMIUM:
+        unsupported = set()
+    return {
+        "matrix_version": 1,
+        "requested": sorted(requested_features),
+        "unsupported": sorted(unsupported),
+        "downgraded": sorted(unsupported),
+        "matrix_document": "docs/renderer-feature-matrix.md",
+    }
+
+
+def source_timeline_for_keep_segments(keep_segments: list[CutSegment]) -> dict[str, object]:
+    """Build the immutable source-to-output mapping shared by both renderers."""
+    clips: list[dict[str, object]] = []
+    output_cursor = 0
+    for index, segment in enumerate(keep_segments):
+        duration_ms = segment.end_ms - segment.start_ms
+        if duration_ms <= 0:
+            continue
+        clips.append(
+            {
+                "id": f"cut-{index}",
+                "source_start_ms": segment.start_ms,
+                "source_end_ms": segment.end_ms,
+                "output_start_ms": output_cursor,
+                "output_end_ms": output_cursor + duration_ms,
+                "reason": segment.reason,
+            }
+        )
+        output_cursor += duration_ms
+    return {
+        "schema_version": 1,
+        "duration_ms": output_cursor,
+        "clips": clips,
+    }
 
 
 def beat_sync_summary(
@@ -144,8 +235,10 @@ def apply_motion_design_export_settings(
     export_settings: dict[str, object],
     source_metadata,
     effects_config,
+    subject_track: list[dict[str, object]] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     motion = effects_config.motion
+    track = subject_track or []
     motion_design: dict[str, object] = {
         "schema_version": 1,
         "keyframe_count": len(motion.keyframes),
@@ -154,6 +247,7 @@ def apply_motion_design_export_settings(
         "beat_impact": motion.beat_impact.model_dump(mode="json"),
         "auto_reframe": {
             **motion.auto_reframe.model_dump(mode="json"),
+            "subject_track": track,
             "applied": False,
             "crop": None,
         },
@@ -168,8 +262,8 @@ def apply_motion_design_export_settings(
         return updated, motion_design
 
     crop = dict(framing.get("crop") or {})
-    crop["x"] = round(motion.auto_reframe.subject_x_pct / 100, 4)
-    crop["y"] = round(motion.auto_reframe.subject_y_pct / 100, 4)
+    crop["x"] = round(float(track[0]["x"]) if track else motion.auto_reframe.subject_x_pct / 100, 4)
+    crop["y"] = round(float(track[0]["y"]) if track else motion.auto_reframe.subject_y_pct / 100, 4)
     crop["zoom"] = max(1, min(3, float(crop.get("zoom") or 1)))
     framing["fit_mode"] = "custom"
     framing["crop"] = crop
@@ -183,6 +277,8 @@ def apply_motion_design_export_settings(
         "source_width": source_width,
         "source_height": source_height,
         "crop": crop,
+        "tracked": bool(track),
+        "track_point_count": len(track),
     }
     return updated, motion_design
 
@@ -263,12 +359,24 @@ async def create_render(
         if payload.adjustment_action != RenderAdjustmentAction.MAKE_PUNCHIER
         else DurationPreset.SHORT
     )
-    keep_segments = cap_keep_segments_to_duration(
-        segments=plan_keep_segments(
+    planned_segments = (
+        [
+            CutSegment(
+                start_ms=cut.start_ms,
+                end_ms=cut.end_ms,
+                reason=cut.reason,
+            )
+            for cut in edit_plan_record.plan.cuts
+        ]
+        if edit_plan_record and edit_plan_record.plan.cuts
+        else plan_keep_segments(
             words=caption_words,
             caption_segments=track.segments,
             metadata=upload.metadata,
-        ),
+        )
+    )
+    keep_segments = cap_keep_segments_to_duration(
+        segments=planned_segments,
         duration_preset=effective_duration_preset,
     )
     retimed_caption_segments = retime_caption_segments_for_keep_segments(
@@ -440,11 +548,26 @@ async def create_render(
     if effects_config and edit_plan_record and effects_config.edit_plan_id != edit_plan_record.id:
         effects_config = None
     if effects_config:
+        visual_repository = getattr(request.app.state, "visual_repository", None)
+        visual_record = (
+            visual_repository.latest_ready_for_upload(
+                uploaded_video_id=upload.id,
+                project_id=project_id,
+                workspace_id=actor.workspace_id,
+            )
+            if visual_repository
+            else None
+        )
+        subject_track = subject_track_from_manifest(
+            visual_record.manifest if visual_record else None
+        )
         effects_props = effects_config.to_response().model_dump(mode="json")
+        effects_props["motion"]["auto_reframe"]["subject_track"] = subject_track
         render_export_settings, motion_design_manifest = apply_motion_design_export_settings(
             export_settings=render_export_settings,
             source_metadata=upload.metadata,
             effects_config=effects_config,
+            subject_track=subject_track,
         )
         render_props_export_settings = {
             **specs.model_dump(mode="json"),
@@ -477,6 +600,30 @@ async def create_render(
         keep_segments=keep_segments,
         template_default_color_grade=template.default_color_grade,
     )
+    render_edit_plan["manual_elements"] = retime_manual_elements_for_keep_segments(
+        elements=list(render_edit_plan.get("manual_elements") or []),
+        keep_segments=keep_segments,
+        include_broll=False,
+    )
+    source_stems = _source_stems_for_render(
+        request=request,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    compiled_timeline = compile_timeline(
+        plan=EditPlan.model_validate(render_edit_plan),
+        source_video_id=upload.id,
+        source_duration_ms=upload.metadata.duration_ms or 1,
+        captions=track.segments if payload.include_captions else [],
+        caption_style=track.style.model_dump(mode="json"),
+        broll=active_broll_assets,
+        music=music_props,
+        source_stems=source_stems,
+        effects_config=effects_props,
+        preserve_layers_from=(edit_plan_record.plan.timeline if edit_plan_record else None),
+    )
+    source_timeline = compiled_timeline.model_dump(mode="json")
+    render_edit_plan["timeline"] = source_timeline
     render_props = {
         "sourceVideo": {
             "src": f"supabase://{upload.storage_bucket}/{upload.storage_path}",
@@ -494,19 +641,31 @@ async def create_render(
         "watermark": billing_status.current_plan.entitlements.watermark,
         "musicSelection": music_props,
         "effectsConfig": effects_props,
-        "sourceStems": _source_stems_for_render(
-            request=request,
-            project_id=project_id,
-            workspace_id=actor.workspace_id,
-        ),
+        "sourceStems": source_stems,
+        "timeline": source_timeline,
     }
     props_hash = build_props_hash(render_props)
+    manual_element_types = {
+        element.type
+        for element in (edit_plan_record.plan.manual_elements if edit_plan_record else [])
+    }
+    requested_features = requested_renderer_features(
+        has_active_broll=bool(active_broll_assets),
+        has_music=bool(music_selection and music_selection.music_track_id),
+        has_effects=bool(effects_config),
+        caption_animation=template.caption_animation,
+        manual_element_types=manual_element_types,
+        has_template_motion=bool(template.intro or template.outro),
+    )
     selected_engine = _select_render_engine(
         settings=request.app.state.settings,
         billing_plan_key=billing_status.current_plan.key.value,
         has_active_broll=bool(active_broll_assets),
         has_music=bool(music_selection and music_selection.music_track_id),
         has_effects=bool(effects_config),
+        caption_animation=template.caption_animation,
+        manual_element_types=manual_element_types,
+        has_template_motion=bool(template.intro or template.outro),
     )
     compute_tier = (
         "gpu"
@@ -546,6 +705,11 @@ async def create_render(
         ),
         "renderer_version": _RENDERER_VERSIONS[selected_engine],
         "props_hash": props_hash,
+        "timeline": source_timeline,
+        "renderer_compatibility": renderer_feature_compatibility(
+            engine=selected_engine,
+            requested_features=requested_features,
+        ),
         "export_settings": render_export_settings,
         "billing": {
             "plan": billing_status.current_plan.key.value,
@@ -657,28 +821,6 @@ async def create_render(
         compute_tier=compute_tier,
     )
 
-    if request.app.state.settings.should_complete_renders_synchronously:
-        job = complete_render_job(
-            job=job,
-            repository=repository,
-            export_bucket=request.app.state.settings.export_storage_bucket,
-            storage_root=request.app.state.settings.media_work_dir,
-            supabase_url=(
-                str(request.app.state.settings.supabase_url)
-                if getattr(request.app.state.settings, "supabase_url", None)
-                else None
-            ),
-            service_role_key=getattr(
-                request.app.state.settings,
-                "supabase_service_role_key",
-                None,
-            ),
-            execute_ffmpeg=request.app.state.settings.render_execute_ffmpeg,
-            allow_fixture_media=(
-                getattr(request.app.state.settings, "app_env", "test") != "production"
-                or getattr(request.app.state.settings, "allow_fixture_providers", False)
-            ),
-        )
     return RenderCreateResponse(
         job=job.to_response(repository.events_for_job(job.id)),
         job_id=job.id,
@@ -758,7 +900,7 @@ def apply_render_adjustment(
 
     if action == RenderAdjustmentAction.MAKE_PUNCHIER:
         adjusted["target_duration_s"] = max(
-            5,
+            10,
             round(sum(segment.end_ms - segment.start_ms for segment in keep_segments) / 1000),
         )
         effects = list(adjusted["effects"])
@@ -871,6 +1013,43 @@ def retime_range_for_keep_segments(
             output_start + (overlap_end - keep.start_ms),
         )
     return None
+
+
+def retime_manual_elements_for_keep_segments(
+    *,
+    elements: list[object],
+    keep_segments: list[CutSegment],
+    include_broll: bool = True,
+) -> list[dict[str, object]]:
+    """Project source-timed manual elements onto the assembled output timeline."""
+    retimed: list[dict[str, object]] = []
+    for raw_element in elements:
+        if hasattr(raw_element, "model_dump"):
+            element = raw_element.model_dump(mode="json")
+        elif isinstance(raw_element, dict):
+            element = dict(raw_element)
+        else:
+            continue
+        if not include_broll and element.get("type") == "broll":
+            continue
+        start_ms = int(element.get("start_ms") or 0)
+        end_ms = int(element.get("end_ms") or 0)
+        for clip_index, (output_start, keep) in enumerate(
+            _keep_segments_with_output_starts(keep_segments)
+        ):
+            overlap_start = max(start_ms, keep.start_ms)
+            overlap_end = min(end_ms, keep.end_ms)
+            if overlap_end <= overlap_start:
+                continue
+            next_element = {
+                **element,
+                "start_ms": output_start + (overlap_start - keep.start_ms),
+                "end_ms": output_start + (overlap_end - keep.start_ms),
+            }
+            if overlap_start != start_ms or overlap_end != end_ms:
+                next_element["id"] = f"{element.get('id', 'element')}-cut-{clip_index}"
+            retimed.append(next_element)
+    return retimed
 
 
 def _keep_segments_with_output_starts(

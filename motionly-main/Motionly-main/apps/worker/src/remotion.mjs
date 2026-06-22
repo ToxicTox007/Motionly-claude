@@ -4,14 +4,14 @@
  * Handles render jobs with render_engine = "remotion_premium".
  *
  * Flow:
- *   1. Fetch the full render job manifest from the API
+ *   1. Load the full render job manifest directly from Supabase
  *   2. Resolve all supabase:// media references to signed URLs
  *   3. Filter fixture:// assets (not renderable in production)
  *   4. Write the assembled MotionlyRenderProps to a temp JSON file
  *   5. Spawn the Remotion CLI: node --loader ts-node/esm src/render-cli.ts
  *   6. Read the render metadata written by the CLI ({output}.json)
  *   7. Upload the rendered MP4 to Supabase Storage
- *   8. POST /internal/renders/{id}/complete to finalise the job record
+ *   8. Finalise the job/export records directly in Supabase
  *   9. Clean up temp files
  */
 
@@ -42,6 +42,131 @@ function supabaseClient() {
     );
   }
   return createClient(url, key, { auth: { persistSession: false } });
+}
+
+async function loadRenderJobDirect(renderJobId, workspaceId, projectId) {
+  const { data, error } = await supabaseClient()
+    .from("render_jobs")
+    .select("*")
+    .eq("id", renderJobId)
+    .eq("workspace_id", workspaceId)
+    .eq("project_id", projectId)
+    .single();
+  if (error || !data) throw new Error(`Failed to load render job: ${error?.message || "missing"}`);
+  return data;
+}
+
+async function persistProgressDirect(renderJobId, workspaceId, projectId, payload) {
+  const client = supabaseClient();
+  const { error } = await client
+    .from("render_jobs")
+    .update({ status: "rendering", progress_pct: payload.progressPct })
+    .eq("id", renderJobId)
+    .eq("workspace_id", workspaceId)
+    .eq("project_id", projectId);
+  if (error) throw new Error(`Failed to persist render progress: ${error.message}`);
+  await client.from("render_job_events").insert({
+    render_job_id: renderJobId,
+    workspace_id: workspaceId,
+    project_id: projectId,
+    event_type: payload.eventType || "worker_progress",
+    to_status: "rendering",
+    progress_pct: payload.progressPct,
+    message: payload.message,
+    metadata: payload.metadata || {},
+  });
+}
+
+async function persistCompleteDirect(renderJobId, workspaceId, projectId, details) {
+  const client = supabaseClient();
+  const { data: existing } = await client
+    .from("exports")
+    .select("id")
+    .eq("render_job_id", renderJobId)
+    .limit(1)
+    .maybeSingle();
+  let exportId = existing?.id || null;
+  if (!exportId) {
+    const { data: latest } = await client
+      .from("exports")
+      .select("version")
+      .eq("project_id", projectId)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const { data: created, error: exportError } = await client
+      .from("exports")
+      .insert({
+        workspace_id: workspaceId,
+        project_id: projectId,
+        render_job_id: renderJobId,
+        version: Number(latest?.version || 0) + 1,
+        storage_bucket: details.artifactBucket,
+        storage_path: details.exportStoragePath,
+        format: "mp4",
+        width: details.width,
+        height: details.height,
+        fps: details.fps,
+        duration_ms: details.durationMs,
+        file_size_bytes: details.fileSizeBytes,
+      })
+      .select("id")
+      .single();
+    if (exportError) throw new Error(`Failed to create export: ${exportError.message}`);
+    exportId = created.id;
+  }
+  const { error } = await client
+    .from("render_jobs")
+    .update({
+      status: "complete",
+      progress_pct: 100,
+      artifact_path: details.exportStoragePath,
+      benchmark_ms: details.benchmarkMs,
+      error_code: null,
+      error_message: null,
+    })
+    .eq("id", renderJobId)
+    .eq("workspace_id", workspaceId)
+    .eq("project_id", projectId);
+  if (error) throw new Error(`Failed to complete render job: ${error.message}`);
+  await client.from("render_job_events").insert({
+    render_job_id: renderJobId,
+    workspace_id: workspaceId,
+    project_id: projectId,
+    event_type: "complete",
+    to_status: "complete",
+    progress_pct: 100,
+    message: "Premium render completed by the Remotion worker.",
+    metadata: { export_id: exportId },
+  });
+  return { render_job_id: renderJobId, export_id: exportId, status: "complete" };
+}
+
+export async function persistRenderFailureDirect(job, errorMessage, retrying) {
+  const client = supabaseClient();
+  const status = retrying ? "queued" : "failed";
+  const { error } = await client
+    .from("render_jobs")
+    .update({
+      status,
+      progress_pct: retrying ? 5 : undefined,
+      error_code: retrying ? null : "render_worker_failed",
+      error_message: retrying ? null : errorMessage.slice(0, 500),
+    })
+    .eq("id", job.resource_id)
+    .eq("workspace_id", job.workspace_id)
+    .eq("project_id", job.project_id);
+  if (error) throw new Error(`Failed to persist render failure: ${error.message}`);
+  await client.from("render_job_events").insert({
+    render_job_id: job.resource_id,
+    workspace_id: job.workspace_id,
+    project_id: job.project_id,
+    event_type: retrying ? "worker_retrying" : "worker_failed",
+    to_status: status,
+    progress_pct: retrying ? 5 : null,
+    message: retrying ? "Render worker failed; BullMQ will retry." : errorMessage.slice(0, 500),
+    metadata: {},
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -216,10 +341,12 @@ async function assembleRenderProps(renderProps) {
       ...renderProps.sourceVideo,
       src: sourceUrl,
     },
+    timeline: renderProps.timeline,
     editPlan: renderProps.editPlan ?? { schema_version: 1, cuts: [] },
     captions: renderProps.captions ?? [],
     words: renderProps.words ?? [],
     assets: resolvedAssets,
+    captionStyle: renderProps.captionStyle ?? null,
     templateId: renderProps.templateId ?? "founder_reel_v1",
     exportSettings: renderProps.exportSettings ?? {},
     musicSelection: resolvedMusic,
@@ -312,86 +439,6 @@ async function readRenderMeta(outputPath) {
 }
 
 // ---------------------------------------------------------------------------
-// API completion report
-// ---------------------------------------------------------------------------
-
-async function reportComplete(
-  apiBaseUrl,
-  workerToken,
-  renderJobId,
-  workspaceId,
-  projectId,
-  {
-    exportStoragePath,
-    artifactBucket,
-    benchmarkMs,
-    fileSizeBytes,
-    width,
-    height,
-    fps,
-    durationMs,
-  },
-) {
-  const url = `${apiBaseUrl}/internal/renders/${renderJobId}/complete`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-motionly-worker-token": workerToken,
-    },
-    body: JSON.stringify({
-      workspace_id: workspaceId,
-      project_id: projectId,
-      export_storage_path: exportStoragePath,
-      artifact_bucket: artifactBucket,
-      benchmark_ms: benchmarkMs,
-      file_size_bytes: fileSizeBytes,
-      width,
-      height,
-      fps,
-      duration_ms: durationMs,
-    }),
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(
-      `complete-remotion API call failed (${response.status}): ${body.slice(0, 400)}`,
-    );
-  }
-  return response.json();
-}
-
-async function reportProgress(
-  apiBaseUrl,
-  workerToken,
-  renderJobId,
-  workspaceId,
-  projectId,
-  { progressPct, message, eventType = "worker_progress", metadata = {} },
-) {
-  const response = await fetch(`${apiBaseUrl}/internal/renders/${renderJobId}/progress`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-motionly-worker-token": workerToken,
-    },
-    body: JSON.stringify({
-      workspace_id: workspaceId,
-      project_id: projectId,
-      status: "rendering",
-      progress_pct: progressPct,
-      message,
-      event_type: eventType,
-      metadata,
-    }),
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`progress API call failed (${response.status}): ${body.slice(0, 400)}`);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -399,9 +446,9 @@ async function reportProgress(
  * Called by worker.mjs when job.render_engine === "remotion_premium".
  *
  * @param {object} job - The queue job record (from BullMQ)
- * @param {object} ctx - { apiBaseUrl: string, workerToken: string }
+ * @param {object} ctx - optional progress callback
  */
-export async function runRemotionJob(job, { apiBaseUrl, workerToken, onProgress = null }) {
+export async function runRemotionJob(job, { onProgress = null } = {}) {
   const renderJobId = String(job.resource_id);
   const workspaceId = String(job.workspace_id);
   const projectId = String(job.project_id);
@@ -414,30 +461,16 @@ export async function runRemotionJob(job, { apiBaseUrl, workerToken, onProgress 
   const started = Date.now();
   const progress = async (progressPct, message, eventType, metadata = {}) => {
     const payload = { progressPct, message, eventType, metadata };
+    await persistProgressDirect(renderJobId, workspaceId, projectId, payload);
     if (onProgress) {
       await onProgress(payload);
-      return;
     }
-    await reportProgress(apiBaseUrl, workerToken, renderJobId, workspaceId, projectId, payload);
   };
 
   try {
     await progress(20, "Preparing premium render manifest.", "remotion_prepare");
-    // 1. Fetch the full render job manifest from the API
-    const manifestRes = await fetch(
-      `${apiBaseUrl}/internal/renders/${renderJobId}` +
-        `?workspace_id=${workspaceId}&project_id=${projectId}`,
-      {
-        headers: { "x-motionly-worker-token": workerToken },
-      },
-    );
-    if (!manifestRes.ok) {
-      const body = await manifestRes.text().catch(() => "");
-      throw new Error(
-        `Failed to fetch render job manifest (${manifestRes.status}): ${body.slice(0, 400)}`,
-      );
-    }
-    const jobRecord = await manifestRes.json();
+    // 1. Fetch the full render job manifest directly from the database.
+    const jobRecord = await loadRenderJobDirect(renderJobId, workspaceId, projectId);
     const renderProps = jobRecord.manifest?.render_props;
     if (!renderProps) {
       throw new Error("render job manifest is missing render_props");
@@ -462,23 +495,19 @@ export async function runRemotionJob(job, { apiBaseUrl, workerToken, onProgress 
     await progress(88, "Uploading premium export.", "remotion_uploading");
     await uploadToStorage(outputPath, exportBucket, exportStoragePath);
 
-    // 7. Report completion to API
-    const result = await reportComplete(
-      apiBaseUrl,
-      workerToken,
-      renderJobId,
-      workspaceId,
-      projectId,
-      {
-        exportStoragePath,
-        artifactBucket: exportBucket,
-        benchmarkMs,
-        fileSizeBytes: meta.file_size_bytes,
-        width: meta.width,
-        height: meta.height,
-        fps: meta.fps,
-        durationMs: meta.video_duration_ms,
-      },
+    // 7. Persist completion directly; the API is not part of the media path.
+    const completionDetails = {
+      exportStoragePath,
+      artifactBucket: exportBucket,
+      benchmarkMs,
+      fileSizeBytes: meta.file_size_bytes,
+      width: meta.width,
+      height: meta.height,
+      fps: meta.fps,
+      durationMs: meta.video_duration_ms,
+    };
+    const result = await persistCompleteDirect(
+      renderJobId, workspaceId, projectId, completionDetails,
     );
 
     console.log(

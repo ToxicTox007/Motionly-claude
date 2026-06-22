@@ -81,8 +81,7 @@ def record_plan_suggestions(
             AIEditLayer.CAPTIONS,
             {
                 "caption_highlights": [
-                    highlight.model_dump(mode="json")
-                    for highlight in plan.plan.caption_highlights
+                    highlight.model_dump(mode="json") for highlight in plan.plan.caption_highlights
                 ],
             },
         ),

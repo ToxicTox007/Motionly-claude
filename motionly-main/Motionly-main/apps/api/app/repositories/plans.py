@@ -198,14 +198,17 @@ class InMemoryPlanRepository:
         return sorted(matches, key=lambda plan: plan.updated_at, reverse=True)[0]
 
     def create_plan(self, **values: object) -> EditPlanRecord:
-        version = len(
-            [
-                plan
-                for plan in self.plans.values()
-                if plan.project_id == values["project_id"]
-                and plan.workspace_id == values["workspace_id"]
-            ]
-        ) + 1
+        version = (
+            len(
+                [
+                    plan
+                    for plan in self.plans.values()
+                    if plan.project_id == values["project_id"]
+                    and plan.workspace_id == values["workspace_id"]
+                ]
+            )
+            + 1
+        )
         for plan in self.plans.values():
             if (
                 plan.project_id == values["project_id"]

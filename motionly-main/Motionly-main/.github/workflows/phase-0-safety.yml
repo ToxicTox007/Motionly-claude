@@ -1,0 +1,60 @@
+name: Phase 0 safety checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  renderer-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build renderer worker image
+        run: docker build --file apps/worker/Dockerfile --tag motionly-renderer-test .
+      - name: Prove timeline edits change encoded Remotion output
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-renderer-test
+          sh -lc "cd /app/apps/renderer && pnpm test:encoded"
+
+  api-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API container
+        run: docker build --file apps/api/Dockerfile .
+
+  empty-database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.104.0
+      - name: Start empty local Supabase
+        run: >-
+          supabase start --exclude
+          gotrue,edge-runtime,imgproxy,kong,logflare,mailpit,postgres-meta,postgrest,realtime,storage-api,studio,supavisor,vector
+      - name: Apply every migration and seed from scratch
+        run: supabase db reset --local
+      - name: Verify final schema contract
+        run: supabase test db
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan the current repository without exposing findings
+        run: >-
+          docker run --rm
+          --volume "$PWD:/repo"
+          zricethezav/gitleaks:v8.24.2
+          detect --source=/repo --no-git --redact --exit-code=1

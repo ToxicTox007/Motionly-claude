@@ -16,7 +16,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMs, rulerTicks } from "@/lib/timeline";
+import { formatMs, outputMsToSourceMs, rulerTicks } from "@/lib/timeline";
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { useTimeline } from "./useTimeline";
@@ -90,6 +90,10 @@ export function TimelinePanel({
 }: TimelinePanelProps) {
   const router = useRouter();
   const { totalDurationMs, tracks } = state;
+  const sourceClips = useMemo(
+    () => activePlan?.plan.timeline?.clips ?? [],
+    [activePlan?.plan.timeline?.clips],
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
@@ -99,9 +103,10 @@ export function TimelinePanel({
   const { zoomLevel, zoomIn, zoomOut, fitToContent, seekTo } = useTimeline({
     totalDurationMs,
     videoRef,
+    sourceClips,
   });
 
-  usePlaybackSync(videoRef, setPlayheadMs);
+  usePlaybackSync(videoRef, setPlayheadMs, sourceClips, playheadMs);
 
   const selectedClip = useMemo(
     () => tracks.flatMap((track) => track.clips).find((clip) => clip.id === selectedClipId) ?? null,
@@ -167,13 +172,13 @@ export function TimelinePanel({
     disabled?: boolean,
   ) => {
     const payload = await request(`/projects/${projectId}/broll/${slotId}/region`, {
-      start_ms: startMs,
-      end_ms: endMs,
+      start_ms: outputMsToSourceMs(startMs, sourceClips),
+      end_ms: outputMsToSourceMs(endMs, sourceClips, "end"),
       disabled,
     });
     onBrollSlotUpdated(payload.slot);
     return disabled ? "B-roll slot disabled." : "B-roll timing saved.";
-  }, [onBrollSlotUpdated, projectId, request]);
+  }, [onBrollSlotUpdated, projectId, request, sourceClips]);
 
   const saveMusicRegions = useCallback(async (regions: MusicRegion[]) => {
     if (!musicSelection) throw new Error("Select music first.");
@@ -282,7 +287,16 @@ export function TimelinePanel({
     const cuts = [...(activePlan?.plan.cuts ?? [])];
     const index = clip.sourceRef.index ?? -1;
     if (index < 0 || !cuts[index]) return null;
-    cuts[index] = { ...cuts[index], start_ms: startMs, end_ms: endMs };
+    const timelineClip = sourceClips[index];
+    cuts[index] = {
+      ...cuts[index],
+      start_ms: timelineClip
+        ? timelineClip.source_start_ms + startMs - clip.startMs
+        : startMs,
+      end_ms: timelineClip
+        ? timelineClip.source_end_ms - (clip.endMs - endMs)
+        : endMs,
+    };
     return cuts;
   }
 
@@ -290,7 +304,11 @@ export function TimelinePanel({
     const segments = [...(captionTrack?.segments ?? [])];
     const index = captionSegmentIndex(clip, segments);
     if (index < 0) return null;
-    segments[index] = { ...segments[index], start_ms: startMs, end_ms: endMs };
+    segments[index] = {
+      ...segments[index],
+      start_ms: outputMsToSourceMs(startMs, sourceClips),
+      end_ms: outputMsToSourceMs(endMs, sourceClips, "end"),
+    };
     return segments;
   }
 
@@ -409,11 +427,12 @@ export function TimelinePanel({
         setMessage("Select a generated video clip.");
         return;
       }
+      const splitSourceMs = outputMsToSourceMs(playheadMs, sourceClips);
       cuts.splice(
         index,
         1,
-        { ...current, end_ms: playheadMs },
-        { ...current, start_ms: playheadMs, reason: `${current.reason} split` },
+        { ...current, end_ms: splitSourceMs },
+        { ...current, start_ms: splitSourceMs, reason: `${current.reason} split` },
       );
       commitCuts(cuts, `Split ${selectedClip.label}`);
       return;
@@ -426,11 +445,12 @@ export function TimelinePanel({
         setMessage("Select a caption segment.");
         return;
       }
+      const splitSourceMs = outputMsToSourceMs(playheadMs, sourceClips);
       segments.splice(
         index,
         1,
-        { ...current, end_ms: playheadMs },
-        { ...current, id: undefined, start_ms: playheadMs },
+        { ...current, end_ms: splitSourceMs },
+        { ...current, id: undefined, start_ms: splitSourceMs },
       );
       commitCaptionSegments(segments, `Split ${selectedClip.label}`);
       return;

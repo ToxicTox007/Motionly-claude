@@ -11,6 +11,7 @@ FROM node:20-bookworm-slim
 # Install Chromium and all shared libraries it needs for headless rendering.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         chromium \
+        ffmpeg \
         fonts-liberation \
         fonts-noto-color-emoji \
         libatk-bridge2.0-0 \
@@ -38,7 +39,8 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
     REMOTION_DISABLE_SANDBOX=true \
-    NODE_ENV=production
+    NODE_ENV=production \
+    WORKER_QUEUES=render_remotion
 
 # ── Source code ───────────────────────────────────────────────────────────────
 WORKDIR /app

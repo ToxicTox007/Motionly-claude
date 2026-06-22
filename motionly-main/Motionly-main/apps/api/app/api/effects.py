@@ -108,13 +108,9 @@ async def update_effects(
         if payload.reset_to_defaults
         else payload.lut_intensity
     )
-    texture = (
-        preset_defaults["texture"] if payload.reset_to_defaults else payload.texture
-    )
+    texture = preset_defaults["texture"] if payload.reset_to_defaults else payload.texture
     motion_effects = (
-        preset_defaults["motion_effects"]
-        if payload.reset_to_defaults
-        else payload.motion_effects
+        preset_defaults["motion_effects"] if payload.reset_to_defaults else payload.motion_effects
     )
     motion = preset_defaults["motion"] if payload.reset_to_defaults else payload.motion
     background_removal = (
@@ -123,9 +119,7 @@ async def update_effects(
         else payload.background_removal
     )
     gradient_ramp = (
-        preset_defaults["gradient_ramp"]
-        if payload.reset_to_defaults
-        else payload.gradient_ramp
+        preset_defaults["gradient_ramp"] if payload.reset_to_defaults else payload.gradient_ramp
     )
     motion_effects, motion, gradient_ramp = normalize_motion_and_gradient(
         motion_effects=motion_effects,
@@ -148,10 +142,8 @@ async def update_effects(
         gradient_ramp=gradient_ramp,
         after_effects_presets=after_effects_presets,
     )
-    job = effects_queue.enqueue_effects_config(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        edit_plan_id=active_plan.id if active_plan else None,
+    execution_id = (
+        f"sync-complete--effects--{project_id}--{active_plan.id if active_plan else 'none'}"
     )
 
     if not payload.force:
@@ -163,7 +155,7 @@ async def update_effects(
         if cached:
             return EffectsUpdateResponse(
                 config=repository.response_for_config(cached),
-                job_id=job.id,
+                job_id=execution_id,
                 cached=True,
             )
 
@@ -221,8 +213,7 @@ async def update_effects(
                 "color_grade": active_plan.plan.color_grade,
                 "effects": active_plan.plan.effects,
                 "zoom_moments": [
-                    moment.model_dump(mode="json")
-                    for moment in active_plan.plan.zoom_moments
+                    moment.model_dump(mode="json") for moment in active_plan.plan.zoom_moments
                 ],
             }
             if active_plan
@@ -231,7 +222,7 @@ async def update_effects(
         user_payload=repository.response_for_config(config).model_dump(mode="json"),
         metadata={"reset_to_defaults": payload.reset_to_defaults},
     )
-    return EffectsUpdateResponse(config=repository.response_for_config(config), job_id=job.id)
+    return EffectsUpdateResponse(config=repository.response_for_config(config), job_id=execution_id)
 
 
 def _next_effects_version(

@@ -115,9 +115,7 @@ class FixtureEditPlannerProvider:
             ZoomMoment(
                 timestamp_ms=highlight.timestamp_ms,
                 intensity=zoom_intensity,
-                reason=_bounded_reason(
-                    f"Emphasize {highlight.word} for {style.value} pacing"
-                ),
+                reason=_bounded_reason(f"Emphasize {highlight.word} for {style.value} pacing"),
             )
             for highlight in highlights[:zoom_limit]
         ]
@@ -187,9 +185,7 @@ class HttpEditPlannerProvider:
                             "duration_ms": video_duration_ms,
                             "words": [word.model_dump(mode="json") for word in transcript.words],
                             "audio_intelligence": _audio_intelligence(transcript),
-                            "visual_intelligence": _visual_intelligence_summary(
-                                visual_manifest
-                            ),
+                            "visual_intelligence": _visual_intelligence_summary(visual_manifest),
                         },
                         separators=(",", ":"),
                     ),
@@ -957,13 +953,17 @@ def _fallback_plan(
     visual_manifest: VideoManifest | None = None,
     style_classification: StyleClassification | None = None,
 ) -> EditPlan:
-    return FixtureEditPlannerProvider().create_plan(
-        transcript=transcript,
-        payload=payload,
-        video_duration_ms=video_duration_ms,
-        visual_manifest=visual_manifest,
-        style_classification=style_classification,
-    ).plan
+    return (
+        FixtureEditPlannerProvider()
+        .create_plan(
+            transcript=transcript,
+            payload=payload,
+            video_duration_ms=video_duration_ms,
+            visual_manifest=visual_manifest,
+            style_classification=style_classification,
+        )
+        .plan
+    )
 
 
 def _repair_cuts(value: object, fallback: object, duration_ms: int) -> list[dict[str, object]]:

@@ -28,11 +28,9 @@ class MusicTrackCandidate:
 class MusicProvider(Protocol):
     provider_key: MusicProviderKey
 
-    def search(self, *, mood: str, max_results: int = 5) -> list[MusicTrackCandidate]:
-        ...
+    def search(self, *, mood: str, max_results: int = 5) -> list[MusicTrackCandidate]: ...
 
-    def get_track(self, *, provider_track_id: str) -> MusicTrackCandidate | None:
-        ...
+    def get_track(self, *, provider_track_id: str) -> MusicTrackCandidate | None: ...
 
 
 SAMPLE_MUSIC: list[MusicTrackCandidate] = [

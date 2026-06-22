@@ -1,10 +1,13 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import type { ProjectTimelineSourceClip } from "@motionly/shared";
+import { outputMsToSourceMs } from "@/lib/timeline";
 
 interface UseTimelineOptions {
   totalDurationMs: number;
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  sourceClips?: ProjectTimelineSourceClip[];
 }
 
 interface UseTimelineReturn {
@@ -24,6 +27,7 @@ const ZOOM_STEP = 1.5;
 export function useTimeline({
   totalDurationMs: _totalDurationMs,
   videoRef,
+  sourceClips = [],
 }: UseTimelineOptions): UseTimelineReturn {
   const [zoomLevel, setZoomLevel] = useState(1);
 
@@ -43,9 +47,9 @@ export function useTimeline({
     (ms: number) => {
       const video = videoRef.current;
       if (!video) return;
-      video.currentTime = ms / 1000;
+      video.currentTime = outputMsToSourceMs(ms, sourceClips) / 1000;
     },
-    [videoRef],
+    [sourceClips, videoRef],
   );
 
   return { zoomLevel, zoomIn, zoomOut, fitToContent, seekTo };

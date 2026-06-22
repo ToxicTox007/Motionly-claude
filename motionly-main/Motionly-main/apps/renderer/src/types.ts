@@ -24,6 +24,21 @@ export type RendererAsset = {
   score?: number;
 };
 
+export type SourceTimelineClip = {
+  id: string;
+  source_start_ms: number;
+  source_end_ms: number;
+  output_start_ms: number;
+  output_end_ms: number;
+  reason?: string;
+};
+
+export type SourceTimeline = {
+  schema_version: 1;
+  duration_ms: number;
+  clips: SourceTimelineClip[];
+};
+
 export type MotionlyRenderProps = {
   sourceVideo: {
     src: string;
@@ -55,6 +70,7 @@ export type MotionlyRenderProps = {
   };
   effectsConfig?: EffectsConfigSummary | null;
   watermark?: boolean;
+  timeline?: SourceTimeline;
 };
 
 export type TemplateDefinition = RenderTemplateMetadata & {

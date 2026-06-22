@@ -18,7 +18,7 @@ def test_live_health_returns_request_id() -> None:
     assert response.model_dump() == {
         "status": "ok",
         "service": "motionly-api",
-            "environment": get_settings().app_env,
+        "environment": get_settings().app_env,
         "request_id": "req_test",
     }
 

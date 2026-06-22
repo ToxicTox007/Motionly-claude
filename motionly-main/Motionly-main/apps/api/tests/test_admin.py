@@ -18,6 +18,7 @@ def make_admin_request(workspace_id):
                 settings=SimpleNamespace(
                     app_env="test",
                     admin_api_token=None,
+                    admin_user_id_list=set(),
                     admin_workspace_id_list={str(workspace_id)},
                 ),
                 queue_registry=QueueRegistry(),
@@ -153,3 +154,41 @@ def test_admin_access_requires_allowed_workspace_or_token() -> None:
 
     assert repository
     assert exc_info.value.status_code == 403
+
+
+def test_admin_access_accepts_explicitly_allowed_user() -> None:
+    _repository, _project_id, workspace_id, user_id = make_render_repository()
+    request = make_admin_request(workspace_id)
+    request.app.state.settings.admin_workspace_id_list = set()
+    request.app.state.settings.admin_user_id_list = {str(user_id)}
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    assert (
+        asyncio.run(
+            require_admin(
+                request=request,
+                actor=actor,
+                x_motionly_admin_token=None,
+            )
+        )
+        == actor
+    )
+
+
+def test_admin_access_rejects_non_admin_with_different_allowlisted_identity() -> None:
+    _repository, _project_id, workspace_id, user_id = make_render_repository()
+    request = make_admin_request(workspace_id)
+    request.app.state.settings.admin_workspace_id_list = {"00000000-0000-4000-8000-000000000098"}
+    request.app.state.settings.admin_user_id_list = {"00000000-0000-4000-8000-000000000099"}
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            require_admin(
+                request=request,
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                x_motionly_admin_token=None,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "admin_access_denied"

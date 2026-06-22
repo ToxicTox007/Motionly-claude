@@ -44,7 +44,7 @@ export default function HomePage() {
               Make polished reels from rough footage.
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-8 text-muted-foreground sm:text-lg">
-              Upload a talking-head clip, generate timed captions and an edit plan, add B-roll, music, and visual polish,
+              Upload a talking-head clip and get a complete AI-populated timeline with cuts, captions, B-roll, music, and visual polish,
               then export a vertical MP4 for Instagram, TikTok, or Shorts.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -57,7 +57,7 @@ export default function HomePage() {
               </ButtonLink>
             </div>
             <div className="mt-8 grid gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-              {["AI edit plans", "Caption timing", "Render pipeline"].map((item) => (
+              {["AI-populated timelines", "Caption timing", "Render pipeline"].map((item) => (
                 <div key={item} className="pixel-panel flex items-center gap-2 px-3 py-2">
                   <CheckCircle2 className="size-4 shrink-0 text-primary" aria-hidden="true" />
                   {item}

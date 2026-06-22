@@ -32,6 +32,8 @@ async def require_admin(
     settings = request.app.state.settings
     if settings.admin_api_token and x_motionly_admin_token == settings.admin_api_token:
         return actor
+    if str(actor.user_id).lower() in settings.admin_user_id_list:
+        return actor
     if str(actor.workspace_id).lower() in settings.admin_workspace_id_list:
         return actor
     raise ApiError(403, "admin_access_denied", "Admin access is required.")

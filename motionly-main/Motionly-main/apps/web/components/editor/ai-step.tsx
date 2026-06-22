@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Input, Label, Select, TextArea, Slider } from "./ui";
 import { Button } from "../button";
-import { AlertCircle, History, Loader2, RefreshCw, Save, Sparkles } from "lucide-react";
+import { AlertCircle, CheckCircle2, Eye, History, Loader2, RefreshCw, Save, Sparkles } from "lucide-react";
 import { env } from "@/lib/env";
 import { editorApiRequest } from "@/lib/client-api";
 import type {
@@ -16,6 +16,7 @@ import type {
   MusicSelectionSummary,
   PlanSnapshotSummary,
   TranscriptSummary,
+  VisualAnalysisStatusSummary,
 } from "@motionly/shared";
 
 interface AIStepProps {
@@ -26,6 +27,7 @@ interface AIStepProps {
   initialPlans: EditPlanRecordSummary[];
   activePlanId: string | null;
   transcript: TranscriptSummary | null;
+  initialVisualStatus: VisualAnalysisStatusSummary;
   onTranscriptUpdated: (transcript: TranscriptSummary | null) => void;
   onPlanGenerated: (plan: EditPlanRecordSummary) => void;
   onCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
@@ -79,6 +81,7 @@ export function AIStep({
   initialPlans,
   activePlanId,
   transcript,
+  initialVisualStatus,
   onTranscriptUpdated,
   onPlanGenerated,
   onCaptionTrackUpdated,
@@ -99,6 +102,7 @@ export function AIStep({
   const [snapshotName, setSnapshotName] = useState("");
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [visualStatus, setVisualStatus] = useState(initialVisualStatus);
   const hasTranscript = transcript?.status === "ready" && Boolean(transcript.words?.length);
 
   const densityMap: Record<BrollDensity, number> = {
@@ -116,6 +120,24 @@ export function AIStep({
   };
 
   useEffect(() => {
+    if (visualStatus.status !== "processing") return;
+    let canceled = false;
+    const poll = async () => {
+      try {
+        const next = await editorApiRequest<VisualAnalysisStatusSummary>(
+          `${env.apiBaseUrl}/projects/${projectId}/visual/status`,
+          { method: "GET", workspaceId, userId, accessToken: apiAccessToken },
+        );
+        if (!canceled) setVisualStatus(next);
+      } catch (error) {
+        console.error(error);
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 5000);
+    return () => { canceled = true; window.clearInterval(timer); };
+  }, [apiAccessToken, projectId, userId, visualStatus.status, workspaceId]);
+
+  useEffect(() => {
     if (!activePlanId) {
       return;
     }
@@ -129,7 +151,7 @@ export function AIStep({
             workspaceId,
             userId,
             accessToken: apiAccessToken,
-            friendlyError: "Plan snapshots could not be loaded.",
+            friendlyError: "Timeline versions could not be loaded.",
           },
         );
         if (!canceled) setSnapshots(payload.snapshots ?? []);
@@ -172,11 +194,23 @@ export function AIStep({
         ensureBroll(),
         ensureMusic(),
       ]);
+      const compiled = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans/${plan.id}/compile-timeline`,
+        {
+          method: "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "The AI edit was created, but its media layers could not be synchronized.",
+          body: {},
+        },
+      );
+      onPlanGenerated(compiled.plan);
       const failedFollowUps = followUpResults.filter((result) => result.status === "rejected");
       setMessage(
         failedFollowUps.length === 0
-          ? `AI edit plan v${plan.version} is ready. Captions, B-roll, and music were prepared.`
-          : `AI edit plan v${plan.version} is ready. Some media steps still need attention.`,
+          ? `AI edit v${plan.version} is ready on the timeline. Captions, B-roll, and music were prepared.`
+          : `AI edit v${plan.version} is ready on the timeline. Some media steps still need attention.`,
       );
       router.refresh();
     } catch (error) {
@@ -285,7 +319,7 @@ export function AIStep({
 
   async function saveSnapshot() {
     if (!activePlan) {
-      setMessage("Generate an AI edit before saving a snapshot.");
+      setMessage("Generate an AI edit before saving a timeline version.");
       return;
     }
     setSnapshotLoading(true);
@@ -298,10 +332,10 @@ export function AIStep({
           workspaceId,
           userId,
           accessToken: apiAccessToken,
-          friendlyError: "Plan snapshot could not be saved.",
+          friendlyError: "Timeline version could not be saved.",
           body: {
             plan_id: activePlan.id,
-            name: snapshotName.trim() || `Plan v${activePlan.version}`,
+            name: snapshotName.trim() || `Timeline v${activePlan.version}`,
             notes: `Saved from editor with ${activePlan.summary.cut_count} cuts.`,
           },
         },
@@ -332,12 +366,12 @@ export function AIStep({
           workspaceId,
           userId,
           accessToken: apiAccessToken,
-          friendlyError: "Plan snapshot could not be restored.",
+          friendlyError: "Timeline version could not be restored.",
           body: {},
         },
       );
       onPlanGenerated(payload.plan);
-      setMessage(`Restored snapshot as plan v${payload.plan.version}.`);
+      setMessage(`Restored timeline version ${payload.plan.version}.`);
       router.refresh();
     } catch (error) {
       console.error(error);
@@ -367,8 +401,16 @@ export function AIStep({
       <div className="space-y-2">
         <h2 className="text-xl font-black tracking-tight">AI Edit</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
-          Our AI will analyze your video and plan the perfect edit based on your chosen style.
+          AI analyzes the video and writes the first complete edit directly onto your timeline.
         </p>
+      </div>
+
+      <div className="pixel-panel flex items-start gap-3 p-3 text-sm" data-testid="visual-analysis-status">
+        {visualStatus.status === "processing" ? <Loader2 className="mt-0.5 size-4 animate-spin" /> : visualStatus.status === "ready" ? <CheckCircle2 className="mt-0.5 size-4 text-success" /> : <AlertCircle className="mt-0.5 size-4 text-warning" />}
+        <div>
+          <div className="flex items-center gap-2 font-bold"><Eye className="size-4" />Visual analysis: {visualStatus.status}</div>
+          <p className="mt-1 text-muted-foreground">{visualStatus.message}</p>
+        </div>
       </div>
 
       <div className="pixel-panel pixel-corners space-y-6 p-4">
@@ -501,7 +543,7 @@ export function AIStep({
           <div>
             <p className="text-sm font-black">Version History</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Save named EditPlan snapshots and restore them as new active versions.
+              Save named timeline versions and restore any edit without creating a separate review step.
             </p>
           </div>
           <History className="size-4 text-muted-foreground" />
@@ -511,7 +553,7 @@ export function AIStep({
             aria-label="Snapshot name"
             value={snapshotName}
             onChange={(event) => setSnapshotName(event.target.value)}
-            placeholder={activePlan ? `Plan v${activePlan.version}` : "Snapshot name"}
+            placeholder={activePlan ? `Timeline v${activePlan.version}` : "Version name"}
             disabled={!activePlan || snapshotLoading}
           />
           <Button
@@ -535,7 +577,7 @@ export function AIStep({
                 <div className="min-w-0">
                   <p className="truncate text-xs font-black">{snapshot.name}</p>
                   <p className="text-[10px] font-bold text-muted-foreground">
-                    Plan v{snapshot.source_plan_version} · {snapshot.summary.cut_count} cuts
+                    Timeline v{snapshot.source_plan_version} · {snapshot.summary.cut_count} cuts
                   </p>
                 </div>
                 <Button

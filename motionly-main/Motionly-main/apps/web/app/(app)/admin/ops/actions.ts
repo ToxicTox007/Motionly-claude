@@ -1,12 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getWorkspaceApiContext } from "@/lib/api-auth";
+import { getAdminApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 
 async function adminPost(path: string) {
-  const context = await getWorkspaceApiContext();
-  if (!context) throw new Error("Admin session is required.");
+  const context = await getAdminApiContext();
+  if (!context) throw new Error("Admin access is required.");
   await fetch(`${env.apiBaseUrl}${path}`, {
     method: "POST",
     cache: "no-store",

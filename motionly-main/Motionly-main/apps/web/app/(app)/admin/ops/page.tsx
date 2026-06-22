@@ -1,8 +1,9 @@
 import { Activity, AlertTriangle, Gauge, RotateCcw, Square, WalletCards } from "lucide-react";
+import { redirect } from "next/navigation";
 import type { ComponentType } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ButtonLink } from "@/components/button";
-import { getWorkspaceApiContext } from "@/lib/api-auth";
+import { getAdminApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { cancelQueueJob, cancelRenderJob, retryQueueJob, retryRenderJob } from "./actions";
 
@@ -57,14 +58,13 @@ type OpsOverview = {
 };
 
 export default async function LaunchOpsPage() {
-  const context = await getWorkspaceApiContext();
-  const [overview, queues, dependencyHealth] = context
-    ? await Promise.all([
-        fetchOpsOverview(context.headers),
-        fetchQueues(context.headers),
-        fetchDependencyHealth(context.headers),
-      ])
-    : [null, null, null];
+  const context = await getAdminApiContext();
+  if (!context) redirect("/dashboard?error=admin_access_denied");
+  const [overview, queues, dependencyHealth] = await Promise.all([
+    fetchOpsOverview(context.headers),
+    fetchQueues(context.headers),
+    fetchDependencyHealth(context.headers),
+  ]);
 
   return (
     <AppShell title="Launch Ops">

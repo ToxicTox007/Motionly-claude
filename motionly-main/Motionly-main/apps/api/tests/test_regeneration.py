@@ -43,7 +43,7 @@ def test_regeneration_dag_preserves_transcription_for_broll_change() -> None:
     assert RegenerationLayer.TRANSCRIPT in response.preserved_layers
     assert response.controls.version == 1
     assert [artifact.version for artifact in response.artifact_versions] == [1, 1]
-    assert response.job_id.startswith(f"regenerate:{project_id}:")
+    assert response.job_id.startswith(f"sync-complete--regeneration--{project_id}--")
 
 
 def test_regeneration_duration_change_invalidates_plan_downstream() -> None:

@@ -8,14 +8,21 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
+from app.api.plans import create_plan
 from app.api.renders import (
+    _select_render_engine,
     create_bulk_render,
-    create_render,
     get_export_download_url,
+    renderer_feature_compatibility,
     restore_export_version,
     retime_caption_segments_for_keep_segments,
+    retime_manual_elements_for_keep_segments,
     retime_range_for_keep_segments,
     retry_render,
+    source_timeline_for_keep_segments,
+)
+from app.api.renders import (
+    create_render as create_render_api,
 )
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
@@ -39,6 +46,7 @@ from app.schemas.effects import (
     VisualPresetKey,
 )
 from app.schemas.music import MusicProviderKey, MusicSelectionStatus
+from app.schemas.plans import BrollDensity, EditPlanCut, PlanCreateRequest
 from app.schemas.renders import (
     CutSegment,
     ExportFraming,
@@ -47,6 +55,7 @@ from app.schemas.renders import (
     PlatformPreset,
     RenderBulkCreateRequest,
     RenderCreateRequest,
+    RenderEngine,
     RenderJobStatus,
     RenderSpecs,
     RenderTemplateId,
@@ -54,10 +63,46 @@ from app.schemas.renders import (
 from app.schemas.uploads import UploadStatus
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
+from app.services.edit_planner import FixtureEditPlannerProvider
 from app.services.ffmpeg_render import FFmpegCaptionRenderer
-from app.services.queue import RenderQueue
+from app.services.queue import PlanQueue, RenderQueue
 from app.services.render_jobs import complete_render_job
 from app.services.transcription_provider import FixtureTranscriptionProvider
+
+
+async def create_render(**kwargs):
+    """Exercise render enqueue and worker completion as separate processes would."""
+    response = await create_render_api(**kwargs)
+    request = kwargs["request"]
+    settings = request.app.state.settings
+    if getattr(settings, "should_complete_renders_synchronously", False):
+        repository = kwargs["repository"]
+        record = repository.get_render_job(
+            project_id=kwargs["project_id"],
+            render_job_id=response.job_id,
+            workspace_id=kwargs["actor"].workspace_id,
+        )
+        completed = complete_render_job(
+            job=record,
+            repository=repository,
+            export_bucket=settings.export_storage_bucket,
+            storage_root=settings.media_work_dir,
+            supabase_url=(
+                str(getattr(settings, "supabase_url", ""))
+                if getattr(settings, "supabase_url", None)
+                else None
+            ),
+            service_role_key=getattr(settings, "supabase_service_role_key", None),
+            execute_ffmpeg=settings.render_execute_ffmpeg,
+            allow_fixture_media=True,
+        )
+        return response.model_copy(
+            update={
+                "job": completed.to_response(repository.events_for_job(completed.id)),
+                "status": completed.status,
+            }
+        )
+    return response
 
 
 class FakeStorageSigner:
@@ -542,6 +587,142 @@ def test_render_timeline_retimes_captions_and_broll_after_cuts() -> None:
     assert "Dialogue: 0,0:00:00." in response.job.manifest["caption_ass"]
 
 
+def test_source_timeline_maps_cuts_and_manual_elements_to_output_time() -> None:
+    cuts = [
+        CutSegment(start_ms=500, end_ms=1500, reason="hook"),
+        CutSegment(start_ms=3000, end_ms=4500, reason="payoff"),
+    ]
+    timeline = source_timeline_for_keep_segments(cuts)
+    elements = retime_manual_elements_for_keep_segments(
+        elements=[
+            {
+                "id": "title",
+                "type": "text",
+                "start_ms": 3200,
+                "end_ms": 4000,
+                "properties": {"content": "Payoff"},
+            }
+        ],
+        keep_segments=cuts,
+    )
+
+    assert timeline["duration_ms"] == 2500
+    assert timeline["clips"] == [
+        {
+            "id": "cut-0",
+            "source_start_ms": 500,
+            "source_end_ms": 1500,
+            "output_start_ms": 0,
+            "output_end_ms": 1000,
+            "reason": "hook",
+        },
+        {
+            "id": "cut-1",
+            "source_start_ms": 3000,
+            "source_end_ms": 4500,
+            "output_start_ms": 1000,
+            "output_end_ms": 2500,
+            "reason": "payoff",
+        },
+    ]
+    assert elements[0]["start_ms"] == 1200
+    assert elements[0]["end_ms"] == 2000
+
+
+def test_render_creation_uses_active_edit_plan_cuts_as_authority() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    plan_repository = InMemoryPlanRepository(repository.caption_repository)
+    plan_response = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(target_duration_s=10, broll_density=BrollDensity.NONE),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=plan_repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    plan_record = plan_repository.get_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=plan_response.plan.id,
+    )
+    plan_record.plan = plan_record.plan.model_copy(
+        update={
+            "cuts": [
+                EditPlanCut(start_ms=500, end_ms=1400, reason="manual opening"),
+                EditPlanCut(start_ms=4200, end_ms=5600, reason="manual payoff"),
+            ]
+        }
+    )
+
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(edit_plan_id=plan_record.id),
+            request=make_request(complete_locally=False),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=plan_repository,
+            render_queue=RenderQueue(),
+        )
+    )
+
+    assert [(cut.start_ms, cut.end_ms) for cut in response.job.keep_segments] == [
+        (500, 1400),
+        (4200, 5600),
+    ]
+    assert response.job.manifest["timeline"]["duration_ms"] == 2300
+    assert response.job.manifest["render_props"]["timeline"] == response.job.manifest["timeline"]
+    assert response.job.manifest["render_props"]["editPlan"]["cuts"] == [
+        {"start_ms": 500, "end_ms": 1400, "reason": "manual opening"},
+        {"start_ms": 4200, "end_ms": 5600, "reason": "manual payoff"},
+    ]
+
+
+def test_animated_caption_alone_selects_remotion() -> None:
+    settings = SimpleNamespace(
+        remotion_enabled=True,
+        billing_enabled=True,
+    )
+    selected = _select_render_engine(
+        settings=settings,
+        billing_plan_key="creator",
+        has_active_broll=False,
+        has_music=False,
+        has_effects=False,
+        caption_animation="karaoke",
+    )
+    assert selected == RenderEngine.REMOTION_PREMIUM
+
+
+def test_renderer_feature_matrix_never_silently_drops_premium_features() -> None:
+    features = {
+        "animated_captions:karaoke",
+        "manual_transition",
+        "manual_music",
+        "broll",
+    }
+    ffmpeg = renderer_feature_compatibility(
+        engine=RenderEngine.FFMPEG_BASIC,
+        requested_features=features,
+    )
+    remotion = renderer_feature_compatibility(
+        engine=RenderEngine.REMOTION_PREMIUM,
+        requested_features=features,
+    )
+
+    assert ffmpeg["unsupported"] == [
+        "animated_captions:karaoke",
+        "manual_music",
+        "manual_transition",
+    ]
+    assert ffmpeg["downgraded"] == ffmpeg["unsupported"]
+    assert remotion["unsupported"] == []
+    assert remotion["downgraded"] == []
+
+
 def test_render_adjustments_change_manifest_and_create_versions() -> None:
     repository, project_id, workspace_id, user_id = make_render_repository()
     request = make_request()
@@ -563,9 +744,7 @@ def test_render_adjustments_change_manifest_and_create_versions() -> None:
     cinematic = asyncio.run(
         create_render(
             project_id=project_id,
-            payload=RenderCreateRequest.model_validate(
-                {"adjustment_action": "more_cinematic"}
-            ),
+            payload=RenderCreateRequest.model_validate({"adjustment_action": "more_cinematic"}),
             request=request,
             actor=Actor(user_id=user_id, workspace_id=workspace_id),
             repository=repository,
@@ -842,9 +1021,7 @@ def test_supabase_render_job_hydrates_from_live_schema_compat_logs() -> None:
                     "caption_track_id": str(track_id),
                     "planner_version": "planner-test",
                     "manifest": {"source": {"bucket": "raw-uploads", "path": "video.mp4"}},
-                    "keep_segments": [
-                        {"start_ms": 100, "end_ms": 900, "reason": "caption"}
-                    ],
+                    "keep_segments": [{"start_ms": 100, "end_ms": 900, "reason": "caption"}],
                     "specs": {"width": 1080, "height": 1920, "fps": 30, "format": "mp4"},
                     "progress_pct": 5,
                 },
@@ -865,13 +1042,13 @@ def test_supabase_render_job_hydrates_from_live_schema_compat_logs() -> None:
     assert job.logs == ["render props prepared"]
 
 
-def test_supabase_render_status_maps_live_foundation_enum() -> None:
+def test_supabase_render_status_writes_canonical_enum_and_reads_legacy_values() -> None:
     repository = make_supabase_render_repository()
 
-    assert repository._db_status(RenderJobStatus.PREPARING) == "running"
-    assert repository._db_status(RenderJobStatus.RENDERING) == "running"
-    assert repository._db_status(RenderJobStatus.UPLOADING) == "running"
-    assert repository._db_status(RenderJobStatus.COMPLETE) == "succeeded"
+    assert repository._db_status(RenderJobStatus.PREPARING) == "preparing"
+    assert repository._db_status(RenderJobStatus.RENDERING) == "rendering"
+    assert repository._db_status(RenderJobStatus.UPLOADING) == "uploading"
+    assert repository._db_status(RenderJobStatus.COMPLETE) == "complete"
     assert repository._app_status("running", progress_pct=20) == RenderJobStatus.PREPARING
     assert repository._app_status("running", progress_pct=70) == RenderJobStatus.RENDERING
     assert repository._app_status("running", progress_pct=90) == RenderJobStatus.UPLOADING

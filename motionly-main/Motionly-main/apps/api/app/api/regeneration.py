@@ -60,13 +60,8 @@ async def regenerate_project_layers(
         cache_key=build_regeneration_cache_key(payload),
         settings_summary=summary,
     )
-    job = regeneration_queue.enqueue_regeneration(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        control_settings_id=controls.id,
-    )
     return RegenerateResponse(
-        job_id=job.id,
+        job_id=f"sync-complete--regeneration--{project_id}--{controls.id}",
         affected_layers=affected_layers,
         preserved_layers=preserved_layers(affected_layers),
         controls=controls.to_response(),

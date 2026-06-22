@@ -84,7 +84,7 @@ from app.services.transcription_provider import (
 )
 from app.services.visual_intelligence import (
     FixtureVisualIntelligenceProvider,
-    LocalMLVisualIntelligenceProvider,
+    WorkerOnlyVisualIntelligenceProvider,
 )
 
 GROQ_TRANSCRIPTION_ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -256,7 +256,8 @@ def create_app() -> FastAPI:
     )
     app.state.stem_separator = (
         FixtureStemSeparator()
-        if settings.stem_separation_provider == "fixture"
+        if settings.process_role == "api"
+        or settings.stem_separation_provider == "fixture"
         or (settings.app_env != "production" and settings.allow_fixture_providers)
         else DemucsStemSeparator()
     )
@@ -279,9 +280,10 @@ def create_app() -> FastAPI:
         if transcription_provider_key in {"groq", "openai_compatible"} and settings.groq_api_key
         else FixtureTranscriptionProvider(model=settings.transcription_model)
     )
-    app.state.audio_ml_providers = _audio_ml_providers(
-        provider_key=audio_ml_provider_key,
-        settings=settings,
+    app.state.audio_ml_providers = (
+        {}
+        if settings.process_role == "api"
+        else _audio_ml_providers(provider_key=audio_ml_provider_key, settings=settings)
     )
     app.state.edit_planner_provider = (
         HttpEditPlannerProvider(
@@ -300,10 +302,14 @@ def create_app() -> FastAPI:
     app.state.visual_intelligence_provider = (
         FixtureVisualIntelligenceProvider()
         if visual_provider_key == "fixture"
-        else LocalMLVisualIntelligenceProvider(
-            clip_model=settings.visual_clip_model,
-            blip_model=settings.visual_blip_model,
-            yolo_model=settings.visual_yolo_model,
+        else WorkerOnlyVisualIntelligenceProvider(
+            model="|".join(
+                (
+                    settings.visual_clip_model,
+                    settings.visual_blip_model,
+                    settings.visual_yolo_model,
+                )
+            ),
         )
     )
     stock_video_provider = settings.stock_video_provider.replace(",", "_")
@@ -378,6 +384,19 @@ def _validate_production_settings(settings) -> None:
     if settings.app_env != "production":
         return
 
+    if settings.process_role != "api":
+        required_worker = {
+            "SUPABASE_URL": settings.supabase_url,
+            "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
+            "REDIS_URL": settings.redis_url,
+        }
+        missing_worker = [name for name, value in required_worker.items() if not value]
+        if missing_worker:
+            raise RuntimeError(
+                f"Missing production worker environment variables: {', '.join(missing_worker)}"
+            )
+        return
+
     required = {
         "SUPABASE_URL": settings.supabase_url,
         "SUPABASE_JWT_SECRET": settings.supabase_jwt_secret,
@@ -396,8 +415,6 @@ def _validate_production_settings(settings) -> None:
 
     if not settings.admin_api_token:
         raise RuntimeError("ADMIN_API_TOKEN is required in production for worker access")
-    if not settings.render_execute_ffmpeg:
-        raise RuntimeError("RENDER_EXECUTE_FFMPEG must be true in production")
     if not settings.redis_url:
         raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
 

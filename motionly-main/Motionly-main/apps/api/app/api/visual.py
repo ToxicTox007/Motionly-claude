@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, Request
 from app.api.dependencies import (
     Actor,
     get_actor,
-    get_visual_intelligence_provider,
     get_visual_queue,
     get_visual_repository,
 )
@@ -17,19 +16,48 @@ from app.schemas.visual import (
     VideoManifestResponse,
     VisualAnalyzeRequest,
     VisualAnalyzeResponse,
+    VisualStatusResponse,
 )
 from app.services.queue import VisualQueue
-from app.services.visual_intelligence import (
-    VisualIntelligenceProvider,
-    run_visual_analysis_for_upload,
-)
+from app.services.visual_jobs import queue_visual_analysis_for_upload, visual_provider_identity
 
 router = APIRouter(prefix="/projects/{project_id}/visual", tags=["visual intelligence"])
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
 VisualRepositoryDep = Annotated[InMemoryVisualRepository, Depends(get_visual_repository)]
 VisualQueueDep = Annotated[VisualQueue, Depends(get_visual_queue)]
-VisualProviderDep = Annotated[VisualIntelligenceProvider, Depends(get_visual_intelligence_provider)]
+
+
+@router.get("/status", response_model=VisualStatusResponse)
+async def get_visual_status(
+    project_id: UUID,
+    actor: ActorDep,
+    repository: VisualRepositoryDep,
+) -> VisualStatusResponse:
+    upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
+    record = repository.latest_for_upload(
+        uploaded_video_id=upload.id,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    if record is None or record.status.value == "failed":
+        return VisualStatusResponse(
+            status="unavailable",
+            manifest=record.to_response() if record else None,
+            message=(record.error_message if record else None)
+            or "Visual context is unavailable; editing will continue using transcript and audio.",
+        )
+    if record.status.value == "ready":
+        return VisualStatusResponse(
+            status="ready",
+            manifest=record.to_response(),
+            message="Visual context is ready and will inform the AI edit.",
+        )
+    return VisualStatusResponse(
+        status="processing",
+        manifest=record.to_response(),
+        message="Visual context is processing; editing can continue with transcript and audio.",
+    )
 
 
 @router.post("/analyze", response_model=VisualAnalyzeResponse, status_code=202)
@@ -40,7 +68,6 @@ async def analyze_visual_manifest(
     actor: ActorDep,
     repository: VisualRepositoryDep,
     visual_queue: VisualQueueDep,
-    provider: VisualProviderDep,
 ) -> VisualAnalyzeResponse:
     upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
     if upload.status != UploadStatus.READY:
@@ -49,33 +76,22 @@ async def analyze_visual_manifest(
             "source_video_not_ready",
             "Finish upload preprocessing before running visual analysis.",
         )
-    cached = repository.latest_ready_for_upload(
-        uploaded_video_id=upload.id,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-    )
-    job = visual_queue.enqueue_visual_analysis(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        video_id=upload.id,
-    )
-    if cached and not payload.force:
-        return VisualAnalyzeResponse(manifest=cached.to_response(), job_id=job.id, cached=True)
-
     settings = request.app.state.settings
-    record = run_visual_analysis_for_upload(
+    provider_name, model = visual_provider_identity(settings)
+    scheduled = queue_visual_analysis_for_upload(
+        upload=upload,
         repository=repository,
-        provider=provider,
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-        video_id=upload.id,
-        media_work_dir=settings.media_work_dir,
-        supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
-        service_role_key=settings.supabase_service_role_key,
-        sample_rate_fps=payload.sample_rate_fps or settings.visual_sample_fps,
-        scene_threshold=payload.scene_threshold or settings.visual_scene_threshold,
+        visual_queue=visual_queue,
+        provider=provider_name,
+        model=model,
+        force=payload.force,
     )
-    return VisualAnalyzeResponse(manifest=record.to_response(), job_id=job.id)
+    return VisualAnalyzeResponse(
+        manifest=scheduled.manifest.to_response(),
+        job_id=(scheduled.job.id if scheduled.job else f"visual-cached--{scheduled.manifest.id}"),
+        status=("ready" if scheduled.cached else "queued"),
+        cached=scheduled.cached,
+    )
 
 
 @router.get("/manifest", response_model=VideoManifestResponse)

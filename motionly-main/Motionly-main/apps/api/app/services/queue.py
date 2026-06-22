@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -234,6 +235,9 @@ class BullMQQueueRegistry:
         self.bridge_path = bridge_path or str(self._default_bridge_path())
         self.node_command = node_command
         self.job_attempts = job_attempts
+        self._bridge_process: subprocess.Popen[str] | None = None
+        self._bridge_lock = threading.Lock()
+        self._bridge_request_id = 0
 
     @staticmethod
     def _default_bridge_path() -> Path:
@@ -309,7 +313,13 @@ class BullMQQueueRegistry:
         return self._job_from_bridge(self._bridge("cancel", {"id": job_id}))
 
     def mark_stuck_as_dead_letter(self, *, timeout_seconds: int) -> list[EnqueuedJob]:
-        return []
+        records = self._bridge(
+            "mark-stuck-dead-letter",
+            {"timeout_seconds": max(1, timeout_seconds)},
+        )
+        if not isinstance(records, list):
+            return []
+        return [self._job_from_bridge(record) for record in records]
 
     def snapshots(self) -> list[QueueSnapshot]:
         queue_names = sorted({job.queue_name for job in self.jobs.values()})
@@ -341,20 +351,51 @@ class BullMQQueueRegistry:
             "REDIS_URL": self.redis_url,
             "JOB_ATTEMPTS": str(self.job_attempts),
         }
-        result = subprocess.run(
-            [self.node_command, self.bridge_path, command],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=15,
-            env=env,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                result.stderr.strip() or result.stdout.strip() or "BullMQ bridge failed"
+        with self._bridge_lock:
+            process = self._ensure_bridge_process(env)
+            self._bridge_request_id += 1
+            request_id = self._bridge_request_id
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.write(
+                json.dumps({"id": request_id, "command": command, "payload": payload}) + "\n"
             )
-        return json.loads(result.stdout or "null")
+            process.stdin.flush()
+            line = process.stdout.readline()
+            if not line:
+                stderr = process.stderr.read() if process.stderr else ""
+                self.close()
+                raise RuntimeError(stderr.strip() or "Persistent BullMQ bridge stopped")
+            response = json.loads(line)
+            if response.get("id") != request_id:
+                raise RuntimeError("Persistent BullMQ bridge response was out of sequence")
+            if response.get("error"):
+                raise RuntimeError(str(response["error"]))
+            return response.get("result")
+
+    def _ensure_bridge_process(self, env: dict[str, str]) -> subprocess.Popen[str]:
+        if self._bridge_process is None or self._bridge_process.poll() is not None:
+            self._bridge_process = subprocess.Popen(
+                [self.node_command, self.bridge_path, "serve"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                env=env,
+            )
+        return self._bridge_process
+
+    def close(self) -> None:
+        process, self._bridge_process = self._bridge_process, None
+        if process is None or process.poll() is not None:
+            return
+        if process.stdin:
+            process.stdin.close()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.terminate()
 
     def _job_from_bridge(self, data: object) -> EnqueuedJob:
         if not isinstance(data, dict):
@@ -571,7 +612,13 @@ class RenderQueue(BaseQueue):
             project_id=project_id,
             resource_id=render_job_id,
             render_engine=render_engine,
-            queue_name="render_gpu" if compute_tier == "gpu" else self.queue_name,
+            queue_name=(
+                "render_remotion"
+                if render_engine == "remotion_premium"
+                else "render_gpu"
+                if compute_tier == "gpu"
+                else self.queue_name
+            ),
         )
 
 
@@ -604,12 +651,20 @@ class ScaleQueue(BaseQueue):
         resource_id: UUID,
         workspace_id: UUID,
         project_id: UUID | None,
+        resource_kind: str | None = None,
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=self._job_id("phase5", resource_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=resource_id,
+            queue_name=(
+                "audio_demucs"
+                if resource_kind == "stem_separation"
+                else "provider_calls"
+                if resource_kind in {"generated_broll", "model_training", "style_profile"}
+                else self.queue_name
+            ),
         )
 
 

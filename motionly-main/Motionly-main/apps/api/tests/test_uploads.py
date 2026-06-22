@@ -10,6 +10,7 @@ from app.api.uploads import cancel_upload, complete_upload, get_upload_asset_url
 from app.core.config import get_settings
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.uploads import InMemoryUploadRepository
+from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.uploads import (
     UploadCompleteRequest,
     UploadInitRequest,
@@ -18,7 +19,7 @@ from app.schemas.uploads import (
 )
 from app.services.local_storage import LocalObjectStorage
 from app.services.preprocessing import VideoPreprocessor
-from app.services.queue import PreprocessQueue, TranscriptionQueue
+from app.services.queue import PreprocessQueue, TranscriptionQueue, VisualQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
 from app.services.upload_validation import validate_video_render_readiness
 
@@ -48,7 +49,6 @@ def make_context() -> tuple[SimpleNamespace, InMemoryUploadRepository, str, str,
     user_id = uuid4()
     repository.seed_project(project_id=project_id, workspace_id=workspace_id)
     settings = get_settings()
-    settings.upload_sync_processing = False
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
     return request, repository, str(project_id), str(workspace_id), str(user_id)
 
@@ -105,17 +105,18 @@ def test_upload_init_and_complete_queues_processing_job() -> None:
     assert complete_response.job_id == f"preprocess--{init_response.video_id}"
 
 
-def test_sync_upload_preprocessing_queues_transcription(
+def test_upload_sync_flag_cannot_run_media_inside_request(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     request, repository, project_id, workspace_id, user_id = make_context()
     settings = request.app.state.settings
-    settings.upload_sync_processing = True
     settings.media_work_dir = str(tmp_path)
     request.app.state.caption_repository = InMemoryCaptionRepository(repository)
     request.app.state.transcription_queue = TranscriptionQueue()
     request.app.state.transcription_provider = FixtureTranscriptionProvider()
+    request.app.state.visual_repository = InMemoryVisualRepository(repository)
+    request.app.state.visual_queue = VisualQueue()
 
     class FakePreprocessor:
         def __init__(self, **_kwargs):
@@ -169,15 +170,15 @@ def test_sync_upload_preprocessing_queues_transcription(
         )
     )
 
-    transcript = request.app.state.caption_repository.latest_transcript(
-        project_id=uuid4_from_string(project_id),
-        workspace_id=uuid4_from_string(workspace_id),
+    assert complete_response.status == "processing"
+    assert complete_response.job_id == f"preprocess--{init_response.video_id}"
+    assert (
+        request.app.state.caption_repository.latest_transcript(
+            project_id=uuid4_from_string(project_id),
+            workspace_id=uuid4_from_string(workspace_id),
+        )
+        is None
     )
-
-    assert complete_response.status == "ready"
-    assert transcript is not None
-    assert transcript.uploaded_video_id == init_response.video_id
-    assert transcript.status == "ready"
 
 
 def test_upload_rejects_mime_extension_mismatch() -> None:

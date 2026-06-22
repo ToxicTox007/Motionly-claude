@@ -90,7 +90,7 @@ export function BrollTab({
       setMessage(`B-roll queued with ${payload.slots?.length ?? 0} slots.`);
       onSlotsUpdated(payload.slots ?? []);
       if (payload.slots?.length === 0) {
-        setMessage("No B-roll slots were created from the active edit plan.");
+        setMessage("No B-roll slots were created from the active timeline.");
       }
       router.refresh();
     } catch (error) {
@@ -182,7 +182,7 @@ export function BrollTab({
                 <p className="font-bold text-foreground">No B-roll slots yet.</p>
                 <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs">
                   <li>Generate an AI edit.</li>
-                  <li>Create B-roll slots from the edit plan.</li>
+                  <li>Create B-roll slots from the timeline.</li>
                   <li>Select or swap assets for each slot.</li>
                 </ol>
               </div>

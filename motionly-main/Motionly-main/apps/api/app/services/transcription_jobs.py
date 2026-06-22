@@ -66,26 +66,6 @@ def queue_transcription_for_upload(
             error_message="This video has no audio track, so captions cannot be generated.",
             duration_ms=upload.metadata.duration_ms,
         )
-    if isinstance(transcription_provider, FixtureTranscriptionProvider):
-        result = transcription_provider.transcribe(audio_path=None, language_hint=language_hint)
-        return caption_repository.update_transcript(
-            transcript=transcript,
-            status=TranscriptStatus.READY,
-            language=result.language,
-            provider=result.provider,
-            model=result.model,
-            confidence=result.confidence,
-            words=result.words,
-            raw_payload=merge_audio_intelligence(
-                raw_payload=result.raw_payload,
-                words=result.words,
-                duration_ms=upload.metadata.duration_ms,
-                has_audio=upload.metadata.has_audio,
-            ),
-            error_code=None,
-            error_message=None,
-            duration_ms=upload.metadata.duration_ms,
-        )
     transcription_queue.enqueue_transcription(
         project_id=upload.project_id,
         workspace_id=upload.workspace_id,
@@ -134,6 +114,8 @@ def run_transcription_for_upload(
             error_code=None,
             error_message=None,
         )
+    elif transcript.status == TranscriptStatus.READY:
+        return transcript
 
     if upload.metadata.has_audio is False:
         return caption_repository.update_transcript(

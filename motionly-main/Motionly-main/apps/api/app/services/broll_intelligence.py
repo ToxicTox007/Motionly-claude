@@ -78,9 +78,7 @@ def apply_stage4_broll_rules(
         return []
     duration_ms = max(duration_ms, max(request.end_ms for request in requests))
     scenes = (
-        sorted(visual_manifest.scenes, key=lambda scene: scene.start_ms)
-        if visual_manifest
-        else []
+        sorted(visual_manifest.scenes, key=lambda scene: scene.start_ms) if visual_manifest else []
     )
     critical_scenes = _critical_face_scenes(scenes)
     enriched = []
@@ -172,9 +170,7 @@ def _enrich_request_from_scene(
             ),
             "source_scene_type": request.source_scene_type or scene.scene_type.value,
             "shot_type": (
-                request.shot_type
-                if request.shot_type != "cutaway"
-                else _shot_type_for_scene(scene)
+                request.shot_type if request.shot_type != "cutaway" else _shot_type_for_scene(scene)
             ),
             "placement_rule": request.placement_rule or "semantic_anchor",
             "avoid_face_overlap": request.avoid_face_overlap,
@@ -364,9 +360,7 @@ def _closest_face_safe_gap(
     return best[0], best[2]
 
 
-def _safe_ranges(
-    *, critical_scenes: list[SceneSegment], duration_ms: int
-) -> list[tuple[int, int]]:
+def _safe_ranges(*, critical_scenes: list[SceneSegment], duration_ms: int) -> list[tuple[int, int]]:
     if not critical_scenes:
         return [(0, duration_ms)]
     blocked = sorted(
@@ -394,9 +388,7 @@ def _safe_ranges(
     return safe
 
 
-def _overlaps_any_critical(
-    request: BrollRequest, critical_scenes: list[SceneSegment]
-) -> bool:
+def _overlaps_any_critical(request: BrollRequest, critical_scenes: list[SceneSegment]) -> bool:
     return any(
         request.start_ms < scene.end_ms + FACE_PADDING_MS
         and request.end_ms > scene.start_ms - FACE_PADDING_MS

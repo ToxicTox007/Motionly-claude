@@ -143,3 +143,9 @@ class VisualAnalyzeResponse(BaseModel):
     job_id: str
     status: Literal["ready", "queued"] = "ready"
     cached: bool = False
+
+
+class VisualStatusResponse(BaseModel):
+    status: Literal["processing", "ready", "unavailable"]
+    manifest: VideoManifestResponse | None = None
+    message: str

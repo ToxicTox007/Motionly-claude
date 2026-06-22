@@ -103,7 +103,7 @@ export const fallbackBillingStatus: BillingStatusSummary = {
       entitlements: {
         monthly_renders: 250,
         watermark: false,
-        max_resolution: "1080p",
+        max_resolution: "4k",
         broll: true,
         priority_queue: true,
         premium_effects: true,
@@ -112,7 +112,7 @@ export const fallbackBillingStatus: BillingStatusSummary = {
         bulk_uploads: true,
         api_access: true,
       },
-      features: ["5 seats", "Brand kits", "Bulk uploads", "API access"],
+      features: ["5 seats", "4K exports", "Brand kits", "Bulk uploads", "API access"],
     },
   ],
   usage: {

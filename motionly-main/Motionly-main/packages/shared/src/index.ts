@@ -345,6 +345,12 @@ export interface VideoManifestSummary {
   updated_at: string;
 }
 
+export interface VisualAnalysisStatusSummary {
+  status: "processing" | "ready" | "unavailable";
+  manifest?: VideoManifestSummary | null;
+  message: string;
+}
+
 export interface CaptionStyle {
   mode: CaptionMode;
   font_family: string;
@@ -408,6 +414,61 @@ export interface EditPlanCut {
   start_ms: number;
   end_ms: number;
   reason: string;
+}
+
+export interface ProjectTimelineSourceClip {
+  id: string;
+  source_video_id?: string | null;
+  source_start_ms: number;
+  source_end_ms: number;
+  output_start_ms: number;
+  output_end_ms: number;
+  reason: string;
+}
+
+export interface ProjectTimelineCaptionLayer {
+  id: string;
+  index: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  words: TranscriptWord[];
+  line_count: number;
+  highlight_words: string[];
+  style: Record<string, unknown>;
+}
+
+export interface ProjectTimelineBrollLayer {
+  id: string;
+  start_ms: number;
+  end_ms: number;
+  src: string;
+  source_start_ms?: number | null;
+  source_end_ms?: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface ProjectTimelineDocument {
+  schema_version: 1;
+  duration_ms: number;
+  clips: ProjectTimelineSourceClip[];
+  captions: ProjectTimelineCaptionLayer[];
+  broll: ProjectTimelineBrollLayer[];
+  audio: {
+    source_stems?: Record<string, unknown> | null;
+    music?: Record<string, unknown> | null;
+    sfx: Array<Record<string, unknown>>;
+  };
+  manual_layers: ManualElement[];
+  transitions: ManualElement[];
+  effects: {
+    color_grade: string;
+    effects: string[];
+    zoom_moments: ZoomMoment[];
+    keyframes: Array<Record<string, unknown>>;
+    config?: Record<string, unknown> | null;
+  };
+  metadata: Record<string, unknown>;
 }
 
 export interface CaptionHighlight {
@@ -600,6 +661,15 @@ export interface AutoReframeSettings {
   subject_x_pct: number;
   subject_y_pct: number;
   smoothing: number;
+  subject_track?: Array<{
+    timestamp_ms: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    confidence: number;
+    source: "face" | "object";
+  }>;
 }
 
 export interface MotionSettings {
@@ -709,6 +779,7 @@ export interface EditPlan {
   color_grade: string;
   risk_flags: string[];
   manual_elements: ManualElement[];
+  timeline?: ProjectTimelineDocument | null;
 }
 
 export interface EditPlanSummary {

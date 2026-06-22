@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
-const allQueueNames = [
+export const allQueueNames = [
   "upload_preprocess",
   "transcription",
   "visual_analysis",
@@ -10,13 +10,17 @@ const allQueueNames = [
   "audio",
   "render",
   "render_gpu",
+  "render_remotion",
   "publish",
   "intelligence",
+  "audio_demucs",
+  "provider_calls",
 ];
+const defaultQueueNames = ["render_remotion"];
 
 export const queueNames = env("WORKER_QUEUES")
   ? env("WORKER_QUEUES").split(",").map((name) => name.trim()).filter((name) => allQueueNames.includes(name))
-  : allQueueNames;
+  : defaultQueueNames;
 
 export function env(name, fallback = "") {
   return process.env[name] || fallback;
@@ -131,6 +135,7 @@ export function normalizeJobRecord(job, state) {
 
 export function mapBullState(state, attemptsMade, maxAttempts, dataStatus) {
   if (dataStatus === "canceled") return "canceled";
+  if (dataStatus === "dead_letter") return "dead_letter";
   if (state === "completed") return "succeeded";
   if (state === "active") return "running";
   if (state === "failed") {

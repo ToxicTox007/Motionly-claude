@@ -23,8 +23,6 @@ from app.schemas.uploads import (
 )
 from app.services.queue import PreprocessQueue
 from app.services.storage import StorageSigner
-from app.services.transcription_jobs import queue_transcription_for_upload
-from app.services.upload_jobs import complete_upload_preprocessing
 from app.services.upload_validation import validate_upload_preflight
 
 router = APIRouter(prefix="/projects/{project_id}/uploads", tags=["uploads"])
@@ -143,29 +141,6 @@ async def complete_upload(
         project_id=upload.project_id,
         workspace_id=upload.workspace_id,
     )
-    settings = request.app.state.settings
-    if settings.should_process_uploads_synchronously:
-        upload = complete_upload_preprocessing(
-            upload=upload,
-            repository=repository,
-            media_work_dir=settings.media_work_dir,
-            supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
-            service_role_key=settings.supabase_service_role_key,
-        )
-        if all(
-            hasattr(request.app.state, name)
-            for name in (
-                "caption_repository",
-                "transcription_queue",
-                "transcription_provider",
-            )
-        ):
-            queue_transcription_for_upload(
-                upload=upload,
-                caption_repository=request.app.state.caption_repository,
-                transcription_queue=request.app.state.transcription_queue,
-                transcription_provider=request.app.state.transcription_provider,
-            )
     return UploadCompleteResponse(video_id=upload.id, status=upload.status, job_id=job.id)
 
 

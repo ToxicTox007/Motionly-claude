@@ -65,7 +65,7 @@ PLAN_DEFINITIONS: dict[BillingPlanKey, PlanDefinition] = {
         entitlements=PlanEntitlements(
             monthly_renders=250,
             watermark=False,
-            max_resolution="1080p",
+            max_resolution="4k",
             broll=True,
             priority_queue=True,
             premium_effects=True,
@@ -74,7 +74,7 @@ PLAN_DEFINITIONS: dict[BillingPlanKey, PlanDefinition] = {
             bulk_uploads=True,
             api_access=True,
         ),
-        features=["5 seats", "Brand kits", "Bulk uploads", "API access"],
+        features=["5 seats", "4K exports", "Brand kits", "Bulk uploads", "API access"],
     ),
 }
 

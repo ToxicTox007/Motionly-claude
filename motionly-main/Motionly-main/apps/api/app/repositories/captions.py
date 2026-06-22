@@ -561,9 +561,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                     if isinstance(word, dict)
                 ],
                 highlight_words=[
-                    str(word)
-                    for word in row.get("highlight_words", [])
-                    if isinstance(word, str)
+                    str(word) for word in row.get("highlight_words", []) if isinstance(word, str)
                 ],
             )
             for row in response.json()

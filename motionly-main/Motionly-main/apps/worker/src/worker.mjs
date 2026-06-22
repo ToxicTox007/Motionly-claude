@@ -1,16 +1,14 @@
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Worker } from "bullmq";
 import {
-  apiBaseUrl,
   bullConnection,
-  hasApiConfig,
   hasQueueConfig,
   isProduction,
   queueNames,
   stalledIntervalMs,
   workerConcurrency,
-  workerToken,
   writeBuildStamp,
 } from "./queue-common.mjs";
 
@@ -26,79 +24,90 @@ function rendererPath() {
   return resolve(env("RENDERER_BASE_PATH", join(import.meta.dirname, "../../renderer")));
 }
 
-async function postJson(path, body) {
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-motionly-worker-token": workerToken(),
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  let payload = {};
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = { raw: text.slice(0, 500) };
-    }
-  }
-  if (!response.ok) {
-    const code = payload?.error?.code || payload?.code || "worker_callback_failed";
-    throw new Error(`${path} failed with ${response.status} ${code}`);
-  }
-  return payload;
-}
+const pythonExecutors = new Map();
 
-async function runApiJob(job) {
-  const response = await fetch(`${apiBaseUrl()}/internal/jobs/${encodeURIComponent(job.id)}/run`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-motionly-worker-token": workerToken(),
-    },
+function persistentPythonExecutor(name, moduleName, payload) {
+  let state = pythonExecutors.get(name);
+  if (!state || state.child.exitCode !== null) {
+    const child = spawn(env("PYTHON_MEDIA_COMMAND", "python"), [
+      "-m", moduleName, "--serve",
+    ], { stdio: ["pipe", "pipe", "pipe"], env: processEnv() });
+    state = { child, nextId: 0, pending: new Map(), buffer: "" };
+    pythonExecutors.set(name, state);
+    child.stdout.on("data", (data) => {
+      state.buffer += String(data);
+      let newline;
+      while ((newline = state.buffer.indexOf("\n")) >= 0) {
+        const line = state.buffer.slice(0, newline).trim();
+        state.buffer = state.buffer.slice(newline + 1);
+        if (!line) continue;
+        let response;
+        try { response = JSON.parse(line); }
+        catch { continue; }
+        const pending = state.pending.get(response.id);
+        if (!pending) continue;
+        state.pending.delete(response.id);
+        if (response.error) pending.reject(new Error(response.error));
+        else pending.resolve(response.result);
+      }
+    });
+    child.stderr.on("data", (data) => globalThis.process.stderr.write(data));
+    const rejectPending = (error) => {
+      for (const pending of state.pending.values()) pending.reject(error);
+      state.pending.clear();
+      pythonExecutors.delete(name);
+    };
+    child.on("error", rejectPending);
+    child.on("close", (code) => rejectPending(new Error(`${name} exited ${code}`)));
+  }
+  const id = ++state.nextId;
+  return new Promise((resolveJob, rejectJob) => {
+    state.pending.set(id, { resolve: resolveJob, reject: rejectJob });
+    state.child.stdin.write(`${JSON.stringify({ id, payload })}\n`);
   });
-  const body = await response.text();
-  let payload = {};
-  if (body) {
-    try {
-      payload = JSON.parse(body);
-    } catch {
-      payload = { raw: body.slice(0, 500) };
-    }
-  }
-  if (!response.ok) {
-    const code = payload?.error?.code || payload?.code || "job_run_failed";
-    throw new Error(`${job.id} failed with ${response.status} ${code}`);
-  }
-  if (payload?.result?.failed) {
-    throw new Error(`${job.id} completed API run with failed result`);
-  }
-  return payload;
 }
 
 async function runRenderJob(job) {
   if (job.data.render_engine === "remotion_premium" && env("REMOTION_ENABLED") === "true") {
     const { runRemotionJob } = await import("./remotion.mjs");
     return runRemotionJob(job.data, {
-      apiBaseUrl: apiBaseUrl(),
-      workerToken: workerToken(),
       onProgress: async ({ progressPct, message, eventType, metadata }) => {
         await job.updateProgress(progressPct);
-        await postJson(`/internal/renders/${job.data.resource_id}/progress`, {
-          workspace_id: job.data.workspace_id,
-          project_id: job.data.project_id,
-          status: "rendering",
-          progress_pct: progressPct,
-          message,
-          event_type: eventType || "worker_progress",
-          metadata: metadata || {},
-        });
+        console.log(JSON.stringify({ event: eventType || "worker_progress", progress_pct: progressPct, message, metadata: metadata || {} }));
       },
     });
   }
-  return runApiJob(job);
+  throw new Error("remotion_premium requires REMOTION_ENABLED=true on the Chromium worker");
+}
+
+async function runVisualJob(job) {
+  if (env("ML_WORKER_ENABLED") !== "true") {
+    throw new Error("visual_analysis requires the dedicated GPU/ML worker image");
+  }
+  return persistentPythonExecutor("visual-ml", "app.workers.visual_job", {
+    workspace_id: String(job.data.workspace_id),
+    project_id: String(job.data.project_id),
+    video_id: String(job.data.resource_id),
+  });
+}
+
+async function runDomainJob(job) {
+  if (env("PYTHON_MEDIA_WORKER_ENABLED") !== "true") {
+    throw new Error(`${job.data.kind} requires a dedicated Python media worker image`);
+  }
+  return persistentPythonExecutor("domain", "app.workers.domain_job", {
+    job_id: String(job.id),
+    kind: String(job.data.kind),
+    queue_name: String(job.queueName),
+    workspace_id: String(job.data.workspace_id),
+    project_id: String(job.data.project_id),
+    resource_id: String(job.data.resource_id),
+    render_engine: String(job.data.render_engine || "ffmpeg_basic"),
+  });
+}
+
+function processEnv() {
+  return { ...globalThis.process.env };
 }
 
 async function runJob(job) {
@@ -117,7 +126,14 @@ async function runJob(job) {
   );
 
   await job.updateProgress(1);
-  const result = job.data.kind === "render" ? await runRenderJob(job) : await runApiJob(job);
+  const result =
+    job.data.kind === "render"
+      ? job.data.render_engine === "remotion_premium"
+        ? await runRenderJob(job)
+        : await runDomainJob(job)
+      : job.data.kind === "visual_analysis"
+        ? await runVisualJob(job)
+        : await runDomainJob(job);
   await job.updateProgress(100);
   return result;
 }
@@ -156,21 +172,13 @@ function createWorker(queueName, connection) {
     );
     if (jobData.kind === "render" && jobData.resource_id) {
       try {
-        await postJson(`/internal/renders/${jobData.resource_id}/failed`, {
-          workspace_id: jobData.workspace_id,
-          project_id: jobData.project_id,
-          error_code:
-            job && job.attemptsMade < Number(job.opts?.attempts || 1)
-              ? "render_worker_retrying"
-              : "render_worker_failed",
-          error_message: error instanceof Error ? error.message : String(error),
-          retrying: Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1)),
-          metadata: {
-            queue_job_id: job?.id,
-            attempts_made: job?.attemptsMade,
-            attempts: job?.opts?.attempts,
-          },
-        });
+        const retrying = Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
+        const { persistRenderFailureDirect } = await import("./remotion.mjs");
+        await persistRenderFailureDirect(
+          jobData,
+          error instanceof Error ? error.message : String(error),
+          retrying,
+        );
       } catch (callbackError) {
         console.error(
           JSON.stringify({
@@ -246,13 +254,13 @@ async function main() {
     console.log("Worker queue config is not set; build check only.");
     return;
   }
-  if (!hasApiConfig()) {
-    await writeBuildStamp();
-    if (isProduction()) {
-      throw new Error("WORKER_API_BASE_URL and WORKER_API_TOKEN are required in production.");
+  if (queueNames.includes("visual_analysis")) {
+    if (env("ML_WORKER_ENABLED") !== "true") {
+      throw new Error("visual_analysis must run with ML_WORKER_ENABLED=true.");
     }
-    console.log("Worker API config is not set; build check only.");
-    return;
+    if (!env("SUPABASE_URL") || !env("SUPABASE_SERVICE_ROLE_KEY")) {
+      throw new Error("visual_analysis requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+    }
   }
 
   await writeBuildStamp();
@@ -274,6 +282,7 @@ async function main() {
     shuttingDown = true;
     console.log(`Received ${signal}; closing BullMQ workers.`);
     await Promise.allSettled(workers.map((worker) => worker.close()));
+    for (const state of pythonExecutors.values()) state.child.stdin.end();
     await connection.quit();
     process.exit(0);
   };

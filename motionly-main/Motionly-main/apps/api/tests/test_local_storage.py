@@ -51,15 +51,15 @@ def test_storage_signer_falls_back_to_local_urls_without_supabase() -> None:
 
     assert upload.url == "http://api.local/_local/storage/raw-uploads/workspaces/one/raw/video.mp4"
     assert upload.headers == {"content-type": "video/mp4"}
-    assert download.url == "http://api.local/_local/storage/exports/workspaces/one/exports/video.mp4"
+    assert (
+        download.url == "http://api.local/_local/storage/exports/workspaces/one/exports/video.mp4"
+    )
 
 
 def test_local_storage_route_writes_and_reads_development_object(tmp_path: Path) -> None:
     request = _local_request(tmp_path, body=b"video-bytes")
 
-    response = asyncio.run(
-        put_local_object("raw-uploads", "workspaces/one/raw/video.mp4", request)
-    )
+    response = asyncio.run(put_local_object("raw-uploads", "workspaces/one/raw/video.mp4", request))
     file_response = asyncio.run(
         get_local_object("raw-uploads", "workspaces/one/raw/video.mp4", request)
     )

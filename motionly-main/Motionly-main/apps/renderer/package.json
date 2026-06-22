@@ -9,7 +9,8 @@
     "render": "node --loader ts-node/esm src/render-cli.ts",
     "render:cli": "node --loader ts-node/esm src/render-cli.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json --noEmit"
+    "test": "tsc -p tsconfig.json --noEmit && TS_NODE_TRANSPILE_ONLY=true node --loader ts-node/esm --test src/*.test.ts",
+    "test:encoded": "RUN_RENDERER_ENCODED_TESTS=true TS_NODE_TRANSPILE_ONLY=true node --loader ts-node/esm --test src/encoded-output.test.ts"
   },
   "dependencies": {
     "@motionly/shared": "workspace:*",

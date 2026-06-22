@@ -9,6 +9,8 @@ import {
 import type { MotionKeyframe, MotionSettings } from "@motionly/shared";
 import type { CSSProperties } from "react";
 import type { MotionlyRenderProps, TemplateDefinition } from "../types";
+import type { SourceTimelineClip } from "../types";
+import { sourceTimelineClips } from "../timeline";
 
 type VideoSceneProps = {
   input: MotionlyRenderProps;
@@ -16,48 +18,11 @@ type VideoSceneProps = {
 };
 
 export function VideoScene({ input, template }: VideoSceneProps) {
-  const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
-  const zoom = activeZoom(input.editPlan.zoom_moments, frame, fps);
   const introFrames = template.intro ? Math.min(60, durationInFrames / 5) : 0;
   const outroFrames = template.outro ? Math.min(72, durationInFrames / 5) : 0;
   const outroStart = Math.max(0, durationInFrames - outroFrames);
   const backgroundRemoval = input.effectsConfig?.background_removal;
-  const framing = input.exportSettings.framing;
-  const crop = cropWithAutoReframe(
-    input,
-    framing?.crop ?? { x: 0.5, y: 0.5, zoom: 1 },
-    framing?.output_aspect,
-  );
-  const framingZoom =
-    framing?.fit_mode === "custom" ? Math.max(1, Math.min(3, crop.zoom)) : 1;
-  const activeZoomScale = zoom * framingZoom;
-  const activeSourceClipId = activeCutClipId(input, (frame / fps) * 1000);
-  const sourceMotion = sourceMotionState({
-    input,
-    frame,
-    fps,
-    durationInFrames,
-    baseScale: activeZoomScale,
-    crop,
-    activeClipId: activeSourceClipId,
-  });
-  const sourceStyle: CSSProperties = {
-    width: "100%",
-    height: "100%",
-    objectFit: framing?.fit_mode === "fit" ? "contain" as const : "cover" as const,
-    objectPosition: `${Math.round(sourceMotion.xPct)}% ${Math.round(sourceMotion.yPct)}%`,
-    transform: motionTransformCss(sourceMotion),
-    transformOrigin: `${Math.round(sourceMotion.xPct)}% ${Math.round(sourceMotion.yPct)}%`,
-    opacity: sourceMotion.opacity,
-    filter: [
-      gradeFilter(input.editPlan.color_grade, template.default_color_grade),
-      sourceMotion.filter,
-    ].filter(Boolean).join(" "),
-    ...(backgroundRemoval?.enabled
-      ? subjectIsolationStyle(backgroundRemoval.feather_px)
-      : {}),
-  };
 
   if (
     !input.sourceVideo.src ||
@@ -71,12 +36,7 @@ export function VideoScene({ input, template }: VideoSceneProps) {
       {backgroundRemoval?.enabled ? (
         <RemovedBackgroundPlate input={input} template={template} />
       ) : null}
-      <OffthreadVideo
-        src={input.sourceVideo.src}
-        muted={Boolean(input.sourceStems?.vocals?.src)}
-        playbackRate={sourceMotion.playbackRate}
-        style={sourceStyle}
-      />
+      <SourceClipAssembly input={input} template={template} />
       {input.assets
         .filter(
           (asset) =>
@@ -110,6 +70,91 @@ export function VideoScene({ input, template }: VideoSceneProps) {
       ) : null}
     </AbsoluteFill>
   );
+}
+
+function SourceClipAssembly({
+  input,
+  template,
+}: VideoSceneProps) {
+  const { fps } = useVideoConfig();
+  return (
+    <>
+      {sourceTimelineClips(input).map((clip) => {
+        const from = millisecondsToFrame(clip.output_start_ms, fps);
+        const durationInFrames = Math.max(
+          1,
+          millisecondsToFrame(
+            clip.output_end_ms - clip.output_start_ms,
+            fps,
+          ),
+        );
+        return (
+          <Sequence key={clip.id} from={from} durationInFrames={durationInFrames}>
+            <SourceClipSurface input={input} template={template} clip={clip} />
+          </Sequence>
+        );
+      })}
+    </>
+  );
+}
+
+function SourceClipSurface({
+  input,
+  template,
+  clip,
+}: VideoSceneProps & { clip: SourceTimelineClip }) {
+  const localFrame = useCurrentFrame();
+  const { fps, durationInFrames } = useVideoConfig();
+  const outputFrame = millisecondsToFrame(clip.output_start_ms, fps) + localFrame;
+  const framing = input.exportSettings.framing;
+  const crop = cropWithAutoReframe(
+    input,
+    framing?.crop ?? { x: 0.5, y: 0.5, zoom: 1 },
+    framing?.output_aspect,
+    clip.source_start_ms + (localFrame / fps) * 1000,
+  );
+  const framingZoom =
+    framing?.fit_mode === "custom" ? Math.max(1, Math.min(3, crop.zoom)) : 1;
+  const zoom = activeZoom(input.editPlan.zoom_moments, outputFrame, fps);
+  const sourceMotion = sourceMotionState({
+    input,
+    frame: outputFrame,
+    fps,
+    durationInFrames,
+    baseScale: zoom * framingZoom,
+    crop,
+    activeClipId: clip.id,
+  });
+  const style: CSSProperties = {
+    width: "100%",
+    height: "100%",
+    objectFit: framing?.fit_mode === "fit" ? "contain" : "cover",
+    objectPosition: `${Math.round(sourceMotion.xPct)}% ${Math.round(sourceMotion.yPct)}%`,
+    transform: motionTransformCss(sourceMotion),
+    transformOrigin: `${Math.round(sourceMotion.xPct)}% ${Math.round(sourceMotion.yPct)}%`,
+    opacity: sourceMotion.opacity,
+    filter: [
+      gradeFilter(input.editPlan.color_grade, template.default_color_grade),
+      sourceMotion.filter,
+    ].filter(Boolean).join(" "),
+    ...(input.effectsConfig?.background_removal?.enabled
+      ? subjectIsolationStyle(input.effectsConfig.background_removal.feather_px)
+      : {}),
+  };
+  return (
+    <OffthreadVideo
+      src={input.sourceVideo.src}
+      startFrom={millisecondsToFrame(clip.source_start_ms, fps)}
+      endAt={millisecondsToFrame(clip.source_end_ms, fps)}
+      muted={Boolean(input.sourceStems?.vocals?.src)}
+      playbackRate={sourceMotion.playbackRate}
+      style={style}
+    />
+  );
+}
+
+function millisecondsToFrame(milliseconds: number, fps: number) {
+  return Math.max(0, Math.round((milliseconds / 1000) * fps));
 }
 
 function BrollOverlay({
@@ -313,13 +358,6 @@ function sourceMotionState({
   return clampMotionState(state);
 }
 
-function activeCutClipId(input: MotionlyRenderProps, timeMs: number) {
-  const index = input.editPlan.cuts.findIndex(
-    (cut) => timeMs >= cut.start_ms && timeMs <= cut.end_ms,
-  );
-  return index >= 0 ? `cut-${index}` : null;
-}
-
 function brollMotionState({
   input,
   asset,
@@ -372,18 +410,42 @@ function cropWithAutoReframe(
   input: MotionlyRenderProps,
   crop: CropState,
   outputAspect: string | undefined,
+  sourceTimeMs: number,
 ): CropState {
   const settings = input.effectsConfig?.motion?.auto_reframe;
   if (!settings?.enabled) return crop;
   if ((outputAspect ?? "9:16") !== settings.target_aspect) return crop;
-  const subjectX = clamp(settings.subject_x_pct / 100, 0, 1);
-  const subjectY = clamp(settings.subject_y_pct / 100, 0, 1);
+  const tracked = interpolateSubjectTrack(settings.subject_track ?? [], sourceTimeMs);
+  const subjectX = clamp(tracked?.x ?? settings.subject_x_pct / 100, 0, 1);
+  const subjectY = clamp(tracked?.y ?? settings.subject_y_pct / 100, 0, 1);
   const strength = clamp(1 - settings.smoothing * 0.25, 0.5, 1);
   return {
     ...crop,
     x: clamp(0.5 + (subjectX - 0.5) * strength, 0, 1),
     y: clamp(0.5 + (subjectY - 0.5) * strength, 0, 1),
     zoom: Math.max(1, crop.zoom),
+  };
+}
+
+function interpolateSubjectTrack(
+  track: NonNullable<MotionSettings["auto_reframe"]>["subject_track"],
+  timestampMs: number,
+) {
+  if (!track?.length) return null;
+  const afterIndex = track.findIndex((point) => point.timestamp_ms >= timestampMs);
+  if (afterIndex <= 0) return track[Math.max(0, afterIndex)];
+  if (afterIndex < 0) return track[track.length - 1];
+  const before = track[afterIndex - 1];
+  const after = track[afterIndex];
+  const progress = clamp(
+    (timestampMs - before.timestamp_ms) / Math.max(1, after.timestamp_ms - before.timestamp_ms),
+    0,
+    1,
+  );
+  return {
+    ...before,
+    x: before.x + (after.x - before.x) * progress,
+    y: before.y + (after.y - before.y) * progress,
   };
 }
 

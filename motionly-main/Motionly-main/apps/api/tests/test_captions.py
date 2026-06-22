@@ -5,7 +5,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.api.captions import (
-    create_transcription,
+    create_transcription as create_transcription_api,
+)
+from app.api.captions import (
     generate_captions,
     update_caption_segments,
     update_caption_track,
@@ -29,10 +31,36 @@ from app.services.ass_captions import caption_track_to_ass
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
 from app.services.queue import TranscriptionQueue
+from app.services.transcription_jobs import run_transcription_for_upload
 from app.services.transcription_provider import (
     FixtureTranscriptionProvider,
     normalize_transcription_language,
 )
+
+
+async def create_transcription(**kwargs):
+    """Exercise the request enqueue and the direct media-worker execution as two steps."""
+    response = await create_transcription_api(**kwargs)
+    repository = kwargs["repository"]
+    actor = kwargs["actor"]
+    project_id = kwargs["project_id"]
+    upload = repository.get_active_upload(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    transcript = run_transcription_for_upload(
+        upload_repository=repository.upload_repository,
+        caption_repository=repository,
+        transcription_provider=kwargs["transcription_provider"],
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        video_id=upload.id,
+        media_work_dir=".motionly/test-storage",
+        supabase_url=None,
+        service_role_key=None,
+        retain_debug_audio=False,
+    )
+    return response.model_copy(update={"status": transcript.status})
 
 
 def make_request() -> SimpleNamespace:
@@ -147,8 +175,7 @@ def test_stage_5_caption_modes_generate_mode_specific_tracks() -> None:
     assert captions.track.style.background_opacity > 0.9
     assert captions.track.segments
     assert all(
-        segment.line_count <= captions.track.style.max_lines
-        for segment in captions.track.segments
+        segment.line_count <= captions.track.style.max_lines for segment in captions.track.segments
     )
     assert any(segment.highlight_words for segment in captions.track.segments)
 

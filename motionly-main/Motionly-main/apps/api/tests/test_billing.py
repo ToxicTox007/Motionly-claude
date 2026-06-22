@@ -48,6 +48,21 @@ def test_active_creator_subscription_expands_entitlements() -> None:
     assert status.entitlements.broll is True
 
 
+def test_agency_subscription_delivers_advertised_4k_exports() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    repository.upsert_subscription(
+        workspace_id=workspace_id,
+        plan=BillingPlanKey.AGENCY,
+        status=SubscriptionStatus.ACTIVE,
+    )
+
+    status = build_billing_status(workspace_id, repository)
+
+    assert status.current_plan.key == BillingPlanKey.AGENCY
+    assert status.entitlements.max_resolution == "4k"
+
+
 def test_supabase_subscription_hydrates_legacy_plan_key_row() -> None:
     workspace_id = uuid4()
 

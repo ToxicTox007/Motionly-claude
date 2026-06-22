@@ -2,7 +2,10 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.api.dependencies import Actor
+from app.api.errors import ApiError
 from app.api.internal_jobs import run_queue_job
 from app.api.internal_renders import fail_render_job, update_render_progress
 from app.api.renders import create_render
@@ -14,6 +17,27 @@ from app.schemas.uploads import UploadStatus, VideoMetadata
 from app.services.local_storage import LocalObjectStorage
 from app.services.queue import PreprocessQueue, QueueRegistry, RenderQueue
 from tests.test_renders import make_render_repository
+
+
+def test_production_api_refuses_media_job_execution() -> None:
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(app_env="production", admin_api_token="worker-secret"),
+                queue_registry=QueueRegistry(),
+            )
+        )
+    )
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            run_queue_job(
+                queue_job_id="any-job",
+                request=request,
+                x_motionly_worker_token="worker-secret",
+            )
+        )
+    assert exc_info.value.status_code == 410
+    assert exc_info.value.code == "direct_worker_execution_required"
 
 
 def test_worker_runs_upload_preprocessing_job(tmp_path, monkeypatch) -> None:

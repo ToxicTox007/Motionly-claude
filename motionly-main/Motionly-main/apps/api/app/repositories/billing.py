@@ -107,9 +107,7 @@ class InMemoryBillingRepository:
         period_end: datetime | None = None,
     ) -> int:
         period_start, period_end = (
-            (period_start, period_end)
-            if period_start and period_end
-            else monthly_period()
+            (period_start, period_end) if period_start and period_end else monthly_period()
         )
         return sum(
             entry.quantity
@@ -194,9 +192,7 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
         period_end: datetime | None = None,
     ) -> int:
         period_start, period_end = (
-            (period_start, period_end)
-            if period_start and period_end
-            else monthly_period()
+            (period_start, period_end) if period_start and period_end else monthly_period()
         )
         response = httpx.get(
             f"{self.rest_url}/usage_ledger",

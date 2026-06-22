@@ -884,7 +884,7 @@ def complete_remotion_render_job(
         settings_summary={
             **_settings_summary_from_job(job),
             "render_engine": "remotion_premium",
-            "renderer_version": "remotion-premium-v1",
+            "renderer_version": "remotion-timeline-v2",
         },
     )
 

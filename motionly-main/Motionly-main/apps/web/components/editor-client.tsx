@@ -54,6 +54,7 @@ import type {
   EditPlanRecordSummary,
   EffectsConfigSummary,
   ExportSummary,
+  ExportResolution,
   MusicSelectionSummary,
   ManualElement,
   MotionEffectKey,
@@ -63,6 +64,7 @@ import type {
   TranscriptSummary,
   UploadedVideoSummary,
   VisualPresetKey,
+  VisualAnalysisStatusSummary,
 } from "@motionly/shared";
 
 // ── Props (unchanged from old editor — project page needs no changes) ─────────
@@ -84,6 +86,8 @@ interface EditorClientProps {
   effectsConfig:   EffectsConfigSummary | null;
   renderJobs:      RenderJobSummary[];
   exports:         ExportSummary[];
+  maxExportResolution: ExportResolution;
+  visualStatus: VisualAnalysisStatusSummary;
 }
 
 type InspectorTab = "ai" | "captions" | "broll" | "audio" | "look" | "history" | "scale" | "export";
@@ -112,6 +116,7 @@ export function EditorClient(props: EditorClientProps) {
     projectId, workspaceId, userId, apiAccessToken, title,
     upload, uploadAssetUrls, transcript, captionTracks,
     brollSlots, musicSelection, effectsConfig, renderJobs, exports,
+    maxExportResolution, visualStatus,
   } = props;
   const router = useRouter();
   const [localTitle, setLocalTitle] = useState(title);
@@ -147,7 +152,6 @@ export function EditorClient(props: EditorClientProps) {
   );
 
   // Timeline + playback state
-  const videoRef       = useRef<HTMLVideoElement>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab]     = useState<InspectorTab>(() =>
@@ -261,13 +265,41 @@ export function EditorClient(props: EditorClientProps) {
     setLocalActivePlanId(plan.id);
   }, []);
 
+  const synchronizeCanonicalTimeline = useCallback(async () => {
+    if (!localActivePlanId) return;
+    try {
+      const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}/compile-timeline`,
+        {
+          method: "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "The timeline could not be synchronized.",
+          body: {},
+        },
+      );
+      handlePlanUpdated(payload.plan);
+    } catch (error) {
+      console.error(error);
+    }
+  }, [
+    apiAccessToken,
+    handlePlanUpdated,
+    localActivePlanId,
+    projectId,
+    userId,
+    workspaceId,
+  ]);
+
   const handleCaptionTrackUpdated = useCallback((track: CaptionTrackSummary) => {
     setDraftCaptionTrack(track);
     setLocalCaptionTracks((prev) => [
       track,
       ...prev.filter((item) => item.id !== track.id),
     ]);
-  }, []);
+    void synchronizeCanonicalTimeline();
+  }, [synchronizeCanonicalTimeline]);
 
   const handleBrollSlotUpdated = useCallback((slot: BrollSlotSummary) => {
     setLocalBrollSlots((prev) =>
@@ -275,19 +307,23 @@ export function EditorClient(props: EditorClientProps) {
         .map((item) => (item.id === slot.id ? slot : item))
         .sort((a, b) => a.start_ms - b.start_ms),
     );
-  }, []);
+    void synchronizeCanonicalTimeline();
+  }, [synchronizeCanonicalTimeline]);
 
   const handleBrollSlotsUpdated = useCallback((slots: BrollSlotSummary[]) => {
     setLocalBrollSlots([...slots].sort((a, b) => a.start_ms - b.start_ms));
-  }, []);
+    void synchronizeCanonicalTimeline();
+  }, [synchronizeCanonicalTimeline]);
 
   const handleMusicSelectionUpdated = useCallback((selection: MusicSelectionSummary) => {
     setLocalMusicSelection(selection);
-  }, []);
+    void synchronizeCanonicalTimeline();
+  }, [synchronizeCanonicalTimeline]);
 
   const handleEffectsConfigUpdated = useCallback((config: EffectsConfigSummary) => {
     setLocalEffectsConfig(config);
-  }, []);
+    void synchronizeCanonicalTimeline();
+  }, [synchronizeCanonicalTimeline]);
 
   const saveProjectTitle = useCallback(
     async (nextTitle: string) => {
@@ -360,6 +396,11 @@ export function EditorClient(props: EditorClientProps) {
         timelineState={timelineState}
         selectedTimelineClip={selectedTimelineClip}
         activePreviewLook={activePreviewLook}
+        localTitle={localTitle}
+        saveStatus={saveStatus}
+        playheadMs={playheadMs}
+        selectedClipId={selectedClipId}
+        inspectorTab={inspectorTab}
         setLocalEditPlans={setLocalEditPlans}
         setLocalActivePlanId={setLocalActivePlanId}
         setLocalCaptionTracks={setLocalCaptionTracks}
@@ -375,6 +416,7 @@ export function EditorClient(props: EditorClientProps) {
         setPlayheadMs={setPlayheadMs}
         setSelectedClipId={setSelectedClipId}
         setInspectorTab={setInspectorTab}
+        setLocalTitle={setLocalTitle}
         handlePlanGenerated={handlePlanGenerated}
         handlePlanUpdated={handlePlanUpdated}
         handleCaptionTrackUpdated={handleCaptionTrackUpdated}
@@ -389,6 +431,11 @@ export function EditorClient(props: EditorClientProps) {
 }
 
 interface EditorClientEditorProps extends EditorClientProps {
+  localTitle: string;
+  saveStatus: "saving" | "saved" | "error";
+  playheadMs: number;
+  selectedClipId: string | null;
+  inspectorTab: InspectorTab;
   localEditPlans: EditPlanRecordSummary[];
   localActivePlanId: string | null;
   localCaptionTracks: CaptionTrackSummary[];
@@ -420,6 +467,7 @@ interface EditorClientEditorProps extends EditorClientProps {
   setPlayheadMs: React.Dispatch<React.SetStateAction<number>>;
   setSelectedClipId: React.Dispatch<React.SetStateAction<string | null>>;
   setInspectorTab: React.Dispatch<React.SetStateAction<InspectorTab>>;
+  setLocalTitle: React.Dispatch<React.SetStateAction<string>>;
   handlePlanGenerated: (plan: EditPlanRecordSummary) => void;
   handlePlanUpdated: (plan: EditPlanRecordSummary) => void;
   handleCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
@@ -435,29 +483,23 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     projectId, workspaceId, userId, apiAccessToken, title,
     upload, uploadAssetUrls, transcript, captionTracks,
     brollSlots, musicSelection, effectsConfig, renderJobs, exports,
+    maxExportResolution, visualStatus,
     localEditPlans, localActivePlanId, localCaptionTracks, localTranscript,
     localBrollSlots, localMusicSelection, localEffectsConfig, draftCaptionTrack,
     previewAudio, previewBroll, previewLook, previewExport,
     activePlan, timelineState, selectedTimelineClip, activePreviewLook,
+    localTitle, saveStatus, playheadMs, selectedClipId, inspectorTab,
     setLocalEditPlans, setLocalActivePlanId, setLocalCaptionTracks, setLocalTranscript,
     setLocalBrollSlots, setLocalMusicSelection, setLocalEffectsConfig,
     setDraftCaptionTrack, setPreviewAudio, setPreviewBroll, setPreviewLook, setPreviewExport,
-    setPlayheadMs, setSelectedClipId, setInspectorTab,
+    setPlayheadMs, setSelectedClipId, setInspectorTab, setLocalTitle,
     handlePlanGenerated, handlePlanUpdated, handleCaptionTrackUpdated,
     handleBrollSlotUpdated, handleBrollSlotsUpdated, handleMusicSelectionUpdated,
     handleEffectsConfigUpdated, saveProjectTitle,
   } = props;
   const router = useRouter();
   const { undo, redo, canUndo, canRedo, pushHistory } = useEditorHistory();
-  const [localTitle, setLocalTitle] = useState(title);
-  const [saveStatus, setSaveStatus] = useState<"saving" | "saved" | "error">("saved");
-  const lastSavedTitleRef = useRef(title);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [playheadMs, setLocalPlayheadMs] = useState(0);
-  const [selectedClipId, setLocalSelectedClipId] = useState<string | null>(null);
-  const [inspectorTab, setLocalInspectorTab] = useState<InspectorTab>(() =>
-    localActivePlanId ? "captions" : "ai",
-  );
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [activePaletteElement, setActivePaletteElement] = useState<PaletteElement | null>(null);
   const [elementSaving, setElementSaving] = useState(false);
@@ -467,23 +509,26 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     useSensor(KeyboardSensor),
   );
   const manualElements = useMemo(
-    () => activePlan?.plan.manual_elements ?? [],
-    [activePlan?.plan.manual_elements],
+    () =>
+      activePlan?.plan.timeline
+        ? [
+            ...activePlan.plan.timeline.manual_layers,
+            ...activePlan.plan.timeline.transitions,
+          ]
+        : activePlan?.plan.manual_elements ?? [],
+    [activePlan],
   );
   const selectedManualElement = manualElements.find((element) => element.id === selectedElementId) ?? null;
 
   const setPlayheadMsWrapped = useCallback((ms: number | ((prev: number) => number)) => {
-    setLocalPlayheadMs(ms);
     setPlayheadMs(ms);
   }, [setPlayheadMs]);
 
   const setSelectedClipIdWrapped = useCallback((id: string | null) => {
-    setLocalSelectedClipId(id);
     setSelectedClipId(id);
   }, [setSelectedClipId]);
 
   const setInspectorTabWrapped = useCallback((tab: InspectorTab) => {
-    setLocalInspectorTab(tab);
     setInspectorTab(tab);
   }, [setInspectorTab]);
 
@@ -680,7 +725,11 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             sourceWidth={upload.width}
             sourceHeight={upload.height}
             playheadMs={playheadMs}
-            captionSegments={(draftCaptionTrack ?? localCaptionTracks[0])?.segments ?? []}
+            captionSegments={
+              activePlan?.plan.timeline?.captions?.length
+                ? activePlan.plan.timeline.captions
+                : (draftCaptionTrack ?? localCaptionTracks[0])?.segments ?? []
+            }
             captionStyle={(draftCaptionTrack ?? localCaptionTracks[0])?.style ?? null}
             totalDurationMs={timelineState.totalDurationMs}
             previewAudio={previewAudio}
@@ -690,6 +739,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             manualElements={manualElements}
             selectedElementId={selectedElementId}
             onElementSelect={setSelectedElementId}
+            sourceClips={activePlan?.plan.timeline?.clips ?? []}
           />
         ),
 
@@ -721,6 +771,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             selectedTimelineClip={selectedTimelineClip}
             renderJobs={renderJobs}
             exports={exports}
+            maxExportResolution={maxExportResolution}
+            visualStatus={visualStatus}
             onTranscriptUpdated={setLocalTranscript}
             onPlanGenerated={handlePlanGenerated}
             onPlanUpdated={handlePlanUpdated}
@@ -790,6 +842,8 @@ interface InspectorPanelProps {
   selectedTimelineClip: TimelineClip | null;
   renderJobs:       RenderJobSummary[];
   exports:          ExportSummary[];
+  maxExportResolution: ExportResolution;
+  visualStatus: VisualAnalysisStatusSummary;
   onTranscriptUpdated: (transcript: TranscriptSummary | null) => void;
   onPlanGenerated:  (plan: EditPlanRecordSummary) => void;
   onPlanUpdated: (plan: EditPlanRecordSummary) => void;
@@ -826,7 +880,7 @@ function InspectorPanel({
   projectId, workspaceId, userId, apiAccessToken,
   upload, transcript, captionTracks, localEditPlans, localActivePlanId,
   activePlan, brollSlots, musicSelection, effectsConfig,
-  selectedTimelineClip, renderJobs, exports, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onPreviewCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated, onPreviewBrollUpdated,
+  selectedTimelineClip, renderJobs, exports, maxExportResolution, visualStatus, onTranscriptUpdated, onPlanGenerated, onPlanUpdated, onCaptionTrackUpdated, onPreviewCaptionTrackUpdated, onBrollSlotUpdated, onBrollSlotsUpdated, onPreviewBrollUpdated,
   onMusicSelectionUpdated, onPreviewAudioUpdated, onEffectsConfigUpdated, onPreviewLookUpdated, onPreviewExportUpdated,
 }: InspectorPanelProps) {
   const brollDensity = activePlan?.broll_density ?? null;
@@ -926,6 +980,7 @@ function InspectorPanel({
             initialPlans={localEditPlans}
             activePlanId={localActivePlanId}
             transcript={transcript}
+            initialVisualStatus={visualStatus}
             onTranscriptUpdated={onTranscriptUpdated}
             onPlanGenerated={onPlanGenerated}
             onCaptionTrackUpdated={onCaptionTrackUpdated}
@@ -997,6 +1052,7 @@ function InspectorPanel({
             activePlanId={localActivePlanId}
             sourceWidth={upload.width}
             sourceHeight={upload.height}
+            maxExportResolution={maxExportResolution}
             onPreviewExportUpdated={onPreviewExportUpdated}
           />
         )}
@@ -1131,7 +1187,7 @@ function selectedElementInsight({
   }
   if (clip.sourceRef.kind === "music") {
     return {
-      reason: activePlan?.summary.music_mood || "Music selected to match the edit plan mood.",
+      reason: activePlan?.summary.music_mood || "Music selected to match the timeline mood.",
       detail: musicSelection?.music_track?.title ?? "Background music",
       confidence: musicSelection?.music_track?.energy ?? null,
     };
@@ -1242,7 +1298,7 @@ function UploadScreen({
             </div>
             <h1 className="text-2xl font-bold">Upload your footage</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Drop in your raw talking-head video. We&apos;ll transcribe it and build an AI edit plan automatically.
+              Drop in your raw talking-head video. We&apos;ll transcribe it and build the first AI edit directly on the timeline.
             </p>
           </div>
           <UploadPanel

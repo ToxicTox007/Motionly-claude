@@ -8,27 +8,37 @@ version = "0.1.0"
 description = "FastAPI service for Motionly."
 requires-python = ">=3.12"
 dependencies = [
-  "demucs>=4.0.1",
   "fastapi>=0.115.6",
   "httpx>=0.28.1",
-  "mediapipe>=0.10.18",
-  "numpy>=2.0.0",
-  "opencv-python-headless>=4.10.0.84",
-  "Pillow>=11.0.0",
-  "pyannote.audio>=3.3.2",
   "pydantic>=2.10.4",
   "pydantic-settings>=2.7.0",
   "python-json-logger>=3.2.1",
-  "tensorflow>=2.18.0",
-  "tensorflow-hub>=0.16.1",
-  "torch>=2.5.0",
-  "torchaudio>=2.5.0",
-  "transformers>=4.48.0",
-  "ultralytics>=8.3.0",
   "uvicorn[standard]>=0.34.0"
 ]
 
 [project.optional-dependencies]
+audio-ml = [
+  "pyannote.audio>=3.3.2,<4.0",
+  "tensorflow>=2.18.0,<2.19",
+  "tensorflow-hub>=0.16.1",
+  "torch>=2.5.0,<2.6",
+  "torchaudio>=2.5.0,<2.6",
+  "transformers>=4.48.0,<5.0",
+]
+demucs = [
+  "demucs>=4.0.1",
+  "torch>=2.5.0,<2.6",
+  "torchaudio>=2.5.0,<2.6",
+]
+visual-ml = [
+  "mediapipe>=0.10.18",
+  "numpy>=2.0.0",
+  "opencv-python-headless>=4.10.0.84",
+  "Pillow>=11.0.0",
+  "ultralytics>=8.3.0",
+  "torch>=2.5.0,<2.6",
+  "transformers>=4.48.0,<5.0",
+]
 dev = [
   "pytest>=8.3.4",
   "ruff>=0.8.4"

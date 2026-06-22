@@ -10,6 +10,7 @@ from app.api.dependencies import Actor
 from app.api.errors import ApiError, request_validation_error_handler
 from app.api.plans import (
     activate_plan,
+    compile_project_timeline,
     create_plan,
     create_plan_snapshot,
     list_plan_snapshots,
@@ -17,14 +18,16 @@ from app.api.plans import (
     restore_plan_snapshot,
     update_plan_cuts,
     update_plan_manual_elements,
+    update_project_timeline,
 )
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.repositories.visual import InMemoryVisualRepository
-from app.schemas.captions import LanguageHint
+from app.schemas.captions import CaptionPresetKey, LanguageHint
 from app.schemas.plans import (
     BrollDensity,
+    EditPlanStatus,
     EditPlanStyle,
     ManualElement,
     PlanCreateRequest,
@@ -32,6 +35,7 @@ from app.schemas.plans import (
     PlanManualElementsUpdateRequest,
     PlanSnapshotCreateRequest,
     StyleClassification,
+    TimelineUpdateRequest,
 )
 from app.schemas.uploads import UploadStatus
 from app.schemas.visual import (
@@ -44,6 +48,8 @@ from app.schemas.visual import (
     VideoManifest,
     VisualManifestStatus,
 )
+from app.services.caption_chunking import chunk_caption_words
+from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.queue import PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
@@ -116,9 +122,15 @@ def test_create_plan_returns_valid_structured_plan() -> None:
     assert response.plan.is_active is True
     assert response.plan.plan.style == EditPlanStyle.LUXURY
     assert response.plan.plan.cuts
+    assert response.plan.plan.timeline is not None
+    assert response.plan.plan.timeline.schema_version == 1
+    assert response.plan.plan.timeline.metadata["authority"] == "project_timeline"
+    assert [clip.output_start_ms for clip in response.plan.plan.timeline.clips] == sorted(
+        clip.output_start_ms for clip in response.plan.plan.timeline.clips
+    )
     assert all(cut.end_ms <= 12_000 for cut in response.plan.plan.cuts)
     assert response.plan.summary.cut_count == len(response.plan.plan.cuts)
-    assert response.job_id.startswith(f"plan--{project_id}--")
+    assert response.job_id.startswith(f"sync-complete--plan--{project_id}--")
 
 
 def test_manual_elements_persist_in_versioned_edit_plan() -> None:
@@ -158,6 +170,92 @@ def test_manual_elements_persist_in_versioned_edit_plan() -> None:
     assert updated.plan.version == created.plan.version
     assert updated.plan.plan.schema_version == 2
     assert updated.plan.plan.manual_elements[0].properties["content"] == "Launch day"
+    assert updated.plan.plan.timeline is not None
+    assert updated.plan.plan.timeline.manual_layers[0].id == "title-1"
+
+
+def test_canonical_timeline_update_projects_to_legacy_clients() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    created = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    timeline = created.plan.plan.timeline
+    assert timeline is not None
+    clip = timeline.clips[0].model_copy(
+        update={
+            "source_start_ms": 1000,
+            "source_end_ms": 3000,
+            "output_start_ms": 0,
+            "output_end_ms": 2000,
+            "reason": "manual timeline edit",
+        }
+    )
+    edited = timeline.model_copy(update={"clips": [clip], "duration_ms": 2000})
+
+    response = asyncio.run(
+        update_project_timeline(
+            project_id=project_id,
+            plan_id=created.plan.id,
+            payload=TimelineUpdateRequest(timeline=edited),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+        )
+    )
+
+    assert response.plan.plan.timeline == edited
+    assert response.plan.plan.cuts[0].start_ms == 1000
+    assert response.plan.plan.cuts[0].end_ms == 3000
+
+
+def test_compile_timeline_endpoint_persists_caption_layers() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    created = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    transcript = repository.latest_transcript(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    assert transcript is not None
+    preset = get_caption_preset(CaptionPresetKey.FOUNDER_CLEAN)
+    repository.caption_repository.create_caption_track(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        transcript_id=transcript.id,
+        preset=CaptionPresetKey.FOUNDER_CLEAN,
+        schema_version=CAPTION_SCHEMA_VERSION,
+        style=preset.style,
+        hide_filler_words=False,
+        segments=chunk_caption_words(transcript.words),
+    )
+
+    response = asyncio.run(
+        compile_project_timeline(
+            project_id=project_id,
+            plan_id=created.plan.id,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+        )
+    )
+
+    assert response.plan.plan.timeline is not None
+    assert response.plan.plan.timeline.captions
+    assert response.plan.plan.timeline.captions[0].start_ms >= 0
 
 
 def test_create_plan_reuses_cache_without_force() -> None:
@@ -312,9 +410,7 @@ def test_visual_manifest_changes_plan_cache_and_seeds_broll_requests() -> None:
     )
 
     keywords = [
-        keyword
-        for request in second.plan.plan.broll_requests
-        for keyword in request.keywords
+        keyword for request in second.plan.plan.broll_requests for keyword in request.keywords
     ]
     first_request = second.plan.plan.broll_requests[0]
     assert second.cached is False
@@ -326,6 +422,70 @@ def test_visual_manifest_changes_plan_cache_and_seeds_broll_requests() -> None:
     assert first_request.source_scene_type == SceneType.PRODUCT.value
     assert first_request.shot_type == "product_detail"
     assert first_request.avoid_face_overlap is True
+
+
+def test_failed_visual_analysis_degrades_plan_with_explicit_risk_flag() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    upload = repository.get_active_upload(project_id=project_id, workspace_id=workspace_id)
+    visual_repository = InMemoryVisualRepository(repository.caption_repository.upload_repository)
+    repository.visual_repository = visual_repository
+    visual_repository.create_manifest(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=upload.id,
+        status=VisualManifestStatus.FAILED,
+        provider="fixture_visual",
+        model="fixture-visual-v1",
+        manifest=None,
+        error_code="visual_analysis_failed",
+        error_message="Visual analysis failed; planning will continue without visual context.",
+    )
+    response = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(force=True),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    assert response.status == "ready"
+    assert "visual_context_failed" in response.plan.plan.risk_flags
+    assert "visual_context_failed" in response.plan.summary.risk_flags
+
+
+def test_visual_failure_degrades_to_flagged_transcript_plan() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    upload = repository.get_active_upload(project_id=project_id, workspace_id=workspace_id)
+    visual_repository = InMemoryVisualRepository(repository.caption_repository.upload_repository)
+    repository.visual_repository = visual_repository
+    visual_repository.create_manifest(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=upload.id,
+        status=VisualManifestStatus.FAILED,
+        provider="fixture_visual",
+        model="fixture-visual-v1",
+        manifest=None,
+        error_code="visual_analysis_failed",
+        error_message="Visual analysis failed; planning will continue without visual context.",
+    )
+
+    response = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(force=True),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    assert response.plan.status == EditPlanStatus.READY
+    assert "visual_context_failed" in response.plan.plan.risk_flags
+    assert "visual_context_failed" in response.plan.summary.risk_flags
 
 
 def test_auto_style_classifier_selects_educational_from_audio_and_visual_context() -> None:
@@ -753,9 +913,7 @@ def test_http_planner_receives_audio_intelligence(monkeypatch: pytest.MonkeyPatc
                                     "schema_version": 1,
                                     "style": "luxury",
                                     "target_duration_s": 10,
-                                    "cuts": [
-                                        {"start_ms": 240, "end_ms": 3500, "reason": "hook"}
-                                    ],
+                                    "cuts": [{"start_ms": 240, "end_ms": 3500, "reason": "hook"}],
                                     "caption_highlights": [],
                                     "broll_requests": [],
                                     "zoom_moments": [],
@@ -927,9 +1085,7 @@ def _sample_visual_manifest() -> VideoManifest:
                 representative_timestamp_ms=1_000,
                 caption="handmade watch macro detail",
                 embedding=[0.1, 0.2, 0.3],
-                dominant_colors=[
-                    DominantColor(hex="#111827", rgb=(17, 24, 39), percentage=0.7)
-                ],
+                dominant_colors=[DominantColor(hex="#111827", rgb=(17, 24, 39), percentage=0.7)],
                 objects=[
                     ObjectDetection(
                         label="watch",

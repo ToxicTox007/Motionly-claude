@@ -371,14 +371,17 @@ class InMemoryRenderRepository:
         )
 
     def create_export(self, **values: object) -> ExportRecord:
-        version = len(
-            [
-                export
-                for export in self.exports.values()
-                if export.project_id == values["project_id"]
-                and export.workspace_id == values["workspace_id"]
-            ]
-        ) + 1
+        version = (
+            len(
+                [
+                    export
+                    for export in self.exports.values()
+                    if export.project_id == values["project_id"]
+                    and export.workspace_id == values["workspace_id"]
+                ]
+            )
+            + 1
+        )
         export = ExportRecord(id=uuid4(), version=version, **values)
         self.exports[export.id] = export
         return export
@@ -749,9 +752,7 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             ),
             manifest=manifest,
             keep_segments=[
-                CutSegment(**segment)
-                for segment in keep_segments
-                if isinstance(segment, dict)
+                CutSegment(**segment) for segment in keep_segments if isinstance(segment, dict)
             ],
             specs=RenderSpecs(**specs) if specs else RenderSpecs(),
             template_id=(
@@ -972,12 +973,7 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         return payload.get("code") in {"42703", "PGRST204"}
 
     def _db_status(self, status: object) -> str:
-        status_value = status.value if hasattr(status, "value") else str(status)
-        if status_value in {"processing", "preparing", "rendering", "uploading"}:
-            return "running"
-        if status_value == "complete":
-            return "succeeded"
-        return status_value
+        return status.value if hasattr(status, "value") else str(status)
 
     def _app_status(self, status: object, *, progress_pct: object = None) -> RenderJobStatus:
         status_value = str(status)

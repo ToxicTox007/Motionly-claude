@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { isAdminIdentityAllowed } from "@/lib/admin-auth.mjs";
 import { createClient } from "@/lib/supabase/server";
 
 export async function getWorkspaceApiContext() {
@@ -48,4 +49,14 @@ export async function getWorkspaceApiContext() {
       "x-motionly-workspace-id": membership.workspace_id as string,
     },
   };
+}
+
+export async function getAdminApiContext() {
+  const context = await getWorkspaceApiContext();
+  if (!context) return null;
+  const allowed = isAdminIdentityAllowed(context, {
+    adminUserIds: process.env.ADMIN_USER_IDS,
+    adminWorkspaceIds: process.env.ADMIN_WORKSPACE_IDS,
+  });
+  return allowed ? context : null;
 }

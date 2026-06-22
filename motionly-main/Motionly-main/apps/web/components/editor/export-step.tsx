@@ -41,6 +41,7 @@ interface ExportStepProps {
   activePlanId?: string | null;
   sourceWidth?: number | null;
   sourceHeight?: number | null;
+  maxExportResolution: ExportResolution;
   onPreviewExportUpdated?: (state: PreviewExportState | null) => void;
 }
 
@@ -56,9 +57,14 @@ const platforms: { value: PlatformPreset; label: string }[] = [
 
 const resolutions: { value: ExportResolution; label: string }[] = [
   { value: "1080p", label: "1080p (Standard)" },
-  { value: "4k", label: "4K (Premium)" },
+  { value: "4k", label: "4K (Agency)" },
   { value: "720p", label: "720p (Fast)" },
 ];
+const resolutionRank: Record<ExportResolution, number> = {
+  "720p": 0,
+  "1080p": 1,
+  "4k": 2,
+};
 
 const outputAspects: { value: OutputAspect; label: string }[] = [
   { value: "9:16", label: "Vertical 9:16" },
@@ -111,12 +117,15 @@ export function ExportStep({
   activePlanId,
   sourceWidth,
   sourceHeight,
+  maxExportResolution,
   onPreviewExportUpdated,
 }: ExportStepProps) {
   const router = useRouter();
   const [templateId, setTemplateId] = useState<RenderTemplateId>("luxury_reel_v1");
   const [platform, setPlatform] = useState<PlatformPreset>("instagram");
-  const [resolution, setResolution] = useState<ExportResolution>("1080p");
+  const [resolution, setResolution] = useState<ExportResolution>(
+    maxExportResolution === "720p" ? "720p" : "1080p",
+  );
   const [outputAspect, setOutputAspect] = useState<OutputAspect>("9:16");
   const [fitMode, setFitMode] = useState<ExportFitMode>("fill");
   const [bulkPlatforms, setBulkPlatforms] = useState<PlatformPreset[]>([
@@ -131,6 +140,14 @@ export function ExportStep({
   const [jobs, setJobs] = useState(initialJobs);
   const [exports, setExports] = useState(initialExports);
   const [message, setMessage] = useState<string | null>(null);
+  const availableResolutions = useMemo(
+    () =>
+      resolutions.filter(
+        (option) =>
+          resolutionRank[option.value] <= resolutionRank[maxExportResolution],
+      ),
+    [maxExportResolution],
+  );
   const [streamingJobId, setStreamingJobId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [connections, setConnections] = useState<PublishConnection[]>([]);
@@ -773,7 +790,7 @@ export function ExportStep({
               label="Video Quality"
               value={resolution}
               onChange={(val) => setResolution(val as ExportResolution)}
-              options={resolutions}
+              options={availableResolutions}
             />
           </div>
         </ExportStepSection>

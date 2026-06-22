@@ -134,7 +134,7 @@ async def generate_captions(
             409,
             str(transcript.status),
             transcript.error_message or "Transcript is not ready.",
-    )
+        )
 
     preset = get_caption_preset(payload.preset)
     segments = chunk_caption_words(
@@ -151,11 +151,6 @@ async def generate_captions(
     if not segments:
         raise ApiError(422, "caption_segments_empty", "No captionable words were found.")
 
-    job = transcription_queue.enqueue_caption_generation(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        transcript_id=transcript.id,
-    )
     track = repository.create_caption_track(
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -166,7 +161,10 @@ async def generate_captions(
         hide_filler_words=payload.hide_filler_words,
         segments=segments,
     )
-    return CaptionGenerateResponse(track=track.to_response(), job_id=job.id)
+    return CaptionGenerateResponse(
+        track=track.to_response(),
+        job_id=f"sync-complete--captions--{project_id}--{track.id}",
+    )
 
 
 @router.get("/captions", response_model=CaptionListResponse)
@@ -231,11 +229,6 @@ async def update_caption_track(
         output_language=payload.output_language or "original",
         settings=request.app.state.settings if request else None,
     )
-    job = transcription_queue.enqueue_caption_generation(
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        transcript_id=transcript.id,
-    )
     updated = repository.update_caption_track(
         track=track,
         preset=preset_key,
@@ -265,7 +258,10 @@ async def update_caption_track(
             "hide_filler_words": hide_filler_words,
         },
     )
-    return CaptionGenerateResponse(track=updated.to_response(), job_id=job.id)
+    return CaptionGenerateResponse(
+        track=updated.to_response(),
+        job_id=f"sync-complete--captions--{project_id}--{updated.id}",
+    )
 
 
 @router.patch("/captions/{track_id}/segments", response_model=CaptionSegmentsUpdateResponse)

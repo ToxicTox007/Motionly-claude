@@ -1,26 +1,95 @@
+x-media-environment: &media-environment
+  REDIS_URL: ${REDIS_URL}
+  SUPABASE_URL: ${SUPABASE_URL}
+  SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+  APP_ENV: production
+  PROCESS_ROLE: worker
+  MEDIA_WORK_DIR: /var/data/motionly
+
+x-media-volumes: &media-volumes
+  - motionly-media:/var/data/motionly
+  - motionly-model-cache:/var/cache/motionly
+
 services:
-  gpu-api:
+  cpu-ffmpeg-worker:
     build:
       context: ..
-      dockerfile: apps/api/Dockerfile.gpu
+      dockerfile: apps/worker/Dockerfile.python
+    environment:
+      <<: *media-environment
+      WORKER_QUEUES: upload_preprocess,render
+      WORKER_CONCURRENCY: "2"
+    volumes: *media-volumes
+
+  gpu-inference-worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.gpu
     gpus: all
     environment:
+      <<: *media-environment
+      WORKER_QUEUES: visual_analysis,transcription
+      WORKER_CONCURRENCY: "1"
+      MODEL_PREFETCH: "true"
+    volumes: *media-volumes
+
+  gpu-ffmpeg-worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+    gpus: all
+    environment:
+      <<: *media-environment
+      WORKER_QUEUES: render_gpu
+      WORKER_CONCURRENCY: "1"
       FFMPEG_GPU_ENABLED: "true"
       FFMPEG_GPU_ENCODER: h264_nvenc
-      RENDER_EXECUTE_FFMPEG: "true"
-    volumes:
-      - motionly-media:/var/data/motionly
+    volumes: *media-volumes
 
-  gpu-worker:
+  demucs-worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+      args:
+        API_EXTRAS: demucs
+    environment:
+      <<: *media-environment
+      WORKER_QUEUES: audio_demucs
+      WORKER_CONCURRENCY: "1"
+      MODEL_PREFETCH: "true"
+    volumes: *media-volumes
+
+  provider-worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+    environment:
+      <<: *media-environment
+      WORKER_QUEUES: provider_calls
+      WORKER_CONCURRENCY: "4"
+    volumes: *media-volumes
+
+  remotion-worker:
     build:
       context: ..
       dockerfile: apps/worker/Dockerfile
     environment:
-      WORKER_QUEUES: render_gpu
-      GPU_RENDER_WORKER_CONCURRENCY: "1"
-      WORKER_API_BASE_URL: http://gpu-api:8000
-    depends_on:
-      - gpu-api
+      <<: *media-environment
+      WORKER_QUEUES: render_remotion
+      REMOTION_ENABLED: "true"
+      WORKER_CONCURRENCY: "1"
+    volumes: *media-volumes
+
+  publishing-worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+    environment:
+      <<: *media-environment
+      WORKER_QUEUES: publish
+      WORKER_CONCURRENCY: "3"
+    volumes: *media-volumes
 
 volumes:
   motionly-media:
+  motionly-model-cache:

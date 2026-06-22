@@ -4,13 +4,14 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { Maximize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMs } from "@/lib/timeline";
+import { formatMs, outputMsToSourceMs } from "@/lib/timeline";
 import type {
   CaptionSegment,
   CaptionStyle,
   MotionKeyframe,
   MotionSettings,
   ManualElement,
+  ProjectTimelineSourceClip,
   TranscriptWord,
   VisualPresetKey,
 } from "@motionly/shared";
@@ -78,6 +79,7 @@ interface VideoPreviewProps {
   manualElements?: ManualElement[];
   selectedElementId?: string | null;
   onElementSelect?: (id: string) => void;
+  sourceClips?: ProjectTimelineSourceClip[];
 }
 
 export function VideoPreview({
@@ -98,6 +100,7 @@ export function VideoPreview({
   manualElements = [],
   selectedElementId,
   onElementSelect,
+  sourceClips = [],
 }: VideoPreviewProps) {
   const { setNodeRef: setCanvasDropRef, isOver: isCanvasDropActive } = useDroppable({
     id: "canvas",
@@ -175,8 +178,12 @@ export function VideoPreview({
   const skip = useCallback((deltaS: number) => {
     const video = videoRef.current;
     if (!video) return;
-    video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + deltaS));
-  }, [videoRef]);
+    const nextOutputMs = Math.max(
+      0,
+      Math.min(totalDurationMs, playheadMs + deltaS * 1000),
+    );
+    video.currentTime = outputMsToSourceMs(nextOutputMs, sourceClips) / 1000;
+  }, [playheadMs, sourceClips, totalDurationMs, videoRef]);
 
   const toggleMute = useCallback(() => {
     const video = videoRef.current;
