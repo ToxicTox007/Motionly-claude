@@ -57,11 +57,25 @@ class StripeWebhookEventRecord:
     processed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+@dataclass
+class BillingAdjustmentRecord:
+    id: UUID
+    workspace_id: UUID
+    stripe_event_id: str
+    adjustment_type: str
+    amount_cents: int
+    currency: str = "usd"
+    reason: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
 class InMemoryBillingRepository:
     def __init__(self) -> None:
         self.subscriptions: dict[UUID, SubscriptionRecord] = {}
         self.usage_ledger: dict[UUID, UsageLedgerEntry] = {}
         self.stripe_events: dict[str, StripeWebhookEventRecord] = {}
+        self.billing_adjustments: dict[str, BillingAdjustmentRecord] = {}
 
     def get_subscription(self, *, workspace_id: UUID) -> SubscriptionRecord:
         return self.subscriptions.get(workspace_id) or SubscriptionRecord(
@@ -159,6 +173,49 @@ class InMemoryBillingRepository:
         event = StripeWebhookEventRecord(id=event_id, event_type=event_type)
         self.stripe_events[event.id] = event
         return event
+
+    def workspace_for_stripe_subscription(
+        self,
+        *,
+        stripe_subscription_id: str | None = None,
+        stripe_customer_id: str | None = None,
+    ) -> UUID | None:
+        for subscription in self.subscriptions.values():
+            if (
+                stripe_subscription_id
+                and subscription.stripe_subscription_id == stripe_subscription_id
+            ):
+                return subscription.workspace_id
+            if stripe_customer_id and subscription.stripe_customer_id == stripe_customer_id:
+                return subscription.workspace_id
+        return None
+
+    def record_billing_adjustment(
+        self,
+        *,
+        workspace_id: UUID,
+        stripe_event_id: str,
+        adjustment_type: str,
+        amount_cents: int,
+        currency: str = "usd",
+        reason: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> BillingAdjustmentRecord:
+        existing = self.billing_adjustments.get(stripe_event_id)
+        if existing:
+            return existing
+        adjustment = BillingAdjustmentRecord(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            stripe_event_id=stripe_event_id,
+            adjustment_type=adjustment_type,
+            amount_cents=amount_cents,
+            currency=currency,
+            reason=reason,
+            metadata=metadata or {},
+        )
+        self.billing_adjustments[stripe_event_id] = adjustment
+        return adjustment
 
 
 class SupabaseBillingRepository(InMemoryBillingRepository):
@@ -281,6 +338,56 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             processed_at=self._parse_datetime(response.json()[0]["processed_at"]),
         )
 
+    def workspace_for_stripe_subscription(
+        self,
+        *,
+        stripe_subscription_id: str | None = None,
+        stripe_customer_id: str | None = None,
+    ) -> UUID | None:
+        filters: dict[str, str] = {"select": "workspace_id", "limit": "1"}
+        if stripe_subscription_id:
+            filters["stripe_subscription_id"] = f"eq.{stripe_subscription_id}"
+        elif stripe_customer_id:
+            filters["stripe_customer_id"] = f"eq.{stripe_customer_id}"
+        else:
+            return None
+        response = httpx.get(
+            f"{self.rest_url}/subscriptions",
+            headers=self.headers,
+            params=filters,
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return UUID(str(rows[0]["workspace_id"])) if rows else None
+
+    def record_billing_adjustment(self, **values: object) -> BillingAdjustmentRecord:
+        response = httpx.post(
+            f"{self.rest_url}/billing_adjustments",
+            headers={
+                **self.headers,
+                "prefer": "resolution=ignore-duplicates,return=representation",
+            },
+            params={"on_conflict": "stripe_event_id"},
+            json=self._json_safe(values),
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        if not response.json():
+            existing = httpx.get(
+                f"{self.rest_url}/billing_adjustments",
+                headers=self.headers,
+                params={
+                    "stripe_event_id": f"eq.{values['stripe_event_id']}",
+                    "select": "*",
+                    "limit": "1",
+                },
+                timeout=10,
+            )
+            self._raise_for_supabase(existing)
+            return self._adjustment_from_row(existing.json()[0])
+        return self._adjustment_from_row(response.json()[0])
+
     @staticmethod
     def _subscription_from_row(row: dict[str, object]) -> SubscriptionRecord:
         raw_plan = row.get("plan") or row.get("plan_key") or BillingPlanKey.FREE.value
@@ -314,6 +421,20 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             event_type=UsageEventType(str(row["event_type"])),
             quantity=int(row["quantity"]),
             source_id=row.get("source_id") and UUID(str(row["source_id"])),
+            metadata=dict(row.get("metadata") or {}),
+            created_at=SupabaseBillingRepository._parse_datetime(str(row["created_at"])),
+        )
+
+    @staticmethod
+    def _adjustment_from_row(row: dict[str, object]) -> BillingAdjustmentRecord:
+        return BillingAdjustmentRecord(
+            id=UUID(str(row["id"])),
+            workspace_id=UUID(str(row["workspace_id"])),
+            stripe_event_id=str(row["stripe_event_id"]),
+            adjustment_type=str(row["adjustment_type"]),
+            amount_cents=int(row["amount_cents"]),
+            currency=str(row.get("currency") or "usd"),
+            reason=row.get("reason") and str(row["reason"]),
             metadata=dict(row.get("metadata") or {}),
             created_at=SupabaseBillingRepository._parse_datetime(str(row["created_at"])),
         )

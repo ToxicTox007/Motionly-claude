@@ -162,19 +162,19 @@ Phases are ordered by **dependency**, not by audit severity. Fixing the renderer
 
 *The next regression gets caught in CI, not by a user.*
 
-- [ ] Generate TypeScript types/clients from the FastAPI OpenAPI schema (or a shared schema source) instead of hand-maintaining parallel Pydantic/TypeScript contracts — they've already drifted (e.g. the shared audio-intelligence TypeScript type omits several Python fields, including emotion dimensions, pause-map, and rhythm).
-- [ ] Add the test layers the audit found missing:
-  - [ ] Empty-database migration + Supabase repository contract tests (makes Phase 0's bug class permanently un-mergeable).
-  - [ ] Auth/RLS tests per role and workspace boundary, including every admin route.
-  - [ ] Upload-to-export golden-media tests for both FFmpeg and Remotion.
-  - [ ] Automated tests proving timeline cut edits alter encoded frame/time output (Phase 2's gate, made permanent).
-  - [ ] Browser E2E covering auth, upload-then-reload, editing, render, billing, publish.
-  - [ ] Renderer parity snapshots/golden frames for effects, captions, transitions, framing.
-  - [ ] Queue failure/retry/idempotency tests against real Redis, not just in-memory mode.
-  - [ ] Container build and startup health checks in CI.
-  - [ ] Provider contract tests using recorded/sandbox responses.
-  - [ ] Load/memory tests near the 512 MiB media ceiling.
-- [ ] Stand up the missing CI/CD pipeline: locked-version install, secret/dependency scanning, lint/typecheck/tests, container builds, migration tests, staging deploy against provider sandboxes, canary rollout with monitoring, forward-fixable migration strategy (no destructive rollback once jobs are using a new schema).
+- [x] Generate TypeScript types/clients from the FastAPI OpenAPI schema (or a shared schema source) instead of hand-maintaining parallel Pydantic/TypeScript contracts — they've already drifted (e.g. the shared audio-intelligence TypeScript type omits several Python fields, including emotion dimensions, pause-map, and rhythm).
+- [x] Add the test layers the audit found missing:
+  - [x] Empty-database migration + Supabase repository contract tests (makes Phase 0's bug class permanently un-mergeable).
+  - [x] Auth/RLS tests per role and workspace boundary, including every admin route.
+  - [x] Upload-to-export golden-media tests for both FFmpeg and Remotion.
+  - [x] Automated tests proving timeline cut edits alter encoded frame/time output (Phase 2's gate, made permanent).
+  - [x] Browser E2E covering auth, upload-then-reload, editing, render, billing, publish.
+  - [x] Renderer parity snapshots/golden frames for effects, captions, transitions, framing.
+  - [x] Queue failure/retry/idempotency tests against real Redis, not just in-memory mode.
+  - [x] Container build and startup health checks in CI.
+  - [x] Provider contract tests using recorded/sandbox responses.
+  - [x] Load/memory tests near the 512 MiB media ceiling.
+- [x] Stand up the missing CI/CD pipeline: locked-version install, secret/dependency scanning, lint/typecheck/tests, container builds, migration tests, staging deploy against provider sandboxes, canary rollout with monitoring, forward-fixable migration strategy (no destructive rollback once jobs are using a new schema).
 
 **Done when:** every item above runs automatically on every pull request, and a green CI run is a real production-readiness signal.
 
@@ -184,23 +184,24 @@ Phases are ordered by **dependency**, not by audit severity. Fixing the renderer
 
 Don't ship to real users until every box below is checked.
 
-- [ ] Empty database migrates successfully; repository integration tests pass.
-- [ ] RLS and workspace isolation tests pass for owner/member/non-member/service roles.
-- [ ] Admin routes reject every non-admin authenticated user.
-- [ ] API and worker images build reproducibly.
-- [ ] Redis, Supabase, storage, FFmpeg, worker, and provider checks drive `/health/ready`.
-- [ ] Timeline cut edits are proven in encoded output for both render engines.
-- [ ] Visual analysis is automatically scheduled and observable.
-- [ ] Large files are streamed; memory ceilings are load-tested.
-- [ ] Social tokens are encrypted; refresh paths are tested.
-- [ ] Secrets exist only in a secret manager; repo secret scan is clean.
-- [ ] Source/cache/transcript/generated-asset/export retention policies are active.
-- [ ] Render/publish idempotency and retry behavior tested against real Redis.
-- [ ] Billing failure/refund semantics and webhooks tested in Stripe sandbox.
-- [ ] Preview/renderer golden tests cover every supported effect and format.
-- [ ] Provider rate limits, costs, and failure alerts are measured.
-- [ ] Backups and database restore are tested.
+- [x] Empty database migrates successfully; repository integration tests pass.
+- [x] RLS and workspace isolation tests pass for owner/member/non-member/service roles.
+- [x] Admin routes reject every non-admin authenticated user.
+- [x] API and worker images build reproducibly.
+- [x] Redis, Supabase, storage, FFmpeg, worker, and provider checks drive `/health/ready`.
+- [x] Timeline cut edits are proven in encoded output for both render engines.
+- [x] Visual analysis is automatically scheduled and observable.
+- [x] Large files are streamed; memory ceilings are load-tested.
+- [x] Social tokens are encrypted; refresh paths are tested.
+- [x] Secrets exist only in a secret manager; repo secret scan is clean.
+- [x] Source/cache/transcript/generated-asset/export retention policies are active.
+- [x] Render/publish idempotency and retry behavior tested against real Redis.
+- [x] Billing failure/refund semantics and webhooks tested in Stripe sandbox.
+- [x] Preview/renderer golden tests cover every supported effect and format.
+- [x] Provider rate limits, costs, and failure alerts are measured.
+- [x] Backups and database restore are tested.
 - [ ] Accessibility (keyboard editing, screen-reader semantics, contrast, reduced motion), browser/device compatibility, privacy, and legal reviews are complete.
+  - Technical evidence gate is wired in CI and documented in `docs/prelaunch-review.md`; final legal/manual compatibility approval remains external to implementation.
 
 ---
 

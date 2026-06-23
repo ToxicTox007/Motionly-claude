@@ -164,6 +164,8 @@ def create_object_storage(
     supabase_url: str | None,
     service_role_key: str | None,
 ) -> LocalObjectStorage:
+    if os.environ.get("FORCE_LOCAL_MEDIA_STORAGE", "").lower() in {"1", "true", "yes", "on"}:
+        return LocalObjectStorage(root=root)
     if supabase_url and service_role_key:
         return SupabaseBackedObjectStorage(
             root=root,

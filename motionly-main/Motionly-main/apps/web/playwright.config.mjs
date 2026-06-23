@@ -24,7 +24,7 @@ export default defineConfig({
       command: "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000",
       cwd: "../api",
       url: "http://127.0.0.1:8000/health/live",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000,
       env: {
         ...process.env,
@@ -37,17 +37,19 @@ export default defineConfig({
         SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
         SUPABASE_JWT_SECRET: jwtSecret,
         ADMIN_API_TOKEN: "e2e-worker-token",
-        PUBLISH_TOKEN_ENCRYPTION_KEY: "e2e-publish-token-key-at-least-32-characters",
+        PUBLISH_TOKEN_ENCRYPTION_KEY:
+          "e2e-publish-token-key-at-least-32-characters",
         ALLOW_FIXTURE_PROVIDERS: "true",
         VISUAL_PROVIDER: "fixture",
         RENDER_EXECUTE_FFMPEG: "false",
         MEDIA_WORK_DIR: "/tmp/motionly-e2e-media",
+        FORCE_LOCAL_MEDIA_STORAGE: "true",
       },
     },
     {
       command: "pnpm dev",
       url: "http://127.0.0.1:3000/login",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000,
       env: {
         ...process.env,

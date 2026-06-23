@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     export_storage_bucket: str = Field(default="exports", alias="EXPORT_STORAGE_BUCKET")
     export_signed_url_ttl_seconds: int = Field(default=300, alias="EXPORT_SIGNED_URL_TTL_SECONDS")
     media_work_dir: str = Field(default="/var/data/motionly/storage", alias="MEDIA_WORK_DIR")
+    force_local_media_storage: bool = Field(default=False, alias="FORCE_LOCAL_MEDIA_STORAGE")
     retention_source_days: int = Field(default=365, alias="RETENTION_SOURCE_DAYS")
     retention_generated_asset_days: int = Field(
         default=90, alias="RETENTION_GENERATED_ASSET_DAYS"

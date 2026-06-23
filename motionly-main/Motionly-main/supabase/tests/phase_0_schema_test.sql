@@ -1,5 +1,5 @@
 begin;
-select plan(53);
+select plan(57);
 
 select has_column('public', 'render_jobs', 'uploaded_video_id', 'render jobs reference uploads');
 select has_column('public', 'render_jobs', 'caption_track_id', 'render jobs reference captions');
@@ -65,6 +65,13 @@ select has_column('public', 'usage_ledger', 'source_id', 'usage entries store so
 select has_index('public', 'usage_ledger', 'usage_ledger_workspace_created_at_idx', 'usage has canonical workspace timestamp index');
 select has_index('public', 'usage_ledger', 'usage_ledger_outcome_source_unique_idx', 'successful render usage is idempotent');
 select has_index('public', 'ai_edit_feedback_events', 'ai_edit_feedback_decision_outcome_unique_idx', 'kept outcomes are idempotent');
+select has_table('public', 'billing_adjustments', 'billing refunds and credits are persisted');
+select has_column('public', 'billing_adjustments', 'stripe_event_id', 'billing adjustments retain Stripe event ID');
+select has_index('public', 'billing_adjustments', 'billing_adjustments_stripe_event_unique_idx', 'Stripe refund handling is idempotent');
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.billing_adjustments'::regclass),
+  'billing adjustments enforce RLS'
+);
 select has_trigger('public', 'stock_assets', 'stock_assets_queue_storage_delete', 'owned stock deletion queues storage cleanup');
 select ok(
   (select pg_get_constraintdef(oid) like '%render_succeeded%'

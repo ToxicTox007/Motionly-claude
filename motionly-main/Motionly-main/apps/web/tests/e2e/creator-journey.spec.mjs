@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,14 +21,22 @@ test.beforeAll(async () => {
   email = `creator-${Date.now()}@motionly.test`;
   const created = await providerFetch("/auth/v1/admin/users", {
     method: "POST",
-    body: { email, password, email_confirm: true, user_metadata: { full_name: "E2E Creator" } },
+    body: {
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: "E2E Creator" },
+    },
   });
   userId = created.id;
-  const session = await fetchJson(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: { apikey: anonKey, "content-type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
+  const session = await fetchJson(
+    `${supabaseUrl}/auth/v1/token?grant_type=password`,
+    {
+      method: "POST",
+      headers: { apikey: anonKey, "content-type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    },
+  );
   accessToken = session.access_token;
   const memberships = await rest("/workspace_members", {
     user_id: `eq.${userId}`,
@@ -43,11 +51,23 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  if (userId) await providerFetch(`/auth/v1/admin/users/${userId}`, { method: "DELETE" });
-  if (mediaDirectory) await rm(mediaDirectory, { recursive: true, force: true });
+  if (userId) {
+    await cleanupUserData(userId);
+    await providerFetch(`/auth/v1/admin/users/${userId}`, {
+      method: "DELETE",
+    }).catch((error) => {
+      console.warn(
+        `E2E cleanup could not delete auth user ${userId}: ${error.message}`,
+      );
+    });
+  }
+  if (mediaDirectory)
+    await rm(mediaDirectory, { recursive: true, force: true });
 });
 
-test("auth, upload/reload, edit, render, billing, and publish creator journey", async ({ page }) => {
+test("auth, upload/reload, edit, render, billing, and publish creator journey", async ({
+  page,
+}) => {
   await page.goto("/projects/new");
   await expect(page).toHaveURL(/\/login\?next=/);
   await page.getByLabel("Email").fill(email);
@@ -59,23 +79,39 @@ test("auth, upload/reload, edit, render, billing, and publish creator journey", 
   await page.getByRole("button", { name: /Continue to Upload/i }).click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]+$/);
   const projectId = page.url().split("/").pop();
-  await expect(page.getByRole("heading", { name: "Upload your footage" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Upload your footage" }),
+  ).toBeVisible();
 
   await page.locator('input[type="file"]').setInputFiles(mediaPath);
   await expect(page.getByRole("button", { name: /^Upload$/ })).toBeEnabled();
   await page.getByRole("button", { name: /^Upload$/ }).click();
-  await expect(page.getByText(/processing|transcribing/i).first()).toBeVisible();
+  await expect(
+    page.getByText(/processing|transcribing/i).first(),
+  ).toBeVisible();
   await page.reload();
-  await expect(page.getByText(/processing|transcribing/i).first()).toBeVisible();
+  await expect(
+    page.getByText(/processing|transcribing/i).first(),
+  ).toBeVisible();
 
   const uploads = await rest("/uploaded_videos", {
     project_id: `eq.${projectId}`,
-    select: "id",
+    select: "id,file_size_bytes,status,storage_bucket,storage_path",
     order: "created_at.desc",
     limit: "1",
   });
-  const videoId = uploads[0].id;
-  const preprocess = await internalJob(`preprocess--${videoId}`);
+  expect(uploads).toHaveLength(1);
+  const upload = uploads[0];
+  const videoId = upload.id;
+  await ensureLocalMediaObject(upload);
+  const completedUpload = await api(
+    `/projects/${projectId}/uploads/${videoId}/complete`,
+    {
+      method: "POST",
+      body: { observed_file_size_bytes: upload.file_size_bytes },
+    },
+  );
+  const preprocess = await internalJob(completedUpload.job_id);
   await internalJob(`transcribe--${projectId}--${videoId}--${workspaceId}`);
   if (preprocess.visual_job_id) await internalJob(preprocess.visual_job_id);
   await api(`/projects/${projectId}/captions/generate`, {
@@ -88,19 +124,25 @@ test("auth, upload/reload, edit, render, billing, and publish creator journey", 
   });
 
   await page.reload();
-  await expect(page.getByRole("button", { name: "Looks" })).toBeVisible();
-  await page.getByRole("button", { name: "Looks" }).click();
-  await page.getByLabel("Enable portrait backdrop blur").check();
-  await expect(page.getByLabel("Enable portrait backdrop blur")).toBeChecked();
+  await expect(page.getByLabel("Caption Preset")).toBeVisible();
+  await page.getByLabel("Caption Preset").selectOption("impact_stamp");
+  await expect(page.getByLabel("Caption Preset")).toHaveValue("impact_stamp");
+  await page.getByRole("button", { name: "Save Text" }).click();
+  await expect(page.getByText("Saved").first()).toBeVisible();
 
-  const render = await api(`/projects/${projectId}/renders`, { method: "POST", body: {} });
+  const render = await api(`/projects/${projectId}/renders`, {
+    method: "POST",
+    body: {},
+  });
   await internalJob(render.queue_job_id);
   await page.reload();
   await page.getByRole("button", { name: "Export" }).click();
-  await expect(page.getByText("Ready to post")).toBeVisible();
+  await expect(page.getByText("Ready to post", { exact: true })).toBeVisible();
 
   await page.goto("/billing");
-  await expect(page.getByRole("heading", { name: /Billing|Plan/i }).first()).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Billing|Plan/i }).first(),
+  ).toBeVisible();
   await page.goto(`/projects/${projectId}`);
   await page.getByRole("button", { name: "Export" }).click();
   await page.getByLabel("Account name").fill("Sandbox Creator");
@@ -108,17 +150,45 @@ test("auth, upload/reload, edit, render, billing, and publish creator journey", 
   await page.getByLabel("Platform access token").fill("sandbox-token-secret");
   await page.getByRole("button", { name: "Connect account" }).click();
   await expect(page.getByText(/TikTok · Sandbox Creator/)).toBeVisible();
-  await page.getByLabel("Post caption").fill("Published from the Phase 9 browser journey.");
+  await page
+    .getByLabel("Post caption")
+    .fill("Published from the Phase 9 browser journey.");
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByText(/publish queued/i)).toBeVisible();
 });
 
 async function internalJob(jobId) {
-  const payload = await fetchJson(`${apiUrl}/internal/jobs/${encodeURIComponent(jobId)}/run`, {
-    method: "POST",
-    headers: { "x-motionly-worker-token": "e2e-worker-token" },
-  });
+  const payload = await fetchJson(
+    `${apiUrl}/internal/jobs/${encodeURIComponent(jobId)}/run`,
+    {
+      method: "POST",
+      headers: { "x-motionly-worker-token": "e2e-worker-token" },
+    },
+  );
   return payload.result;
+}
+
+async function ensureLocalMediaObject(upload) {
+  const objectBytes = await readFile(mediaPath);
+  const bucket = encodeURIComponent(upload.storage_bucket);
+  const objectPath = upload.storage_path
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  const response = await fetch(
+    `${apiUrl}/_local/storage/${bucket}/${objectPath}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "video/mp4" },
+      body: objectBytes,
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `PUT local media object failed: ${response.status} ${text}`,
+    );
+  }
 }
 
 async function api(path, { method = "GET", body } = {}) {
@@ -136,7 +206,8 @@ async function api(path, { method = "GET", body } = {}) {
 
 async function rest(path, query) {
   const url = new URL(`${supabaseUrl}/rest/v1${path}`);
-  for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
+  for (const [key, value] of Object.entries(query))
+    url.searchParams.set(key, value);
   return fetchJson(url, { headers: serviceHeaders() });
 }
 
@@ -148,10 +219,31 @@ async function providerFetch(path, { method, body } = {}) {
   });
 }
 
+async function cleanupUserData(id) {
+  await restDelete("/projects", { created_by: `eq.${id}` }).catch((error) => {
+    console.warn(
+      `E2E cleanup could not delete projects for ${id}: ${error.message}`,
+    );
+  });
+}
+
+async function restDelete(path, query) {
+  const url = new URL(`${supabaseUrl}/rest/v1${path}`);
+  for (const [key, value] of Object.entries(query))
+    url.searchParams.set(key, value);
+  await fetchJson(url, {
+    method: "DELETE",
+    headers: { ...serviceHeaders(), prefer: "return=minimal" },
+  });
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   const text = await response.text();
-  if (!response.ok) throw new Error(`${options?.method || "GET"} ${url}: ${response.status} ${text}`);
+  if (!response.ok)
+    throw new Error(
+      `${options?.method || "GET"} ${url}: ${response.status} ${text}`,
+    );
   return text ? JSON.parse(text) : {};
 }
 
@@ -160,15 +252,38 @@ function serviceHeaders() {
 }
 
 function assertEnvironment() {
-  if (!anonKey || !serviceKey) throw new Error("Supabase E2E credentials are required.");
+  if (!anonKey || !serviceKey)
+    throw new Error("Supabase E2E credentials are required.");
 }
 
 function createVideo(path) {
-  const result = spawnSync("ffmpeg", [
-    "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-    "testsrc2=size=360x640:rate=24:duration=3", "-f", "lavfi", "-i",
-    "sine=frequency=440:sample_rate=44100:duration=3", "-shortest", "-c:v",
-    "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", path,
-  ], { encoding: "utf8" });
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=360x640:rate=24:duration=3",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:sample_rate=44100:duration=3",
+      "-shortest",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      path,
+    ],
+    { encoding: "utf8" },
+  );
   if (result.status !== 0) throw new Error(result.stderr);
 }

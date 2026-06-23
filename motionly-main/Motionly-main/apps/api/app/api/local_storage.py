@@ -13,7 +13,11 @@ def _local_storage(request: Request) -> LocalObjectStorage:
     settings = request.app.state.settings
     if settings.app_env == "production":
         raise ApiError(404, "local_storage_unavailable", "Local storage is not available.")
-    if settings.supabase_url and settings.supabase_service_role_key:
+    if (
+        settings.supabase_url
+        and settings.supabase_service_role_key
+        and not settings.force_local_media_storage
+    ):
         raise ApiError(
             404,
             "local_storage_unavailable",
