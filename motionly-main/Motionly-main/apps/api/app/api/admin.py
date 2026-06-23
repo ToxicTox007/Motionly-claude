@@ -67,15 +67,17 @@ async def ops_overview(
                 round(completed / len(recent_renders), 4) if recent_renders else None
             ),
         },
-        provider_costs={
-            "status": "placeholder",
-            "currency": "usd",
-            "transcription": None,
-            "edit_planning": None,
-            "stock_video": None,
-            "music": None,
-            "rendering": None,
-        },
+        provider_costs=(
+            request.app.state.operations_repository.cost_summary()
+            if hasattr(request.app.state, "operations_repository")
+            else {
+                "currency": "usd",
+                "total_usd": 0,
+                "by_category": {},
+                "approved_exports": 0,
+                "cost_per_approved_export_usd": None,
+            }
+        ),
         render_failure_diagnostics=[
             {
                 "render_job_id": str(job.id),
@@ -144,6 +146,7 @@ async def cancel_queue_job(
 @router.get("/renders/{render_job_id}", response_model=RenderJobAdminDetailResponse)
 async def get_render_job_detail(
     render_job_id: UUID,
+    request: Request,
     _actor: AdminActorDep,
     render_repository: RenderRepositoryDep,
 ) -> RenderJobAdminDetailResponse:
@@ -153,9 +156,7 @@ async def get_render_job_detail(
         job=job.to_response(events),
         diagnostics=_render_diagnostics(job, events),
         provider_costs={
-            "currency": "usd",
-            "estimated_total_usd": None,
-            "status": "placeholder",
+            **request.app.state.operations_repository.cost_summary(render_job_id=job.id),
             "render_engine": job.render_engine.value if job.render_engine else None,
         },
     )

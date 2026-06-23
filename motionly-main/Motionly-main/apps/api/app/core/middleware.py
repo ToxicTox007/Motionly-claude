@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.logging import get_logger
 from app.services.auth import verify_supabase_jwt, verify_supabase_token_with_auth_api
+from app.services.tracing import current_trace_id
 
 logger = get_logger(__name__)
 
@@ -17,15 +18,35 @@ async def request_id_middleware(
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     request_id = request.headers.get("x-request-id", f"req_{uuid4().hex}")
+    incoming_trace = request.headers.get("traceparent", "").split("-")
+    trace_id = incoming_trace[1] if len(incoming_trace) == 4 else uuid4().hex
+    span_id = uuid4().hex[:16]
     request.state.request_id = request_id
+    request.state.trace_id = trace_id
+    trace_token = current_trace_id.set(trace_id)
     started_at = perf_counter()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    finally:
+        current_trace_id.reset(trace_token)
     response.headers["x-request-id"] = request_id
+    response.headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
     latency_ms = round((perf_counter() - started_at) * 1000)
+    metrics = getattr(request.app.state, "metrics_registry", None)
+    if metrics:
+        metrics.observe(
+            "http_request_duration_ms",
+            latency_ms,
+            method=request.method,
+            route=request.url.path,
+            status=str(response.status_code),
+        )
     logger.info(
         "api_request_completed",
         extra={
             "request_id": request_id,
+            "trace_id": trace_id,
+            "span_id": span_id,
             "method": request.method,
             "path": request.url.path,
             "status_code": response.status_code,

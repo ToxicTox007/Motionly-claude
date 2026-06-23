@@ -1092,10 +1092,10 @@ export function LookTab({
 
         <PanelSection title="Advanced">
           <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
-            Background removal
+            Portrait backdrop blur
             <input
               type="checkbox"
-              aria-label="Enable background removal"
+              aria-label="Enable portrait backdrop blur"
               checked={backgroundRemoval.enabled}
               onChange={(event) =>
                 setBackgroundRemoval((current) => ({ ...current, enabled: event.target.checked }))

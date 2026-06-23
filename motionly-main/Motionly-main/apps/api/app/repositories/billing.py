@@ -126,6 +126,19 @@ class InMemoryBillingRepository:
         source_id: UUID | None = None,
         metadata: dict[str, object] | None = None,
     ) -> UsageLedgerEntry:
+        if source_id is not None:
+            existing = next(
+                (
+                    entry
+                    for entry in self.usage_ledger.values()
+                    if entry.workspace_id == workspace_id
+                    and entry.event_type == event_type
+                    and entry.source_id == source_id
+                ),
+                None,
+            )
+            if existing:
+                return existing
         entry = UsageLedgerEntry(
             id=uuid4(),
             workspace_id=workspace_id,
@@ -209,13 +222,33 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
         return sum(int(row["quantity"]) for row in response.json())
 
     def record_usage(self, **values: object) -> UsageLedgerEntry:
+        event_type_value = getattr(values["event_type"], "value", values["event_type"])
         response = httpx.post(
             f"{self.rest_url}/usage_ledger",
-            headers=self.headers,
+            headers={
+                **self.headers,
+                "prefer": "resolution=ignore-duplicates,return=representation",
+            },
+            params={"on_conflict": "workspace_id,event_type,source_id"},
             json=self._json_safe(values),
             timeout=10,
         )
         self._raise_for_supabase(response)
+        if not response.json():
+            existing = httpx.get(
+                f"{self.rest_url}/usage_ledger",
+                headers=self.headers,
+                params={
+                    "workspace_id": f"eq.{values['workspace_id']}",
+                    "event_type": f"eq.{event_type_value}",
+                    "source_id": f"eq.{values['source_id']}",
+                    "select": "*",
+                    "limit": "1",
+                },
+                timeout=10,
+            )
+            self._raise_for_supabase(existing)
+            return self._usage_from_row(existing.json()[0])
         return self._usage_from_row(response.json()[0])
 
     def has_processed_stripe_event(self, event_id: str) -> bool:

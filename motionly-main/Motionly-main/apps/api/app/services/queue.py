@@ -8,6 +8,8 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import UUID
 
+from app.services.tracing import current_trace_id
+
 
 class QueueJobStatus(StrEnum):
     QUEUED = "queued"
@@ -33,6 +35,7 @@ class EnqueuedJob:
     resource_id: UUID | None = None
     # Render engine hint stored so the worker can route without a manifest fetch
     render_engine: str = "ffmpeg_basic"
+    trace_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class QueueRegistry:
             project_id=project_id,
             resource_id=resource_id,
             render_engine=render_engine,
+            trace_id=current_trace_id.get(),
         )
         self.jobs[job.id] = job
         return job
@@ -97,6 +101,7 @@ class QueueRegistry:
             project_id=job.project_id,
             resource_id=job.resource_id,
             render_engine=job.render_engine,
+            trace_id=job.trace_id,
         )
         self.jobs[job_id] = retried
         return retried
@@ -132,6 +137,7 @@ class QueueRegistry:
             project_id=job.project_id,
             resource_id=job.resource_id,
             render_engine=job.render_engine,
+            trace_id=job.trace_id,
         )
         self.jobs[job_id] = failed
         return failed
@@ -151,6 +157,7 @@ class QueueRegistry:
             project_id=job.project_id,
             resource_id=job.resource_id,
             render_engine=job.render_engine,
+            trace_id=job.trace_id,
         )
         self.jobs[job_id] = canceled
         return canceled
@@ -176,6 +183,7 @@ class QueueRegistry:
                 project_id=job.project_id,
                 resource_id=job.resource_id,
                 render_engine=job.render_engine,
+                trace_id=job.trace_id,
             )
             self.jobs[job.id] = dead
             moved.append(dead)
@@ -219,6 +227,7 @@ class QueueRegistry:
             project_id=job.project_id,
             resource_id=job.resource_id,
             render_engine=job.render_engine,
+            trace_id=job.trace_id,
         )
 
 
@@ -286,6 +295,7 @@ class BullMQQueueRegistry:
             "resource_id": str(resource_id) if resource_id else None,
             "max_attempts": max_attempts or self.job_attempts,
             "render_engine": render_engine,
+            "trace_id": current_trace_id.get(),
         }
         return self._job_from_bridge(self._bridge("enqueue", payload))
 
@@ -413,6 +423,7 @@ class BullMQQueueRegistry:
             project_id=UUID(str(data["project_id"])) if data.get("project_id") else None,
             resource_id=UUID(str(data["resource_id"])) if data.get("resource_id") else None,
             render_engine=str(data.get("render_engine") or "ffmpeg_basic"),
+            trace_id=str(data["trace_id"]) if data.get("trace_id") else None,
         )
 
     def _copy_job(self, job: EnqueuedJob, *, status: QueueJobStatus) -> EnqueuedJob:
@@ -429,6 +440,7 @@ class BullMQQueueRegistry:
             project_id=job.project_id,
             resource_id=job.resource_id,
             render_engine=job.render_engine,
+            trace_id=job.trace_id,
         )
 
 
@@ -658,11 +670,14 @@ class ScaleQueue(BaseQueue):
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=resource_id,
+            kind="batch_plan" if resource_kind == "batch" else self.kind,
             queue_name=(
                 "audio_demucs"
                 if resource_kind == "stem_separation"
                 else "provider_calls"
                 if resource_kind in {"generated_broll", "model_training", "style_profile"}
+                else "planning"
+                if resource_kind == "batch"
                 else self.queue_name
             ),
         )

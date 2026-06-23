@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 
 from app.api.errors import ApiError
+from app.services.local_storage import LocalObjectStorage
 
 
 class RetentionService:
@@ -62,6 +63,7 @@ class RetentionService:
             "analytics_events": 0,
             "exports": 0,
             "local_cache_files": 0,
+            "local_cache_bytes": 0,
             "queued_storage_objects": 0,
         }
         if self.rest_url and self.settings.supabase_service_role_key:
@@ -90,8 +92,16 @@ class RetentionService:
                 older_than_days=self.settings.retention_generated_asset_days,
                 extra_filter="kind=in.(generated_broll,stem_separation)",
             )
+            counts["generated_assets"] += self._delete_rows(
+                table="stock_assets",
+                timestamp_column="created_at",
+                older_than_days=self.settings.retention_generated_asset_days,
+                extra_filter="provider=in.(pexels,pixabay,runway)",
+            )
             counts["queued_storage_objects"] += self._drain_storage_deletion_queue()
-        counts["local_cache_files"] = self._evict_local_cache()
+        evicted = self._evict_local_cache()
+        counts["local_cache_files"] = evicted["removed_files"]
+        counts["local_cache_bytes"] = evicted["removed_bytes"]
         return counts
 
     def _drain_storage_deletion_queue(self) -> int:
@@ -140,23 +150,20 @@ class RetentionService:
             self._request("DELETE", table, params={"id": f"eq.{row['id']}"})
         return len(rows)
 
-    def _evict_local_cache(self) -> int:
+    def _evict_local_cache(self) -> dict[str, int]:
         root = Path(self.settings.media_work_dir)
         if not root.exists():
-            return 0
-        cutoff = datetime.now(UTC).timestamp() - self.settings.retention_local_cache_days * 86400
-        deleted = 0
-        for path in root.rglob("*"):
-            if not path.is_file() or path.stat().st_mtime >= cutoff:
-                continue
-            path.unlink(missing_ok=True)
-            deleted += 1
+            return {"removed_files": 0, "removed_bytes": 0}
+        evicted = LocalObjectStorage(root=root).evict_cache(
+            max_bytes=getattr(self.settings, "media_cache_max_bytes", 10_737_418_240),
+            max_age_seconds=self.settings.retention_local_cache_days * 86400,
+        )
         for directory in sorted((p for p in root.rglob("*") if p.is_dir()), reverse=True):
             try:
                 directory.rmdir()
             except OSError:
                 pass
-        return deleted
+        return evicted
 
     def _request(self, method: str, table: str, **kwargs: object) -> list[dict[str, object]]:
         response = httpx.request(

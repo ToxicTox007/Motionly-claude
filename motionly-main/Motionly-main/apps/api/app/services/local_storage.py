@@ -1,3 +1,6 @@
+import os
+import shutil
+import time
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -29,7 +32,34 @@ class LocalObjectStorage:
         target = self.object_path(bucket=bucket, path=path)
         if not target.exists() or not target.is_file():
             raise ApiError(404, "storage_object_missing", "Uploaded video was not found.")
+        target.touch(exist_ok=True)
         return target
+
+    def evict_cache(self, *, max_bytes: int, max_age_seconds: int) -> dict[str, int]:
+        """Evict oldest cached files until both age and size bounds are satisfied."""
+        now = time.time()
+        files = [item for item in self.root.rglob("*") if item.is_file()]
+        removed_files = 0
+        removed_bytes = 0
+        for item in files:
+            stat = item.stat()
+            if now - stat.st_mtime > max_age_seconds:
+                item.unlink(missing_ok=True)
+                removed_files += 1
+                removed_bytes += stat.st_size
+        remaining = sorted(
+            (item for item in files if item.exists()), key=lambda item: item.stat().st_mtime
+        )
+        total = sum(item.stat().st_size for item in remaining)
+        for item in remaining:
+            if total <= max_bytes:
+                break
+            size = item.stat().st_size
+            item.unlink(missing_ok=True)
+            total -= size
+            removed_files += 1
+            removed_bytes += size
+        return {"removed_files": removed_files, "removed_bytes": removed_bytes}
 
     def upload_file(
         self,
@@ -42,7 +72,10 @@ class LocalObjectStorage:
         source = Path(source_path)
         target = self.object_path(bucket=bucket, path=path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read_bytes())
+        if source.resolve() == target.resolve():
+            return target
+        with source.open("rb") as input_file, target.open("wb") as output_file:
+            shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
         return target
 
 
@@ -65,20 +98,25 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
 
         target.parent.mkdir(parents=True, exist_ok=True)
         encoded_path = quote(path, safe="/")
-        response = httpx.get(
+        temporary = target.with_suffix(target.suffix + ".partial")
+        with httpx.stream(
+            "GET",
             f"{self.supabase_url}/storage/v1/object/{bucket}/{encoded_path}",
             headers=self._storage_headers(),
-            timeout=60,
-        )
-        if response.status_code == 404:
-            raise ApiError(404, "storage_object_missing", "Uploaded video was not found.")
-        if response.status_code >= 400:
-            raise ApiError(
-                502,
-                "storage_download_failed",
-                "Uploaded video could not be downloaded from storage.",
-            )
-        target.write_bytes(response.content)
+            timeout=180,
+        ) as response:
+            if response.status_code == 404:
+                raise ApiError(404, "storage_object_missing", "Uploaded video was not found.")
+            if response.status_code >= 400:
+                raise ApiError(
+                    502,
+                    "storage_download_failed",
+                    "Uploaded video could not be downloaded from storage.",
+                )
+            with temporary.open("wb") as output:
+                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                    output.write(chunk)
+        os.replace(temporary, target)
         return target
 
     def upload_file(
@@ -102,7 +140,7 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
         response = httpx.post(
             f"{self.supabase_url}/storage/v1/object/{bucket}/{encoded_path}",
             headers=headers,
-            content=source.read_bytes(),
+            content=_file_chunks(source),
             timeout=60,
         )
         if response.status_code >= 400:
@@ -139,3 +177,9 @@ def _safe_part(value: str) -> str:
     if not value or "/" in value or "\\" in value or value in {".", ".."}:
         raise ApiError(400, "storage_bucket_invalid", "Storage bucket is invalid.")
     return value
+
+
+def _file_chunks(path: Path, *, chunk_size: int = 1024 * 1024):
+    with path.open("rb") as source:
+        while chunk := source.read(chunk_size):
+            yield chunk

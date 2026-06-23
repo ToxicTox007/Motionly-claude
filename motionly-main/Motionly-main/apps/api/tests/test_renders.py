@@ -1215,7 +1215,7 @@ def test_render_manifest_includes_music_selection_without_overwriting_caption_tr
     music_props = response.job.manifest["render_props"]["musicSelection"]
     assert music_props["track"]["title"] == "Ambient Luxury Bed"
     assert music_props["mix"]["loudness_target_lufs"] == -14
-    assert music_props["beat_sync"]["enabled"] is True
+    assert music_props["beat_alignment_report"]["enabled"] is True
     assert response.job.manifest["audio"]["music_volume"] == 0.65
     assert response.job.manifest["audio"]["sfx_intensity"] == 0.4
     exports = repository.list_exports(project_id=project_id, workspace_id=workspace_id)
@@ -1276,7 +1276,7 @@ def test_render_manifest_includes_effects_config() -> None:
     assert effects_props["lut_intensity"] == 0.85
     assert effects_props["background_removal"]["enabled"] is True
     assert effects_props["gradient_ramp"]["enabled"] is True
-    assert response.job.manifest["after_effects_handoff"]["project_file_url"] is None
+    assert response.job.manifest["external_finishing_metadata"]["project_file_url"] is None
 
 
 def test_render_manifest_applies_motion_auto_reframe_to_export_framing() -> None:

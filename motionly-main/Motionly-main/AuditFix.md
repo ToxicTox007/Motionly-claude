@@ -128,15 +128,15 @@ Phases are ordered by **dependency**, not by audit severity. Fixing the renderer
 
 *Every feature label matches its implementation. No silent feature gaps reach users.*
 
-- [ ] For each of the following, pick one — rename it honestly, or implement it for real: "model training" (currently preference-dictionary extraction, not fine-tuning), "custom style training" (statistical profiling), "background removal" (approximate ellipse/blur treatment, not segmentation — add a real matting model if the name stays), "auto-reframe" (static coordinates, not tracked — wire to Phase 3's detections if kept), "beat sync" (metadata only, doesn't retime cuts), "After Effects handoff" (metadata only, no real AE interchange), "screen recording" (palette item only, no capture implementation exists).
-- [ ] Fix preference-learning bugs: use latest-feedback-wins instead of letting repeated layer assignment let older rows overwrite newer ones; stop letting rejected suggestions with an empty "ideal output" overwrite useful values; scope trained adapters to the project/workspace they came from instead of applying the latest one workspace-wide.
-- [ ] Stop marking every edit layer "kept" before render success, download, or publication — only count it once an outcome confirms it. This currently inflates acceptance metrics, and analytics write failures are silently swallowed rather than surfaced for recovery.
-- [ ] Fix billing usage accounting: record usage on render **success**, not render **start** — failed renders currently consume paid quota.
-- [ ] Ingest stock B-roll into Motionly-owned storage instead of linking external provider URLs directly — provider URL expiry, removal, or throttling currently breaks renders after the fact.
-- [ ] Replace hard-coded "Creator / Free Plan, 3/10 Exports" labels in the app shell with live billing state (the billing page itself already reads this correctly — just isn't shared with the shell).
-- [ ] Pick one project-list data path — API or direct Supabase reads, not both — to remove duplicate authorization/caching/error semantics.
-- [ ] Persist the feedback form to the `launch_feedback` table instead of only opening a `mailto:` link.
-- [ ] Fix the missing `runway` entry in the shared `StockProviderKey` TypeScript type (Python schemas and stored assets already include it).
+- [x] For each of the following, pick one — rename it honestly, or implement it for real: "model training" (currently preference-dictionary extraction, not fine-tuning), "custom style training" (statistical profiling), "background removal" (approximate ellipse/blur treatment, not segmentation — add a real matting model if the name stays), "auto-reframe" (static coordinates, not tracked — wire to Phase 3's detections if kept), "beat sync" (metadata only, doesn't retime cuts), "After Effects handoff" (metadata only, no real AE interchange), "screen recording" (palette item only, no capture implementation exists).
+- [x] Fix preference-learning bugs: use latest-feedback-wins instead of letting repeated layer assignment let older rows overwrite newer ones; stop letting rejected suggestions with an empty "ideal output" overwrite useful values; scope trained adapters to the project/workspace they came from instead of applying the latest one workspace-wide.
+- [x] Stop marking every edit layer "kept" before render success, download, or publication — only count it once an outcome confirms it. This currently inflates acceptance metrics, and analytics write failures are silently swallowed rather than surfaced for recovery.
+- [x] Fix billing usage accounting: record usage on render **success**, not render **start** — failed renders currently consume paid quota.
+- [x] Ingest stock B-roll into Motionly-owned storage instead of linking external provider URLs directly — provider URL expiry, removal, or throttling currently breaks renders after the fact.
+- [x] Replace hard-coded "Creator / Free Plan, 3/10 Exports" labels in the app shell with live billing state (the billing page itself already reads this correctly — just isn't shared with the shell).
+- [x] Pick one project-list data path — API or direct Supabase reads, not both — to remove duplicate authorization/caching/error semantics.
+- [x] Persist the feedback form to the `launch_feedback` table instead of only opening a `mailto:` link.
+- [x] Fix the missing `runway` entry in the shared `StockProviderKey` TypeScript type (Python schemas and stored assets already include it).
 
 **Done when:** every feature name in the UI either matches its real implementation or has a corrected label, and there's a single written engine/feature support matrix that's actually true.
 
@@ -146,13 +146,13 @@ Phases are ordered by **dependency**, not by audit severity. Fixing the renderer
 
 *This survives real concurrent users, not just a laptop demo.*
 
-- [ ] Stream all large-media paths (uploads, generated-asset ingestion, YouTube publish) instead of whole-file/whole-response buffering — a 512 MiB file currently risks large transient memory spikes at multiple points.
-- [ ] Add an eviction policy for locally cached source files pulled from Supabase Storage.
-- [ ] Make `/health/ready` actually probe Redis, Supabase, storage, FFmpeg, and providers instead of unconditionally returning ready.
-- [ ] Add metrics export, distributed tracing, queue-latency dashboards, provider latency/error SLOs, and a persisted worker heartbeat — none of this exists today beyond structured logs and Sentry/GlitchTip error capture.
-- [ ] Replace the synchronous/serial batch-planning loop with a real batch queue: progressive status and cancellation.
-- [ ] Provision the full topology the GPU compose file currently assumes exists elsewhere (web, Redis, Supabase, ingress, secrets) so it's a deployable unit, not a fragment.
-- [ ] Build real cost attribution (provider tokens, generated seconds, compute/GPU time, storage, egress) per workspace/project/render — admin cost reporting is currently a placeholder. Track cost-per-**approved** export, not cost-per-completed-render.
+- [x] Stream all large-media paths (uploads, generated-asset ingestion, YouTube publish) instead of whole-file/whole-response buffering — a 512 MiB file currently risks large transient memory spikes at multiple points.
+- [x] Add an eviction policy for locally cached source files pulled from Supabase Storage.
+- [x] Make `/health/ready` actually probe Redis, Supabase, storage, FFmpeg, and providers instead of unconditionally returning ready.
+- [x] Add metrics export, distributed tracing, queue-latency dashboards, provider latency/error SLOs, and a persisted worker heartbeat — none of this exists today beyond structured logs and Sentry/GlitchTip error capture.
+- [x] Replace the synchronous/serial batch-planning loop with a real batch queue: progressive status and cancellation.
+- [x] Provision the full topology the GPU compose file currently assumes exists elsewhere (web, Redis, Supabase, ingress, secrets) so it's a deployable unit, not a fragment.
+- [x] Build real cost attribution (provider tokens, generated seconds, compute/GPU time, storage, egress) per workspace/project/render — admin cost reporting is currently a placeholder. Track cost-per-**approved** export, not cost-per-completed-render.
 
 **Done when:** a load test near the 512 MiB upload ceiling doesn't spike API memory, and `/health/ready` actually reflects real dependency health.
 

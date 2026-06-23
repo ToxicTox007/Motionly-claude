@@ -1,5 +1,5 @@
 begin;
-select plan(41);
+select plan(53);
 
 select has_column('public', 'render_jobs', 'uploaded_video_id', 'render jobs reference uploads');
 select has_column('public', 'render_jobs', 'caption_track_id', 'render jobs reference captions');
@@ -63,9 +63,36 @@ select has_column('public', 'subscriptions', 'status', 'subscriptions use canoni
 select has_column('public', 'subscriptions', 'stripe_price_id', 'subscriptions store Stripe price');
 select has_column('public', 'usage_ledger', 'source_id', 'usage entries store source ID');
 select has_index('public', 'usage_ledger', 'usage_ledger_workspace_created_at_idx', 'usage has canonical workspace timestamp index');
+select has_index('public', 'usage_ledger', 'usage_ledger_outcome_source_unique_idx', 'successful render usage is idempotent');
+select has_index('public', 'ai_edit_feedback_events', 'ai_edit_feedback_decision_outcome_unique_idx', 'kept outcomes are idempotent');
+select has_trigger('public', 'stock_assets', 'stock_assets_queue_storage_delete', 'owned stock deletion queues storage cleanup');
+select ok(
+  (select pg_get_constraintdef(oid) like '%render_succeeded%'
+   from pg_constraint
+   where conrelid = 'public.usage_ledger'::regclass
+     and conname = 'usage_ledger_event_type_check'),
+  'usage ledger supports successful render outcomes'
+);
+select has_table('public', 'worker_heartbeats', 'worker liveness is persisted');
+select has_table('public', 'provider_slo_events', 'provider SLO events are persisted');
+select has_table('public', 'cost_attribution_events', 'cost attribution is persisted');
+select has_index('public', 'provider_slo_events', 'provider_slo_events_provider_created_idx', 'provider SLO history is queryable');
+select has_index('public', 'cost_attribution_events', 'cost_attribution_workspace_created_idx', 'workspace costs are queryable');
+select has_index('public', 'cost_attribution_events', 'cost_attribution_source_unique_idx', 'cost events are idempotent');
+select ok(
+  (select pg_get_constraintdef(oid) like '%canceled%'
+   from pg_constraint
+   where conrelid = 'public.phase5_resources'::regclass
+     and conname = 'phase5_resources_status_check'),
+  'batch resources support cancellation'
+);
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.worker_heartbeats'::regclass),
+  'worker heartbeats are service-role only'
+);
 
 select hasnt_table('public', 'audit_logs', 'unused audit logs table is removed');
-select hasnt_table('public', 'launch_feedback', 'unused launch feedback table is removed');
+select has_table('public', 'launch_feedback', 'launch feedback is persisted');
 select hasnt_table('public', 'launch_ops_events', 'unused launch ops table is removed');
 
 select has_column('public', 'profiles', 'company', 'profiles store company identity');

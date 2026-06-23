@@ -1,7 +1,9 @@
 import { MessageSquare } from "lucide-react";
 import { Button } from "@/components/button";
+import { submitFeedback } from "./actions";
 
-export default function FeedbackPage() {
+export default async function FeedbackPage({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  const params = await searchParams;
   return (
     <main className="container-content flex min-h-screen flex-col justify-center py-12">
       <div className="mb-8 flex items-center gap-3">
@@ -13,12 +15,10 @@ export default function FeedbackPage() {
           <h1 className="text-2xl font-bold">Feedback</h1>
         </div>
       </div>
-      <form
-        action="mailto:support@motionly.local"
-        method="post"
-        encType="text/plain"
-        className="pixel-panel pixel-corners max-w-2xl space-y-4 p-5"
-      >
+      {params?.sent ? <p className="mb-4 max-w-2xl border border-emerald-300 bg-emerald-50 p-3 text-sm font-bold text-emerald-800">Feedback saved. Thank you.</p> : null}
+      {params?.error ? <p className="mb-4 max-w-2xl border border-red-300 bg-red-50 p-3 text-sm font-bold text-red-800">Feedback could not be saved. Please try again.</p> : null}
+      <form action={submitFeedback} className="pixel-panel pixel-corners max-w-2xl space-y-4 p-5">
+        <input type="hidden" name="pageUrl" value="/feedback" />
         <label className="block text-sm font-semibold">
           Category
           <select

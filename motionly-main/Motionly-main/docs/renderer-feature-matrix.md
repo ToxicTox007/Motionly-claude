@@ -23,7 +23,9 @@ This matrix is the production contract used when choosing a render engine. “Na
 | Grain, vignette, light leak, flare, gradients | Approximation | Native |
 | Ken Burns, speed ramps and impact zooms | Unsupported | Native |
 | Motion keyframes and per-clip motion effects | Unsupported | Native |
-| Background replacement | Approximation | Native |
+| Portrait backdrop blur (ellipse/blur treatment; not segmentation) | Approximation | Approximation |
+| Visual-manifest tracked auto-reframe | Approximation | Native |
+| Beat-impact motion at timeline boundaries | Unsupported | Native |
 | Fit/fill/custom framing and watermark | Native | Native |
 
 Engine selection evaluates animated captions, template motion, selected B-roll/music/effects, and manual B-roll/audio/transitions. Paid eligible renders are promoted to Remotion whenever one of those features is active. If Remotion is disabled, FFmpeg remains the operational fallback and the manifest’s compatibility fields are the source of truth for downgrades.

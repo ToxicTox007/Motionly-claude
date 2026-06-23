@@ -52,6 +52,7 @@ from app.services.stock_video import (
     build_broll_cache_key,
     candidate_shot_type,
     desired_requests,
+    ensure_owned_stock_asset,
     keyword_query,
     latency_ms_since,
     score_candidate,
@@ -236,7 +237,11 @@ async def generate_broll(
     billing_repository: BillingRepositoryDep,
     broll_queue: BrollQueueDep,
     providers: StockProvidersDep,
+    storage_signer: StorageSignerDep = None,  # type: ignore[assignment]
 ) -> BrollGenerateResponse:
+    storage_signer = storage_signer or getattr(
+        request.app.state, "storage_signer", StorageSigner()
+    )
     if (
         request.app.state.settings.billing_enabled
         and not build_billing_status(
@@ -296,6 +301,19 @@ async def generate_broll(
             cache_key=cache_key,
         )
         if cached:
+            for slot in cached:
+                if slot.selected_asset_id:
+                    asset = repository.get_asset(
+                        project_id=project_id,
+                        workspace_id=actor.workspace_id,
+                        asset_id=slot.selected_asset_id,
+                    )
+                    ensure_owned_stock_asset(
+                        asset=asset,
+                        repository=repository,
+                        settings=request.app.state.settings,
+                        storage_signer=storage_signer,
+                    )
             return BrollGenerateResponse(
                 slots=[repository.response_for_slot(slot) for slot in cached],
                 job_id=execution_id,
@@ -374,6 +392,12 @@ async def generate_broll(
             else None
         )
         if selected:
+            selected = ensure_owned_stock_asset(
+                asset=selected,
+                repository=repository,
+                settings=request.app.state.settings,
+                storage_signer=storage_signer,
+            )
             used_provider_asset_ids.add(selected.provider_asset_id)
         if selected_shot_type:
             used_shot_types.add(selected_shot_type)
@@ -446,19 +470,31 @@ async def swap_broll(
     payload: BrollSwapRequest,
     actor: ActorDep,
     repository: BrollRepositoryDep,
+    storage_signer: StorageSignerDep = None,  # type: ignore[assignment]
     request: Request = None,  # type: ignore[assignment]
 ) -> BrollSwapResponse:
+    request_state = getattr(getattr(request, "app", None), "state", None)
+    storage_signer = storage_signer or getattr(request_state, "storage_signer", StorageSigner())
     slot = repository.get_slot(
         project_id=project_id,
         workspace_id=actor.workspace_id,
         slot_id=slot_id,
     )
     if payload.asset_id is not None:
-        repository.get_asset(
+        asset = repository.get_asset(
             project_id=project_id,
             workspace_id=actor.workspace_id,
             asset_id=payload.asset_id,
         )
+        if asset.provider in {StockProviderKey.PEXELS, StockProviderKey.PIXABAY}:
+            if request_state is None:
+                raise ApiError(500, "stock_ingest_not_configured", "Stock ingest is unavailable.")
+            ensure_owned_stock_asset(
+                asset=asset,
+                repository=repository,
+                settings=request_state.settings,
+                storage_signer=storage_signer,
+            )
     updated = repository.update_slot_selection(
         slot=slot,
         asset_id=payload.asset_id,

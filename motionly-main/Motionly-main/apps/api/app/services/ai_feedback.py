@@ -3,9 +3,12 @@ from uuid import UUID
 
 from fastapi import Request
 
+from app.core.logging import get_logger
 from app.repositories.analytics import InMemoryAnalyticsRepository
 from app.repositories.plans import EditPlanRecord
 from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
+
+logger = get_logger(__name__)
 
 
 def record_ai_feedback(
@@ -27,6 +30,20 @@ def record_ai_feedback(
     repository = _analytics_repository(request)
     if repository is None:
         return
+    payload = {
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "user_id": str(user_id),
+        "edit_plan_id": str(edit_plan_id) if edit_plan_id else None,
+        "event_type": event_type.value,
+        "layer": layer.value,
+        "decision_id": decision_id,
+        "action": action,
+        "source": source,
+        "ai_payload": ai_payload,
+        "user_payload": user_payload,
+        "metadata": metadata,
+    }
     try:
         repository.record_event(
             workspace_id=workspace_id,
@@ -42,9 +59,22 @@ def record_ai_feedback(
             user_payload=user_payload,
             metadata=metadata,
         )
-    except Exception:
-        # Feedback is diagnostic and training data; it should never block editing.
-        return
+    except Exception as exc:
+        recovery = getattr(request.app.state, "analytics_recovery_queue", None)
+        if recovery is not None:
+            try:
+                recovery.enqueue(payload)
+            except Exception:
+                logger.exception("analytics_recovery_enqueue_failed")
+        logger.error(
+            "analytics_delivery_deferred",
+            extra={
+                "project_id": str(project_id),
+                "workspace_id": str(workspace_id),
+                "event_type": event_type.value,
+                "error_type": type(exc).__name__,
+            },
+        )
 
 
 def record_plan_suggestions(

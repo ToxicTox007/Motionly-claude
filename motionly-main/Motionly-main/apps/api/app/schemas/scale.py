@@ -16,6 +16,7 @@ class ScaleResourceStatus(StrEnum):
     COMPLETED = "completed"
     PARTIAL = "partial"
     FAILED = "failed"
+    CANCELED = "canceled"
 
 
 class ScaleResourceResponse(BaseModel):
@@ -121,6 +122,109 @@ class ModelTrainingRequest(BaseModel):
     minimum_examples: int = Field(default=3, ge=1, le=1000)
 
 
+class AudioKeyword(BaseModel):
+    text: str
+    score: float
+
+
+class AudioStyleSignals(BaseModel):
+    predicted_style: str
+    tone: str
+    pace: str
+    style_scores: dict[str, float]
+
+
+class AudioSpeechMetrics(BaseModel):
+    word_count: int
+    duration_ms: int | None = None
+    words_per_minute: int | None = None
+
+
+class AudioConfidence(BaseModel):
+    average_word_confidence: float | None = None
+    low_confidence_word_count: int
+    word_confidence_available: bool
+
+
+class SpeakerSegment(BaseModel):
+    speaker: str
+    start_ms: int
+    end_ms: int
+    segment_index: int
+
+
+class SpeakerDiarization(BaseModel):
+    provider: str
+    model: str | None = None
+    speaker_count: int
+    confidence: float | None = None
+    segments: list[SpeakerSegment]
+
+
+class PauseMapEntry(BaseModel):
+    start_ms: int
+    end_ms: int
+    duration_ms: int
+
+
+class SpeechEnergyWindow(BaseModel):
+    start_ms: int
+    end_ms: int
+    speech_density: float
+    word_onsets: int
+
+
+class SpeechRhythm(BaseModel):
+    bpm_equivalent: int | None = None
+    onset_count: int
+    mean_interval_ms: int | None = None
+    interval_variability: float | None = None
+    energy_curve: list[SpeechEnergyWindow]
+
+
+class EmotionWindow(BaseModel):
+    start_ms: int
+    end_ms: int
+    emotion: str
+    joy: float | None = None
+    sadness: float | None = None
+    urgency: float | None = None
+    intensity: float
+    word_count: int | None = None
+
+
+class EmotionPacing(BaseModel):
+    aggregate_emotion: str
+    pause_count: int
+    provider: str | None = None
+    pause_map: list[PauseMapEntry]
+    speech_rhythm: SpeechRhythm
+    windows: list[EmotionWindow]
+
+
+class SoundLabel(BaseModel):
+    label: str
+    confidence: float
+
+
+class SoundClassification(BaseModel):
+    provider: str
+    model: str | None = None
+    background_sound: str | None = None
+    labels: list[SoundLabel]
+
+
+class AudioIntelligence(BaseModel):
+    schema_version: int
+    keywords: list[AudioKeyword]
+    style_signals: AudioStyleSignals
+    speech_metrics: AudioSpeechMetrics
+    confidence: AudioConfidence
+    speaker_diarization: SpeakerDiarization
+    emotion_pacing: EmotionPacing
+    sound_classification: SoundClassification
+
+
 class AudioIntelligenceResponse(BaseModel):
     project_id: UUID
-    audio_intelligence: dict[str, Any]
+    audio_intelligence: AudioIntelligence

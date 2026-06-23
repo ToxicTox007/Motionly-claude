@@ -1,4 +1,6 @@
+import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +43,12 @@ class Settings(BaseSettings):
     retention_analytics_days: int = Field(default=365, alias="RETENTION_ANALYTICS_DAYS")
     retention_export_days: int = Field(default=30, alias="RETENTION_EXPORT_DAYS")
     retention_local_cache_days: int = Field(default=7, alias="RETENTION_LOCAL_CACHE_DAYS")
+    media_cache_max_bytes: int = Field(default=10_737_418_240, alias="MEDIA_CACHE_MAX_BYTES")
+    readiness_timeout_seconds: float = Field(default=3.0, alias="READINESS_TIMEOUT_SECONDS")
+    worker_heartbeat_max_age_seconds: int = Field(
+        default=90, alias="WORKER_HEARTBEAT_MAX_AGE_SECONDS"
+    )
+    metrics_bearer_token: str | None = Field(default=None, alias="METRICS_BEARER_TOKEN")
     render_execute_ffmpeg: bool = Field(default=True, alias="RENDER_EXECUTE_FFMPEG")
     ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
     ffmpeg_gpu_encoder: str = Field(default="h264_nvenc", alias="FFMPEG_GPU_ENCODER")
@@ -116,6 +124,9 @@ class Settings(BaseSettings):
         alias="BILLING_PORTAL_RETURN_URL",
     )
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+    otel_exporter_otlp_endpoint: str | None = Field(
+        default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT"
+    )
     remotion_enabled: bool = Field(default=False, alias="REMOTION_ENABLED")
     publish_sync_completion: bool = Field(default=False, alias="PUBLISH_SYNC_COMPLETION")
     publish_oauth_state_secret: str | None = Field(default=None, alias="PUBLISH_OAUTH_STATE_SECRET")
@@ -156,4 +167,15 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    for name in (
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_JWT_SECRET",
+        "ADMIN_API_TOKEN",
+        "PUBLISH_TOKEN_ENCRYPTION_KEY",
+        "REDIS_URL",
+        "METRICS_BEARER_TOKEN",
+    ):
+        secret_file = os.getenv(f"{name}_FILE")
+        if secret_file and not os.getenv(name):
+            os.environ[name] = Path(secret_file).read_text(encoding="utf-8").strip()
     return Settings()

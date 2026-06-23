@@ -1,7 +1,11 @@
+import asyncio
+import shutil
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field
 
 from app.services.queue import BullMQQueueRegistry
@@ -45,13 +49,180 @@ async def live(request: Request) -> HealthResponse:
     )
 
 
-@router.get("/ready", response_model=HealthResponse)
-async def ready(request: Request) -> HealthResponse:
-    return HealthResponse(
-        status="ok",
+@router.get("/ready", response_model=DependencyHealthResponse)
+async def ready(
+    request: Request, response: Response = None  # type: ignore[assignment]
+) -> DependencyHealthResponse:
+    settings = request.app.state.settings
+    names = ("redis", "supabase", "storage", "ffmpeg", "providers", "workers")
+    results = await asyncio.gather(
+        _probe_redis(settings),
+        _probe_supabase_ready(settings),
+        _probe_storage(settings),
+        _probe_ffmpeg(),
+        _probe_providers(settings),
+        _probe_workers(request),
+        return_exceptions=True,
+    )
+    checks = {
+        name: (
+            result
+            if isinstance(result, DependencyHealth)
+            else DependencyHealth(status="down", message=str(result)[:300])
+        )
+        for name, result in zip(names, results, strict=True)
+    }
+    ready_status = all(item.status == "ok" for item in checks.values())
+    if not ready_status and response is not None:
+        response.status_code = 503
+    return DependencyHealthResponse(
+        status="ok" if ready_status else "not_ready",
         service="motionly-api",
-        environment=request.app.state.settings.app_env,
+        environment=settings.app_env,
         request_id=request.state.request_id,
+        dependencies=checks,
+    )
+
+
+async def _probe_redis(settings) -> DependencyHealth:
+    if not settings.redis_url:
+        if settings.app_env != "production":
+            return DependencyHealth(status="ok", message="Local in-memory queue mode.")
+        return DependencyHealth(status="down", message="Redis is not configured.")
+    from redis.asyncio import Redis
+
+    client = Redis.from_url(settings.redis_url)
+    try:
+        await asyncio.wait_for(client.ping(), timeout=settings.readiness_timeout_seconds)
+    finally:
+        await client.aclose()
+    return DependencyHealth(status="ok", message="Redis PING succeeded.")
+
+
+async def _probe_supabase_ready(settings) -> DependencyHealth:
+    if (
+        settings.app_env != "production"
+        and (not settings.supabase_url or not settings.supabase_service_role_key)
+    ):
+        return DependencyHealth(status="ok", message="Local in-memory repository mode.")
+    result = await _supabase_health(settings)
+    if result.status != "ok":
+        result.status = "down"
+    return result
+
+
+async def _probe_storage(settings) -> DependencyHealth:
+    if not settings.supabase_url or not settings.supabase_service_role_key:
+        if settings.app_env != "production":
+            root = Path(settings.media_work_dir)
+            root.mkdir(parents=True, exist_ok=True)
+            probe = root / f".ready-{uuid4().hex}"
+            probe.write_bytes(b"ready")
+            probe.unlink()
+            return DependencyHealth(status="ok", message="Local storage write succeeded.")
+        return DependencyHealth(status="down", message="Storage is not configured.")
+    async with httpx.AsyncClient(timeout=settings.readiness_timeout_seconds) as client:
+        result = await client.get(
+            f"{str(settings.supabase_url).rstrip('/')}/storage/v1/bucket",
+            headers={
+                "apikey": settings.supabase_service_role_key,
+                "authorization": f"Bearer {settings.supabase_service_role_key}",
+            },
+        )
+    if result.status_code >= 400:
+        return DependencyHealth(
+            status="down", message=f"Storage responded with HTTP {result.status_code}."
+        )
+    return DependencyHealth(status="ok", message="Storage API responded.")
+
+
+async def _probe_ffmpeg() -> DependencyHealth:
+    executable = shutil.which("ffmpeg")
+    if not executable:
+        return DependencyHealth(status="down", message="FFmpeg is not installed.")
+    process = await asyncio.create_subprocess_exec(
+        executable,
+        "-version",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    if await process.wait() != 0:
+        return DependencyHealth(status="down", message="FFmpeg probe failed.")
+    return DependencyHealth(status="ok", message="FFmpeg executed successfully.")
+
+
+async def _probe_providers(settings) -> DependencyHealth:
+    probes: list[tuple[str, str, dict[str, str]]] = []
+    if settings.openrouter_api_key:
+        probes.append(
+            (
+                "openrouter",
+                "https://openrouter.ai/api/v1/models",
+                {"authorization": f"Bearer {settings.openrouter_api_key}"},
+            )
+        )
+    if settings.groq_api_key:
+        probes.append(
+            (
+                "groq",
+                "https://api.groq.com/openai/v1/models",
+                {"authorization": f"Bearer {settings.groq_api_key}"},
+            )
+        )
+    if settings.pexels_api_key:
+        probes.append(
+            (
+                "pexels",
+                "https://api.pexels.com/v1/curated?per_page=1",
+                {"authorization": settings.pexels_api_key},
+            )
+        )
+    if settings.pixabay_api_key:
+        probes.append(
+            (
+                "pixabay",
+                f"https://pixabay.com/api/videos/?key={settings.pixabay_api_key}&per_page=3",
+                {},
+            )
+        )
+    if settings.runway_api_key:
+        probes.append(
+            (
+                "runway",
+                "https://api.dev.runwayml.com/v1/tasks",
+                {
+                    "authorization": f"Bearer {settings.runway_api_key}",
+                    "x-runway-version": "2024-11-06",
+                },
+            )
+        )
+    if not probes:
+        return DependencyHealth(status="ok", message="No remote providers configured.")
+    statuses: dict[str, int] = {}
+    async with httpx.AsyncClient(timeout=settings.readiness_timeout_seconds) as client:
+        for name, url, headers in probes:
+            result = await client.get(url, headers=headers)
+            statuses[name] = result.status_code
+    if any(status >= 500 or status in {401, 403} for status in statuses.values()):
+        return DependencyHealth(
+            status="down", message="A provider probe failed.", metadata=statuses
+        )
+    return DependencyHealth(status="ok", message="Provider probes responded.", metadata=statuses)
+
+
+async def _probe_workers(request: Request) -> DependencyHealth:
+    settings = request.app.state.settings
+    if settings.app_env != "production" and not settings.redis_url:
+        return DependencyHealth(status="ok", message="Workers are optional in local mode.")
+    heartbeats = await asyncio.to_thread(
+        request.app.state.operations_repository.latest_heartbeats
+    )
+    cutoff = datetime.now(UTC).timestamp() - settings.worker_heartbeat_max_age_seconds
+    live = [item for item in heartbeats if item.last_seen_at.timestamp() >= cutoff]
+    if not live:
+        return DependencyHealth(status="down", message="No current worker heartbeat.")
+    return DependencyHealth(
+        status="ok", message="Current worker heartbeat found.", metadata={"workers": len(live)}
     )
 
 
@@ -140,7 +311,7 @@ async def _supabase_health(settings) -> DependencyHealth:
             )
     except httpx.HTTPError as exc:
         return DependencyHealth(status="degraded", message=str(exc)[:300])
-    if response.status_code >= 500:
+    if response.status_code >= 400:
         return DependencyHealth(
             status="degraded",
             message=f"Supabase responded with HTTP {response.status_code}.",

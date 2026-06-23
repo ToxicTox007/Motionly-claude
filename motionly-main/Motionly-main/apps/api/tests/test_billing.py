@@ -17,7 +17,7 @@ def test_free_plan_uses_usage_ledger_for_monthly_render_limit() -> None:
     for _ in range(3):
         repository.record_usage(
             workspace_id=workspace_id,
-            event_type=UsageEventType.RENDER_STARTED,
+            event_type=UsageEventType.RENDER_SUCCEEDED,
         )
 
     status = build_billing_status(workspace_id, repository)

@@ -46,6 +46,7 @@ from app.services.edit_planner import (
     normalize_plan,
     summarize_plan,
 )
+from app.services.operations import monotonic_ms
 from app.services.queue import PlanQueue
 from app.services.style_classifier import classify_edit_style
 from app.services.timeline_compiler import (
@@ -77,6 +78,7 @@ async def create_plan(
         payload=payload,
         request=request,
         workspace_id=actor.workspace_id,
+        project_id=project_id,
     )
     transcript = repository.latest_transcript(
         project_id=project_id,
@@ -139,13 +141,39 @@ async def create_plan(
                 )
             return PlanCreateResponse(plan=cached.to_response(), job_id=execution_id, cached=True)
 
-    result = planner_provider.create_plan(
-        transcript=transcript,
-        payload=effective_payload,
-        video_duration_ms=video_duration_ms,
-        visual_manifest=visual_manifest,
-        style_classification=style_classification,
-    )
+    state = getattr(getattr(request, "app", None), "state", None)
+    operations = getattr(state, "operations_repository", None)
+    started_ms = monotonic_ms()
+    try:
+        result = planner_provider.create_plan(
+            transcript=transcript,
+            payload=effective_payload,
+            video_duration_ms=video_duration_ms,
+            visual_manifest=visual_manifest,
+            style_classification=style_classification,
+        )
+    except Exception as exc:
+        if operations is not None:
+            operations.record_provider_slo(
+                workspace_id=actor.workspace_id,
+                project_id=project_id,
+                provider=planner_provider.provider_name,
+                operation="edit_plan",
+                success=False,
+                latency_ms=monotonic_ms() - started_ms,
+                error_code=type(exc).__name__,
+            )
+        raise
+    if operations is not None:
+        operations.record_provider_slo(
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+            provider=result.provider,
+            operation="edit_plan",
+            success=True,
+            latency_ms=result.latency_ms,
+            error_code=None,
+        )
     plan = normalize_plan(
         plan=result.plan,
         words=transcript.words,
@@ -179,6 +207,23 @@ async def create_plan(
         summary=summarize_plan(plan, style_classification=style_classification),
         plan=plan,
     )
+    if operations is not None:
+        usage = result.raw_payload.get("usage") if isinstance(result.raw_payload, dict) else {}
+        operations.record_cost(
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+            provider=result.provider,
+            category="tokens",
+            quantity=float(usage.get("total_tokens") or 0) if isinstance(usage, dict) else 0,
+            unit="token",
+            unit_cost_usd=(
+                float(result.cost_estimate_usd or 0)
+                / float(usage.get("total_tokens") or 1)
+                if isinstance(usage, dict)
+                else 0
+            ),
+            metadata={"model": result.model, "plan_id": str(record.id)},
+        )
     record_plan_suggestions(
         request=request,
         workspace_id=actor.workspace_id,
@@ -194,6 +239,7 @@ def _apply_phase5_learning(
     payload: PlanCreateRequest,
     request: Request | None,
     workspace_id: UUID,
+    project_id: UUID,
 ) -> PlanCreateRequest:
     state = getattr(getattr(request, "app", None), "state", None)
     scale_repository = getattr(state, "scale_repository", None)
@@ -224,7 +270,7 @@ def _apply_phase5_learning(
             workspace_id=workspace_id,
         )
         if profile.kind != "style_profile" or profile.status != ScaleResourceStatus.READY:
-            raise ApiError(409, "style_profile_not_ready", "Train the custom style first.")
+            raise ApiError(409, "style_profile_not_ready", "Analyze the reference style first.")
         learned = profile.result.get("learned_settings") or {}
         if isinstance(learned, dict):
             if learned.get("style"):
@@ -234,16 +280,18 @@ def _apply_phase5_learning(
             if learned.get("broll_density"):
                 updates["broll_density"] = BrollDensity(str(learned["broll_density"]))
             direction_parts.append(
-                "Custom style profile: " + str(learned.get("caption_direction") or learned)
+                "Reference style profile: "
+                + str(learned.get("caption_direction") or learned)
             )
     adapter = scale_repository.latest(
         workspace_id=workspace_id,
+        project_id=project_id,
         kind="model_training",
         status=ScaleResourceStatus.READY,
     )
     if adapter and adapter.result.get("preferences"):
         direction_parts.append(
-            "Workspace learned preferences: " + str(adapter.result["preferences"])
+            "Project learned preferences: " + str(adapter.result["preferences"])
         )
     if direction_parts:
         updates["prompt"] = "\n".join(direction_parts)[:1200]

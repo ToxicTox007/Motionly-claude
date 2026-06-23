@@ -122,6 +122,58 @@ async function runRetentionJob() {
   return response.json();
 }
 
+async function runBatchJob(job) {
+  if (!hasApiConfig()) {
+    throw new Error("batch planning requires WORKER_API_BASE_URL and WORKER_API_TOKEN");
+  }
+  const response = await fetch(
+    `${apiBaseUrl()}/internal/batches/${job.data.workspace_id}/${job.data.resource_id}/run`,
+    { method: "POST", headers: { "x-motionly-worker-token": workerToken() } },
+  );
+  if (!response.ok) throw new Error(`batch endpoint returned HTTP ${response.status}`);
+  return response.json();
+}
+
+async function sendHeartbeat() {
+  if (!hasApiConfig()) return;
+  const response = await fetch(`${apiBaseUrl()}/internal/operations/heartbeat`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-motionly-worker-token": workerToken(),
+    },
+    body: JSON.stringify({
+      worker_id: env("WORKER_ID", `${env("HOSTNAME", "worker")}-${process.pid}`),
+      worker_role: env("PROCESS_ROLE", "worker"),
+      queues: queueNames,
+      version: env("APP_VERSION") || null,
+      metadata: { concurrency: env("WORKER_CONCURRENCY", "1") },
+    }),
+  });
+  if (!response.ok) throw new Error(`heartbeat endpoint returned HTTP ${response.status}`);
+}
+
+async function reportProviderSlo(job, success, latencyMs, errorCode = null) {
+  if (!hasApiConfig()) return;
+  const providerKinds = new Set(["transcription", "visual_analysis", "phase5", "edit_plan", "batch_plan"]);
+  if (!providerKinds.has(String(job.data.kind))) return;
+  const response = await fetch(`${apiBaseUrl()}/internal/operations/provider-slo`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-motionly-worker-token": workerToken(),
+    },
+    body: JSON.stringify({
+      provider: String(job.data.provider || job.queueName),
+      operation: String(job.data.kind),
+      success,
+      latency_ms: latencyMs,
+      error_code: errorCode,
+    }),
+  });
+  if (!response.ok) throw new Error(`provider SLO endpoint returned HTTP ${response.status}`);
+}
+
 function processEnv() {
   return { ...globalThis.process.env };
 }
@@ -138,20 +190,36 @@ async function runJob(job) {
       kind: job.data.kind,
       queue_name: job.queueName,
       attempt: job.attemptsMade + 1,
+      trace_id: job.data.trace_id || null,
     }),
   );
 
   await job.updateProgress(1);
-  const result =
-    job.data.kind === "retention"
-      ? await runRetentionJob()
-      : job.data.kind === "render"
-      ? job.data.render_engine === "remotion_premium"
-        ? await runRenderJob(job)
-        : await runDomainJob(job)
-      : job.data.kind === "visual_analysis"
-        ? await runVisualJob(job)
-        : await runDomainJob(job);
+  const startedAt = Date.now();
+  let result;
+  try {
+    result =
+      job.data.kind === "retention"
+        ? await runRetentionJob()
+        : job.data.kind === "batch_plan"
+        ? await runBatchJob(job)
+        : job.data.kind === "render"
+        ? job.data.render_engine === "remotion_premium"
+          ? await runRenderJob(job)
+          : await runDomainJob(job)
+        : job.data.kind === "visual_analysis"
+          ? await runVisualJob(job)
+          : await runDomainJob(job);
+    await reportProviderSlo(job, true, Date.now() - startedAt);
+  } catch (error) {
+    await reportProviderSlo(
+      job,
+      false,
+      Date.now() - startedAt,
+      error instanceof Error ? error.name : "worker_error",
+    ).catch(() => {});
+    throw error;
+  }
   await job.updateProgress(100);
   return result;
 }
@@ -170,6 +238,7 @@ function createWorker(queueName, connection) {
         queue_job_id: job.id,
         queue_name: queueName,
         kind: job.data.kind,
+        trace_id: job.data.trace_id || null,
         result_status: result?.status || result?.render_status || "ok",
       }),
     );
@@ -303,12 +372,20 @@ async function main() {
     );
   }
   const workers = queueNames.map((queueName) => createWorker(queueName, connection));
+  await sendHeartbeat();
+  const heartbeatTimer = setInterval(() => {
+    void sendHeartbeat().catch((error) => console.error(JSON.stringify({
+      event: "worker_heartbeat_failed",
+      message: error instanceof Error ? error.message : String(error),
+    })));
+  }, Number(env("WORKER_HEARTBEAT_INTERVAL_MS", "30000")));
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`Received ${signal}; closing BullMQ workers.`);
     await Promise.allSettled(workers.map((worker) => worker.close()));
+    clearInterval(heartbeatTimer);
     if (maintenanceQueue) await maintenanceQueue.close();
     for (const state of pythonExecutors.values()) state.child.stdin.end();
     await connection.quit();

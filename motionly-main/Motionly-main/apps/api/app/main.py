@@ -9,12 +9,15 @@ from app.api.broll import router as broll_router
 from app.api.captions import router as captions_router
 from app.api.effects import router as effects_router
 from app.api.errors import ApiError, api_error_handler, request_validation_error_handler
+from app.api.feedback import router as feedback_router
 from app.api.health import router as health_router
+from app.api.internal_batches import router as internal_batches_router
 from app.api.internal_jobs import router as internal_jobs_router
 from app.api.internal_renders import router as internal_renders_router
 from app.api.internal_retention import router as internal_retention_router
 from app.api.local_storage import router as local_storage_router
 from app.api.music import router as music_router
+from app.api.operations import router as operations_router
 from app.api.plans import router as plans_router
 from app.api.projects import router as projects_router
 from app.api.publishing import router as publishing_router
@@ -48,6 +51,7 @@ from app.repositories.renders import InMemoryRenderRepository, SupabaseRenderRep
 from app.repositories.scale import InMemoryScaleRepository, SupabaseScaleRepository
 from app.repositories.uploads import InMemoryUploadRepository, SupabaseUploadRepository
 from app.repositories.visual import InMemoryVisualRepository, SupabaseVisualRepository
+from app.services.analytics_recovery import AnalyticsRecoveryQueue
 from app.services.audio_ml_providers import (
     PyannoteSpeakerDiarizationProvider,
     Wav2VecEmotionProvider,
@@ -56,6 +60,7 @@ from app.services.audio_ml_providers import (
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
+from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.publishing import PublishOAuthClient, SocialPublishingClient
 from app.services.queue import (
     BrollQueue,
@@ -110,6 +115,12 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
     app.state.settings = settings
+    app.state.launch_feedback = []
+    app.state.metrics_registry = MetricsRegistry()
+    app.state.operations_repository = OperationsRepository(
+        supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
+        service_role_key=settings.supabase_service_role_key,
+    )
     app.state.project_repository = (
         SupabaseProjectRepository(
             supabase_url=str(settings.supabase_url),
@@ -223,6 +234,7 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryAnalyticsRepository()
     )
+    app.state.analytics_recovery_queue = AnalyticsRecoveryQueue(settings.redis_url)
     app.state.scale_repository = (
         SupabaseScaleRepository(
             supabase_url=str(settings.supabase_url),
@@ -378,6 +390,8 @@ def create_app() -> FastAPI:
         ],
     )
     app.include_router(health_router)
+    app.include_router(operations_router)
+    app.include_router(feedback_router)
     app.include_router(projects_router)
     app.include_router(uploads_router)
     app.include_router(captions_router)
@@ -393,6 +407,7 @@ def create_app() -> FastAPI:
     app.include_router(billing_router)
     app.include_router(analytics_router)
     app.include_router(internal_jobs_router)
+    app.include_router(internal_batches_router)
     app.include_router(internal_retention_router)
     app.include_router(internal_renders_router)
     app.include_router(local_storage_router)
@@ -409,6 +424,7 @@ def _validate_production_settings(settings) -> None:
             "SUPABASE_URL": settings.supabase_url,
             "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
             "REDIS_URL": settings.redis_url,
+            "ADMIN_API_TOKEN": settings.admin_api_token,
         }
         missing_worker = [name for name, value in required_worker.items() if not value]
         if missing_worker:
@@ -422,6 +438,7 @@ def _validate_production_settings(settings) -> None:
         "SUPABASE_JWT_SECRET": settings.supabase_jwt_secret,
         "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
         "SENTRY_DSN": settings.sentry_dsn,
+        "METRICS_BEARER_TOKEN": settings.metrics_bearer_token,
     }
     missing = [name for name, value in required.items() if not value]
     if missing:

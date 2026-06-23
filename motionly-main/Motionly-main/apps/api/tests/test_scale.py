@@ -94,11 +94,12 @@ def test_model_training_turns_override_events_into_applied_preferences() -> None
         payload=PlanCreateRequest(),
         request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(scale_repository=scale))),
         workspace_id=workspace_id,
+        project_id=project_id,
     )
 
     assert completed.status == ScaleResourceStatus.READY
     assert completed.result["preferences"]["cuts"] == {"pace": "fast"}
-    assert "Workspace learned preferences" in adapted.prompt
+    assert "Project learned preferences" in adapted.prompt
 
 
 def test_collaboration_manifest_rejects_stale_revision() -> None:
@@ -173,6 +174,7 @@ def test_stem_cleanup_only_removes_motionly_temp_directory(tmp_path) -> None:
 
 def test_custom_style_and_saved_template_change_future_plan_requests() -> None:
     workspace_id = uuid4()
+    project_id = uuid4()
     scale = InMemoryScaleRepository()
     template = scale.create(
         workspace_id=workspace_id,
@@ -191,7 +193,7 @@ def test_custom_style_and_saved_template_change_future_plan_requests() -> None:
     )
     profile = scale.create(
         workspace_id=workspace_id,
-        project_id=uuid4(),
+        project_id=project_id,
         kind="style_profile",
         name="House style",
         status=ScaleResourceStatus.READY,
@@ -212,6 +214,7 @@ def test_custom_style_and_saved_template_change_future_plan_requests() -> None:
         ),
         request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(scale_repository=scale))),
         workspace_id=workspace_id,
+        project_id=project_id,
     )
 
     assert adapted.style.value == "cinematic"

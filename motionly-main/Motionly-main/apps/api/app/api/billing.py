@@ -145,7 +145,7 @@ def build_billing_status(
     period_start, period_end = monthly_period()
     renders_used = repository.count_usage(
         workspace_id=workspace_id,
-        event_type=UsageEventType.RENDER_STARTED,
+        event_type=UsageEventType.RENDER_SUCCEEDED,
         period_start=period_start,
         period_end=period_end,
     )
@@ -186,7 +186,7 @@ def enforce_render_entitlement(
     return status
 
 
-def record_render_usage(
+def record_render_success_usage(
     *,
     workspace_id: UUID,
     render_job_id: UUID,
@@ -195,7 +195,7 @@ def record_render_usage(
 ) -> None:
     repository.record_usage(
         workspace_id=workspace_id,
-        event_type=UsageEventType.RENDER_STARTED,
+        event_type=UsageEventType.RENDER_SUCCEEDED,
         source_id=render_job_id,
         metadata={"plan": plan.value},
     )

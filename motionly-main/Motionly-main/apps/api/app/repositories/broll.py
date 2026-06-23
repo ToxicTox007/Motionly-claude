@@ -220,6 +220,24 @@ class InMemoryBrollRepository:
         asset.raw_metadata = {**asset.raw_metadata, "status": "ready"}
         return asset
 
+    def mark_stock_asset_owned(
+        self,
+        *,
+        asset: StockAssetRecord,
+        bucket: str,
+        path: str,
+        download_url: str,
+    ) -> StockAssetRecord:
+        asset.download_url = download_url
+        asset.preview_video_url = download_url
+        asset.raw_metadata = {
+            **asset.raw_metadata,
+            "owned_copy": True,
+            "storage_bucket": bucket,
+            "storage_path": path,
+        }
+        return asset
+
     def delete_library_asset(self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID) -> None:
         asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
         if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
@@ -458,6 +476,33 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
                 "download_url": download_url,
                 "preview_video_url": download_url,
                 "raw_metadata": {**asset.raw_metadata, "status": "ready"},
+            },
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    def mark_stock_asset_owned(
+        self,
+        *,
+        asset: StockAssetRecord,
+        bucket: str,
+        path: str,
+        download_url: str,
+    ) -> StockAssetRecord:
+        response = httpx.patch(
+            f"{self.rest_url}/stock_assets",
+            headers=self.headers,
+            params={"id": f"eq.{asset.id}", "select": "*"},
+            json={
+                "download_url": download_url,
+                "preview_video_url": download_url,
+                "raw_metadata": {
+                    **asset.raw_metadata,
+                    "owned_copy": True,
+                    "storage_bucket": bucket,
+                    "storage_path": path,
+                },
             },
             timeout=10,
         )

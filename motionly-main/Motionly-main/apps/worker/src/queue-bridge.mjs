@@ -42,6 +42,7 @@ async function enqueue(connection, payload) {
     project_id: payload.project_id || null,
     resource_id: payload.resource_id || null,
     render_engine: payload.render_engine || "ffmpeg_basic",
+    trace_id: payload.trace_id || null,
   };
   const job = await queue.add(payload.kind, data, {
     ...defaultJobOptions(),

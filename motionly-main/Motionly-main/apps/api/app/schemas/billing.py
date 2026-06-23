@@ -24,7 +24,7 @@ class SubscriptionStatus(StrEnum):
 
 
 class UsageEventType(StrEnum):
-    RENDER_STARTED = "render_started"
+    RENDER_SUCCEEDED = "render_succeeded"
     PREMIUM_ACTION = "premium_action"
 
 

@@ -54,8 +54,6 @@ export const ELEMENT_CATALOG: PaletteElement[] = [
   item({ id: "my-library", name: "My Library", category: "media", elementType: "broll", accepts: ["timeline"], preview: "Upload", properties: { source: "user_library" } }),
   item({ id: "solid-color", name: "Solid Color", category: "media", elementType: "overlay", accepts: ["canvas", "timeline"], preview: "■", properties: { backgroundColor: "#111827" } }),
   item({ id: "gradient-fill", name: "Gradient Fill", category: "media", elementType: "overlay", accepts: ["canvas", "timeline"], preview: "◩", properties: { background: "linear-gradient(135deg,#0f172a,#f59e0b)" } }),
-  item({ id: "screen-record", name: "Screen Record", category: "media", elementType: "broll", accepts: ["timeline"], preview: "REC", properties: { source: "screen_record" } }),
-
   item({ id: "music-track", name: "Music Track", category: "audio", elementType: "ai", accepts: ["timeline"], preview: "AI ♫", aiAction: "music_match" }),
   ...["Impact", "Whoosh", "Notification", "Ambient Sound", "Voice-over"].map((name) =>
     item({ id: `audio-${name.toLowerCase().replaceAll(" ", "-")}`, name, category: "audio", elementType: name === "Voice-over" ? "music" : "sfx", accepts: ["timeline"], preview: "♪", durationMs: name === "Ambient Sound" || name === "Voice-over" ? 8000 : 900, properties: { sound: name.toLowerCase().replaceAll(" ", "_"), ...(name === "Voice-over" ? {} : { assetUrl: BUILT_IN_SFX_DATA_URL, volume: 80 }) } }),

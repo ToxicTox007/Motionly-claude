@@ -94,12 +94,13 @@ def _local_request(
                     supabase_url=supabase_url,
                     supabase_service_role_key=supabase_service_role_key,
                     media_work_dir=str(tmp_path),
+                    upload_max_file_size_bytes=536_870_912,
                 ),
             ),
         )
 
-        async def body(self) -> bytes:
-            return body
+        async def stream(self):
+            yield body
 
     return Request()
 
@@ -107,13 +108,27 @@ def _local_request(
 def test_supabase_storage_downloads_missing_object(monkeypatch, tmp_path: Path) -> None:
     calls = {}
 
-    def fake_get(url: str, *, headers: dict[str, str], timeout: int):
+    class FakeStream:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_bytes(self, chunk_size: int):
+            assert chunk_size == 1024 * 1024
+            yield b"video-bytes"
+
+    def fake_stream(method: str, url: str, *, headers: dict[str, str], timeout: int):
+        assert method == "GET"
         calls["url"] = url
         calls["headers"] = headers
         calls["timeout"] = timeout
-        return httpx.Response(200, content=b"video-bytes")
+        return FakeStream()
 
-    monkeypatch.setattr("app.services.local_storage.httpx.get", fake_get)
+    monkeypatch.setattr("app.services.local_storage.httpx.stream", fake_stream)
     storage = SupabaseBackedObjectStorage(
         root=tmp_path,
         supabase_url="https://example.supabase.co",
@@ -134,12 +149,12 @@ def test_supabase_storage_uploads_file(monkeypatch, tmp_path: Path) -> None:
         url: str,
         *,
         headers: dict[str, str],
-        content: bytes,
+        content,
         timeout: int,
     ):
         calls["url"] = url
         calls["headers"] = headers
-        calls["content"] = content
+        calls["content"] = b"".join(content)
         calls["timeout"] = timeout
         return httpx.Response(200, json={"Key": "exports/video.mp4"})
 

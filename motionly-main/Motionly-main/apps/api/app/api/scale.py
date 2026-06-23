@@ -7,9 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from app.api.billing import build_billing_status
 from app.api.dependencies import Actor, get_actor
 from app.api.errors import ApiError
-from app.api.plans import create_plan
 from app.schemas.billing import BillingPlanKey
-from app.schemas.plans import PlanCreateRequest
 from app.schemas.scale import (
     AudioIntelligenceResponse,
     BatchCreateRequest,
@@ -450,7 +448,7 @@ async def start_model_training(
     return record.to_response()
 
 
-@router.post("/phase5/batches", response_model=ScaleResourceResponse, status_code=201)
+@router.post("/phase5/batches", response_model=ScaleResourceResponse, status_code=202)
 async def create_batch(
     payload: BatchCreateRequest, actor: ActorDep, request: Request
 ) -> ScaleResourceResponse:
@@ -459,48 +457,47 @@ async def create_batch(
         project_id=payload.project_ids[0],
         kind="batch",
         name=payload.name,
-        status=ScaleResourceStatus.PROCESSING,
-        payload=payload.model_dump(mode="json"),
+        status=ScaleResourceStatus.QUEUED,
+        payload={**payload.model_dump(mode="json"), "creator_user_id": str(actor.user_id)},
+        result={
+            "items": [
+                {"project_id": str(project_id), "status": "queued"}
+                for project_id in payload.project_ids
+            ],
+            "completed": 0,
+            "total": len(payload.project_ids),
+        },
     )
-    items = []
     for project_id in payload.project_ids:
-        try:
-            result = await create_plan(
-                project_id=project_id,
-                payload=PlanCreateRequest(
-                    prompt=payload.prompt,
-                    style=payload.style,
-                    target_duration_s=payload.target_duration_s,
-                    broll_density=payload.broll_density,
-                    force=True,
-                    style_profile_id=payload.style_profile_id,
-                    saved_template_id=payload.saved_template_id,
-                ),
-                actor=actor,
-                repository=request.app.state.plan_repository,
-                planner_provider=request.app.state.edit_planner_provider,
-                plan_queue=request.app.state.plan_queue,
-                request=request,
-            )
-            items.append(
-                {
-                    "project_id": str(project_id),
-                    "status": "completed",
-                    "plan_id": str(result.plan.id),
-                }
-            )
-        except Exception as exc:
-            items.append(
-                {"project_id": str(project_id), "status": "failed", "error": str(exc)[:300]}
-            )
-    completed = len([item for item in items if item["status"] == "completed"])
-    status = (
-        ScaleResourceStatus.COMPLETED if completed == len(items) else ScaleResourceStatus.PARTIAL
+        request.app.state.project_repository.get_project(
+            project_id=project_id, workspace_id=actor.workspace_id
+        )
+    request.app.state.scale_queue.enqueue_resource(
+        resource_id=record.id,
+        workspace_id=actor.workspace_id,
+        project_id=payload.project_ids[0],
+        resource_kind="batch",
     )
+    return record.to_response()
+
+
+@router.post("/phase5/batches/{batch_id}/cancel", response_model=ScaleResourceResponse)
+async def cancel_batch(
+    batch_id: UUID, actor: ActorDep, request: Request
+) -> ScaleResourceResponse:
+    record = request.app.state.scale_repository.get(
+        resource_id=batch_id, workspace_id=actor.workspace_id
+    )
+    if record.kind != "batch":
+        raise ApiError(409, "batch_required", "This resource is not a batch.")
+    if record.status in {ScaleResourceStatus.COMPLETED, ScaleResourceStatus.PARTIAL}:
+        raise ApiError(409, "batch_already_finished", "This batch has already finished.")
+    job_id = f"phase5--{batch_id}"
+    if job_id in request.app.state.queue_registry.jobs:
+        request.app.state.queue_registry.cancel(job_id)
     return request.app.state.scale_repository.update(
         record=record,
-        status=status,
-        result={"items": items, "completed": completed, "total": len(items)},
+        status=ScaleResourceStatus.CANCELED,
         revision=record.revision + 1,
     ).to_response()
 

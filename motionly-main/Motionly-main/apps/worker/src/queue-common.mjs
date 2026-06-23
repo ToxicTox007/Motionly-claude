@@ -1,5 +1,6 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import { readFileSync } from "node:fs";
 
 export const allQueueNames = [
   "upload_preprocess",
@@ -24,7 +25,10 @@ export const queueNames = env("WORKER_QUEUES")
   : defaultQueueNames;
 
 export function env(name, fallback = "") {
-  return process.env[name] || fallback;
+  if (process.env[name]) return process.env[name];
+  const secretFile = process.env[`${name}_FILE`];
+  if (secretFile) return readFileSync(secretFile, "utf8").trim();
+  return fallback;
 }
 
 export function isProduction() {
@@ -131,6 +135,7 @@ export function normalizeJobRecord(job, state) {
     project_id: data.project_id || null,
     resource_id: data.resource_id || null,
     render_engine: data.render_engine || "ffmpeg_basic",
+    trace_id: data.trace_id || null,
   };
 }
 

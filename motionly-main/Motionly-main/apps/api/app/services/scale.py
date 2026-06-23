@@ -150,6 +150,7 @@ def execute_scale_resource(
     analytics_repository,
     stem_separator,
     runway_provider,
+    operations_repository=None,
 ) -> ScaleResourceRecord:
     record = repository.get(resource_id=resource_id, workspace_id=workspace_id)
     if record.status in {ScaleResourceStatus.READY, ScaleResourceStatus.COMPLETED}:
@@ -173,6 +174,7 @@ def execute_scale_resource(
                 settings=settings,
                 broll_repository=broll_repository,
                 runway_provider=runway_provider,
+                operations_repository=operations_repository,
             )
         elif record.kind == "style_profile":
             result = _train_style(
@@ -253,7 +255,9 @@ def _remove_stem_temp_directory(stems: dict[str, Path]) -> None:
             return
 
 
-def _generate_broll(*, record, settings, broll_repository, runway_provider) -> dict[str, Any]:
+def _generate_broll(
+    *, record, settings, broll_repository, runway_provider, operations_repository=None
+) -> dict[str, Any]:
     if not record.project_id:
         raise ApiError(422, "scale_project_required", "Generated B-roll needs a project.")
     payload = record.payload
@@ -265,13 +269,19 @@ def _generate_broll(*, record, settings, broll_repository, runway_provider) -> d
         duration_s=int(payload.get("duration_s") or 5),
         ratio=str(payload.get("ratio") or "768:1280"),
     )
+    if operations_repository is not None:
+        operations_repository.record_cost(
+            workspace_id=record.workspace_id,
+            project_id=record.project_id,
+            provider="runway",
+            category="generated_seconds",
+            quantity=float(payload.get("duration_s") or 5),
+            unit="second",
+            unit_cost_usd=float(payload.get("unit_cost_usd") or 0),
+            metadata={"resource_id": str(record.id), "task_id": generated.task_id},
+        )
     storage_metadata: dict[str, Any] = {}
     if generated.video_url.startswith(("http://", "https://")):
-        response = httpx.get(generated.video_url, timeout=180)
-        if response.status_code >= 400:
-            raise ApiError(
-                502, "runway_asset_download_failed", "Generated B-roll could not be saved."
-            )
         storage = create_object_storage(
             root=settings.media_work_dir,
             supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
@@ -279,7 +289,14 @@ def _generate_broll(*, record, settings, broll_repository, runway_provider) -> d
         )
         target = storage.object_path(bucket="tmp", path=f"runway-{record.id}.mp4")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(response.content)
+        with httpx.stream("GET", generated.video_url, timeout=180) as response:
+            if response.status_code >= 400:
+                raise ApiError(
+                    502, "runway_asset_download_failed", "Generated B-roll could not be saved."
+                )
+            with target.open("wb") as output:
+                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                    output.write(chunk)
         storage_path = (
             f"workspaces/{record.workspace_id}/projects/{record.project_id}/"
             f"generated-broll/{record.id}.mp4"
@@ -380,7 +397,7 @@ def _train_style(*, record, settings, visual_provider) -> dict[str, Any]:
 
 def _train_preference_adapter(*, record, analytics_repository) -> dict[str, Any]:
     if not record.project_id:
-        raise ApiError(422, "scale_project_required", "Model training needs a project.")
+        raise ApiError(422, "scale_project_required", "Preference learning needs a project.")
     examples = analytics_repository.fine_tuning_examples(
         project_id=record.project_id,
         workspace_id=record.workspace_id,
@@ -396,9 +413,12 @@ def _train_preference_adapter(*, record, analytics_repository) -> dict[str, Any]
     corrections = [example for example in examples if example.signal.value == "correction"]
     preferences: dict[str, Any] = {}
     for example in examples:
-        preferences[example.layer.value] = example.ideal_output
+        # Examples are newest-first. Keep the first useful value for each layer so
+        # an older event or a rejection without an ideal output cannot overwrite it.
+        if example.layer.value not in preferences and example.ideal_output:
+            preferences[example.layer.value] = example.ideal_output
     return {
-        "adapter_version": f"workspace-{record.workspace_id}-{record.id}",
+        "preference_summary_version": f"project-{record.project_id}-{record.id}",
         "training_example_count": len(examples),
         "correction_count": len(corrections),
         "preferences": preferences,

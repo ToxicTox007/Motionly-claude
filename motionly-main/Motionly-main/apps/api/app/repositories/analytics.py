@@ -73,6 +73,19 @@ class InMemoryAnalyticsRepository:
         user_payload: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AIEditFeedbackEventRecord:
+        if decision_id and event_type == AIEditFeedbackEventType.KEPT:
+            existing = next(
+                (
+                    event
+                    for event in self.events.values()
+                    if event.workspace_id == workspace_id
+                    and event.event_type == AIEditFeedbackEventType.KEPT
+                    and event.decision_id == decision_id
+                ),
+                None,
+            )
+            if existing:
+                return existing
         record = AIEditFeedbackEventRecord(
             id=uuid4(),
             workspace_id=workspace_id,
@@ -213,6 +226,22 @@ class SupabaseAnalyticsRepository(InMemoryAnalyticsRepository):
             "user_payload": user_payload or {},
             "metadata": metadata or {},
         }
+        if decision_id and event_type == AIEditFeedbackEventType.KEPT:
+            existing = httpx.get(
+                f"{self.rest_url}/ai_edit_feedback_events",
+                headers=self.headers,
+                params={
+                    "workspace_id": f"eq.{workspace_id}",
+                    "event_type": "eq.kept",
+                    "decision_id": f"eq.{decision_id}",
+                    "select": "*",
+                    "limit": "1",
+                },
+                timeout=10,
+            )
+            self._raise_for_supabase(existing)
+            if existing.json():
+                return self._event_from_row(existing.json()[0])
         response = httpx.post(
             f"{self.rest_url}/ai_edit_feedback_events",
             headers=self.headers,

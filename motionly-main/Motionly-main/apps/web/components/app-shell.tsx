@@ -9,6 +9,9 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { ThemeMenu } from "@/components/theme-menu";
+import { env } from "@/lib/env";
+import { createClient } from "@/lib/supabase/server";
+import type { BillingStatusSummary } from "@motionly/shared";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -21,7 +24,8 @@ const settingsItems = [
   { href: "/account", label: "Settings", icon: Settings },
 ];
 
-export function AppShell({ children, title }: { children: React.ReactNode; title: string }) {
+export async function AppShell({ children, title }: { children: React.ReactNode; title: string }) {
+  const shell = await loadShellState();
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-background text-foreground lg:flex lg:h-screen lg:overflow-hidden">
       <aside className="pixel-grid-fine glass-surface flex border-b border-border bg-surface/90 lg:h-screen lg:w-72 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r">
@@ -68,8 +72,8 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
               <UserRound className="size-4 text-muted-foreground" />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-bold truncate">Creator</p>
-              <p className="text-xs text-muted-foreground truncate">Free Plan</p>
+              <p className="text-sm font-bold truncate">{shell.creatorName}</p>
+              <p className="text-xs text-muted-foreground truncate">{shell.planName}</p>
             </div>
           </div>
         </div>
@@ -83,9 +87,9 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
           </div>
           <div className="flex items-center gap-3">
              <div className="pixel-progress h-2.5 w-28 sm:w-32">
-                <div className="pixel-progress-fill h-full w-1/3" />
+                <div className="pixel-progress-fill h-full" style={{ width: `${shell.percentUsed}%` }} />
              </div>
-             <span className="text-xs font-bold text-muted-foreground">3/10 Exports</span>
+             <span className="text-xs font-bold text-muted-foreground">{shell.rendersUsed}/{shell.rendersLimit} Renders</span>
           </div>
         </header>
         <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:p-8">
@@ -94,6 +98,45 @@ export function AppShell({ children, title }: { children: React.ReactNode; title
       </main>
     </div>
   );
+}
+
+async function loadShellState() {
+  const fallback = {
+    creatorName: "Creator",
+    planName: "Free Plan",
+    rendersUsed: 0,
+    rendersLimit: 10,
+    percentUsed: 0,
+  };
+  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") return fallback;
+  const supabase = await createClient();
+  const [{ data: { user } }, { data: { session } }] = await Promise.all([
+    supabase.auth.getUser(),
+    supabase.auth.getSession(),
+  ]);
+  if (!user || !session?.access_token) return fallback;
+  const [{ data: profile }, { data: membership }] = await Promise.all([
+    supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
+    supabase.from("workspace_members").select("workspace_id").eq("user_id", user.id).eq("status", "active").limit(1).maybeSingle(),
+  ]);
+  if (!membership?.workspace_id) return { ...fallback, creatorName: profile?.full_name || fallback.creatorName };
+  const response = await fetch(`${env.apiBaseUrl}/billing/status`, {
+    headers: {
+      authorization: `Bearer ${session.access_token}`,
+      "x-motionly-user-id": user.id,
+      "x-motionly-workspace-id": String(membership.workspace_id),
+    },
+    cache: "no-store",
+  });
+  if (!response.ok) return { ...fallback, creatorName: profile?.full_name || fallback.creatorName };
+  const status = await response.json() as BillingStatusSummary;
+  return {
+    creatorName: profile?.full_name || fallback.creatorName,
+    planName: `${status.current_plan.name} Plan`,
+    rendersUsed: status.usage.renders_used,
+    rendersLimit: status.usage.renders_limit,
+    percentUsed: status.usage.percent_used,
+  };
 }
 
 function SidebarItem({

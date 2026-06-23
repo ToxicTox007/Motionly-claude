@@ -8,7 +8,9 @@
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
-    "format": "prettier --check ."
+    "format": "prettier --check .",
+    "contracts:generate": "pnpm --filter @motionly/shared contracts:generate",
+    "contracts:check": "pnpm --filter @motionly/shared contracts:check"
   },
   "devDependencies": {
     "pg": "^8.21.0",

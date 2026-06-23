@@ -192,3 +192,20 @@ def test_admin_access_rejects_non_admin_with_different_allowlisted_identity() ->
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.code == "admin_access_denied"
+
+
+def test_every_admin_route_requires_the_admin_authorization_dependency(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    from app.main import app
+
+    try:
+        routes = [route for route in app.routes if route.path.startswith("/admin")]
+        assert routes
+        for route in routes:
+            dependencies = {dependency.call for dependency in route.dependant.dependencies}
+            assert require_admin in dependencies, f"{route.path} was not protected"
+    finally:
+        get_settings.cache_clear()

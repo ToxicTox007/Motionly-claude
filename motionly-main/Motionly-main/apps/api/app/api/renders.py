@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Annotated
 from uuid import UUID
@@ -7,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.billing import enforce_render_entitlement, record_render_usage
+from app.api.billing import enforce_render_entitlement
 from app.api.dependencies import (
     Actor,
     get_actor,
@@ -44,7 +45,6 @@ from app.schemas.renders import (
     RenderListResponse,
 )
 from app.schemas.uploads import UploadStatus
-from app.services.ai_feedback import record_render_kept_signals
 from app.services.ass_captions import caption_track_to_ass
 from app.services.billing import PLAN_DEFINITIONS
 from app.services.cut_planning import PLANNER_VERSION, build_crop_warnings, plan_keep_segments
@@ -226,7 +226,7 @@ def beat_sync_summary(
         "aligned_cut_count": len(aligned),
         "tolerance_ms": tolerance_ms,
         "aligned_cuts": aligned[:12],
-        "strategy": "report alignment; speech cuts are not moved by the FFmpeg fallback",
+            "strategy": "alignment report only; speech cuts are not retimed",
     }
 
 
@@ -531,7 +531,7 @@ async def create_render(
                 "loudness_target_lufs": -14,
                 "beat_snap_tolerance_ms": 140,
             }
-            music_props["beat_sync"] = beat_sync_summary(
+            music_props["beat_alignment_report"] = beat_sync_summary(
                 keep_segments=keep_segments,
                 beat_map=music_track.beat_map,
                 tolerance_ms=140,
@@ -675,6 +675,8 @@ async def create_render(
     )
     manifest = {
         "schema_version": 1,
+        "creator_user_id": str(actor.user_id),
+        "billing_plan": billing_status.current_plan.key.value,
         "source_video_id": str(upload.id),
         "caption_track_id": str(track.id),
         "include_captions": payload.include_captions,
@@ -684,7 +686,7 @@ async def create_render(
         "music_selection_id": str(music_selection.id) if music_selection else None,
         "effects_config_id": str(effects_config.id) if effects_config else None,
         "motion_design": motion_design_manifest,
-        "after_effects_handoff": (
+        "external_finishing_metadata": (
             {
                 "project_file_url": effects_config.after_effects_project_url,
                 "correction_manifest_url": effects_config.correction_manifest_url,
@@ -796,22 +798,6 @@ async def create_render(
         ],
         progress_pct=5,
     )
-    record_render_kept_signals(
-        request=request,
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-        user_id=actor.user_id,
-        edit_plan_id=edit_plan_record.id if edit_plan_record else None,
-        render_job_id=job.id,
-        render_props=render_props,
-    )
-    if request.app.state.settings.billing_enabled:
-        record_render_usage(
-            workspace_id=actor.workspace_id,
-            render_job_id=job.id,
-            repository=billing_repository,
-            plan=billing_status.current_plan.key,
-        )
     queue_job = render_queue.enqueue_render(
         render_job_id=job.id,
         project_id=project_id,
@@ -1236,6 +1222,26 @@ async def get_export_download_url(
     storage_signer: StorageSignerDep,
 ) -> ExportDownloadUrlResponse:
     export = repository.get_export(export_id=export_id, workspace_id=actor.workspace_id)
+    operations = getattr(request.app.state, "operations_repository", None)
+    if operations is not None:
+        operations.approve_export(
+            workspace_id=actor.workspace_id,
+            render_job_id=export.render_job_id,
+            export_id=export.id,
+        )
+        operations.record_cost(
+            workspace_id=actor.workspace_id,
+            project_id=export.project_id,
+            render_job_id=export.render_job_id,
+            export_id=export.id,
+            provider="supabase_storage",
+            category="egress",
+            quantity=float(export.file_size_bytes or 0) / 1_000_000_000,
+            unit="gb",
+            unit_cost_usd=0.09,
+            approved_at=datetime.now(UTC),
+            metadata={"outcome": "download"},
+        )
     ttl = min(
         request.app.state.settings.export_signed_url_ttl_seconds,
         StorageSigner.MAX_DOWNLOAD_TTL_SECONDS,

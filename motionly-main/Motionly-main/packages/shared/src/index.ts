@@ -1,3 +1,6 @@
+import type { components as ApiComponents } from "./generated/api";
+export * from "./generated/api";
+
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type WorkspaceMemberStatus = "active" | "invited" | "disabled";
 export type ProjectStatus = "draft" | "ready" | "failed";
@@ -77,7 +80,7 @@ export type RenderEngine = "ffmpeg_basic" | "remotion_premium";
 export type BrollDensity = "none" | "low" | "medium" | "high";
 export type EditPlanStatus = "ready" | "failed";
 export type BrollSlotStatus = "ready" | "disabled" | "failed";
-export type StockProviderKey = "fixture" | "pexels" | "pixabay" | "user_library";
+export type StockProviderKey = "fixture" | "pexels" | "pixabay" | "user_library" | "runway";
 export type MusicProviderKey = "fixture" | "licensed_catalog";
 export type MusicSelectionStatus = "ready" | "failed";
 export type VisualPresetKey =
@@ -194,53 +197,7 @@ export interface TranscriptWord {
   confidence?: number | null;
 }
 
-export interface AudioIntelligenceSummary {
-  schema_version: number;
-  keywords: Array<{ text: string; score: number }>;
-  style_signals: {
-    predicted_style: string;
-    tone: string;
-    pace: string;
-    style_scores: Record<string, number>;
-  };
-  speech_metrics: {
-    word_count: number;
-    duration_ms?: number | null;
-    words_per_minute?: number | null;
-  };
-  confidence: {
-    average_word_confidence?: number | null;
-    low_confidence_word_count: number;
-    word_confidence_available: boolean;
-  };
-  speaker_diarization: {
-    provider: string;
-    speaker_count: number;
-    confidence: number;
-    segments: Array<{
-      speaker: string;
-      start_ms: number;
-      end_ms: number;
-      segment_index: number;
-    }>;
-  };
-  emotion_pacing: {
-    aggregate_emotion: string;
-    pause_count: number;
-    windows: Array<{
-      start_ms: number;
-      end_ms: number;
-      emotion: string;
-      intensity: number;
-      word_count: number;
-    }>;
-  };
-  sound_classification: {
-    provider: string;
-    background_sound: string;
-    labels: Array<{ label: string; confidence: number }>;
-  };
-}
+export type AudioIntelligenceSummary = ApiComponents["schemas"]["AudioIntelligence"];
 
 export interface TranscriptSummary {
   id: string;

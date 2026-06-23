@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse
 
@@ -26,8 +28,22 @@ async def put_local_object(
     object_path: str,
     request: Request,
 ) -> Response:
-    content = await request.body()
-    _local_storage(request).write_object(bucket=bucket, path=object_path, content=content)
+    storage = _local_storage(request)
+    target = storage.object_path(bucket=bucket, path=object_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_suffix(target.suffix + ".partial")
+    received = 0
+    try:
+        with partial.open("wb") as output:
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > request.app.state.settings.upload_max_file_size_bytes:
+                    raise ApiError(413, "upload_too_large", "Upload exceeds the file size limit.")
+                output.write(chunk)
+        os.replace(partial, target)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
     return Response(status_code=204)
 
 

@@ -3,7 +3,9 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
+from urllib.parse import quote
 from uuid import NAMESPACE_URL, uuid5
 
 import httpx
@@ -11,6 +13,65 @@ import httpx
 from app.api.errors import ApiError
 from app.schemas.broll import StockOrientation, StockProviderKey
 from app.schemas.plans import BrollRequest, EditPlan
+from app.services.storage import StorageSigner
+
+
+def ensure_owned_stock_asset(
+    *, asset, repository, settings, storage_signer: StorageSigner
+):
+    if asset.provider not in {StockProviderKey.PEXELS, StockProviderKey.PIXABAY}:
+        return asset
+    if asset.raw_metadata.get("owned_copy"):
+        return asset
+    source_url = asset.download_url or asset.preview_video_url
+    if not source_url or not source_url.startswith(("http://", "https://")):
+        raise ApiError(502, "stock_asset_source_missing", "Selected stock video is unavailable.")
+    bucket = settings.upload_storage_bucket
+    object_id = hashlib.sha256(
+        f"{asset.provider.value}:{asset.provider_asset_id}".encode()
+    ).hexdigest()[:24]
+    path = (
+        f"workspaces/{asset.workspace_id}/projects/{asset.project_id}/"
+        f"broll/stock/{asset.provider.value}-{object_id}.mp4"
+    )
+    try:
+        with httpx.stream("GET", source_url, timeout=180, follow_redirects=True) as source:
+            source.raise_for_status()
+            content_type = source.headers.get("content-type", "video/mp4")
+            if storage_signer.supabase_url and storage_signer.service_role_key:
+                encoded_path = quote(path, safe="/")
+                uploaded = httpx.post(
+                    f"{storage_signer.supabase_url}/storage/v1/object/{bucket}/{encoded_path}",
+                    headers={
+                        "apikey": storage_signer.service_role_key,
+                        "authorization": f"Bearer {storage_signer.service_role_key}",
+                        "content-type": content_type,
+                        "x-upsert": "true",
+                    },
+                    content=source.iter_bytes(chunk_size=1024 * 1024),
+                    timeout=300,
+                )
+                if uploaded.status_code >= 400:
+                    raise ApiError(502, "stock_asset_ingest_failed", "Stock video copy failed.")
+            else:
+                target = Path(settings.media_work_dir).expanduser().resolve() / bucket / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("wb") as output:
+                    for chunk in source.iter_bytes(chunk_size=1024 * 1024):
+                        output.write(chunk)
+    except httpx.HTTPError as exc:
+        raise ApiError(502, "stock_asset_ingest_failed", "Stock video copy failed.") from exc
+    signed = storage_signer.create_signed_download(
+        bucket=bucket,
+        path=path,
+        expires_in_seconds=StorageSigner.MAX_DOWNLOAD_TTL_SECONDS,
+    )
+    return repository.mark_stock_asset_owned(
+        asset=asset,
+        bucket=bucket,
+        path=path,
+        download_url=signed.url,
+    )
 
 ABSTRACT_TERMS = {
     "growth",

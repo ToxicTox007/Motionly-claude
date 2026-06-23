@@ -3,6 +3,8 @@ import { AppShell } from "@/components/app-shell";
 import { ButtonLink } from "@/components/button";
 import { EmptyState } from "@/components/empty-state";
 import { createClient } from "@/lib/supabase/server";
+import { getWorkspaceApiContext } from "@/lib/api-auth";
+import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 
@@ -27,6 +29,7 @@ export default async function DashboardPage() {
     workspaceName = "Personal workspace";
     projects = [];
   } else {
+    const context = await getWorkspaceApiContext();
     const supabase = await createClient();
     const {
       data: { user },
@@ -46,15 +49,34 @@ export default async function DashboardPage() {
         : membership?.workspaces;
       workspaceName = workspace?.name ?? workspaceName;
 
-      const { data } = await supabase
-        .from("projects")
-        .select(
-          "id,title,updated_at,uploaded_videos!uploaded_videos_project_id_fkey(status,original_filename,duration_ms,metadata)",
-        )
-        .order("updated_at", { ascending: false })
-        .limit(12);
-
-      projects = (data ?? []) as typeof projects;
+      if (context) {
+        const response = await fetch(`${env.apiBaseUrl}/projects`, {
+          headers: context.headers,
+          cache: "no-store",
+        });
+        const payload = response.ok ? await response.json() as {
+          projects?: Array<{ id: string; title: string; updated_at: string; active_video_id?: string | null }>;
+        } : {};
+        const projectRows = (payload.projects ?? []).slice(0, 12);
+        projects = await Promise.all(projectRows.map(async (project) => {
+          const uploadResponse = project.active_video_id
+            ? await fetch(`${env.apiBaseUrl}/projects/${project.id}/uploads/${project.active_video_id}`, { headers: context.headers, cache: "no-store" })
+            : null;
+          const upload = uploadResponse?.ok ? await uploadResponse.json() as {
+            status: string;
+            original_filename: string;
+            metadata?: { duration_ms?: number | null; warnings?: string[] } | null;
+          } : null;
+          return {
+            ...project,
+            uploaded_videos: upload ? [{
+              ...upload,
+              duration_ms: upload.metadata?.duration_ms ?? null,
+              metadata: upload.metadata ?? null,
+            }] : [],
+          };
+        })) as typeof projects;
+      }
     }
   }
 

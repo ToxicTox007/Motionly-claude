@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.api.errors import ApiError
 from app.repositories.renders import InMemoryRenderRepository
 from app.schemas.renders import RenderJobResponse, RenderJobStatus
+from app.services.outcomes import record_render_success_outcome
 from app.services.render_jobs import complete_remotion_render_job
 
 router = APIRouter(prefix="/internal/renders", tags=["internal renders"])
@@ -240,6 +241,7 @@ async def complete_remotion_job(
             None,
         )
         if latest:
+            record_render_success_outcome(request=request, job=job)
             return RemotionCompleteResponse(
                 render_job_id=render_job_id,
                 export_id=latest.id,
@@ -259,6 +261,7 @@ async def complete_remotion_job(
         fps=payload.fps,
         duration_ms=payload.duration_ms,
     )
+    record_render_success_outcome(request=request, job=job)
     return RemotionCompleteResponse(
         render_job_id=render_job_id,
         export_id=export.id,

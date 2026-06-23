@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
 from app.schemas.renders import RenderJobStatus
+from app.services.outcomes import record_render_success_outcome
 from app.services.publishing import execute_publish_job
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob, QueueJobStatus, QueueRegistry
 from app.services.render_jobs import complete_render_job_by_id
@@ -73,7 +74,17 @@ async def run_queue_job(
     if job.status != QueueJobStatus.RUNNING:
         job = registry.start(queue_job_id)
     try:
-        result = _execute_job(job=job, request=request)
+        if job.kind == "batch_plan" and job.workspace_id and job.resource_id:
+            from app.api.internal_batches import run_batch
+
+            result = await run_batch(
+                workspace_id=job.workspace_id,
+                batch_id=job.resource_id,
+                request=request,
+                x_motionly_worker_token=x_motionly_worker_token,
+            )
+        else:
+            result = _execute_job(job=job, request=request)
     except Exception:
         registry.fail(queue_job_id)
         raise
@@ -206,6 +217,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
                 or getattr(settings, "allow_fixture_providers", False)
             ),
         )
+        record_render_success_outcome(request=request, job=render)
         return {
             "render_job_id": str(render.id),
             "render_status": render.status.value,
@@ -222,6 +234,15 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             job_id=job.resource_id,
             workspace_id=job.workspace_id,
         )
+        if published.status.value == "published":
+            export = request.app.state.render_repository.get_export(
+                export_id=published.export_id, workspace_id=job.workspace_id
+            )
+            request.app.state.operations_repository.approve_export(
+                workspace_id=job.workspace_id,
+                render_job_id=export.render_job_id,
+                export_id=export.id,
+            )
         return {
             "publish_job_id": str(published.id),
             "publish_status": published.status.value,
@@ -241,6 +262,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             analytics_repository=request.app.state.analytics_repository,
             stem_separator=request.app.state.stem_separator,
             runway_provider=request.app.state.runway_provider,
+            operations_repository=request.app.state.operations_repository,
         )
         return {
             "resource_id": str(resource.id),
