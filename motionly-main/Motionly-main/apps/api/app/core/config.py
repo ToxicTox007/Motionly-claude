@@ -2,7 +2,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, Field
+from pydantic import AnyHttpUrl, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -142,6 +142,14 @@ class Settings(BaseSettings):
     demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
     runway_api_key: str | None = Field(default=None, alias="RUNWAY_API_KEY")
     runway_model: str = Field(default="gen3a_turbo", alias="RUNWAY_MODEL")
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        if self.app_env == "production":
+            skip_api_auth = os.getenv("SKIP_API_AUTH")
+            if skip_api_auth and skip_api_auth.lower() in ("true", "1", "yes", "on"):
+                raise ValueError("Security violation: SKIP_API_AUTH cannot be enabled in production environment.")
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:
