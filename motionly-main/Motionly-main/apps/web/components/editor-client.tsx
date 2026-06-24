@@ -22,7 +22,7 @@ import {
   Film, Loader2, ChevronLeft, History, Network,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
+import { buildApiHeaders, editorApiRequest, pollPlanJob } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
 import { EditorLayout } from "./editor-layout";
@@ -662,9 +662,46 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         const prompt = entry.aiAction === "highlight_reel"
           ? `Create the strongest 30-60 second highlight reel${clip ? ` emphasizing ${clip.startMs}-${clip.endMs}ms` : ""}.`
           : "Re-analyze the audio and visual style, then update captions, grade, motion, and pacing.";
-        const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, { method: "POST", workspaceId, userId, accessToken: apiAccessToken, friendlyError: `${entry.name} failed.`, body: { prompt, target_duration_s: entry.aiAction === "highlight_reel" ? 45 : activePlan?.target_duration_s ?? 35, broll_density: activePlan?.broll_density ?? "medium", force: true } });
-        handlePlanGenerated(payload.plan);
+        const payload = await editorApiRequest<{
+          plan?: EditPlanRecordSummary;
+          status: string;
+          job_id?: string;
+          status_url?: string;
+        }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, { method: "POST", workspaceId, userId, accessToken: apiAccessToken, friendlyError: `${entry.name} failed.`, body: { prompt, target_duration_s: entry.aiAction === "highlight_reel" ? 45 : activePlan?.target_duration_s ?? 35, broll_density: activePlan?.broll_density ?? "medium", force: true } });
+        
+        let plan: EditPlanRecordSummary;
+        if (payload.status === "queued" && payload.status_url) {
+          setDropMessage(`Running ${entry.name}…`);
+          const planId = await pollPlanJob(
+            `${env.apiBaseUrl}${payload.status_url}`,
+            {
+              workspaceId,
+              userId,
+              accessToken: apiAccessToken,
+            },
+            (progress) => {
+              setDropMessage(`Running ${entry.name}: ${progress}%`);
+            }
+          );
+          const planList = await editorApiRequest<{ plans: EditPlanRecordSummary[] }>(
+            `${env.apiBaseUrl}/projects/${projectId}/plans`,
+            {
+              workspaceId,
+              userId,
+              accessToken: apiAccessToken,
+            }
+          );
+          const foundPlan = planList.plans.find((p) => p.id === planId);
+          if (!foundPlan) {
+            throw new Error("Plan was generated successfully but could not be loaded.");
+          }
+          plan = foundPlan;
+        } else {
+          plan = payload.plan as EditPlanRecordSummary;
+        }
+        handlePlanGenerated(plan);
       }
+
       setDropMessage(`${entry.name} complete.`);
     } catch (error) {
       setDropMessage((error as Error).message);

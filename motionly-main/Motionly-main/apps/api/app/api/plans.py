@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.api.dependencies import (
     Actor,
@@ -24,6 +24,8 @@ from app.schemas.plans import (
     PlanCaptionHighlightsUpdateResponse,
     PlanCreateRequest,
     PlanCreateResponse,
+    PlanJobStatusResponse,
+
     PlanCutsUpdateRequest,
     PlanCutsUpdateResponse,
     PlanListResponse,
@@ -71,6 +73,7 @@ async def create_plan(
     repository: PlanRepositoryDep,
     planner_provider: EditPlannerProviderDep,
     plan_queue: PlanQueueDep,
+    response: Response = None,  # type: ignore[assignment]
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanCreateResponse:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
@@ -139,99 +142,105 @@ async def create_plan(
                     summary=cached.summary,
                     target_duration_s=cached.target_duration_s,
                 )
-            return PlanCreateResponse(plan=cached.to_response(), job_id=execution_id, cached=True)
+            return PlanCreateResponse(plan=cached.to_response(), job_id=execution_id, cached=True, status="ready", project_id=project_id)
 
-    state = getattr(getattr(request, "app", None), "state", None)
-    operations = getattr(state, "operations_repository", None)
-    started_ms = monotonic_ms()
-    try:
-        result = planner_provider.create_plan(
-            transcript=transcript,
-            payload=effective_payload,
-            video_duration_ms=video_duration_ms,
-            visual_manifest=visual_manifest,
-            style_classification=style_classification,
-        )
-    except Exception as exc:
-        if operations is not None:
-            operations.record_provider_slo(
-                workspace_id=actor.workspace_id,
-                project_id=project_id,
-                provider=planner_provider.provider_name,
-                operation="edit_plan",
-                success=False,
-                latency_ms=monotonic_ms() - started_ms,
-                error_code=type(exc).__name__,
-            )
-        raise
-    if operations is not None:
-        operations.record_provider_slo(
-            workspace_id=actor.workspace_id,
-            project_id=project_id,
-            provider=result.provider,
-            operation="edit_plan",
-            success=True,
-            latency_ms=result.latency_ms,
-            error_code=None,
-        )
-    plan = normalize_plan(
-        plan=result.plan,
-        words=transcript.words,
-        duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
-    )
-    if visual_context_flag and visual_context_flag not in plan.risk_flags:
-        plan = plan.model_copy(update={"risk_flags": [*plan.risk_flags, visual_context_flag][:10]})
-    plan = migrate_legacy_plan_to_timeline(
-        plan=plan,
-        source_video_id=upload.id,
-        source_duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
-    )
-    record = repository.create_plan(
-        workspace_id=actor.workspace_id,
+    # Cache miss: Enqueue on PlanQueue and return 202 Accepted
+    import json
+    serialized_params = json.dumps({
+        "prompt": payload.prompt,
+        "style": payload.style.value if payload.style else None,
+        "target_duration_s": payload.target_duration_s,
+        "broll_density": payload.broll_density.value,
+        "feedback": payload.feedback,
+        "style_profile_id": str(payload.style_profile_id) if payload.style_profile_id else None,
+        "saved_template_id": str(payload.saved_template_id) if payload.saved_template_id else None,
+        "user_id": str(actor.user_id),
+    })
+
+
+    job = plan_queue.enqueue_plan(
         project_id=project_id,
+        workspace_id=actor.workspace_id,
         transcript_id=transcript.id,
-        schema_version=EDIT_PLAN_SCHEMA_VERSION,
-        status=EditPlanStatus.READY,
-        style=style_classification.effective_style,
-        target_duration_s=payload.target_duration_s,
-        broll_density=payload.broll_density,
-        prompt=payload.prompt.strip(),
-        feedback=payload.feedback.strip() if payload.feedback else None,
-        provider=result.provider,
-        model=result.model,
-        cache_key=cache_key,
-        schema_hash=PLANNER_SCHEMA_HASH,
-        latency_ms=result.latency_ms,
-        cost_estimate_usd=result.cost_estimate_usd,
-        validation_errors=result.validation_errors,
-        summary=summarize_plan(plan, style_classification=style_classification),
-        plan=plan,
+        render_engine=serialized_params,
     )
-    if operations is not None:
-        usage = result.raw_payload.get("usage") if isinstance(result.raw_payload, dict) else {}
-        operations.record_cost(
-            workspace_id=actor.workspace_id,
-            project_id=project_id,
-            provider=result.provider,
-            category="tokens",
-            quantity=float(usage.get("total_tokens") or 0) if isinstance(usage, dict) else 0,
-            unit="token",
-            unit_cost_usd=(
-                float(result.cost_estimate_usd or 0)
-                / float(usage.get("total_tokens") or 1)
-                if isinstance(usage, dict)
-                else 0
-            ),
-            metadata={"model": result.model, "plan_id": str(record.id)},
-        )
-    record_plan_suggestions(
-        request=request,
-        workspace_id=actor.workspace_id,
+
+    if response is not None:
+        response.status_code = status.HTTP_202_ACCEPTED
+    status_url = f"/projects/{project_id}/plans/jobs/{job.id}"
+
+    return PlanCreateResponse(
+        job_id=job.id,
+        status="queued",
         project_id=project_id,
-        user_id=actor.user_id,
-        plan=record,
+        status_url=status_url,
     )
-    return PlanCreateResponse(plan=record.to_response(), job_id=execution_id)
+
+
+
+@router.get("/jobs/{job_id}", response_model=PlanJobStatusResponse)
+async def get_plan_job_status(
+    project_id: UUID,
+    job_id: str,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+    request: Request,
+) -> PlanJobStatusResponse:
+    repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
+    
+    queue_registry = request.app.state.queue_registry
+    job = queue_registry.jobs.get(job_id)
+    
+    transcript_id = None
+    try:
+        parts = job_id.split("--")
+        if len(parts) >= 4 and parts[0] == "plan":
+            transcript_id = UUID(parts[2])
+    except Exception:
+        pass
+
+    def find_completed_plan(t_id):
+        if not t_id:
+            return None
+        plans = repository.list_plans(project_id=project_id, workspace_id=actor.workspace_id)
+        matching = [p for p in plans if p.transcript_id == t_id]
+        if not matching:
+            return None
+        matching.sort(key=lambda p: p.updated_at, reverse=True)
+        return matching[0]
+
+    if not job:
+        db_plan = find_completed_plan(transcript_id)
+        if db_plan:
+            if db_plan.status == EditPlanStatus.READY:
+                return PlanJobStatusResponse(status="succeeded", progress=100, plan_id=db_plan.id)
+            elif db_plan.status == EditPlanStatus.FAILED:
+                return PlanJobStatusResponse(
+                    status="failed",
+                    progress=0,
+                    failure_reason="Edit planning failed during execution"
+                )
+        return PlanJobStatusResponse(status="failed", progress=0, failure_reason="Job not found")
+
+    from app.services.queue import QueueJobStatus
+    if job.status == QueueJobStatus.SUCCEEDED:
+        db_plan = find_completed_plan(transcript_id)
+        return PlanJobStatusResponse(
+            status="succeeded",
+            progress=100,
+            plan_id=db_plan.id if db_plan else None
+        )
+    elif job.status == QueueJobStatus.RUNNING:
+        return PlanJobStatusResponse(status="running", progress=50)
+    elif job.status == QueueJobStatus.QUEUED:
+        return PlanJobStatusResponse(status="queued", progress=0)
+    else:
+        db_plan = find_completed_plan(transcript_id)
+        reason = "Job failed in queue worker"
+        if db_plan and db_plan.validation_errors:
+            reason = db_plan.validation_errors[0]
+        return PlanJobStatusResponse(status="failed", progress=0, failure_reason=reason)
+
 
 
 def _apply_phase5_learning(

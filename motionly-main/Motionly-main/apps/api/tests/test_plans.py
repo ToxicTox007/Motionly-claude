@@ -11,7 +11,7 @@ from app.api.errors import ApiError, request_validation_error_handler
 from app.api.plans import (
     activate_plan,
     compile_project_timeline,
-    create_plan,
+    create_plan as _create_plan_api,
     create_plan_snapshot,
     list_plan_snapshots,
     list_plans,
@@ -19,6 +19,7 @@ from app.api.plans import (
     update_plan_cuts,
     update_plan_manual_elements,
     update_project_timeline,
+    get_plan_job_status,
 )
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
@@ -53,6 +54,63 @@ from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_pre
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.queue import PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
+
+
+async def create_plan(
+    project_id: UUID,
+    payload: PlanCreateRequest,
+    actor: Actor,
+    repository: InMemoryPlanRepository,
+    planner_provider,
+    plan_queue,
+    request=None,
+):
+    if request is None:
+        request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    settings=SimpleNamespace(
+                        media_work_dir=".motionly/test-storage",
+                        transcription_debug_retain_audio=False,
+                    ),
+                    plan_repository=repository,
+                    edit_planner_provider=planner_provider,
+                    operations_repository=None,
+                    queue_registry=plan_queue.registry,
+                )
+            )
+        )
+    
+    response = await _create_plan_api(
+        project_id=project_id,
+        payload=payload,
+        actor=actor,
+        repository=repository,
+        planner_provider=planner_provider,
+        plan_queue=plan_queue,
+        response=None,
+        request=request,
+    )
+    
+    if response.status == "ready":
+        return response
+        
+    job_id = response.job_id
+    job = plan_queue.registry.jobs[job_id]
+    
+    from app.api.internal_jobs import _execute_job
+    result = _execute_job(job=job, request=request)
+    
+    plan_id = UUID(result["plan_id"])
+    record = repository.get_plan(project_id=project_id, workspace_id=actor.workspace_id, plan_id=plan_id)
+    
+    return response.model_copy(
+        update={
+            "plan": record.to_response(),
+            "status": "ready"
+        }
+    )
+
 
 
 def make_plan_repository(
@@ -130,7 +188,7 @@ def test_create_plan_returns_valid_structured_plan() -> None:
     )
     assert all(cut.end_ms <= 12_000 for cut in response.plan.plan.cuts)
     assert response.plan.summary.cut_count == len(response.plan.plan.cuts)
-    assert response.job_id.startswith(f"sync-complete--plan--{project_id}--")
+    assert response.job_id.startswith(f"plan--{project_id}--")
 
 
 def test_manual_elements_persist_in_versioned_edit_plan() -> None:
@@ -1149,3 +1207,219 @@ def _educational_visual_manifest() -> VideoManifest:
             "top_objects": ["laptop"],
         },
     )
+
+
+def test_async_planner_fast_path_and_polling() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    plan_queue = PlanQueue()
+    
+    # Mocking planner_provider to verify it is NOT called during HTTP route execution
+    class MockFailurePlanner:
+        provider_name = "mock_failure"
+        def create_plan(self, *args, **kwargs):
+            raise AssertionError("Should not be called synchronously in API route!")
+            
+    # Mock Request and Response
+    class DummyResponse:
+        def __init__(self):
+            self.status_code = 200
+    mock_response = DummyResponse()
+    
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    media_work_dir=".motionly/test-storage",
+                    transcription_debug_retain_audio=False,
+                ),
+                plan_repository=repository,
+                edit_planner_provider=MockFailurePlanner(),
+                operations_repository=None,
+                queue_registry=plan_queue.registry,
+            )
+        )
+    )
+
+    # 1. POST /plans returns 202 on cache miss.
+    # 2. OpenRouter/httpx.post is not called (proved by MockFailurePlanner not throwing)
+    response = asyncio.run(
+        _create_plan_api(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, force=True),
+            actor=actor,
+            repository=repository,
+            planner_provider=MockFailurePlanner(),
+            plan_queue=plan_queue,
+            response=mock_response,
+            request=request,
+        )
+    )
+    
+    assert mock_response.status_code == 202
+    assert response.status == "queued"
+    assert response.job_id.startswith(f"plan--{project_id}--")
+    assert response.status_url == f"/projects/{project_id}/plans/jobs/{response.job_id}"
+
+    # 3. GET /projects/{project_id}/plans/jobs/{job_id} returns queued
+    status_response = asyncio.run(
+        get_plan_job_status(
+            project_id=project_id,
+            job_id=response.job_id,
+            actor=actor,
+            repository=repository,
+            request=request,
+        )
+    )
+    assert status_response.status == "queued"
+    assert status_response.progress == 0
+
+    # 4. edit_plan job handler eventually persists a plan.
+    from app.api.internal_jobs import _execute_job
+    job = plan_queue.registry.jobs[response.job_id]
+    
+    execute_request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    media_work_dir=".motionly/test-storage",
+                    transcription_debug_retain_audio=False,
+                ),
+                plan_repository=repository,
+                edit_planner_provider=FixtureEditPlannerProvider(),
+                operations_repository=None,
+                queue_registry=plan_queue.registry,
+            )
+        )
+    )
+    
+    # Mark the job as running/started in registry
+    plan_queue.registry.start(response.job_id)
+    
+    status_response = asyncio.run(
+        get_plan_job_status(
+            project_id=project_id,
+            job_id=response.job_id,
+            actor=actor,
+            repository=repository,
+            request=execute_request,
+        )
+    )
+    assert status_response.status == "running"
+    assert status_response.progress == 50
+
+    # Execute
+    result = _execute_job(job=job, request=execute_request)
+    plan_queue.registry.complete(response.job_id)
+    
+    assert "plan_id" in result
+    assert result["status"] == "ready"
+    
+    # Proves the plan was persisted in repository
+    persisted_plan = repository.get_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=UUID(result["plan_id"]),
+    )
+    assert persisted_plan.status == EditPlanStatus.READY
+
+    # 5. GET status is succeeded after worker completes
+    status_response = asyncio.run(
+        get_plan_job_status(
+            project_id=project_id,
+            job_id=response.job_id,
+            actor=actor,
+            repository=repository,
+            request=execute_request,
+        )
+    )
+    assert status_response.status == "succeeded"
+    assert status_response.progress == 100
+    assert status_response.plan_id == persisted_plan.id
+
+    # 6. Cache hit still returns existing cached plan synchronously
+    mock_response_cache = DummyResponse()
+    cached_response = asyncio.run(
+        _create_plan_api(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, force=False),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=plan_queue,
+            response=mock_response_cache,
+            request=execute_request,
+        )
+    )
+    assert cached_response.cached is True
+    assert cached_response.status == "ready"
+    assert cached_response.plan.id == persisted_plan.id
+
+
+def test_async_planner_failed_job() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    plan_queue = PlanQueue()
+    
+    class BrokenPlanner:
+        provider_name = "broken"
+        def create_plan(self, *args, **kwargs):
+            raise RuntimeError("OpenRouter failed!")
+            
+    # Mock Request and Response
+    class DummyResponse:
+        def __init__(self):
+            self.status_code = 200
+    mock_response = DummyResponse()
+    
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    media_work_dir=".motionly/test-storage",
+                    transcription_debug_retain_audio=False,
+                ),
+                plan_repository=repository,
+                edit_planner_provider=BrokenPlanner(),
+                operations_repository=None,
+                queue_registry=plan_queue.registry,
+            )
+        )
+    )
+    
+    response = asyncio.run(
+        _create_plan_api(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, force=True),
+            actor=actor,
+            repository=repository,
+            planner_provider=BrokenPlanner(),
+            plan_queue=plan_queue,
+            response=mock_response,
+            request=request,
+        )
+    )
+    
+    from app.api.internal_jobs import _execute_job
+    job = plan_queue.registry.jobs[response.job_id]
+    
+    with pytest.raises(RuntimeError):
+        _execute_job(job=job, request=request)
+        
+    plan_queue.registry.fail(response.job_id)
+    plan_queue.registry.fail(response.job_id)
+    plan_queue.registry.fail(response.job_id)
+
+    # 7. failed edit_plan job produces failed status
+    status_response = asyncio.run(
+        get_plan_job_status(
+            project_id=project_id,
+            job_id=response.job_id,
+            actor=actor,
+            repository=repository,
+            request=request,
+        )
+    )
+    assert status_response.status == "failed"
+    assert "OpenRouter failed!" in status_response.failure_reason
+

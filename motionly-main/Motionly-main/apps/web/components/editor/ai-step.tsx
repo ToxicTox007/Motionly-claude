@@ -6,7 +6,7 @@ import { Input, Label, Select, TextArea, Slider } from "./ui";
 import { Button } from "../button";
 import { AlertCircle, CheckCircle2, Eye, History, Loader2, RefreshCw, Save, Sparkles } from "lucide-react";
 import { env } from "@/lib/env";
-import { editorApiRequest } from "@/lib/client-api";
+import { editorApiRequest, pollPlanJob } from "@/lib/client-api";
 import type {
   BrollSlotSummary,
   BrollDensity,
@@ -169,10 +169,15 @@ export function AIStep({
     setLoading(true);
     setMessage(null);
     try {
-      const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+      const payload = await editorApiRequest<{
+        plan?: EditPlanRecordSummary;
+        status: string;
+        job_id?: string;
+        status_url?: string;
+      }>(
         `${env.apiBaseUrl}/projects/${projectId}/plans`,
         {
-        method: "POST",
+          method: "POST",
           workspaceId,
           userId,
           accessToken: apiAccessToken,
@@ -186,7 +191,39 @@ export function AIStep({
           },
         },
       );
-      const plan = payload.plan as EditPlanRecordSummary;
+
+      let plan: EditPlanRecordSummary;
+
+      if (payload.status === "queued" && payload.status_url) {
+        setMessage("Edit plan queued... generating timeline.");
+        const planId = await pollPlanJob(
+          `${env.apiBaseUrl}${payload.status_url}`,
+          {
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+          },
+          (progress) => {
+            setMessage(`Generating plan: ${progress}%`);
+          }
+        );
+        const planList = await editorApiRequest<{ plans: EditPlanRecordSummary[] }>(
+          `${env.apiBaseUrl}/projects/${projectId}/plans`,
+          {
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+          }
+        );
+        const foundPlan = planList.plans.find((p) => p.id === planId);
+        if (!foundPlan) {
+          throw new Error("Plan was generated successfully but could not be loaded.");
+        }
+        plan = foundPlan;
+      } else {
+        plan = payload.plan as EditPlanRecordSummary;
+      }
+
       onPlanGenerated(plan);
 
       const followUpResults = await Promise.allSettled([
@@ -216,7 +253,8 @@ export function AIStep({
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);
-    } finally {
+    }
+ finally {
       setLoading(false);
     }
   }

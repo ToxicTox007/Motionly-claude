@@ -143,3 +143,44 @@ async function readJson(response: Response): Promise<unknown> {
     return { error: { message: text } };
   }
 }
+
+export type PlanJobStatusResponse = {
+  status: "queued" | "running" | "succeeded" | "failed";
+  progress: number;
+  plan_id?: string;
+  failure_reason?: string;
+};
+
+export async function pollPlanJob(
+  statusUrl: string,
+  options: EditorApiRequestOptions,
+  onProgress?: (progress: number) => void
+): Promise<string> {
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const maxRetries = 120;
+  for (let i = 0; i < maxRetries; i++) {
+    const response = await editorApiRequest<PlanJobStatusResponse>(
+      statusUrl,
+      {
+        ...options,
+        method: "GET",
+        body: undefined,
+      }
+    );
+    if (response.status === "succeeded") {
+      if (!response.plan_id) {
+        throw new Error("Job succeeded but returned no plan ID.");
+      }
+      return response.plan_id;
+    }
+    if (response.status === "failed") {
+      throw new Error(response.failure_reason || "Plan generation failed.");
+    }
+    if (onProgress && response.progress !== undefined) {
+      onProgress(response.progress);
+    }
+    await delay(1000);
+  }
+  throw new Error("Plan generation timed out.");
+}
+
