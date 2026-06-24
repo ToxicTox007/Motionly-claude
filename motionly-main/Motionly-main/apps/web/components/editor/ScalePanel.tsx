@@ -5,7 +5,7 @@ import type React from "react";
 import { Activity, BrainCircuit, Film, Layers3, Loader2, Save, Users } from "lucide-react";
 import type { CaptionTrackSummary, EditPlanRecordSummary, EffectsConfigSummary } from "@motionly/shared";
 import { Button } from "@/components/button";
-import { editorApiRequest } from "@/lib/client-api";
+import { editorApiRequest, pollPlanJob } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/browser";
 
@@ -159,10 +159,39 @@ export function ScalePanel(props: ScalePanelProps) {
 
   async function applySavedTemplate(template: Resource) {
     const settings = (template.payload.settings ?? {}) as Record<string, unknown>;
-    const result = await editorApiRequest<{ plan: EditPlanRecordSummary }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
+    const payload = await editorApiRequest<{
+      plan?: EditPlanRecordSummary;
+      status: string;
+      job_id?: string;
+      status_url?: string;
+    }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
       ...auth(props), method: "POST", body: { saved_template_id: template.id, force: true },
     });
-    onPlanUpdated(result.plan);
+
+    let plan: EditPlanRecordSummary;
+    if (payload.status === "queued" && payload.status_url) {
+      setMessage("Applying template: enqueued...");
+      const planId = await pollPlanJob(
+        `${env.apiBaseUrl}${payload.status_url}`,
+        auth(props),
+        (progress) => {
+          setMessage(`Applying template: ${progress}%`);
+        }
+      );
+      const planList = await editorApiRequest<{ plans: EditPlanRecordSummary[] }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans`,
+        auth(props)
+      );
+      const foundPlan = planList.plans.find((p) => p.id === planId);
+      if (!foundPlan) {
+        throw new Error("Template plan was generated successfully but could not be loaded.");
+      }
+      plan = foundPlan;
+    } else {
+      plan = payload.plan as EditPlanRecordSummary;
+    }
+
+    onPlanUpdated(plan);
 
     const captionSettings = settings.caption_settings as Record<string, unknown> | undefined;
     if (captionSettings && props.captionTrack) {
@@ -180,6 +209,42 @@ export function ScalePanel(props: ScalePanelProps) {
       );
       props.onEffectsConfigUpdated(effects.config);
     }
+  }
+
+  async function applyStyleProfile(profile: Resource) {
+    const payload = await editorApiRequest<{
+      plan?: EditPlanRecordSummary;
+      status: string;
+      job_id?: string;
+      status_url?: string;
+    }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
+      ...auth(props), method: "POST", body: { style_profile_id: profile.id, force: true },
+    });
+
+    let plan: EditPlanRecordSummary;
+    if (payload.status === "queued" && payload.status_url) {
+      setMessage("Applying style: enqueued...");
+      const planId = await pollPlanJob(
+        `${env.apiBaseUrl}${payload.status_url}`,
+        auth(props),
+        (progress) => {
+          setMessage(`Applying style: ${progress}%`);
+        }
+      );
+      const planList = await editorApiRequest<{ plans: EditPlanRecordSummary[] }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans`,
+        auth(props)
+      );
+      const foundPlan = planList.plans.find((p) => p.id === planId);
+      if (!foundPlan) {
+        throw new Error("Style plan was generated successfully but could not be loaded.");
+      }
+      plan = foundPlan;
+    } else {
+      plan = payload.plan as EditPlanRecordSummary;
+    }
+
+    onPlanUpdated(plan);
   }
 
   return (
@@ -209,7 +274,7 @@ export function ScalePanel(props: ScalePanelProps) {
         <div className="flex gap-2"><input className="pixel-input min-h-11 min-w-0 flex-1 px-3 text-xs" placeholder="Style profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /><Button disabled={busy || !profileName.trim()} onClick={() => action(() => editorApiRequest(`${env.apiBaseUrl}/projects/${projectId}/phase5/style-profiles`, { ...auth(props), method: "POST", body: { name: profileName, target_style: activePlan?.style ?? "creator_influencer" } }), "Style profile created.")}>Create</Button></div>
         {profiles.map((profile) => {
           const references = (profile.payload.references ?? []) as Array<{ status: string }>;
-          return <div key={profile.id} className="mt-2 border border-border p-3"><p className="text-xs font-black">{profile.name} · {references.length}/5 · {profile.status}</p><input type="file" accept="video/*" multiple disabled={busy || references.length >= 5} className="mt-2 w-full text-xs" onChange={(event) => void uploadReferences(profile, event.target.files)} /><div className="mt-2 flex gap-2"><Button variant="secondary" disabled={busy || references.filter((item) => item.status === "ready").length < 5} onClick={() => action(() => editorApiRequest(`${env.apiBaseUrl}/projects/${projectId}/phase5/style-profiles/${profile.id}/train`, { ...auth(props), method: "POST", body: {} }), "Style analysis queued.")}>Analyze</Button>{profile.status === "ready" ? <Button disabled={busy} onClick={() => action(async () => { const result = await editorApiRequest<{ plan: EditPlanRecordSummary }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, { ...auth(props), method: "POST", body: { style_profile_id: profile.id, force: true } }); onPlanUpdated(result.plan); }, "Reference style applied.")}>Apply</Button> : null}</div></div>;
+          return <div key={profile.id} className="mt-2 border border-border p-3"><p className="text-xs font-black">{profile.name} · {references.length}/5 · {profile.status}</p><input type="file" accept="video/*" multiple disabled={busy || references.length >= 5} className="mt-2 w-full text-xs" onChange={(event) => void uploadReferences(profile, event.target.files)} /><div className="mt-2 flex gap-2"><Button variant="secondary" disabled={busy || references.filter((item) => item.status === "ready").length < 5} onClick={() => action(() => editorApiRequest(`${env.apiBaseUrl}/projects/${projectId}/phase5/style-profiles/${profile.id}/train`, { ...auth(props), method: "POST", body: {} }), "Style analysis queued.")}>Analyze</Button>{profile.status === "ready" ? <Button disabled={busy} onClick={() => action(() => applyStyleProfile(profile), "Reference style applied.")}>Apply</Button> : null}</div></div>;
         })}
       </Section>
 

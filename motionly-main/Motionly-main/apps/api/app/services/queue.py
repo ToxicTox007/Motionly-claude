@@ -563,12 +563,14 @@ class PlanQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         transcript_id: UUID,
+        render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=self._job_id("plan", project_id, transcript_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=transcript_id,
+            render_engine=render_engine,
         )
 
 

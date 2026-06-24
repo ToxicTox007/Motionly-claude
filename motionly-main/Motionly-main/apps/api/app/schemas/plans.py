@@ -281,10 +281,19 @@ class EditPlanResponse(BaseModel):
 
 
 class PlanCreateResponse(BaseModel):
-    plan: EditPlanResponse
+    plan: EditPlanResponse | None = None
     job_id: str
-    status: Literal["ready"] = "ready"
+    status: str = "ready"
     cached: bool = False
+    project_id: UUID | None = None
+    status_url: str | None = None
+
+
+class PlanJobStatusResponse(BaseModel):
+    status: str
+    progress: int
+    plan_id: UUID | None = None
+    failure_reason: str | None = None
 
 
 class PlanListResponse(BaseModel):
