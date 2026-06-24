@@ -42,6 +42,15 @@ const parsedEnv = appEnvSchema.parse(
 );
 
 if (process.env.NODE_ENV === "production" && !isProductionBuild) {
+  const skipAuth = process.env.SKIP_AUTH_MIDDLEWARE;
+  const skipAuthPublic = process.env.NEXT_PUBLIC_SKIP_AUTH_MIDDLEWARE;
+  if (
+    (skipAuth && ["true", "1", "yes", "on"].includes(skipAuth.toLowerCase())) ||
+    (skipAuthPublic && ["true", "1", "yes", "on"].includes(skipAuthPublic.toLowerCase()))
+  ) {
+    throw new Error("Security violation: SKIP_AUTH_MIDDLEWARE and NEXT_PUBLIC_SKIP_AUTH_MIDDLEWARE are not allowed in production.");
+  }
+
   for (const [name, value] of [
     ["NEXT_PUBLIC_APP_URL", parsedEnv.NEXT_PUBLIC_APP_URL],
     ["NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL", parsedEnv.NEXT_PUBLIC_API_BASE_URL ?? parsedEnv.NEXT_PUBLIC_API_URL],

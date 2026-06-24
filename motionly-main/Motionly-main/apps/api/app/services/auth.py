@@ -24,8 +24,16 @@ def verify_supabase_jwt(
     jwt_secret: str,
     audience: str = "authenticated",
 ) -> VerifiedToken:
-    # Local bypass: accept a fixed mock token when SKIP_API_AUTH is enabled
-    if os.getenv("SKIP_API_AUTH") == "true" and token == "mock-local-bearer":
+    # Local bypass: accept a fixed mock token when SKIP_API_AUTH is enabled and not in production
+    from app.core.config import get_settings
+    settings = get_settings()
+    skip_api_auth = os.getenv("SKIP_API_AUTH")
+    if (
+        settings.app_env != "production"
+        and skip_api_auth
+        and skip_api_auth.lower() in ("true", "1", "yes", "on")
+        and token == "mock-local-bearer"
+    ):
         return VerifiedToken(
             user_id=UUID("00000000-0000-4000-8000-000000000001"),
             claims={},
