@@ -128,3 +128,89 @@ def test_stripe_webhook_rejects_bad_signature() -> None:
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.code == "stripe_signature_invalid"
+
+
+def test_stripe_payment_failure_marks_subscription_past_due_from_signed_sandbox_event() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    repository.upsert_subscription(
+        workspace_id=workspace_id,
+        plan=BillingPlanKey.PRO,
+        status=SubscriptionStatus.ACTIVE,
+        stripe_customer_id="cus_failure",
+        stripe_subscription_id="sub_failure",
+        stripe_price_id="price_pro",
+    )
+    payload = json.dumps(
+        {
+            "id": "evt_payment_failed",
+            "type": "invoice.payment_failed",
+            "data": {
+                "object": {
+                    "customer": "cus_failure",
+                    "subscription": "sub_failure",
+                }
+            },
+        },
+    ).encode()
+
+    event = parse_verified_stripe_event(
+        payload=payload,
+        signature_header=stripe_signature_header(payload=payload, secret="whsec_sandbox"),
+        webhook_secret="whsec_sandbox",
+    )
+    apply_stripe_event(
+        event=event,
+        repository=repository,
+        settings=SimpleNamespace(stripe_price_pro="price_pro"),
+    )
+
+    subscription = repository.get_subscription(workspace_id=workspace_id)
+    assert subscription.plan == BillingPlanKey.PRO
+    assert subscription.status == SubscriptionStatus.PAST_DUE
+    assert build_billing_status(workspace_id, repository).subscription.payment_issue is True
+
+
+def test_stripe_refund_records_idempotent_billing_adjustment_from_signed_sandbox_event() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    payload = json.dumps(
+        {
+            "id": "evt_refund",
+            "type": "charge.refunded",
+            "data": {
+                "object": {
+                    "id": "ch_refund",
+                    "customer": "cus_refund",
+                    "invoice": "in_refund",
+                    "amount_refunded": 2900,
+                    "currency": "usd",
+                    "metadata": {"workspace_id": str(workspace_id)},
+                }
+            },
+        },
+    ).encode()
+
+    event = parse_verified_stripe_event(
+        payload=payload,
+        signature_header=stripe_signature_header(payload=payload, secret="whsec_sandbox"),
+        webhook_secret="whsec_sandbox",
+    )
+    apply_stripe_event(
+        event=event,
+        repository=repository,
+        settings=SimpleNamespace(),
+    )
+    apply_stripe_event(
+        event=event,
+        repository=repository,
+        settings=SimpleNamespace(),
+    )
+
+    adjustments = list(repository.billing_adjustments.values())
+    assert len(adjustments) == 1
+    adjustment = adjustments[0]
+    assert adjustment.workspace_id == workspace_id
+    assert adjustment.adjustment_type == "refund"
+    assert adjustment.amount_cents == -2900
+    assert adjustment.metadata["stripe_charge_id"] == "ch_refund"

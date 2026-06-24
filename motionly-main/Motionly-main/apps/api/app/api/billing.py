@@ -242,6 +242,7 @@ def apply_stripe_event(
 ) -> None:
     event_type = str(event["type"])
     obj = event_object(event)
+    event_id = str(event["id"])
     if event_type == "checkout.session.completed":
         workspace_id = UUID(
             str(obj.get("client_reference_id") or obj.get("metadata", {}).get("workspace_id"))
@@ -272,6 +273,45 @@ def apply_stripe_event(
             current_period_end=timestamp_to_datetime(obj.get("current_period_end")),
             cancel_at_period_end=bool(obj.get("cancel_at_period_end", False)),
         )
+        return
+    if event_type == "invoice.payment_failed":
+        workspace_id = workspace_id_from_stripe_object(obj, repository)
+        if workspace_id is None:
+            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
+        existing = repository.get_subscription(workspace_id=workspace_id)
+        repository.upsert_subscription(
+            workspace_id=workspace_id,
+            plan=existing.plan,
+            status=SubscriptionStatus.PAST_DUE,
+            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
+            stripe_subscription_id=obj.get("subscription") and str(obj["subscription"]),
+            stripe_price_id=existing.stripe_price_id,
+            current_period_start=existing.current_period_start,
+            current_period_end=existing.current_period_end,
+            cancel_at_period_end=existing.cancel_at_period_end,
+        )
+        return
+    if event_type in {"charge.refunded", "charge.refund.updated"}:
+        workspace_id = workspace_id_from_stripe_object(obj, repository)
+        if workspace_id is None:
+            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
+        amount_cents = int(obj.get("amount_refunded") or obj.get("amount") or 0)
+        if amount_cents <= 0:
+            raise ApiError(400, "stripe_refund_invalid", "Stripe refund amount is invalid.")
+        repository.record_billing_adjustment(
+            workspace_id=workspace_id,
+            stripe_event_id=event_id,
+            adjustment_type="refund",
+            amount_cents=-amount_cents,
+            currency=str(obj.get("currency") or "usd"),
+            reason=obj.get("failure_message") and str(obj["failure_message"]),
+            metadata={
+                "stripe_charge_id": obj.get("id"),
+                "stripe_customer_id": obj.get("customer"),
+                "stripe_invoice_id": obj.get("invoice"),
+            },
+        )
+
 
 
 def event_object(event: dict[str, object]) -> dict[str, Any]:
@@ -296,6 +336,21 @@ def stripe_price_id_from_subscription(obj: dict[str, Any]) -> str | None:
         return None
     price = items[0].get("price", {})
     return price.get("id") and str(price["id"])
+
+
+def workspace_id_from_stripe_object(
+    obj: dict[str, Any],
+    repository: InMemoryBillingRepository,
+) -> UUID | None:
+    metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
+    if metadata.get("workspace_id"):
+        return UUID(str(metadata["workspace_id"]))
+    subscription = obj.get("subscription")
+    customer = obj.get("customer")
+    return repository.workspace_for_stripe_subscription(
+        stripe_subscription_id=subscription and str(subscription),
+        stripe_customer_id=customer and str(customer),
+    )
 
 
 def plan_from_price(price_id: str | None, settings: object) -> BillingPlanKey:

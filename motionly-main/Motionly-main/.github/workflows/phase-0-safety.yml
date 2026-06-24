@@ -248,6 +248,45 @@ jobs:
           python -m pip install --disable-pip-version-check pip-audit .
           python -m pip_audit .
 
+  phase-10-prelaunch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Install pre-launch gate dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check './apps/api[dev]'
+      - name: Verify documented launch evidence
+        run: node scripts/verify_prelaunch_evidence.mjs
+      - name: Run Phase 10 pre-launch contracts
+        working-directory: apps/api
+        run: APP_ENV=test python -m pytest -q tests/test_phase10_prelaunch.py tests/test_billing.py
+      - name: Verify backup and restore drill
+        run: |
+          supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
+          supabase db reset --local
+          eval "$(supabase status -o env)"
+          psql "$DB_URL" --command "drop database if exists motionly_restore;"
+          psql "$DB_URL" --command "create database motionly_restore;"
+          bash scripts/verify_backup_restore.sh "$DB_URL" "postgresql://postgres:postgres@127.0.0.1:54322/motionly_restore"
+
   staging-canary:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:
@@ -258,6 +297,7 @@ jobs:
       - browser-creator-journey
       - containers
       - secret-and-dependency-scans
+      - phase-10-prelaunch
     runs-on: ubuntu-latest
     environment: staging
     env:

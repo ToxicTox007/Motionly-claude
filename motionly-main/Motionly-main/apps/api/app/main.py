@@ -254,10 +254,14 @@ def create_app() -> FastAPI:
     )
     app.state.plan_repository.visual_repository = app.state.visual_repository
     app.state.stripe_billing_client = StripeBillingClient(api_key=settings.stripe_secret_key)
+    storage_supabase_url = None if settings.force_local_media_storage else settings.supabase_url
+    storage_service_role_key = (
+        None if settings.force_local_media_storage else settings.supabase_service_role_key
+    )
     app.state.storage_signer = StorageSigner(
         base_url=str(settings.api_public_base_url),
-        supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
-        service_role_key=settings.supabase_service_role_key,
+        supabase_url=str(storage_supabase_url) if storage_supabase_url else None,
+        service_role_key=storage_service_role_key,
     )
     app.state.rate_limiter = (
         RedisRateLimiter(settings.redis_url) if settings.redis_url else InMemoryRateLimiter()
