@@ -16,6 +16,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
@@ -208,11 +209,11 @@ async function signSupabaseSrc(src) {
  * Returns the storage path on success.
  */
 async function uploadToStorage(localPath, storageBucket, storagePath) {
-  const buffer = await readFile(localPath);
+  const stream = createReadStream(localPath);
   const supabase = supabaseClient();
   const { error } = await supabase.storage
     .from(storageBucket)
-    .upload(storagePath, buffer, {
+    .upload(storagePath, stream, {
       contentType: "video/mp4",
       upsert: true,
     });

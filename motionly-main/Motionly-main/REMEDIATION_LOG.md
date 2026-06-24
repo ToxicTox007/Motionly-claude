@@ -101,3 +101,34 @@
   ℹ duration_ms 726.654432
   ```
 - Remaining caveats: None.
+
+## Phase 3 / Task 3.1 — Stream Render Uploads
+
+- Date: 2026-06-24
+- Executor: Antigravity / Main Agent / Implementer
+- Files touched:
+  - [apps/worker/src/remotion.mjs](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/worker/src/remotion.mjs#L19-L219)
+  - [apps/worker/src/storage-streaming.test.mjs](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/worker/src/storage-streaming.test.mjs)
+- Audit finding resolved: Large Remotion exports must upload without loading the whole file into memory (preventing worker OOM on large videos).
+- What changed: Imported `createReadStream` from `"node:fs"` and replaced buffer-based whole-file reading (`await readFile(localPath)`) inside `uploadToStorage` with streaming uploads via `createReadStream(localPath)`. Added static analysis code-contract test `storage-streaming.test.mjs` ensuring buffering/readFile isn't reintroduced to the upload path.
+- Verification performed:
+  `pnpm --filter @motionly/worker test`
+- Verification output / evidence:
+  ```
+  ✔ workers execute media without the API job runner (14.934436ms)
+  ﹣ real Redis preserves BullMQ retry, terminal failure, and job-id idempotency (0.773334ms) # set RUN_REDIS_CONTRACTS=true
+  ✔ Remotion export upload uses streaming and avoids full-file buffering (5.216944ms)
+  ✔ media work is dispatched directly and never through the API job runner (5.470348ms)
+  ✔ standard worker defaults to the isolated Remotion queue (4.577479ms)
+  ℹ tests 5
+  ℹ suites 0
+  ℹ pass 4
+  ℹ fail 0
+  ℹ cancelled 0
+  ℹ skipped 1
+  ℹ todo 0
+  ℹ duration_ms 660.506807
+  Worker queue config is not set; build check only.
+  ```
+- Remaining caveats: None. Supabase storage JS SDK is verified to support standard Node.js readable streams.
+
