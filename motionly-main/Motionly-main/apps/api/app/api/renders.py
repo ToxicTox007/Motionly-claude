@@ -540,6 +540,7 @@ async def create_render(
     effects_config = None
     effects_props = None
     motion_design_manifest = None
+    visual_record = None
     if effects_repository:
         effects_config = effects_repository.latest_config(
             project_id=project_id,
@@ -624,6 +625,21 @@ async def create_render(
     )
     source_timeline = compiled_timeline.model_dump(mode="json")
     render_edit_plan["timeline"] = source_timeline
+    segmentation_matte = None
+    if (
+        effects_props
+        and effects_props.get("background_removal", {}).get("enabled")
+        and visual_record
+        and visual_record.manifest
+        and visual_record.manifest.segmentation_matte
+    ):
+        matte = visual_record.manifest.segmentation_matte
+        segmentation_matte = {
+            "src": f"supabase://{matte.bucket}/{matte.path}",
+            "model": matte.model,
+            "bucket": matte.bucket,
+            "path": matte.path,
+        }
     render_props = {
         "sourceVideo": {
             "src": f"supabase://{upload.storage_bucket}/{upload.storage_path}",
@@ -643,6 +659,7 @@ async def create_render(
         "effectsConfig": effects_props,
         "sourceStems": source_stems,
         "timeline": source_timeline,
+        "segmentationMatte": segmentation_matte,
     }
     props_hash = build_props_hash(render_props)
     manual_element_types = {

@@ -1092,10 +1092,10 @@ export function LookTab({
 
         <PanelSection title="Advanced">
           <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
-            Portrait backdrop blur
+            Subject segmentation
             <input
               type="checkbox"
-              aria-label="Enable portrait backdrop blur"
+              aria-label="Enable subject segmentation"
               checked={backgroundRemoval.enabled}
               onChange={(event) =>
                 setBackgroundRemoval((current) => ({ ...current, enabled: event.target.checked }))
@@ -1105,6 +1105,9 @@ export function LookTab({
           </label>
           {backgroundRemoval.enabled ? (
             <div className="mt-4 space-y-4">
+              <p className="text-xs text-muted-foreground">
+                Uses lightweight MediaPipe subject segmentation after visual analysis completes.
+              </p>
               <Slider
                 label="Feather"
                 value={backgroundRemoval.feather_px}

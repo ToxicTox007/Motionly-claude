@@ -87,6 +87,10 @@ def complete_render_job(
                 allow_fixture_media=allow_fixture_media,
             )
             effects_config = _effects_config_from_manifest(job.manifest)
+            matte_path = _segmentation_matte_path_from_manifest(
+                job.manifest,
+                storage=storage,
+            )
             try:
                 benchmark_ms, file_size_bytes = renderer.render(
                     source_path=source_path,
@@ -100,6 +104,7 @@ def complete_render_job(
                     keep_segments=job.keep_segments,
                     video_encoder=_video_encoder_from_manifest(job.manifest),
                     watermark=_watermark_from_manifest(job.manifest),
+                    matte_path=matte_path,
                     **audio_mix,
                 )
             except ApiError as exc:
@@ -127,6 +132,7 @@ def complete_render_job(
                     keep_segments=job.keep_segments,
                     video_encoder=_video_encoder_from_manifest(job.manifest),
                     watermark=_watermark_from_manifest(job.manifest),
+                    matte_path=matte_path,
                     **audio_mix,
                 )
                 job.specs = fallback_specs
@@ -434,6 +440,39 @@ def _effects_config_from_manifest(manifest: dict) -> dict[str, object] | None:
         return None
     effects_config = render_props.get("effectsConfig")
     return effects_config if isinstance(effects_config, dict) else None
+
+
+def _segmentation_matte_path_from_manifest(
+    manifest: dict,
+    *,
+    storage: LocalObjectStorage,
+) -> Path | None:
+    render_props = manifest.get("render_props")
+    if not isinstance(render_props, dict):
+        return None
+    effects_config = render_props.get("effectsConfig")
+    if not isinstance(effects_config, dict):
+        return None
+    background = effects_config.get("background_removal")
+    if not isinstance(background, dict) or not background.get("enabled"):
+        return None
+    matte = render_props.get("segmentationMatte")
+    if not isinstance(matte, dict):
+        return None
+    bucket = matte.get("bucket")
+    path = matte.get("path")
+    if not isinstance(bucket, str) or not isinstance(path, str):
+        src = matte.get("src")
+        if isinstance(src, str) and src.startswith("supabase://"):
+            without_scheme = src.removeprefix("supabase://")
+            slash_idx = without_scheme.find("/")
+            if slash_idx < 0:
+                return None
+            bucket = without_scheme[:slash_idx]
+            path = without_scheme[slash_idx + 1 :]
+        else:
+            return None
+    return storage.ensure_object(bucket=bucket, path=path)
 
 
 def _video_encoder_from_manifest(manifest: dict) -> str:

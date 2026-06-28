@@ -565,6 +565,13 @@ export interface BackgroundRemovalSettings {
   replacement: "transparent" | "gradient_ramp" | "blurred_source";
 }
 
+export interface SegmentationMatteRef {
+  src: string;
+  model?: string;
+  bucket?: string;
+  path?: string;
+}
+
 export interface GradientRampSettings {
   enabled: boolean;
   start_color: string;

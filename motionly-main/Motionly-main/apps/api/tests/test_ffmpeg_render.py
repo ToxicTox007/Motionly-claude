@@ -520,6 +520,39 @@ def test_ffmpeg_renderer_applies_effects_before_caption_filter(
     assert filter_graph.index("eq=") < filter_graph.index("ass=")
 
 
+def test_ffmpeg_renderer_uses_segmentation_matte_instead_of_boxblur(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, list[str]] = {}
+    matte_path = tmp_path / "matte.mp4"
+    matte_path.write_bytes(b"matte")
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        Path(command[-1]).write_bytes(b"mp4")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(ffmpeg_render.subprocess, "run", fake_run)
+
+    FFmpegCaptionRenderer().render(
+        source_path=tmp_path / "source.mp4",
+        ass_path=tmp_path / "captions.ass",
+        output_path=tmp_path / "exports" / "out.mp4",
+        specs=RenderSpecs(),
+        effects_config={
+            "background_removal": {"enabled": True, "feather_px": 24},
+        },
+        matte_path=matte_path,
+    )
+
+    filter_graph = captured["command"][captured["command"].index("-filter_complex") + 1]
+    assert "movie=" in filter_graph
+    assert "alphamerge" in filter_graph
+    assert "enable='lt(mod(t" not in filter_graph
+
+
 def test_ffmpeg_renderer_reports_missing_binary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

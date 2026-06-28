@@ -1,5 +1,6 @@
 import hashlib
 import math
+import tempfile
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -16,10 +17,12 @@ from app.schemas.visual import (
     ObjectDetection,
     SceneSegment,
     SceneType,
+    SegmentationMatte,
     VideoManifest,
     VisualManifestStatus,
 )
 from app.services.local_storage import create_object_storage
+from app.services.segmentation_matte import generate_selfie_segmentation_matte
 
 
 class VisualIntelligenceProvider(Protocol):
@@ -221,6 +224,7 @@ class LocalMLVisualIntelligenceProvider:
                 "blip": self.blip_model_name,
                 "object_detection": self.yolo_model_name,
                 "face_detection": "mediapipe-face-detection",
+                "segmentation": "mediapipe-selfie-segmentation",
             },
             frame_samples=samples,
             scenes=scenes,
@@ -264,6 +268,9 @@ class LocalMLVisualIntelligenceProvider:
             model_selection=1,
             min_detection_confidence=0.45,
         )
+        selfie_segmentation = mp.solutions.selfie_segmentation.SelfieSegmentation(
+            model_selection=1,
+        )
         self._loaded = {
             "cv2": cv2,
             "np": np,
@@ -276,6 +283,7 @@ class LocalMLVisualIntelligenceProvider:
             "blip_model": blip_model,
             "yolo_model": yolo_model,
             "face_detector": face_detector,
+            "selfie_segmentation": selfie_segmentation,
         }
         return self._loaded
 
@@ -339,6 +347,17 @@ def run_visual_analysis_for_upload(
             sample_rate_fps=sample_rate_fps,
             scene_threshold=scene_threshold,
         )
+        if provider.provider_name == LocalMLVisualIntelligenceProvider.provider_name:
+            manifest = _attach_segmentation_matte(
+                manifest=manifest,
+                provider=provider,
+                source_path=source_path,
+                storage=storage,
+                upload_bucket=upload.storage_bucket,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                video_id=video_id,
+            )
     except ApiError as exc:
         repository.transition_manifest(
             record=record,
@@ -366,6 +385,50 @@ def run_visual_analysis_for_upload(
         status=VisualManifestStatus.READY,
         manifest=manifest,
     )
+
+
+def _attach_segmentation_matte(
+    *,
+    manifest: VideoManifest,
+    provider: VisualIntelligenceProvider,
+    source_path: Path,
+    storage,
+    upload_bucket: str,
+    workspace_id: UUID,
+    project_id: UUID,
+    video_id: UUID,
+) -> VideoManifest:
+    if not isinstance(provider, LocalMLVisualIntelligenceProvider):
+        return manifest
+    models = provider._load_models()
+    matte_path = (
+        f"workspaces/{workspace_id}/projects/{project_id}/segmentation/{video_id}/matte.mp4"
+    )
+    with tempfile.TemporaryDirectory(prefix="motionly-matte-upload-") as temp_dir:
+        local_matte = Path(temp_dir) / "matte.mp4"
+        stats = generate_selfie_segmentation_matte(
+            cv2=models["cv2"],
+            np=models["np"],
+            selfie_segmentation=models["selfie_segmentation"],
+            source_path=source_path,
+            output_path=local_matte,
+        )
+        storage.upload_file(
+            bucket=upload_bucket,
+            path=matte_path,
+            source_path=local_matte,
+            content_type="video/mp4",
+        )
+    matte = SegmentationMatte(
+        bucket=upload_bucket,
+        path=matte_path,
+        model="mediapipe-selfie-segmentation",
+        fps=float(stats["fps"]),
+        width=int(stats["width"]),
+        height=int(stats["height"]),
+        frame_count=int(stats["frame_count"]),
+    )
+    return manifest.model_copy(update={"segmentation_matte": matte})
 
 
 def _fixture_timestamps(*, duration_ms: int, sample_rate_fps: float) -> list[int]:

@@ -77,6 +77,16 @@ class FrameSample(BaseModel):
     visual_importance_score: float = Field(default=0, ge=0, le=1)
 
 
+class SegmentationMatte(BaseModel):
+    bucket: str = Field(min_length=1, max_length=120)
+    path: str = Field(min_length=1, max_length=512)
+    model: str = Field(default="mediapipe-selfie-segmentation", max_length=120)
+    fps: float = Field(gt=0, le=120)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    frame_count: int = Field(gt=0)
+
+
 class SceneSegment(BaseModel):
     index: int = Field(ge=0)
     start_ms: int = Field(ge=0)
@@ -108,6 +118,7 @@ class VideoManifest(BaseModel):
     frame_samples: list[FrameSample] = Field(default_factory=list)
     scenes: list[SceneSegment] = Field(default_factory=list)
     summary: dict[str, Any] = Field(default_factory=dict)
+    segmentation_matte: SegmentationMatte | None = None
 
 
 class VisualAnalyzeRequest(JsonStringBodyMixin, BaseModel):

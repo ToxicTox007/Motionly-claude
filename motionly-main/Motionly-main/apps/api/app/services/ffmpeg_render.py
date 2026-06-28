@@ -32,6 +32,7 @@ class FFmpegCaptionRenderer:
         keep_segments: list[CutSegment] | None = None,
         video_encoder: str = "libx264",
         watermark: bool = False,
+        matte_path: Path | None = None,
     ) -> tuple[int, int]:
         if which("ffmpeg") is None:
             raise ApiError(
@@ -53,6 +54,7 @@ class FFmpegCaptionRenderer:
             keep_segments=safe_keep_segments,
             watermark=watermark,
             include_source_audio=dialogue_source is None,
+            matte_path=matte_path,
         )
         active_sfx_sources = (sfx_sources or [])[:6] if sfx_intensity > 0 else []
         has_music = music_source is not None and music_volume > 0
@@ -80,7 +82,11 @@ class FFmpegCaptionRenderer:
             ),
         )
         uses_filter_complex = bool(
-            broll_assets or audio_filter or source_audio_map or dialogue_filter
+            broll_assets
+            or audio_filter
+            or source_audio_map
+            or dialogue_filter
+            or matte_path is not None
         )
         if (audio_filter or dialogue_filter) and not broll_assets and not source_audio_map:
             filter_graph = f"[0:v]{filter_graph}[vout]"
@@ -211,9 +217,12 @@ def _build_video_filter_graph(
     keep_segments: list[CutSegment],
     watermark: bool,
     include_source_audio: bool,
+    matte_path: Path | None = None,
 ) -> tuple[str, str, str | None]:
+    background = _dict((effects_config or {}).get("background_removal"))
+    use_segmentation = bool(background.get("enabled")) and matte_path is not None
     source_steps = _source_framing_filters(specs=specs, framing=framing)
-    source_steps.extend(_effects_filters(effects_config))
+    source_steps.extend(_effects_filters(effects_config, use_segmentation=use_segmentation))
     source_steps.extend(_manual_element_filters(manual_elements, specs=specs))
     if watermark:
         source_steps.append(
@@ -225,6 +234,19 @@ def _build_video_filter_graph(
         keep_segments,
         include_audio=include_source_audio,
     )
+    if use_segmentation and matte_path is not None:
+        return _segmentation_video_filter_graph(
+            specs=specs,
+            ass_path=ass_path,
+            broll_assets=broll_assets,
+            effects_config=effects_config,
+            source_steps=source_steps,
+            cut_filters=cut_filters,
+            source_video_label=source_video_label,
+            source_audio_label=source_audio_label,
+            matte_path=matte_path,
+            watermark=watermark,
+        )
     if not broll_assets:
         if ass_path is not None:
             source_steps.append(f"ass={_ffmpeg_filter_path(ass_path)}")
@@ -321,7 +343,11 @@ def _cut_filter_graph(
     )
 
 
-def _effects_filters(effects_config: dict[str, object] | None) -> list[str]:
+def _effects_filters(
+    effects_config: dict[str, object] | None,
+    *,
+    use_segmentation: bool = False,
+) -> list[str]:
     if not effects_config:
         return []
 
@@ -362,12 +388,92 @@ def _effects_filters(effects_config: dict[str, object] | None) -> list[str]:
         filters.append(f"drawbox=x=iw*0.62:y=0:w=iw*0.38:h=ih:color=0xffd08a@{opacity:.3f}:t=fill")
     if bool(texture.get("anamorphic_flare")):
         filters.append("drawbox=x=0:y=ih*0.43:w=iw:h=26:color=white@0.105:t=fill")
-    if bool(background.get("enabled")):
+    if bool(background.get("enabled")) and not use_segmentation:
         feather = min(16, max(0, _float(background.get("feather_px"), 18) / 6))
         filters.append(
             f"boxblur=luma_radius={feather:.1f}:luma_power=1:enable='lt(mod(t\\,2)\\,0.28)'"
         )
     return filters
+
+
+def _segmentation_video_filter_graph(
+    *,
+    specs: RenderSpecs,
+    ass_path: Path | None,
+    broll_assets: list[dict[str, Any]],
+    effects_config: dict[str, object] | None,
+    source_steps: list[str],
+    cut_filters: str,
+    source_video_label: str,
+    source_audio_label: str | None,
+    matte_path: Path,
+    watermark: bool,
+) -> tuple[str, str, str | None]:
+    del watermark
+    background = _dict((effects_config or {}).get("background_removal"))
+    gradient = _dict((effects_config or {}).get("gradient_ramp"))
+    feather = min(16, max(0, _float(background.get("feather_px"), 18) / 6))
+    start_color = _ffmpeg_color(str(gradient.get("start_color", "#0f172a")))
+    end_color = _ffmpeg_color(str(gradient.get("end_color", "#f59e0b")))
+    filters: list[str] = []
+    if cut_filters:
+        filters.append(cut_filters)
+    filters.append(f"{source_video_label}{','.join(source_steps)}[srcfx]")
+    filters.append(f"movie={_ffmpeg_filter_path(matte_path)}[matte_raw]")
+    filters.append(
+        f"[matte_raw]format=gray,scale={specs.width}:{specs.height}:flags=bilinear,"
+        f"boxblur=luma_radius={feather:.1f}:luma_power=1[matte]"
+    )
+    filters.append(f"[srcfx][matte]alphamerge[fg]")
+    filters.append(f"color={start_color}:s={specs.width}x{specs.height}:d=3600[bgbase]")
+    filters.append(
+        f"[bgbase]drawbox=x=0:y=ih*0.55:w=iw:h=ih*0.45:color={end_color}@0.65:t=fill[bg]"
+    )
+    filters.append(f"[bg][fg]overlay=format=auto[seg0]")
+    current = "seg0"
+
+    if not broll_assets:
+        if ass_path is not None:
+            filters.append(f"[{current}]ass={_ffmpeg_filter_path(ass_path)}[vout]")
+            return ";".join(filters), "[vout]", source_audio_label
+        return ";".join(filters), f"[{current}]", source_audio_label
+
+    for index, asset in enumerate(broll_assets, start=1):
+        start_ms = max(0, int(asset["start_ms"]))
+        end_ms = max(start_ms + 1, int(asset["end_ms"]))
+        start_s = start_ms / 1000
+        end_s = end_ms / 1000
+        duration_s = max(0.1, (end_ms - start_ms) / 1000)
+        crossfade_s = min(
+            max(0.08, float(asset.get("crossfade_ms") or 260) / 1000),
+            max(0.08, duration_s / 3),
+        )
+        broll_label = f"broll{index}"
+        next_label = f"base{index}"
+        filters.append(
+            f"[{index}:v]"
+            f"trim=duration={duration_s:.3f},"
+            "setpts=PTS-STARTPTS,"
+            f"scale={specs.width}:{specs.height}:force_original_aspect_ratio=increase,"
+            f"crop={specs.width}:{specs.height},setsar=1,format=yuva420p,"
+            f"fade=t=in:st=0:d={crossfade_s:.3f}:alpha=1,"
+            f"fade=t=out:st={max(0, duration_s - crossfade_s):.3f}:"
+            f"d={crossfade_s:.3f}:alpha=1,"
+            f"setpts=PTS+{start_s:.3f}/TB"
+            f"[{broll_label}]"
+        )
+        filters.append(
+            f"[{current}][{broll_label}]"
+            f"overlay=enable='between(t,{start_s:.3f},{end_s:.3f})':"
+            "eof_action=pass:shortest=0"
+            f"[{next_label}]"
+        )
+        current = next_label
+
+    if ass_path is not None:
+        filters.append(f"[{current}]ass={_ffmpeg_filter_path(ass_path)}[vout]")
+        return ";".join(filters), "[vout]", source_audio_label
+    return ";".join(filters), f"[{current}]", source_audio_label
 
 
 def _source_framing_filters(

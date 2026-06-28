@@ -132,3 +132,31 @@
   ```
 - Remaining caveats: None. Supabase storage JS SDK is verified to support standard Node.js readable streams.
 
+## Phase 4 / Task 4.5 — Real background segmentation (Option A)
+
+- Date: 2026-06-28
+- Executor: Cursor / Implementer
+- Files touched:
+  - [segmentation_matte.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/segmentation_matte.py)
+  - [visual_intelligence.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/visual_intelligence.py#L267-L420)
+  - [visual.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/schemas/visual.py#L80-L88)
+  - [renders.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/renders.py#L627-L660)
+  - [ffmpeg_render.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/ffmpeg_render.py#L365-L470)
+  - [render_jobs.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/render_jobs.py#L431-L470)
+  - [VideoScene.tsx](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/renderer/src/components/VideoScene.tsx#L128-L310)
+  - [remotion.mjs](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/worker/src/remotion.mjs#L340-L620)
+  - [look-tab.tsx](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/web/components/editor/tabs/look-tab.tsx#L1093-L1100)
+- Audit finding resolved: Fake CSS ellipse / FFmpeg boxblur presented as background removal; no ML segmentation masks in render pipeline.
+- What changed: Added MediaPipe Selfie Segmentation matte generation during GPU visual analysis, stored matte video in object storage, wired `segmentationMatte` into render props, composited real masks in Remotion (alpha-key pre-pass) and FFmpeg (`movie` + `alphamerge`), updated UI copy to “Subject segmentation”, and removed legacy ellipse fallback when a matte is present.
+- Verification performed: `pytest tests/test_segmentation_matte.py tests/test_ffmpeg_render.py::test_ffmpeg_renderer_uses_segmentation_matte_instead_of_boxblur` and `node --test apps/web/tests/phase7-product-integrity.test.mjs`
+- Verification output / evidence:
+  ```
+  tests/test_segmentation_matte.py .                                         [100%]
+  tests/test_ffmpeg_render.py .                                              [100%]
+  2 passed, 1 warning in 1.04s
+
+  ✔ editor labels describe the implemented behavior
+  ℹ tests 3 / pass 3
+  ```
+- Remaining caveats: MediaPipe Selfie Segmentation is a lightweight stopgap (best for centered speakers). B-roll still uses legacy ellipse when `apply_to_broll` is enabled. Matte retention is not yet tied to upload delete triggers. Remotion golden `segmentation_off_center` scenario still pending GPU worker validation in CI media-goldens job.
+

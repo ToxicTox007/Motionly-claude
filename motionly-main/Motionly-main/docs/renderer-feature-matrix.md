@@ -23,7 +23,7 @@ This matrix is the production contract used when choosing a render engine. “Na
 | Grain, vignette, light leak, flare, gradients | Approximation | Native |
 | Ken Burns, speed ramps and impact zooms | Unsupported | Native |
 | Motion keyframes and per-clip motion effects | Unsupported | Native |
-| Portrait backdrop blur (ellipse/blur treatment; not segmentation) | Approximation | Approximation |
+| Subject segmentation (MediaPipe matte; experimental) | Approximation | Native |
 | Visual-manifest tracked auto-reframe | Approximation | Native |
 | Beat-impact motion at timeline boundaries | Unsupported | Native |
 | Fit/fill/custom framing and watermark | Native | Native |

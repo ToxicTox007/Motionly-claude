@@ -136,9 +136,10 @@ function SourceClipSurface({
     filter: [
       gradeFilter(input.editPlan.color_grade, template.default_color_grade),
       sourceMotion.filter,
+      segmentationSpillFilter(input),
     ].filter(Boolean).join(" "),
-    ...(input.effectsConfig?.background_removal?.enabled
-      ? subjectIsolationStyle(input.effectsConfig.background_removal.feather_px)
+    ...(usesLegacyBackgroundIsolation(input)
+      ? subjectIsolationStyle(input.effectsConfig!.background_removal!.feather_px)
       : {}),
   };
   return (
@@ -288,6 +289,22 @@ function RemovedBackgroundPlate({
       }}
     />
   );
+}
+
+function usesLegacyBackgroundIsolation(input: MotionlyRenderProps) {
+  const settings = input.effectsConfig?.background_removal;
+  if (!settings?.enabled) return false;
+  return !input.sourceVideo.has_alpha && !input.segmentationMatte?.src;
+}
+
+function segmentationSpillFilter(input: MotionlyRenderProps) {
+  const settings = input.effectsConfig?.background_removal;
+  if (!settings?.enabled) return undefined;
+  if (!input.sourceVideo.has_alpha && !input.segmentationMatte?.src) return undefined;
+  const spill = Math.max(0, Math.min(1, settings.spill_suppression ?? 0));
+  if (spill <= 0) return undefined;
+  const strength = (spill * 18).toFixed(1);
+  return `saturate(${(1 - spill * 0.35).toFixed(3)}) hue-rotate(${strength}deg)`;
 }
 
 function subjectIsolationStyle(featherPx: number) {

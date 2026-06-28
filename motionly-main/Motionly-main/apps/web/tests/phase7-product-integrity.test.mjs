@@ -15,8 +15,8 @@ test("editor labels describe the implemented behavior", async () => {
 
   assert.doesNotMatch(scale, /Custom style training|Train from overrides/);
   assert.match(scale, /Reference style analysis/);
-  assert.doesNotMatch(look, />Background removal</);
-  assert.match(look, /Portrait backdrop blur/);
+  assert.doesNotMatch(look, />AI background removal</);
+  assert.match(look, /Subject segmentation/);
   assert.doesNotMatch(catalog, /screen-record|Screen Record/);
 });
 

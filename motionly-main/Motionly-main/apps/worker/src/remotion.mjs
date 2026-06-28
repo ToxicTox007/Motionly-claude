@@ -15,9 +15,10 @@
  *   9. Clean up temp files
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 
@@ -354,7 +355,74 @@ async function assembleRenderProps(renderProps) {
     effectsConfig: renderProps.effectsConfig ?? null,
     sourceStems: resolvedStems,
     watermark: Boolean(renderProps.watermark),
+    segmentationMatte: renderProps.segmentationMatte ?? null,
   };
+}
+
+async function downloadToFile(url, destPath) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download media (${response.status}): ${url}`);
+  }
+  await writeFile(destPath, Buffer.from(await response.arrayBuffer()));
+}
+
+function startLocalFileServer(filePath) {
+  return new Promise((resolve, reject) => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "video/webm" });
+      createReadStream(filePath).pipe(res);
+    });
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      resolve({
+        url: `http://127.0.0.1:${port}/keyed.webm`,
+        close: () => new Promise((done) => server.close(done)),
+      });
+    });
+  });
+}
+
+async function applySegmentationAlphaKey({ sourceUrl, matteUrl, featherPx, workDir }) {
+  await mkdir(workDir, { recursive: true });
+  const sourcePath = join(workDir, "source.mp4");
+  const mattePath = join(workDir, "matte.mp4");
+  const keyedPath = join(workDir, "keyed.webm");
+  await downloadToFile(sourceUrl, sourcePath);
+  await downloadToFile(matteUrl, mattePath);
+  const feather = Math.max(0, Math.min(20, Number(featherPx ?? 18) / 8));
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-y",
+      "-i",
+      sourcePath,
+      "-i",
+      mattePath,
+      "-filter_complex",
+      `[1:v]format=gray,scale=iw:ih:flags=bilinear,boxblur=luma_radius=${feather.toFixed(1)}:luma_power=1[alpha];[0:v][alpha]alphamerge[out]`,
+      "-map",
+      "[out]",
+      "-map",
+      "0:a?",
+      "-c:v",
+      "libvpx-vp9",
+      "-pix_fmt",
+      "yuva420p",
+      "-auto-alt-ref",
+      "0",
+      keyedPath,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !(await stat(keyedPath).catch(() => null))) {
+    throw new Error(
+      `Failed to alpha-key source for segmentation: ${(result.stderr || "").slice(-500)}`,
+    );
+  }
+  return startLocalFileServer(keyedPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -456,10 +524,12 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
 
   const propsPath = `/tmp/motionly-props-${renderJobId}.json`;
   const outputPath = `/tmp/motionly-output-${renderJobId}.mp4`;
+  const keyedWorkDir = `/tmp/motionly-keyed-${renderJobId}`;
   const exportBucket = env("EXPORT_STORAGE_BUCKET", "exports");
   const exportStoragePath = `workspaces/${workspaceId}/projects/${projectId}/exports/${renderJobId}.mp4`;
 
   const started = Date.now();
+  let keyedServer = null;
   const progress = async (progressPct, message, eventType, metadata = {}) => {
     const payload = { progressPct, message, eventType, metadata };
     await persistProgressDirect(renderJobId, workspaceId, projectId, payload);
@@ -480,6 +550,25 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
     // 2. Resolve all media references to signed / real URLs
     await progress(30, "Resolving render media assets.", "remotion_assets");
     const resolvedProps = await assembleRenderProps(renderProps);
+    const backgroundRemoval = resolvedProps.effectsConfig?.background_removal;
+    const segmentationMatte = renderProps.segmentationMatte;
+    if (backgroundRemoval?.enabled && segmentationMatte?.src) {
+      const matteUrl = await resolveSrc(segmentationMatte.src);
+      if (!matteUrl) {
+        throw new Error("segmentation matte could not be resolved for premium render");
+      }
+      keyedServer = await applySegmentationAlphaKey({
+        sourceUrl: resolvedProps.sourceVideo.src,
+        matteUrl,
+        featherPx: backgroundRemoval.feather_px,
+        workDir: keyedWorkDir,
+      });
+      resolvedProps.sourceVideo = {
+        ...resolvedProps.sourceVideo,
+        src: keyedServer.url,
+        has_alpha: true,
+      };
+    }
 
     // 3. Write props to temp file
     await writeFile(propsPath, JSON.stringify(resolvedProps, null, 2));
@@ -523,11 +612,15 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
 
     return result;
   } finally {
+    if (keyedServer) {
+      await keyedServer.close();
+    }
     // 8. Clean up temp files (best-effort)
     await Promise.allSettled([
       rm(propsPath, { force: true }),
       rm(outputPath, { force: true }),
       rm(`${outputPath}.json`, { force: true }),
+      rm(keyedWorkDir, { recursive: true, force: true }),
     ]);
   }
 }

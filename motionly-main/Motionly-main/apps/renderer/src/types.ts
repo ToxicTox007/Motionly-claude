@@ -45,7 +45,9 @@ export type MotionlyRenderProps = {
     width: number;
     height: number;
     duration_ms: number;
+    has_alpha?: boolean;
   };
+  segmentationMatte?: import("@motionly/shared").SegmentationMatteRef | null;
   sourceStems?: {
     provider?: string;
     vocals?: { src?: string; bucket?: string; path?: string };
