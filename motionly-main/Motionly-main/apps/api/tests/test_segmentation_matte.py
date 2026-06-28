@@ -1,21 +1,29 @@
 from pathlib import Path
+from typing import Any
 from types import SimpleNamespace
 
-import cv2
-import numpy as np
 import pytest
+
+try:
+    import cv2
+    import numpy as np
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
 
 from app.services.segmentation_matte import generate_selfie_segmentation_matte
 
 
 class _FakeSelfieSegmentation:
-    def process(self, rgb: np.ndarray) -> object:
+    def process(self, rgb: Any) -> object:
         height, width = rgb.shape[:2]
         mask = np.zeros((height, width), dtype=np.float32)
         mask[:, int(width * 0.55) :] = 1.0
         return SimpleNamespace(segmentation_mask=mask)
 
 
+@pytest.mark.skipif(not HAS_CV2, reason="cv2 not installed")
 def test_generate_selfie_segmentation_matte_writes_grayscale_video(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

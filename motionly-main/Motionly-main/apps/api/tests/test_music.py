@@ -59,32 +59,71 @@ def make_music_repository() -> tuple[InMemoryMusicRepository, UUID, UUID, UUID]:
         .words,
     )
     plan_repository = InMemoryPlanRepository(caption_repository)
-    asyncio.run(
-        create_plan(
-            project_id=project_id,
-            payload=PlanCreateRequest(broll_density=BrollDensity.MEDIUM),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=plan_repository,
-            planner_provider=FixtureEditPlannerProvider(),
-            plan_queue=PlanQueue(),
-        )
+    from tests.worker_job_test_helpers import seed_active_plan
+    seed_active_plan(
+        plan_repository=plan_repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        payload=PlanCreateRequest(broll_density=BrollDensity.MEDIUM),
     )
     return InMemoryMusicRepository(plan_repository), project_id, workspace_id, user_id
+
+
+def run_select_music(
+    *,
+    project_id: UUID,
+    payload: MusicSelectRequest,
+    actor: Actor,
+    repository: InMemoryMusicRepository,
+    providers: list[FixtureMusicProvider],
+) -> object:
+    from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, DummyResponse
+    from app.services.queue import QueueRegistry
+    from app.schemas.music import MusicSelectResponse
+
+    registry = QueueRegistry()
+    request = build_queue_request_state(
+        registry=registry,
+        music_repository=repository,
+        plan_repository=repository.plan_repository,
+        music_providers=providers,
+    )
+    music_response = asyncio.run(
+        select_music(
+            project_id=project_id,
+            payload=payload,
+            actor=actor,
+            repository=repository,
+            plan_repository=repository.plan_repository,
+            music_queue=MusicQueue(registry=registry),
+            providers=providers,
+            request=request,
+            response=DummyResponse(),
+        )
+    )
+    if getattr(music_response, "status", None) == "queued":
+        asyncio.run(
+            run_enqueued_job(job_id=music_response.job_id, request=request)
+        )
+        selection = repository.latest_selection(project_id=project_id, workspace_id=actor.workspace_id)
+        music_response = MusicSelectResponse(
+            selection=repository.response_for_selection(selection),
+            job_id=music_response.job_id,
+            status="ready",
+        )
+    return music_response
 
 
 def test_select_music_creates_selection() -> None:
     repository, project_id, workspace_id, user_id = make_music_repository()
 
-    response = asyncio.run(
-        select_music(
-            project_id=project_id,
-            payload=MusicSelectRequest(),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=repository,
-            plan_repository=repository.plan_repository,
-            music_queue=MusicQueue(),
-            providers=[FixtureMusicProvider()],
-        )
+    response = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(),
+        actor=Actor(user_id=user_id, workspace_id=workspace_id),
+        repository=repository,
+        providers=[FixtureMusicProvider()],
     )
 
     assert response.status == "ready"
@@ -101,16 +140,12 @@ def test_update_music_regions_splits_and_deletes_region() -> None:
     repository, project_id, workspace_id, user_id = make_music_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
 
-    selected = asyncio.run(
-        select_music(
-            project_id=project_id,
-            payload=MusicSelectRequest(),
-            actor=actor,
-            repository=repository,
-            plan_repository=repository.plan_repository,
-            music_queue=MusicQueue(),
-            providers=[FixtureMusicProvider()],
-        )
+    selected = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(),
+        actor=actor,
+        repository=repository,
+        providers=[FixtureMusicProvider()],
     )
     original = selected.selection.regions[0]
 
@@ -168,16 +203,12 @@ def test_list_music_tracks_returns_clickable_options() -> None:
 def test_select_music_can_persist_no_music() -> None:
     repository, project_id, workspace_id, user_id = make_music_repository()
 
-    response = asyncio.run(
-        select_music(
-            project_id=project_id,
-            payload=MusicSelectRequest(include_music=False),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=repository,
-            plan_repository=repository.plan_repository,
-            music_queue=MusicQueue(),
-            providers=[FixtureMusicProvider()],
-        )
+    response = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(include_music=False),
+        actor=Actor(user_id=user_id, workspace_id=workspace_id),
+        repository=repository,
+        providers=[FixtureMusicProvider()],
     )
 
     assert response.selection.music_track is None
@@ -190,27 +221,19 @@ def test_change_music_chooses_alternative_track() -> None:
     repository, project_id, workspace_id, user_id = make_music_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
 
-    first = asyncio.run(
-        select_music(
-            project_id=project_id,
-            payload=MusicSelectRequest(mood="clean confident"),
-            actor=actor,
-            repository=repository,
-            plan_repository=repository.plan_repository,
-            music_queue=MusicQueue(),
-            providers=[FixtureMusicProvider()],
-        )
+    first = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(mood="clean confident"),
+        actor=actor,
+        repository=repository,
+        providers=[FixtureMusicProvider()],
     )
-    changed = asyncio.run(
-        select_music(
-            project_id=project_id,
-            payload=MusicSelectRequest(mood="clean confident", force=True),
-            actor=actor,
-            repository=repository,
-            plan_repository=repository.plan_repository,
-            music_queue=MusicQueue(),
-            providers=[FixtureMusicProvider()],
-        )
+    changed = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(mood="clean confident", force=True),
+        actor=actor,
+        repository=repository,
+        providers=[FixtureMusicProvider()],
     )
 
     assert first.selection.music_track is not None
@@ -225,27 +248,19 @@ def test_select_music_reuses_cached_selection() -> None:
     repository, project_id, workspace_id, user_id = make_music_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
 
-    first = asyncio.run(
-        select_music(
-            project_id=project_id,
-            payload=MusicSelectRequest(),
-            actor=actor,
-            repository=repository,
-            plan_repository=repository.plan_repository,
-            music_queue=MusicQueue(),
-            providers=[FixtureMusicProvider()],
-        )
+    first = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(),
+        actor=actor,
+        repository=repository,
+        providers=[FixtureMusicProvider()],
     )
-    second = asyncio.run(
-        select_music(
-            project_id=project_id,
-            payload=MusicSelectRequest(),
-            actor=actor,
-            repository=repository,
-            plan_repository=repository.plan_repository,
-            music_queue=MusicQueue(),
-            providers=[FixtureMusicProvider()],
-        )
+    second = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(),
+        actor=actor,
+        repository=repository,
+        providers=[FixtureMusicProvider()],
     )
 
     assert second.cached is True
@@ -256,16 +271,12 @@ def test_select_music_rejects_cross_workspace_access() -> None:
     repository, project_id, workspace_id, user_id = make_music_repository()
 
     with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            select_music(
-                project_id=project_id,
-                payload=MusicSelectRequest(),
-                actor=Actor(user_id=user_id, workspace_id=uuid4()),
-                repository=repository,
-                plan_repository=repository.plan_repository,
-                music_queue=MusicQueue(),
-                providers=[FixtureMusicProvider()],
-            )
+        run_select_music(
+            project_id=project_id,
+            payload=MusicSelectRequest(),
+            actor=Actor(user_id=user_id, workspace_id=uuid4()),
+            repository=repository,
+            providers=[FixtureMusicProvider()],
         )
 
     assert exc_info.value.status_code in {403, 404}

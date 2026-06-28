@@ -30,7 +30,7 @@ from app.services.layer_job_enqueue import (
     prepare_heavy_job_enqueue,
     serialize_layer_job_payload,
 )
-from app.services.music import MusicProvider
+from app.services.music import MusicProvider, MusicTrackCandidate
 from app.services.queue import MusicQueue
 
 router = APIRouter(prefix="/projects/{project_id}/music", tags=["Music"])

@@ -632,20 +632,17 @@ def test_source_timeline_maps_cuts_and_manual_elements_to_output_time() -> None:
 def test_render_creation_uses_active_edit_plan_cuts_as_authority() -> None:
     repository, project_id, workspace_id, user_id = make_render_repository()
     plan_repository = InMemoryPlanRepository(repository.caption_repository)
-    plan_response = asyncio.run(
-        create_plan(
-            project_id=project_id,
-            payload=PlanCreateRequest(target_duration_s=10, broll_density=BrollDensity.NONE),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=plan_repository,
-            planner_provider=FixtureEditPlannerProvider(),
-            plan_queue=PlanQueue(),
-        )
-    )
-    plan_record = plan_repository.get_plan(
+    from tests.worker_job_test_helpers import seed_active_plan
+    seed_active_plan(
+        plan_repository=plan_repository,
         project_id=project_id,
         workspace_id=workspace_id,
-        plan_id=plan_response.plan.id,
+        user_id=user_id,
+        payload=PlanCreateRequest(target_duration_s=10, broll_density=BrollDensity.NONE),
+    )
+    plan_record = plan_repository.active_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
     )
     plan_record.plan = plan_record.plan.model_copy(
         update={

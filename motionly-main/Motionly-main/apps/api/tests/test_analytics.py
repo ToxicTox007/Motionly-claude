@@ -94,17 +94,35 @@ def test_plan_suggestions_and_manual_cut_overrides_create_feedback_events() -> N
     request = request_with_analytics(analytics_repository)
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
 
-    created = asyncio.run(
+    from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, DummyResponse
+    from app.services.queue import QueueRegistry
+
+    registry = QueueRegistry()
+    request = build_queue_request_state(
+        registry=registry,
+        plan_repository=plan_repository,
+        analytics_repository=analytics_repository,
+        edit_planner_provider=FixtureEditPlannerProvider(),
+    )
+
+    created_resp = asyncio.run(
         create_plan(
             project_id=project_id,
             payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=12),
             actor=actor,
             repository=plan_repository,
             planner_provider=FixtureEditPlannerProvider(),
-            plan_queue=PlanQueue(),
+            plan_queue=PlanQueue(registry=registry),
             request=request,
+            response=DummyResponse(),
         )
     )
+    asyncio.run(
+        run_enqueued_job(job_id=created_resp.job_id, request=request)
+    )
+    plan = plan_repository.active_plan(project_id=project_id, workspace_id=workspace_id)
+    created = SimpleNamespace(plan=plan)
+
     suggested = analytics_repository.list_events(
         project_id=project_id,
         workspace_id=workspace_id,

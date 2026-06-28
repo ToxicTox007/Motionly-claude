@@ -120,6 +120,15 @@ class InMemoryRegenerationRepository:
         self.control_settings[record.id] = record
         return record
 
+    def get_control_settings(self, control_settings_id: UUID) -> ControlSettingsRecord | None:
+        return self.control_settings.get(control_settings_id)
+
+    def get_artifact_versions_by_cache_key(self, project_id: UUID, cache_key: str) -> list[ArtifactVersionRecord]:
+        return [
+            art for art in self.artifact_versions.values()
+            if art.project_id == project_id and art.cache_key == cache_key
+        ]
+
     def create_artifact_versions(
         self,
         *,
@@ -233,6 +242,28 @@ class SupabaseRegenerationRepository(InMemoryRegenerationRepository):
         )
         self._raise_for_supabase(response)
         return [self._artifact_from_row(row) for row in response.json()]
+
+    def get_control_settings(self, control_settings_id: UUID) -> ControlSettingsRecord | None:
+        response = httpx.get(
+            f"{self.rest_url}/project_control_settings",
+            headers=self.headers,
+            params={"id": f"eq.{control_settings_id}"},
+            timeout=10,
+        )
+        if response.status_code == 200 and response.json():
+            return self._control_from_row(response.json()[0])
+        return None
+
+    def get_artifact_versions_by_cache_key(self, project_id: UUID, cache_key: str) -> list[ArtifactVersionRecord]:
+        response = httpx.get(
+            f"{self.rest_url}/artifact_versions",
+            headers=self.headers,
+            params={"project_id": f"eq.{project_id}", "cache_key": f"eq.{cache_key}"},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return [self._artifact_from_row(row) for row in response.json()]
+        return []
 
     def latest_layer_version(
         self,

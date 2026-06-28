@@ -54,7 +54,8 @@ from app.services.stock_video import (
     semantic_match_score,
 )
 from app.services.storage import StorageSigner
-from app.schemas.music import MusicRegion, MusicTrackCandidate
+from app.schemas.music import MusicRegion
+from app.services.music import MusicTrackCandidate
 
 
 def execute_broll_generation(
@@ -284,8 +285,7 @@ def execute_music_selection(
     user_id: UUID | None,
     payload: MusicSelectRequest,
 ) -> dict[str, Any]:
-    from app.api.music import build_music_cache_key
-    from app.services.music import candidates_for_change
+    from app.api.music import build_music_cache_key, candidates_for_change
 
     plan = plan_repository.active_plan(project_id=project_id, workspace_id=workspace_id)
     mood = payload.mood or plan.plan.music_mood
@@ -353,7 +353,7 @@ def execute_music_selection(
         mood=mood,
         music_volume=music_volume,
         sfx_intensity=sfx_intensity,
-        track_id=track.id if track else None,
+        track_id=payload.music_track_id,
     )
     if not payload.force:
         cached = repository.find_cached_selection(
@@ -572,26 +572,37 @@ def execute_regeneration(
     workspace_id: UUID,
     project_id: UUID,
     payload: RegenerateRequest,
+    control_settings_id: UUID | None = None,
 ) -> dict[str, Any]:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
     affected_layers = affected_layers_for_request(payload)
     summary = settings_summary(payload)
-    controls = repository.create_control_settings(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        schema_version=REGENERATION_SCHEMA_VERSION,
-        controls=payload.controls,
-        action=payload.action,
-        export_options=payload.export_options,
-        settings_summary=summary,
-    )
-    artifacts = repository.create_artifact_versions(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        layers=affected_layers,
-        cache_key=build_regeneration_cache_key(payload),
-        settings_summary=summary,
-    )
+    cache_key = build_regeneration_cache_key(payload)
+
+    controls = None
+    if control_settings_id is not None:
+        controls = repository.get_control_settings(control_settings_id)
+
+    if controls is not None:
+        artifacts = repository.get_artifact_versions_by_cache_key(project_id=project_id, cache_key=cache_key)
+    else:
+        controls = repository.create_control_settings(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            schema_version=REGENERATION_SCHEMA_VERSION,
+            controls=payload.controls,
+            action=payload.action,
+            export_options=payload.export_options,
+            settings_summary=summary,
+        )
+        artifacts = repository.create_artifact_versions(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            layers=affected_layers,
+            cache_key=cache_key,
+            settings_summary=summary,
+        )
+
     return {
         "controls_id": str(controls.id),
         "artifact_version_ids": [str(artifact.id) for artifact in artifacts],

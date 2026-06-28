@@ -741,6 +741,7 @@ class RegenerationQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         control_settings_id: UUID,
+        job_payload: str = "{}",
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=":".join(
@@ -749,4 +750,5 @@ class RegenerationQueue(BaseQueue):
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=control_settings_id,
+            render_engine=job_payload,
         )

@@ -76,6 +76,53 @@ def make_request() -> SimpleNamespace:
     )
 
 
+def run_generate_captions(
+    *,
+    project_id: UUID,
+    payload: CaptionGenerateRequest,
+    actor: Actor,
+    repository: InMemoryCaptionRepository,
+    transcription_queue: TranscriptionQueue,
+) -> object:
+    from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, DummyResponse
+    from app.services.queue import QueueRegistry
+    from app.schemas.captions import CaptionGenerateResponse
+
+    registry = QueueRegistry()
+    transcription_queue = TranscriptionQueue(registry=registry)
+    request = build_queue_request_state(
+        registry=registry,
+        caption_repository=repository,
+    )
+    request.app.state.transcription_queue = transcription_queue
+
+    response = DummyResponse()
+    captions_response = asyncio.run(
+        generate_captions(
+            project_id=project_id,
+            payload=payload,
+            actor=actor,
+            repository=repository,
+            transcription_queue=transcription_queue,
+            request=request,
+            response=response,
+        )
+    )
+    if getattr(captions_response, "status", None) == "queued":
+        asyncio.run(
+            run_enqueued_job(job_id=captions_response.job_id, request=request)
+        )
+        tracks = repository.list_caption_tracks(project_id=project_id, workspace_id=actor.workspace_id)
+        track = sorted(tracks, key=lambda item: item.updated_at, reverse=True)[0]
+        captions_response = CaptionGenerateResponse(
+            track=track.to_response(),
+            job_id=captions_response.job_id,
+            status="ready",
+        )
+    return captions_response
+
+
+
 def make_repository() -> tuple[InMemoryCaptionRepository, UUID, UUID, UUID]:
     upload_repository = InMemoryUploadRepository()
     project_id = uuid4()
@@ -125,14 +172,12 @@ def test_transcription_and_caption_generation_happy_path() -> None:
     assert transcript.raw_payload["audio_intelligence"]["emotion_pacing"]["windows"]
     assert transcript.raw_payload["audio_intelligence"]["sound_classification"]["labels"]
 
-    captions = asyncio.run(
-        generate_captions(
-            project_id=project_id,
-            payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=repository,
-            transcription_queue=TranscriptionQueue(),
-        )
+    captions = run_generate_captions(
+        project_id=project_id,
+        payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
+        actor=Actor(user_id=user_id, workspace_id=workspace_id),
+        repository=repository,
+        transcription_queue=TranscriptionQueue(),
     )
 
     assert captions.status == "ready"
@@ -158,14 +203,12 @@ def test_stage_5_caption_modes_generate_mode_specific_tracks() -> None:
     )
     assert transcription.transcript_id is not None
 
-    captions = asyncio.run(
-        generate_captions(
-            project_id=project_id,
-            payload=CaptionGenerateRequest(preset=CaptionPresetKey.EDUCATIONAL_CARD),
-            actor=actor,
-            repository=repository,
-            transcription_queue=TranscriptionQueue(),
-        )
+    captions = run_generate_captions(
+        project_id=project_id,
+        payload=CaptionGenerateRequest(preset=CaptionPresetKey.EDUCATIONAL_CARD),
+        actor=actor,
+        repository=repository,
+        transcription_queue=TranscriptionQueue(),
     )
 
     assert captions.track.schema_version == CAPTION_SCHEMA_VERSION
@@ -387,14 +430,12 @@ def test_update_caption_segments_persists_timeline_edits() -> None:
             transcription_queue=TranscriptionQueue(),
         )
     )
-    captions = asyncio.run(
-        generate_captions(
-            project_id=project_id,
-            payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
-            actor=actor,
-            repository=repository,
-            transcription_queue=TranscriptionQueue(),
-        )
+    captions = run_generate_captions(
+        project_id=project_id,
+        payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
+        actor=actor,
+        repository=repository,
+        transcription_queue=TranscriptionQueue(),
     )
     first = captions.track.segments[0]
     second = captions.track.segments[1]
@@ -444,14 +485,12 @@ def test_update_caption_track_persists_custom_style() -> None:
             transcription_queue=TranscriptionQueue(),
         )
     )
-    captions = asyncio.run(
-        generate_captions(
-            project_id=project_id,
-            payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
-            actor=actor,
-            repository=repository,
-            transcription_queue=TranscriptionQueue(),
-        )
+    captions = run_generate_captions(
+        project_id=project_id,
+        payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
+        actor=actor,
+        repository=repository,
+        transcription_queue=TranscriptionQueue(),
     )
     custom_style = captions.track.style.model_copy(
         update={
@@ -492,14 +531,12 @@ def test_update_caption_segments_rejects_cross_workspace_access() -> None:
             transcription_queue=TranscriptionQueue(),
         )
     )
-    captions = asyncio.run(
-        generate_captions(
-            project_id=project_id,
-            payload=CaptionGenerateRequest(),
-            actor=actor,
-            repository=repository,
-            transcription_queue=TranscriptionQueue(),
-        )
+    captions = run_generate_captions(
+        project_id=project_id,
+        payload=CaptionGenerateRequest(),
+        actor=actor,
+        repository=repository,
+        transcription_queue=TranscriptionQueue(),
     )
 
     with pytest.raises(ApiError) as exc_info:
@@ -569,14 +606,12 @@ def test_caption_generation_rejects_cross_workspace_access() -> None:
     )
 
     with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            generate_captions(
-                project_id=project_id,
-                payload=CaptionGenerateRequest(),
-                actor=Actor(user_id=user_id, workspace_id=uuid4()),
-                repository=repository,
-                transcription_queue=TranscriptionQueue(),
-            )
+        run_generate_captions(
+            project_id=project_id,
+            payload=CaptionGenerateRequest(),
+            actor=Actor(user_id=user_id, workspace_id=uuid4()),
+            repository=repository,
+            transcription_queue=TranscriptionQueue(),
         )
 
     assert exc_info.value.status_code in {403, 404}

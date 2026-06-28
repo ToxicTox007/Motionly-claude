@@ -202,7 +202,14 @@ def test_every_admin_route_requires_the_admin_authorization_dependency(monkeypat
     from app.main import app
 
     try:
-        routes = [route for route in app.routes if route.path.startswith("/admin")]
+        routes = []
+        for route in app.routes:
+            if hasattr(route, "path") and route.path.startswith("/admin"):
+                routes.append(route)
+            elif hasattr(route, "original_router"):
+                for sub in route.original_router.routes:
+                    if hasattr(sub, "path") and sub.path.startswith("/admin"):
+                        routes.append(sub)
         assert routes
         for route in routes:
             dependencies = {dependency.call for dependency in route.dependant.dependencies}

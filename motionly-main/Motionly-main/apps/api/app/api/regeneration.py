@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.api.dependencies import (
     Actor,
@@ -22,6 +22,11 @@ from app.services.regeneration import (
     preserved_layers,
     settings_summary,
 )
+from app.services.layer_job_enqueue import (
+    prepare_heavy_job_enqueue,
+    serialize_layer_job_payload,
+    build_queued_layer_response_fields,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/regenerate", tags=["regeneration"])
 
@@ -40,8 +45,12 @@ async def regenerate_project_layers(
     actor: ActorDep,
     repository: RegenerationRepositoryDep,
     regeneration_queue: RegenerationQueueDep,
+    request: Request,
+    response: Response,
 ) -> RegenerateResponse:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
+    prepare_heavy_job_enqueue(request=request)
+
     affected_layers = affected_layers_for_request(payload)
     summary = settings_summary(payload)
     controls = repository.create_control_settings(
@@ -60,10 +69,20 @@ async def regenerate_project_layers(
         cache_key=build_regeneration_cache_key(payload),
         settings_summary=summary,
     )
+    job = regeneration_queue.enqueue_regeneration(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        control_settings_id=controls.id,
+        job_payload=serialize_layer_job_payload(payload=payload, user_id=actor.user_id),
+    )
     return RegenerateResponse(
-        job_id=f"sync-complete--regeneration--{project_id}--{controls.id}",
         affected_layers=affected_layers,
         preserved_layers=preserved_layers(affected_layers),
         controls=controls.to_response(),
         artifact_versions=[artifact.to_response() for artifact in artifacts],
+        **build_queued_layer_response_fields(
+            project_id=project_id,
+            job_id=job.id,
+            response=response,
+        )
     )

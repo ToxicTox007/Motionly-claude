@@ -42,7 +42,7 @@ from app.schemas.visual import (
 )
 from app.services.broll_intelligence import apply_stage4_broll_rules
 from app.services.queue import BrollQueue, QueueRegistry
-from app.services.stock_video import FixtureStockVideoProvider, score_candidate
+from app.services.stock_video import FixtureStockVideoProvider, score_candidate, StockVideoProvider
 from app.services.storage import StorageSigner
 from app.services.transcription_provider import FixtureTranscriptionProvider
 from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, seed_active_plan
@@ -217,17 +217,15 @@ def test_user_broll_library_upload_list_and_delete() -> None:
 def test_generate_broll_stores_stage_4_semantic_metadata() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
 
-    response = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(force=True),
-            request=_request(),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    response = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(force=True),
+        request=_request(),
+        actor=Actor(user_id=user_id, workspace_id=workspace_id),
+        repository=repository,
+        billing_repository=make_creator_billing_repository(workspace_id),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
 
     slot = response.slots[0]
@@ -244,29 +242,25 @@ def test_generate_broll_stores_stage_4_semantic_metadata() -> None:
 def test_generate_broll_reuses_cached_selection() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
-    first = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(),
-            request=_request(),
-            actor=actor,
-            repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    first = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=make_creator_billing_repository(workspace_id),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
-    second = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(),
-            request=_request(),
-            actor=actor,
-            repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    second = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=make_creator_billing_repository(workspace_id),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
 
     assert second.cached is True
@@ -276,17 +270,15 @@ def test_generate_broll_reuses_cached_selection() -> None:
 def test_swap_broll_can_disable_and_reselect_candidate() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
-    generated = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(),
-            request=_request(),
-            actor=actor,
-            repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    generated = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=make_creator_billing_repository(workspace_id),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
     slot = generated.slots[0]
     alternate = slot.candidates[1]
@@ -318,17 +310,15 @@ def test_swap_broll_can_disable_and_reselect_candidate() -> None:
 def test_update_broll_region_persists_timing_and_disabled_state() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
-    generated = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(),
-            request=_request(),
-            actor=actor,
-            repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    generated = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=make_creator_billing_repository(workspace_id),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
     slot = generated.slots[0]
 
@@ -356,17 +346,15 @@ def test_update_broll_region_persists_timing_and_disabled_state() -> None:
 def test_update_broll_region_rejects_cross_workspace_access() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
-    generated = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(),
-            request=_request(),
-            actor=actor,
-            repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    generated = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=make_creator_billing_repository(workspace_id),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
 
     with pytest.raises(ApiError) as exc_info:
@@ -391,17 +379,15 @@ def test_update_broll_region_validates_ranges() -> None:
 def test_search_broll_candidates_adds_provider_results_to_slot() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
-    generated = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(),
-            request=_request(),
-            actor=actor,
-            repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    generated = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=make_creator_billing_repository(workspace_id),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
     slot = generated.slots[0]
 
@@ -477,17 +463,15 @@ def test_semantic_candidate_scoring_enforces_shot_type_diversity() -> None:
 def test_generate_broll_allows_local_qa_when_billing_is_disabled() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
 
-    response = asyncio.run(
-        generate_broll(
-            project_id=project_id,
-            payload=BrollGenerateRequest(),
-            request=_request(billing_enabled=False),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=repository,
-            billing_repository=InMemoryBillingRepository(),
-            broll_queue=BrollQueue(),
-            providers=[FixtureStockVideoProvider()],
-        )
+    response = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(billing_enabled=False),
+        actor=Actor(user_id=user_id, workspace_id=workspace_id),
+        repository=repository,
+        billing_repository=InMemoryBillingRepository(),
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
     )
 
     assert response.status == "ready"
@@ -498,17 +482,15 @@ def test_generate_broll_requires_creator_when_billing_is_enabled() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
 
     with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            generate_broll(
-                project_id=project_id,
-                payload=BrollGenerateRequest(),
-                request=_request(billing_enabled=True),
-                actor=Actor(user_id=user_id, workspace_id=workspace_id),
-                repository=repository,
-                billing_repository=InMemoryBillingRepository(),
-                broll_queue=BrollQueue(),
-                providers=[FixtureStockVideoProvider()],
-            )
+        run_generate_broll(
+            project_id=project_id,
+            payload=BrollGenerateRequest(),
+            request=_request(billing_enabled=True),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            broll_queue=BrollQueue(),
+            providers=[FixtureStockVideoProvider()],
         )
 
     assert exc_info.value.status_code == 402
@@ -545,6 +527,57 @@ def _request(*, billing_enabled: bool = True, registry: QueueRegistry | None = N
         stock_video_providers=[FixtureStockVideoProvider()],
         storage_signer=StorageSigner(base_url="http://localhost:8000"),
     )
+
+
+def run_generate_broll(
+    *,
+    project_id: UUID,
+    payload: BrollGenerateRequest,
+    request: object,
+    actor: Actor,
+    repository: InMemoryBrollRepository,
+    billing_repository: InMemoryBillingRepository,
+    broll_queue: BrollQueue,
+    providers: list[StockVideoProvider],
+) -> object:
+    from tests.worker_job_test_helpers import run_enqueued_job
+    from app.schemas.broll import BrollGenerateResponse
+    from app.services.queue import QueueRegistry
+
+    registry = broll_queue.registry or QueueRegistry()
+    broll_queue = BrollQueue(registry=registry)
+    request.app.state.queue_registry = registry
+    request.app.state.broll_repository = repository
+    request.app.state.billing_repository = billing_repository
+    request.app.state.stock_video_providers = providers
+    request.app.state.storage_signer = StorageSigner(base_url="http://localhost:8000")
+
+    response = DummyResponse()
+    broll_response = asyncio.run(
+        generate_broll(
+            project_id=project_id,
+            payload=payload,
+            request=request,
+            response=response,
+            actor=actor,
+            repository=repository,
+            billing_repository=billing_repository,
+            broll_queue=broll_queue,
+            providers=providers,
+        )
+    )
+    if getattr(broll_response, "status", None) == "queued":
+        asyncio.run(
+            run_enqueued_job(job_id=broll_response.job_id, request=request)
+        )
+        slots = repository.list_slots(project_id=project_id, workspace_id=actor.workspace_id)
+        broll_response = BrollGenerateResponse(
+            slots=[repository.response_for_slot(slot) for slot in slots],
+            job_id=broll_response.job_id,
+            status="ready",
+        )
+    return broll_response
+
 
 
 class DummyResponse:

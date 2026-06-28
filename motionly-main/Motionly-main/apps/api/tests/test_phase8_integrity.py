@@ -191,7 +191,8 @@ def test_metrics_heartbeats_and_trace_context_are_operational() -> None:
 
 
 def test_gpu_compose_provisions_complete_topology() -> None:
-    compose = Path("../../infra/docker-compose.gpu.yml").read_text()
+    root = Path(__file__).resolve().parents[3]
+    compose = (root / "infra/docker-compose.gpu.yml").read_text()
     for service in (
         "postgres:",
         "redis:",

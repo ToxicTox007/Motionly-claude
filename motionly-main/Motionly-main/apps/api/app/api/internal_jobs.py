@@ -562,6 +562,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             billing_repository=request.app.state.billing_repository,
             plan_repository=request.app.state.plan_repository,
             request=request,
+            settings=settings,
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             user_id=user_id,
@@ -593,6 +594,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             payload=payload,
+            control_settings_id=job.resource_id,
         )
 
     return {

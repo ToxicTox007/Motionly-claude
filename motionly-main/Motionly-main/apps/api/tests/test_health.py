@@ -25,7 +25,7 @@ def test_live_health_returns_request_id() -> None:
     }
 
 
-def test_ready_health_is_ok(tmp_path) -> None:
+def test_ready_health_is_ok(monkeypatch, tmp_path) -> None:
     settings = get_settings().model_copy(
         update={
             "app_env": "test",
@@ -40,6 +40,9 @@ def test_ready_health_is_ok(tmp_path) -> None:
             "runway_api_key": None,
         }
     )
+    async def fake_probe_ffmpeg():
+        return DependencyHealth(status="ok", message="Mocked FFmpeg.")
+    monkeypatch.setattr("app.api.health._probe_ffmpeg", fake_probe_ffmpeg)
     http_response = Response()
     response = asyncio.run(
         ready(make_request("req_ready", settings=settings), http_response)

@@ -252,6 +252,7 @@ async def update_caption_track(
     return CaptionGenerateResponse(
         track=updated.to_response(),
         job_id=f"sync-complete--captions--{project_id}--{updated.id}",
+        status="ready",
     )
 
 
