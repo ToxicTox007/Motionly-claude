@@ -149,6 +149,14 @@ class Settings(BaseSettings):
             skip_api_auth = os.getenv("SKIP_API_AUTH")
             if skip_api_auth and skip_api_auth.lower() in ("true", "1", "yes", "on"):
                 raise ValueError("Security violation: SKIP_API_AUTH cannot be enabled in production environment.")
+            if self.publish_sync_completion:
+                raise ValueError(
+                    "Security violation: PUBLISH_SYNC_COMPLETION cannot be enabled in production environment."
+                )
+            if self.force_local_media_storage:
+                raise ValueError(
+                    "Security violation: FORCE_LOCAL_MEDIA_STORAGE cannot be enabled in production environment."
+                )
         return self
 
     @property

@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.api.dependencies import (
     Actor,
@@ -35,6 +35,11 @@ from app.services.caption_presets import (
     CAPTION_SCHEMA_VERSION,
     get_caption_preset,
     list_caption_presets,
+)
+from app.services.layer_job_enqueue import (
+    build_queued_layer_response_fields,
+    prepare_heavy_job_enqueue,
+    serialize_layer_job_payload,
 )
 from app.services.queue import TranscriptionQueue
 from app.services.transcription_jobs import queue_transcription_for_upload
@@ -109,14 +114,15 @@ async def get_transcript(
     return transcript.to_response()
 
 
-@router.post("/captions/generate", response_model=CaptionGenerateResponse, status_code=201)
+@router.post("/captions/generate", response_model=CaptionGenerateResponse, status_code=202)
 async def generate_captions(
     project_id: UUID,
     payload: CaptionGenerateRequest,
     actor: ActorDep,
     repository: CaptionRepositoryDep,
     transcription_queue: TranscriptionQueueDep,
-    request: Request = None,  # type: ignore[assignment]
+    request: Request,
+    response: Response,
 ) -> CaptionGenerateResponse:
     transcript = (
         repository.get_transcript(
@@ -136,34 +142,19 @@ async def generate_captions(
             transcript.error_message or "Transcript is not ready.",
         )
 
-    preset = get_caption_preset(payload.preset)
-    segments = chunk_caption_words(
-        transcript.words,
-        hide_filler_words=payload.hide_filler_words,
-        style=preset.style,
-    )
-    segments = translate_segments_if_requested(
-        segments=segments,
-        source_language=transcript.language,
-        output_language=payload.output_language,
-        settings=request.app.state.settings if request else None,
-    )
-    if not segments:
-        raise ApiError(422, "caption_segments_empty", "No captionable words were found.")
-
-    track = repository.create_caption_track(
-        workspace_id=actor.workspace_id,
+    prepare_heavy_job_enqueue(request=request)
+    job = transcription_queue.enqueue_caption_generation(
         project_id=project_id,
+        workspace_id=actor.workspace_id,
         transcript_id=transcript.id,
-        preset=payload.preset,
-        schema_version=CAPTION_SCHEMA_VERSION,
-        style=preset.style,
-        hide_filler_words=payload.hide_filler_words,
-        segments=segments,
+        job_payload=serialize_layer_job_payload(payload=payload, user_id=actor.user_id),
     )
     return CaptionGenerateResponse(
-        track=track.to_response(),
-        job_id=f"sync-complete--captions--{project_id}--{track.id}",
+        **build_queued_layer_response_fields(
+            project_id=project_id,
+            job_id=job.id,
+            response=response,
+        )
     )
 
 

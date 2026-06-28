@@ -17,7 +17,6 @@ from app.api.broll import (
 )
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.plans import create_plan
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
 from app.repositories.captions import InMemoryCaptionRepository
@@ -42,11 +41,11 @@ from app.schemas.visual import (
     VideoManifest,
 )
 from app.services.broll_intelligence import apply_stage4_broll_rules
-from app.services.edit_planner import FixtureEditPlannerProvider
-from app.services.queue import BrollQueue, PlanQueue
+from app.services.queue import BrollQueue, QueueRegistry
 from app.services.stock_video import FixtureStockVideoProvider, score_candidate
 from app.services.storage import StorageSigner
 from app.services.transcription_provider import FixtureTranscriptionProvider
+from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, seed_active_plan
 
 
 def make_broll_repository() -> tuple[InMemoryBrollRepository, UUID, UUID, UUID]:
@@ -86,15 +85,12 @@ def make_broll_repository() -> tuple[InMemoryBrollRepository, UUID, UUID, UUID]:
         .words,
     )
     plan_repository = InMemoryPlanRepository(caption_repository)
-    asyncio.run(
-        create_plan(
-            project_id=project_id,
-            payload=PlanCreateRequest(broll_density=BrollDensity.MEDIUM),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=plan_repository,
-            planner_provider=FixtureEditPlannerProvider(),
-            plan_queue=PlanQueue(),
-        )
+    seed_active_plan(
+        plan_repository=plan_repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        payload=PlanCreateRequest(broll_density=BrollDensity.MEDIUM),
     )
     return InMemoryBrollRepository(plan_repository), project_id, workspace_id, user_id
 
@@ -111,30 +107,41 @@ def make_creator_billing_repository(workspace_id: UUID) -> InMemoryBillingReposi
 
 def test_generate_broll_creates_scored_vertical_slots() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
+    registry = QueueRegistry()
+    billing_repository = make_creator_billing_repository(workspace_id)
+    request = _request(
+        registry=registry,
+        repository=repository,
+        billing_repository=billing_repository,
+    )
 
     response = asyncio.run(
         generate_broll(
             project_id=project_id,
             payload=BrollGenerateRequest(),
-            request=_request(),
+            request=request,
+            response=DummyResponse(),
             actor=Actor(user_id=user_id, workspace_id=workspace_id),
             repository=repository,
-            billing_repository=make_creator_billing_repository(workspace_id),
-            broll_queue=BrollQueue(),
+            billing_repository=billing_repository,
+            broll_queue=BrollQueue(registry=registry),
             providers=[FixtureStockVideoProvider()],
         )
     )
 
-    assert response.status == "ready"
-    assert response.job_id.startswith(f"sync-complete--broll--{project_id}--")
-    assert len(response.slots) == 2
-    assert all(slot.selected_asset for slot in response.slots)
+    assert response.status == "queued"
+    asyncio.run(run_enqueued_job(job_id=response.job_id, request=request))
+    slots = repository.list_slots(project_id=project_id, workspace_id=workspace_id)
+    slot_responses = [repository.response_for_slot(slot) for slot in slots]
+
+    assert len(slot_responses) == 2
+    assert all(slot.selected_asset for slot in slot_responses)
     assert all(
         slot.selected_asset.orientation == "portrait"
-        for slot in response.slots
+        for slot in slot_responses
         if slot.selected_asset
     )
-    assert all(slot.crossfade_ms == 260 for slot in response.slots)
+    assert all(slot.crossfade_ms == 260 for slot in slot_responses)
 
 
 def test_user_broll_library_upload_list_and_delete() -> None:
@@ -523,12 +530,25 @@ def test_list_broll_rejects_cross_workspace_access() -> None:
     assert exc_info.value.status_code in {403, 404}
 
 
-def _request(*, billing_enabled: bool = True):
-    return SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(settings=SimpleNamespace(billing_enabled=billing_enabled)),
+def _request(*, billing_enabled: bool = True, registry: QueueRegistry | None = None, repository=None, billing_repository=None):
+    registry = registry or QueueRegistry()
+    return build_queue_request_state(
+        registry=registry,
+        settings=SimpleNamespace(
+            billing_enabled=billing_enabled,
+            app_env="test",
+            redis_url=None,
+            admin_api_token="worker-secret",
         ),
+        broll_repository=repository,
+        billing_repository=billing_repository,
+        stock_video_providers=[FixtureStockVideoProvider()],
+        storage_signer=StorageSigner(base_url="http://localhost:8000"),
     )
+
+
+class DummyResponse:
+    status_code = 200
 
 
 def _face_and_product_manifest() -> VideoManifest:

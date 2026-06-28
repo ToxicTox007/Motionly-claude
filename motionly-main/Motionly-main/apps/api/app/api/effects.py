@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.api.billing import build_billing_status
 from app.api.dependencies import (
@@ -34,6 +34,11 @@ from app.services.effects import (
     preview_urls,
     render_time_impact,
 )
+from app.services.layer_job_enqueue import (
+    build_queued_layer_response_fields,
+    prepare_heavy_job_enqueue,
+    serialize_layer_job_payload,
+)
 from app.services.queue import EffectsQueue
 
 router = APIRouter(prefix="/projects/{project_id}/effects", tags=["Effects"])
@@ -60,6 +65,7 @@ async def update_effects(
     project_id: UUID,
     payload: EffectsConfigRequest,
     request: Request,
+    response: Response,
     actor: ActorDep,
     repository: EffectsRepositoryDep,
     billing_repository: BillingRepositoryDep,
@@ -156,73 +162,24 @@ async def update_effects(
             return EffectsUpdateResponse(
                 config=repository.response_for_config(cached),
                 job_id=execution_id,
+                status="ready",
                 cached=True,
             )
 
-    preview_before_url, preview_after_url = preview_urls(project_id, payload.preset)
-    next_version = _next_effects_version(
-        repository=repository,
+    prepare_heavy_job_enqueue(request=request)
+    job = effects_queue.enqueue_effects_config(
         project_id=project_id,
         workspace_id=actor.workspace_id,
-    )
-    after_effects_project_url, correction_manifest_url = after_effects_handoff_urls(
-        project_id,
-        next_version,
-    )
-    config = repository.create_config(
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
         edit_plan_id=active_plan.id if active_plan else None,
-        status=EffectsStatus.READY,
-        preset=payload.preset,
-        lut_intensity=lut_intensity,
-        texture=texture,
-        motion_effects=motion_effects,
-        motion=motion,
-        background_removal=background_removal,
-        gradient_ramp=gradient_ramp,
-        after_effects_presets=after_effects_presets,
-        after_effects_project_url=after_effects_project_url,
-        correction_manifest_url=correction_manifest_url,
-        effect_count_limit_per_30s=effect_count_limit_per_30s(motion_effects, motion),
-        render_time_impact=render_time_impact(
-            texture=texture,
-            motion_effects=motion_effects,
-            motion=motion,
-            background_removal=background_removal,
-            gradient_ramp=gradient_ramp,
-            after_effects_presets=after_effects_presets,
-        ),
-        preview_before_url=preview_before_url,
-        preview_after_url=preview_after_url,
-        cache_key=cache_key,
+        job_payload=serialize_layer_job_payload(payload=payload, user_id=actor.user_id),
     )
-    record_ai_feedback(
-        request=request,
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-        user_id=actor.user_id,
-        edit_plan_id=active_plan.id if active_plan else None,
-        event_type=AIEditFeedbackEventType.CHANGED,
-        layer=AIEditLayer.EFFECTS,
-        source="look_editor",
-        decision_id=f"{active_plan.id if active_plan else project_id}:effects",
-        action="update_effects",
-        ai_payload=(
-            {
-                "color_grade": active_plan.plan.color_grade,
-                "effects": active_plan.plan.effects,
-                "zoom_moments": [
-                    moment.model_dump(mode="json") for moment in active_plan.plan.zoom_moments
-                ],
-            }
-            if active_plan
-            else {}
-        ),
-        user_payload=repository.response_for_config(config).model_dump(mode="json"),
-        metadata={"reset_to_defaults": payload.reset_to_defaults},
+    return EffectsUpdateResponse(
+        **build_queued_layer_response_fields(
+            project_id=project_id,
+            job_id=job.id,
+            response=response,
+        )
     )
-    return EffectsUpdateResponse(config=repository.response_for_config(config), job_id=execution_id)
 
 
 def _next_effects_version(

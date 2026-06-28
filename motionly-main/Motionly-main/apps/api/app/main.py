@@ -15,6 +15,7 @@ from app.api.internal_batches import router as internal_batches_router
 from app.api.internal_jobs import router as internal_jobs_router
 from app.api.internal_renders import router as internal_renders_router
 from app.api.internal_retention import router as internal_retention_router
+from app.api.layer_jobs import router as layer_jobs_router
 from app.api.local_storage import router as local_storage_router
 from app.api.music import router as music_router
 from app.api.operations import router as operations_router
@@ -401,6 +402,7 @@ def create_app() -> FastAPI:
     app.include_router(captions_router)
     app.include_router(visual_router)
     app.include_router(plans_router)
+    app.include_router(layer_jobs_router)
     app.include_router(broll_router)
     app.include_router(music_router)
     app.include_router(effects_router)
@@ -464,6 +466,10 @@ def _validate_production_settings(settings) -> None:
     ):
         raise RuntimeError("Stripe settings are required when BILLING_ENABLED=true")
 
+    if settings.publish_sync_completion:
+        raise RuntimeError("PUBLISH_SYNC_COMPLETION must be false in production")
+    if settings.force_local_media_storage:
+        raise RuntimeError("FORCE_LOCAL_MEDIA_STORAGE must be false in production")
     if settings.allow_fixture_providers:
         raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
     if settings.stem_separation_provider != "demucs":

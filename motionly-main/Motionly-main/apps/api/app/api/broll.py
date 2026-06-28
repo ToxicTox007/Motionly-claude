@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.billing import build_billing_status
 from app.api.dependencies import (
@@ -47,6 +47,11 @@ from app.services.broll_intelligence import (
 )
 from app.services.local_storage import LocalObjectStorage
 from app.services.queue import BrollQueue
+from app.services.layer_job_enqueue import (
+    build_queued_layer_response_fields,
+    prepare_heavy_job_enqueue,
+    serialize_layer_job_payload,
+)
 from app.services.stock_video import (
     StockVideoProvider,
     build_broll_cache_key,
@@ -232,6 +237,7 @@ async def generate_broll(
     project_id: UUID,
     payload: BrollGenerateRequest,
     request: Request,
+    response: Response,
     actor: ActorDep,
     repository: BrollRepositoryDep,
     billing_repository: BillingRepositoryDep,
@@ -260,7 +266,6 @@ async def generate_broll(
             "stock_provider_unavailable",
             "No stock video provider is configured for B-roll generation.",
         )
-    started = time.perf_counter()
     plan = repository.active_plan(project_id=project_id, workspace_id=actor.workspace_id)
     visual_manifest = latest_visual_manifest_for_broll(
         repository=repository,
@@ -293,7 +298,6 @@ async def generate_broll(
         schema_version=BROLL_SCHEMA_VERSION,
         semantic_context=visual_manifest_cache_signature(visual_manifest),
     )
-    execution_id = f"sync-complete--broll--{project_id}--{plan.id}"
     if not payload.force:
         cached = repository.find_cached_slots(
             project_id=project_id,
@@ -316,136 +320,24 @@ async def generate_broll(
                     )
             return BrollGenerateResponse(
                 slots=[repository.response_for_slot(slot) for slot in cached],
-                job_id=execution_id,
+                job_id=f"sync-complete--broll--{project_id}--{plan.id}",
+                status="ready",
                 cached=True,
             )
 
-    used_provider_asset_ids: set[str] = set()
-    used_shot_types: set[str] = set()
-    slots: list[dict[str, object]] = []
-    for broll_request in requests:
-        query = keyword_query(broll_request, plan.style.value)
-        slot_duration_ms = broll_request.end_ms - broll_request.start_ms
-        ranked_assets = []
-        errors: list[str] = []
-        for provider in providers:
-            try:
-                candidates = provider.search(
-                    query=query,
-                    orientation=StockOrientation.PORTRAIT,
-                    min_width=720,
-                    min_height=1280,
-                )
-            except ApiError as exc:
-                errors.append(exc.code)
-                continue
-            for candidate in candidates:
-                score = score_candidate(
-                    candidate=candidate,
-                    slot_duration_ms=slot_duration_ms,
-                    duplicate_provider_asset_ids=used_provider_asset_ids,
-                    semantic_query=broll_request.semantic_query or query,
-                    semantic_embedding=broll_request.semantic_embedding,
-                    target_shot_type=broll_request.shot_type,
-                    used_shot_types=used_shot_types,
-                )
-                if candidate.duration_ms < 1500:
-                    continue
-                asset = repository.upsert_asset(
-                    workspace_id=actor.workspace_id,
-                    project_id=project_id,
-                    provider=candidate.provider,
-                    provider_asset_id=candidate.provider_asset_id,
-                    title=candidate.title,
-                    thumbnail_url=candidate.thumbnail_url,
-                    preview_video_url=candidate.preview_video_url,
-                    download_url=candidate.download_url,
-                    license=candidate.license,
-                    width=candidate.width,
-                    height=candidate.height,
-                    duration_ms=candidate.duration_ms,
-                    orientation=candidate.orientation,
-                    score=score,
-                    raw_metadata={
-                        **candidate.raw_metadata,
-                        "query": query,
-                        "semantic_query": broll_request.semantic_query or query,
-                        "target_shot_type": broll_request.shot_type,
-                        "latency_ms": latency_ms_since(started),
-                    },
-                )
-                ranked_assets.append((score, asset, candidate))
-            if ranked_assets:
-                break
-
-        ranked_assets.sort(key=lambda item: item[0], reverse=True)
-        selected = ranked_assets[0][1] if ranked_assets else None
-        selected_candidate = ranked_assets[0][2] if ranked_assets else None
-        selected_shot_type = candidate_shot_type(selected_candidate) if selected_candidate else None
-        selected_semantic_score = (
-            semantic_match_score(
-                candidate=selected_candidate,
-                semantic_query=broll_request.semantic_query or query,
-                semantic_embedding=broll_request.semantic_embedding,
-            )
-            if selected_candidate
-            else None
-        )
-        if selected:
-            selected = ensure_owned_stock_asset(
-                asset=selected,
-                repository=repository,
-                settings=request.app.state.settings,
-                storage_signer=storage_signer,
-            )
-            used_provider_asset_ids.add(selected.provider_asset_id)
-        if selected_shot_type:
-            used_shot_types.add(selected_shot_type)
-        status = BrollSlotStatus.READY if selected else BrollSlotStatus.FAILED
-        slots.append(
-            {
-                "workspace_id": actor.workspace_id,
-                "project_id": project_id,
-                "edit_plan_id": plan.id,
-                "status": status,
-                "start_ms": broll_request.start_ms,
-                "end_ms": broll_request.end_ms,
-                "keywords": [query, *broll_request.keywords][:8],
-                "intent": f"Support transcript moment with {query}",
-                "density": (
-                    payload.density if payload.density != "from_plan" else plan.broll_density.value
-                ),
-                "priority": broll_request.priority,
-                "selected_asset_id": selected.id if selected else None,
-                "candidate_asset_ids": [asset.id for _, asset, _candidate in ranked_assets[:5]],
-                "crossfade_ms": 260,
-                "provider": selected.provider if selected else providers[0].provider_key,
-                "score": ranked_assets[0][0] if ranked_assets else 0,
-                "error_code": (
-                    None if selected else (errors[0] if errors else "stock_asset_not_found")
-                ),
-                "error_message": None if selected else "No usable vertical stock clip was found.",
-                "metadata": broll_slot_metadata(
-                    request=broll_request,
-                    query=query,
-                    candidate_count=len(ranked_assets),
-                    selected_shot_type=selected_shot_type,
-                    selected_semantic_score=selected_semantic_score,
-                    provider_errors=errors,
-                    visual_manifest=visual_manifest,
-                ),
-            }
-        )
-
-    records = repository.create_slot_set(
-        workspace_id=actor.workspace_id,
+    prepare_heavy_job_enqueue(request=request)
+    job = broll_queue.enqueue_broll(
         project_id=project_id,
-        cache_key=cache_key,
-        slots=slots,
+        workspace_id=actor.workspace_id,
+        edit_plan_id=plan.id,
+        job_payload=serialize_layer_job_payload(payload=payload, user_id=actor.user_id),
     )
     return BrollGenerateResponse(
-        slots=[repository.response_for_slot(slot) for slot in records],
-        job_id=execution_id,
+        **build_queued_layer_response_fields(
+            project_id=project_id,
+            job_id=job.id,
+            response=response,
+        )
     )
 
 

@@ -85,10 +85,11 @@ class MusicSelectionResponse(BaseModel):
 
 
 class MusicSelectResponse(BaseModel):
-    selection: MusicSelectionResponse
+    selection: MusicSelectionResponse | None = None
     job_id: str
-    status: Literal["ready"] = "ready"
+    status: Literal["ready", "queued"]
     cached: bool = False
+    status_url: str | None = None
 
 
 class MusicRegionsUpdateRequest(JsonStringBodyMixin, BaseModel):

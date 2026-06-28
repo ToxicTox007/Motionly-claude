@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.dependencies import (
     Actor,
@@ -25,7 +25,12 @@ from app.schemas.music import (
     MusicTrackListResponse,
 )
 from app.services.ai_feedback import record_ai_feedback
-from app.services.music import MusicProvider, MusicTrackCandidate
+from app.services.layer_job_enqueue import (
+    build_queued_layer_response_fields,
+    prepare_heavy_job_enqueue,
+    serialize_layer_job_payload,
+)
+from app.services.music import MusicProvider
 from app.services.queue import MusicQueue
 
 router = APIRouter(prefix="/projects/{project_id}/music", tags=["Music"])
@@ -70,78 +75,30 @@ async def select_music(
     plan_repository: PlanRepositoryDep,
     music_queue: MusicQueueDep,
     providers: MusicProvidersDep,
-    request: Request = None,  # type: ignore[assignment]
+    request: Request,
+    response: Response,
 ) -> MusicSelectResponse:
     plan = plan_repository.active_plan(project_id=project_id, workspace_id=actor.workspace_id)
     mood = payload.mood or plan.plan.music_mood
-    track = None
     music_volume = payload.music_volume if payload.include_music else 0
     sfx_intensity = payload.sfx_intensity if payload.include_music else 0
-
     if not payload.include_music:
         mood = "none"
-    elif payload.music_track_id:
-        track = repository.get_track(
-            project_id=project_id,
-            workspace_id=actor.workspace_id,
-            track_id=payload.music_track_id,
-        )
-    else:
-        if not providers:
-            raise ApiError(
-                503,
-                "music_provider_not_configured",
-                "Music selection is not configured for production.",
-            )
-        candidates: list[MusicTrackCandidate] = []
-        for provider in providers:
-            try:
-                candidates = provider.search(mood=mood)
-            except ApiError:
-                continue
-            if candidates:
-                break
-        if not candidates:
-            raise ApiError(
-                404,
-                "music_track_not_found",
-                "No music track was available for the requested mood.",
-            )
-        if payload.force:
-            candidates = candidates_for_change(
-                candidates=candidates,
-                repository=repository,
-                project_id=project_id,
-                workspace_id=actor.workspace_id,
-                providers=providers,
-            )
-        candidate = candidates[0]
-        track = repository.upsert_track(
-            workspace_id=actor.workspace_id,
-            project_id=project_id,
-            provider=candidate.provider,
-            provider_track_id=candidate.provider_track_id,
-            title=candidate.title,
-            license=candidate.license,
-            duration_ms=candidate.duration_ms,
-            mood_tags=candidate.mood_tags,
-            bpm=candidate.bpm,
-            energy=candidate.energy,
-            vocals=candidate.vocals,
-            loopable=candidate.loopable,
-            beat_map=candidate.beat_map,
-            raw_metadata={**candidate.raw_metadata, "mood": mood},
+    elif not payload.music_track_id and not providers:
+        raise ApiError(
+            503,
+            "music_provider_not_configured",
+            "Music selection is not configured for production.",
         )
 
+    track_id = payload.music_track_id
     cache_key = build_music_cache_key(
         edit_plan_id=plan.id,
         mood=mood,
         music_volume=music_volume,
         sfx_intensity=sfx_intensity,
-        track_id=track.id if track else None,
+        track_id=track_id,
     )
-    execution_id = f"sync-complete--music--{project_id}--{plan.id}"
-
     if not payload.force:
         cached = repository.find_cached_selection(
             project_id=project_id,
@@ -151,53 +108,24 @@ async def select_music(
         if cached:
             return MusicSelectResponse(
                 selection=repository.response_for_selection(cached),
-                job_id=execution_id,
+                job_id=f"sync-complete--music--{project_id}--{plan.id}",
+                status="ready",
                 cached=True,
             )
 
-    plan_duration_ms = (
-        max((cut.end_ms for cut in plan.plan.cuts), default=0) or plan.plan.target_duration_s * 1000
-    )
-    regions = (
-        [MusicRegion(id="music-0", start_ms=0, end_ms=plan_duration_ms)]
-        if track and plan_duration_ms > 0
-        else []
-    )
-    selection = repository.create_selection(
-        workspace_id=actor.workspace_id,
+    prepare_heavy_job_enqueue(request=request)
+    job = music_queue.enqueue_music_selection(
         project_id=project_id,
-        edit_plan_id=plan.id,
-        status=MusicSelectionStatus.READY,
-        music_track_id=track.id if track else None,
-        music_volume=music_volume,
-        sfx_intensity=sfx_intensity,
-        rights_confirmed=payload.rights_confirmed,
-        cache_key=cache_key,
-        regions=regions,
-    )
-    record_ai_feedback(
-        request=request,
         workspace_id=actor.workspace_id,
-        project_id=project_id,
-        user_id=actor.user_id,
         edit_plan_id=plan.id,
-        event_type=(
-            AIEditFeedbackEventType.REJECTED
-            if not payload.include_music
-            else AIEditFeedbackEventType.CHANGED
-        ),
-        layer=AIEditLayer.MUSIC,
-        source="music_editor",
-        decision_id=f"{plan.id}:music",
-        action="select_music",
-        ai_payload={"music_mood": plan.plan.music_mood},
-        user_payload=repository.response_for_selection(selection).model_dump(mode="json"),
-        metadata={"mood": mood, "force": payload.force},
+        job_payload=serialize_layer_job_payload(payload=payload, user_id=actor.user_id),
     )
-
     return MusicSelectResponse(
-        selection=repository.response_for_selection(selection),
-        job_id=execution_id,
+        **build_queued_layer_response_fields(
+            project_id=project_id,
+            job_id=job.id,
+            response=response,
+        )
     )
 
 

@@ -21,18 +21,24 @@ def test_workers_never_route_domain_compute_through_internal_api() -> None:
     assert "persistCompleteDirect" in remotion
 
 
-def test_synchronous_operations_do_not_create_accounting_only_queue_jobs() -> None:
+def test_heavy_endpoints_enqueue_worker_jobs() -> None:
     api_dir = ROOT / "apps/api/app/api"
-    forbidden = {
+    required = {
         "plans.py": "enqueue_plan(",
         "broll.py": "enqueue_broll(",
         "music.py": "enqueue_music_selection(",
         "effects.py": "enqueue_effects_config(",
         "captions.py": "enqueue_caption_generation(",
-        "regeneration.py": "enqueue_regeneration(",
     }
-    for filename, call in forbidden.items():
-        assert call not in (api_dir / filename).read_text()
+    for filename, call in required.items():
+        assert call in (api_dir / filename).read_text()
+
+
+def test_heavy_endpoints_require_worker_queue_before_enqueue() -> None:
+    api_dir = ROOT / "apps/api/app/api"
+    for filename in ("plans.py", "broll.py", "music.py", "effects.py", "captions.py", "publishing.py"):
+        source = (api_dir / filename).read_text()
+        assert "prepare_heavy_job_enqueue" in source
 
 
 def test_specialized_worker_pools_and_persistent_model_cache_are_declared() -> None:

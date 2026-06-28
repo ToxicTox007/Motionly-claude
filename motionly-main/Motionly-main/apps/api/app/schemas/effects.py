@@ -223,7 +223,8 @@ class EffectsConfigResponse(BaseModel):
 
 
 class EffectsUpdateResponse(BaseModel):
-    config: EffectsConfigResponse
+    config: EffectsConfigResponse | None = None
     job_id: str
-    status: Literal["ready"] = "ready"
+    status: Literal["ready", "queued"]
     cached: bool = False
+    status_url: str | None = None

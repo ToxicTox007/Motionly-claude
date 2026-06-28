@@ -524,6 +524,7 @@ class TranscriptionQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         transcript_id: UUID,
+        job_payload: str = "{}",
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=self._job_id("captions", project_id, transcript_id, workspace_id),
@@ -531,6 +532,7 @@ class TranscriptionQueue(BaseQueue):
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=transcript_id,
+            render_engine=job_payload,
         )
 
 
@@ -584,6 +586,7 @@ class BrollQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         edit_plan_id: UUID,
+        job_payload: str = "{}",
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=":".join(
@@ -592,6 +595,7 @@ class BrollQueue(BaseQueue):
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
+            render_engine=job_payload,
         )
 
 
@@ -695,12 +699,14 @@ class MusicQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         edit_plan_id: UUID,
+        job_payload: str = "{}",
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=self._job_id("music", project_id, edit_plan_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
+            render_engine=job_payload,
         )
 
 
@@ -714,12 +720,14 @@ class EffectsQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         edit_plan_id: UUID | None,
+        job_payload: str = "{}",
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=self._job_id("effects", project_id, edit_plan_id or "no-plan", workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
+            render_engine=job_payload,
         )
 
 

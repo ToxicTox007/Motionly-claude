@@ -507,9 +507,98 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             "status": "ready",
         }
 
+    if job.kind == "broll_generation":
+        from uuid import UUID
+
+        from app.schemas.broll import BrollGenerateRequest
+        from app.services.layer_jobs import execute_broll_generation, parse_layer_job_payload
+
+        params = parse_layer_job_payload(job.render_engine)
+        payload = BrollGenerateRequest.model_validate(params["payload"])
+        user_id = UUID(params["user_id"]) if params.get("user_id") else None
+        return execute_broll_generation(
+            repository=request.app.state.broll_repository,
+            billing_repository=request.app.state.billing_repository,
+            providers=request.app.state.stock_video_providers,
+            storage_signer=request.app.state.storage_signer,
+            settings=settings,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            user_id=user_id,
+            payload=payload,
+        )
+
+    if job.kind == "music_selection":
+        from uuid import UUID
+
+        from app.schemas.music import MusicSelectRequest
+        from app.services.layer_jobs import execute_music_selection, parse_layer_job_payload
+
+        params = parse_layer_job_payload(job.render_engine)
+        payload = MusicSelectRequest.model_validate(params["payload"])
+        user_id = UUID(params["user_id"]) if params.get("user_id") else None
+        return execute_music_selection(
+            repository=request.app.state.music_repository,
+            plan_repository=request.app.state.plan_repository,
+            providers=request.app.state.music_providers,
+            request=request,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            user_id=user_id,
+            payload=payload,
+        )
+
+    if job.kind == "effects_config":
+        from uuid import UUID
+
+        from app.schemas.effects import EffectsConfigRequest
+        from app.services.layer_jobs import execute_effects_update, parse_layer_job_payload
+
+        params = parse_layer_job_payload(job.render_engine)
+        payload = EffectsConfigRequest.model_validate(params["payload"])
+        user_id = UUID(params["user_id"]) if params.get("user_id") else None
+        return execute_effects_update(
+            repository=request.app.state.effects_repository,
+            billing_repository=request.app.state.billing_repository,
+            plan_repository=request.app.state.plan_repository,
+            request=request,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            user_id=user_id,
+            payload=payload,
+        )
+
+    if job.kind == "caption_generation":
+        from app.schemas.captions import CaptionGenerateRequest
+        from app.services.layer_jobs import execute_caption_generation, parse_layer_job_payload
+
+        params = parse_layer_job_payload(job.render_engine)
+        payload = CaptionGenerateRequest.model_validate(params["payload"])
+        return execute_caption_generation(
+            repository=request.app.state.caption_repository,
+            settings=settings,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            payload=payload,
+        )
+
+    if job.kind == "layer_regeneration":
+        from app.schemas.regeneration import RegenerateRequest
+        from app.services.layer_jobs import execute_regeneration, parse_layer_job_payload
+
+        params = parse_layer_job_payload(job.render_engine)
+        payload = RegenerateRequest.model_validate(params["payload"])
+        return execute_regeneration(
+            repository=request.app.state.regeneration_repository,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            payload=payload,
+        )
+
     return {
-        "message": "Queue item was already completed synchronously by the API.",
+        "message": f"Unhandled worker job kind: {job.kind}",
         "skipped": True,
+        "failed": True,
     }
 
 

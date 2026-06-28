@@ -20,6 +20,7 @@ from app.schemas.publishing import (
     PublishPlatform,
     PublishStatus,
 )
+from app.services.layer_job_enqueue import prepare_heavy_job_enqueue
 from app.services.publishing import (
     PublishOAuthClient,
     create_oauth_state,
@@ -161,12 +162,16 @@ async def create_publish_job(
         caption=payload.caption,
         privacy=payload.privacy,
     )
+    prepare_heavy_job_enqueue(request=request)
     request.app.state.publish_queue.enqueue_publish(
         publish_job_id=record.id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
-    if request.app.state.settings.publish_sync_completion:
+    if (
+        request.app.state.settings.publish_sync_completion
+        and request.app.state.settings.app_env != "production"
+    ):
         record = execute_publish_job(
             publishing_repository=request.app.state.publishing_repository,
             render_repository=request.app.state.render_repository,

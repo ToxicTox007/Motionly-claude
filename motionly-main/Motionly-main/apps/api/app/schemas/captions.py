@@ -184,9 +184,10 @@ class CaptionGenerateRequest(JsonStringBodyMixin, BaseModel):
 
 
 class CaptionGenerateResponse(BaseModel):
-    track: CaptionTrackReadResponse
+    track: CaptionTrackReadResponse | None = None
     job_id: str
-    status: Literal["ready"] = "ready"
+    status: Literal["ready", "queued"]
+    status_url: str | None = None
 
 
 class CaptionUpdateRequest(JsonStringBodyMixin, BaseModel):

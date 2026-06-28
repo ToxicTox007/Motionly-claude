@@ -95,10 +95,11 @@ class BrollGenerateRequest(JsonStringBodyMixin, BaseModel):
 
 
 class BrollGenerateResponse(BaseModel):
-    slots: list[BrollSlotResponse]
+    slots: list[BrollSlotResponse] | None = None
     job_id: str
-    status: Literal["ready"] = "ready"
+    status: Literal["ready", "queued"]
     cached: bool = False
+    status_url: str | None = None
 
 
 class BrollListResponse(BaseModel):
