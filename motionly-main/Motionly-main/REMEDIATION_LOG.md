@@ -290,3 +290,35 @@
   ✔ visual_analysis concurrency defaults to 1 and is configurable (232.239201ms)
   ```
 - Remaining caveats: The persistent Python subprocess does not automatically restart on OOM (though the daemon stays alive and subsequent jobs process successfully). Under heavy backlogs, manual scaling of the `gpu-inference-worker` Docker service is required.
+
+## Phase 9 — Planner Correctness, Fallback Transparency, and Cache Invalidation
+
+- Date: 2026-06-28
+- Executor: Antigravity / Main Agent / Implementer
+- Files touched:
+  - [apps/api/app/services/edit_planner.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/edit_planner.py#L355-L387)
+  - [apps/api/app/api/plans.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/plans.py#L118-L125)
+  - [apps/api/app/api/internal_jobs.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/internal_jobs.py#L369-L376)
+  - [apps/api/tests/test_plans.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_plans.py#L1426-L1711)
+- Validation/repair behavior inspected:
+  - Inspected `_validate_or_repair_plan` and `_repair_plan_payload`. Found that LLM output is repaired at a field level, using defaults or fallback components. However, even if repair is successful (returning a valid plan), the previous implementation marked `fallback_used: True` inside `raw_payload`, which was inaccurate. Full fallback to deterministic templates occurs when provider HTTP calls fail, JSON decoding fails, or validation after repair fails.
+- Fallback transparency added:
+  - Changed validation/repair logic to distinguish between field-level repairs and full deterministic fallback.
+  - Returns `fallback_used` boolean from `_validate_or_repair_plan`, setting `fallback_used: True` only in cases of full fallback.
+  - Appends structured JSON warnings in `validation_errors` (e.g., `{"code": "fallback_used", "reason": "validation_failed"}` or `{"code": "repair_applied", "reason": "field_level_repair"}`), which are persisted to the database and returned to the API/frontend.
+- Cache key inputs added:
+  - Included stable markers to prevent serving stale plans: transcript `updated_at` marker, stable SHA-256 hash of the words list content, SHA-256 hash of the full `visual_manifest` Pydantic model representation, visual manifest `schema_version`, style templates/settings (`style_profile_id`, `saved_template_id`), stable SHA-256 hash of the `SYSTEM_PROMPT` as prompt version, and planner `provider` and `model` version strings.
+- Tests added:
+  - Added unit tests in `apps/api/tests/test_plans.py`:
+    - `test_phase9_cache_keys`: Verifies identical inputs trigger cache hit, and changed prompts, templates, visual manifest hashes, style profile IDs, saved template IDs, or provider/model result in cache misses.
+    - `test_phase9_repair_vs_fallback`: Verifies that repairable LLM outputs yield `fallback_used=False` with repair warnings, and unrecoverable output triggers full fallback with `fallback_used=True` and validation failure markers.
+    - `test_phase9_http_provider_json_decode_failure`: Verifies JSON decode failure falls back to deterministic fixture plan and sets `fallback_used: True` with json decode warning.
+- Verification performed:
+  - Ran `python3 -m pytest apps/api/tests/test_plans.py apps/api/tests/test_phase7_failure_isolation.py`.
+- Verification output / evidence:
+  ```
+  apps/api/tests/test_plans.py ...................................         [ 85%]
+  apps/api/tests/test_phase7_failure_isolation.py ......                  [100%]
+  ======================== 36 passed, 1 warning in 1.32s =========================
+  ```
+- Remaining caveats: The visual manifest must be pre-generated/ready for the visual manifest hash to be included in the cache key. If it is unavailable or status is pending/processing, the fallback visual context flags are used instead. No schema migrations were added, preserving compatibility.

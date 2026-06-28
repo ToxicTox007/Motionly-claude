@@ -371,6 +371,8 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             payload=effective_payload,
             visual_manifest=visual_manifest,
             style_classification=style_classification,
+            model=getattr(planner_provider, "model", None),
+            provider=getattr(planner_provider, "provider_name", None),
         )
 
         started_ms = monotonic_ms()

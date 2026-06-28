@@ -1423,3 +1423,288 @@ def test_async_planner_failed_job() -> None:
     assert status_response.status == "failed"
     assert "OpenRouter failed!" in status_response.failure_reason
 
+
+def test_phase9_cache_keys() -> None:
+    from app.services.edit_planner import build_plan_cache_key
+    from app.repositories.captions import TranscriptRecord
+    from app.schemas.plans import PlanCreateRequest, EditPlanStyle
+    from app.schemas.visual import VideoManifest
+    from uuid import uuid4
+    from datetime import datetime, UTC
+
+    transcript = TranscriptRecord(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        uploaded_video_id=uuid4(),
+        status="ready",
+        language="en",
+        language_hint="auto",
+        provider="fixture",
+        model="whisper-1",
+        confidence=0.95,
+        duration_ms=12_000,
+        raw_payload={},
+        words=[],
+        updated_at=datetime.now(UTC),
+    )
+
+    payload = PlanCreateRequest(
+        prompt="original prompt",
+        style=EditPlanStyle.FOUNDER,
+        target_duration_s=25,
+        style_profile_id=uuid4(),
+        saved_template_id=uuid4(),
+    )
+
+    manifest_1 = VideoManifest(
+        duration_ms=12_000,
+        sample_rate_fps=2,
+        frame_count=2,
+        provider="fixture_visual",
+        summary={"title": "summary 1"},
+    )
+    manifest_2 = VideoManifest(
+        duration_ms=12_000,
+        sample_rate_fps=2,
+        frame_count=2,
+        provider="fixture_visual",
+        summary={"title": "summary 2"},
+    )
+
+    # 1. Identical inputs => cache hit
+    key1 = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload,
+        visual_manifest=manifest_1,
+        style_classification=None,
+        provider="openai",
+        model="gpt-4o",
+    )
+    key2 = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload,
+        visual_manifest=manifest_1,
+        style_classification=None,
+        provider="openai",
+        model="gpt-4o",
+    )
+    assert key1 == key2
+
+    # 2. same transcript ID + changed full visual manifest hash => cache miss
+    key_diff_manifest = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload,
+        visual_manifest=manifest_2,
+        style_classification=None,
+        provider="openai",
+        model="gpt-4o",
+    )
+    assert key1 != key_diff_manifest
+
+    # 3. changed user prompt => cache miss
+    payload_diff_prompt = payload.model_copy(update={"prompt": "different prompt"})
+    key_diff_prompt = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload_diff_prompt,
+        visual_manifest=manifest_1,
+        style_classification=None,
+        provider="openai",
+        model="gpt-4o",
+    )
+    assert key1 != key_diff_prompt
+
+    # 4. changed style_profile_id => cache miss
+    payload_diff_style_profile = payload.model_copy(update={"style_profile_id": uuid4()})
+    key_diff_style_profile = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload_diff_style_profile,
+        visual_manifest=manifest_1,
+        style_classification=None,
+        provider="openai",
+        model="gpt-4o",
+    )
+    assert key1 != key_diff_style_profile
+
+    # 5. changed saved_template_id => cache miss
+    payload_diff_saved_template = payload.model_copy(update={"saved_template_id": uuid4()})
+    key_diff_saved_template = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload_diff_saved_template,
+        visual_manifest=manifest_1,
+        style_classification=None,
+        provider="openai",
+        model="gpt-4o",
+    )
+    assert key1 != key_diff_saved_template
+
+    # 6. changed provider/model => cache miss
+    key_diff_provider = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload,
+        visual_manifest=manifest_1,
+        style_classification=None,
+        provider="anthropic",
+        model="gpt-4o",
+    )
+    assert key1 != key_diff_provider
+
+    key_diff_model = build_plan_cache_key(
+        transcript=transcript,
+        payload=payload,
+        visual_manifest=manifest_1,
+        style_classification=None,
+        provider="openai",
+        model="gpt-4o-mini",
+    )
+    assert key1 != key_diff_model
+
+
+def test_phase9_repair_vs_fallback() -> None:
+    from app.services.edit_planner import _validate_or_repair_plan
+    from app.repositories.captions import TranscriptRecord
+    from app.schemas.plans import PlanCreateRequest, EditPlanStyle
+    from app.schemas.captions import TranscriptWord
+    from uuid import uuid4
+    from datetime import datetime, UTC
+    import json
+
+    transcript = TranscriptRecord(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        uploaded_video_id=uuid4(),
+        status="ready",
+        language="en",
+        language_hint="auto",
+        provider="fixture",
+        model="whisper-1",
+        confidence=0.95,
+        duration_ms=12_000,
+        raw_payload={},
+        words=[TranscriptWord(index=0, text="hello", start_ms=0, end_ms=1000, confidence=1.0)],
+        updated_at=datetime.now(UTC),
+    )
+
+    payload = PlanCreateRequest(
+        prompt="original prompt",
+        style=EditPlanStyle.FOUNDER,
+        target_duration_s=25,
+    )
+
+    # 1. Repairable malformed LLM output
+    raw_plan_repairable = {
+        "schema_version": 1,
+        "style": "invalid_style_value",
+        "target_duration_s": "45",
+        "cuts": [
+            {
+                "start_ms": 100,
+                "end_ms": 2000,
+                "reason": "good cut",
+            }
+        ],
+        "caption_highlights": [],
+        "broll_requests": [],
+        "zoom_moments": [],
+        "music_mood": "chilled",
+        "effects": ["flash", "zoom"],
+        "color_grade": "warm_corporate",
+        "risk_flags": [],
+    }
+
+    plan, validation_errors, fallback_used = _validate_or_repair_plan(
+        raw_plan=raw_plan_repairable,
+        transcript=transcript,
+        payload=payload,
+        video_duration_ms=12_000,
+        provider_name="test_provider",
+    )
+
+    assert plan is not None
+    assert fallback_used is False
+    assert any("repair_applied" in err for err in validation_errors)
+    assert plan.style == EditPlanStyle.FOUNDER
+    assert plan.target_duration_s == 45
+
+    # 2. Unrecoverable malformed output
+    raw_plan_unrecoverable = {
+        "schema_version": 1,
+        "style": "founder",
+        "target_duration_s": 25,
+        "music_mood": "a" * 200,  # exceeds max_length=160, causing second validation to fail
+    }
+
+    plan, validation_errors, fallback_used = _validate_or_repair_plan(
+        raw_plan=raw_plan_unrecoverable,
+        transcript=transcript,
+        payload=payload,
+        video_duration_ms=12_000,
+        provider_name="test_provider",
+    )
+
+    assert plan is not None
+    assert fallback_used is True
+    assert any("fallback_used" in err for err in validation_errors)
+    assert any("validation_failed" in err for err in validation_errors)
+
+
+def test_phase9_http_provider_json_decode_failure(monkeypatch) -> None:
+    from app.services.edit_planner import HttpEditPlannerProvider
+    from app.repositories.captions import TranscriptRecord
+    from app.schemas.plans import PlanCreateRequest, EditPlanStyle
+    from app.schemas.captions import TranscriptWord, LanguageHint
+    from uuid import uuid4
+    import json
+
+    class MockResponse:
+        def __init__(self, text: str, status_code: int = 200):
+            self.text = text
+            self.status_code = status_code
+        def json(self):
+            return {"choices": [{"message": {"content": self.text}}]}
+
+    def mock_post(*args, **kwargs):
+        return MockResponse("invalid json text { { {")
+
+    monkeypatch.setattr("httpx.post", mock_post)
+
+    provider = HttpEditPlannerProvider(
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        api_key="test-openrouter-key",
+        model="openrouter/free",
+        provider_name="openrouter"
+    )
+
+    transcript = TranscriptRecord(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        uploaded_video_id=uuid4(),
+        status="ready",
+        language="en",
+        language_hint=LanguageHint.AUTO,
+        provider="groq",
+        model="whisper",
+        confidence=1.0,
+        duration_ms=5000,
+        words=[TranscriptWord(index=0, text="hello", start_ms=0, end_ms=1000, confidence=1.0)],
+        raw_payload={}
+    )
+
+    payload = PlanCreateRequest(
+        style=EditPlanStyle.FOUNDER,
+        prompt="Make it clean"
+    )
+
+    result = provider.create_plan(
+        transcript=transcript,
+        payload=payload,
+        video_duration_ms=5000
+    )
+
+    assert result.raw_payload["fallback_used"] is True
+    assert any("json_decode:" in err for err in result.validation_errors)
+    assert any("json_decode_failed" in err for err in result.validation_errors)
+    assert result.plan is not None
+

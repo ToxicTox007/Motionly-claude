@@ -220,7 +220,10 @@ class HttpEditPlannerProvider:
             )
 
         if has_error:
-            validation_errors = [f"provider_error: {error_msg}"]
+            validation_errors = [
+                f"provider_error: {error_msg}",
+                json.dumps({"code": "fallback_used", "reason": "provider_error"}),
+            ]
             plan = _fallback_plan(
                 transcript=transcript,
                 payload=payload,
@@ -246,7 +249,10 @@ class HttpEditPlannerProvider:
         try:
             raw_plan = json.loads(_extract_json_object(content))
         except json.JSONDecodeError as exc:
-            validation_errors = [f"json_decode: {exc.msg} at line {exc.lineno} column {exc.colno}"]
+            validation_errors = [
+                f"json_decode: {exc.msg} at line {exc.lineno} column {exc.colno}",
+                json.dumps({"code": "fallback_used", "reason": "json_decode_failed"}),
+            ]
             logger.warning(
                 "edit_planner_json_decode_failed",
                 extra={"validation_errors": validation_errors, "provider": self.provider_name},
@@ -258,8 +264,21 @@ class HttpEditPlannerProvider:
                 visual_manifest=visual_manifest,
                 style_classification=style_classification,
             )
+            plan = normalize_plan(plan=plan, words=transcript.words, duration_ms=video_duration_ms)
+            return PlannerProviderResult(
+                plan=plan,
+                provider=self.provider_name,
+                model=self.model,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                cost_estimate_usd=None,
+                validation_errors=validation_errors,
+                raw_payload={
+                    "validation_errors": validation_errors,
+                    "fallback_used": True,
+                },
+            )
         else:
-            plan, validation_errors = _validate_or_repair_plan(
+            plan, validation_errors, fallback_used = _validate_or_repair_plan(
                 raw_plan=raw_plan,
                 transcript=transcript,
                 payload=payload,
@@ -283,7 +302,7 @@ class HttpEditPlannerProvider:
             raw_payload={
                 "usage": usage or {},
                 "validation_errors": validation_errors,
-                "fallback_used": bool(validation_errors),
+                "fallback_used": fallback_used,
             },
         )
 
@@ -358,16 +377,36 @@ def build_plan_cache_key(
     payload: PlanCreateRequest,
     visual_manifest: VideoManifest | None = None,
     style_classification: StyleClassification | None = None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> str:
     words_payload = [
         {"t": word.text, "s": word.start_ms, "e": word.end_ms} for word in transcript.words
     ]
+    words_hash = hashlib.sha256(
+        json.dumps(words_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    visual_manifest_hash = None
+    visual_manifest_version = None
+    if visual_manifest is not None:
+        visual_manifest_version = visual_manifest.schema_version
+        try:
+            manifest_json = visual_manifest.model_dump(mode="json")
+        except Exception:
+            manifest_json = visual_manifest.dict()
+        visual_manifest_hash = hashlib.sha256(
+            json.dumps(manifest_json, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
     digest_payload = {
         "schema_hash": PLANNER_SCHEMA_HASH,
         "transcript_id": str(transcript.id),
+        "transcript_updated_at": transcript.updated_at.isoformat() if getattr(transcript, "updated_at", None) else "",
         "duration_ms": transcript.duration_ms,
-        "words": words_payload,
+        "words_hash": words_hash,
         "prompt": payload.prompt.strip(),
+        "prompt_version": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest(),
         "feedback": payload.feedback or "",
         "requested_style": payload.style.value if payload.style else None,
         "effective_style": (
@@ -375,11 +414,17 @@ def build_plan_cache_key(
         ),
         "target_duration_s": payload.target_duration_s,
         "broll_density": payload.broll_density.value,
+        "style_profile_id": str(payload.style_profile_id) if payload.style_profile_id else None,
+        "saved_template_id": str(payload.saved_template_id) if payload.saved_template_id else None,
         "style_classification": (
             style_classification.model_dump(mode="json") if style_classification else None
         ),
         "audio_intelligence": _audio_intelligence(transcript),
         "visual_intelligence": _visual_intelligence_summary(visual_manifest),
+        "visual_manifest_hash": visual_manifest_hash,
+        "visual_manifest_version": visual_manifest_version,
+        "provider": provider,
+        "model": model,
     }
     return hashlib.sha256(
         json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -863,9 +908,9 @@ def _validate_or_repair_plan(
     provider_name: str,
     visual_manifest: VideoManifest | None = None,
     style_classification: StyleClassification | None = None,
-) -> tuple[EditPlan, list[str]]:
+) -> tuple[EditPlan, list[str], bool]:
     try:
-        return EditPlan.model_validate(raw_plan), []
+        return EditPlan.model_validate(raw_plan), [], False
     except ValidationError as first_error:
         first_errors = _validation_error_messages(first_error)
 
@@ -883,6 +928,7 @@ def _validate_or_repair_plan(
         validation_errors = [
             *first_errors,
             *[f"after_repair: {message}" for message in _validation_error_messages(second_error)],
+            json.dumps({"code": "fallback_used", "reason": "validation_failed"}),
             "fallback_used: deterministic_fixture_plan",
         ]
         logger.warning(
@@ -898,17 +944,19 @@ def _validate_or_repair_plan(
                 style_classification=style_classification,
             ),
             validation_errors,
+            True,
         )
 
     validation_errors = [
         *first_errors,
+        json.dumps({"code": "repair_applied", "reason": "field_level_repair"}),
         "repair_used: coerced_provider_plan",
     ]
     logger.warning(
         "edit_planner_validation_repaired",
         extra={"validation_errors": validation_errors, "provider": provider_name},
     )
-    return plan, validation_errors
+    return plan, validation_errors, False
 
 
 def _repair_plan_payload(

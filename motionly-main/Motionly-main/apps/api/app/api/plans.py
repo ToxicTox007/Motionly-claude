@@ -120,6 +120,8 @@ async def create_plan(
         payload=effective_payload,
         visual_manifest=visual_manifest,
         style_classification=style_classification,
+        model=getattr(planner_provider, "model", None),
+        provider=getattr(planner_provider, "provider_name", None),
     )
     execution_id = f"sync-complete--plan--{project_id}--{transcript.id}"
     if not payload.force:
