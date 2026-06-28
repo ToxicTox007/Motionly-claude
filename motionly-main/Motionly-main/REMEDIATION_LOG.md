@@ -236,4 +236,29 @@
   ```
 - Remaining caveats: None. Worker execution configuration is fully hardened.
 
+## Phase 7 / Task 7 — AI Pipeline Error Isolation and Transcription Fallback
 
+- Date: 2026-06-28
+- Executor: Antigravity / Main Agent / Implementer
+- Files touched:
+  - [apps/api/app/services/transcription_provider.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/transcription_provider.py#L121-L180)
+  - [apps/api/app/services/transcription_jobs.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/transcription_jobs.py#L205-L250)
+  - [apps/api/app/services/edit_planner.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/edit_planner.py#L197-L250)
+  - [apps/api/app/services/audio_ml_providers.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/audio_ml_providers.py#L12-L230)
+  - [apps/api/app/api/health.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/health.py#L229-L260)
+  - [apps/api/app/services/scale.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/scale.py#L85-L130)
+  - [apps/api/tests/test_phase7_failure_isolation.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_phase7_failure_isolation.py)
+- Audit finding resolved: Provider or ML failures could crash the transcription or edit planning pipeline. Groq Whisper and OpenRouter API calls were unguarded, lacking transient retry and fallback. Pyannote/Wav2Vec2/YAMNet failures were not isolated and crashed parent jobs. Runway calls could leak credentials on connection failures.
+- What changed:
+  - Added bounded retry with exponential backoff for transient errors (429, 5xx, network timeouts/errors) to Groq Whisper transcription, while failing instantly for authentication/validation errors (400, 401, 403, 404).
+  - Isolated each audio ML provider call inside `_run_audio_ml_providers` so that speaker diarization, emotion, and sound classification failures do not prevent transcript words from being saved, instead returning well-formed degraded states.
+  - Added availability check `check_availability()` to local ML providers to check dependencies and credentials dynamically without heavy model loading, exposing their health in `/health/dependencies` and falling back to heuristics if unavailable.
+  - Wrapped OpenRouter and Runway HTTP calls in clean exception handling blocks, returning a fallback plan with `fallback_used=True` for the planner, and raising credential-safe errors for Runway.
+- Verification performed:
+  - Created 6 failure-injection unit tests covering all retry/fallback behaviors and ran the entire 260-test pytest suite successfully.
+- Verification output / evidence:
+  ```
+  tests/test_phase7_failure_isolation.py ......                            [100%]
+  ========================= 6 passed, 1 warning in 0.80s =========================
+  ```
+- Remaining caveats: No paid fallback providers (e.g. Deepgram or AssemblyAI) were introduced, respecting the privacy/cost constraint. Local ML providers still depend on try-imports which may require manual dependency installation on startup.

@@ -194,16 +194,54 @@ class HttpEditPlannerProvider:
             "response_format": {"type": "json_object"},
             "temperature": 0.2,
         }
-        response = httpx.post(
-            self.endpoint,
-            headers={"authorization": f"Bearer {self.api_key}", "content-type": "application/json"},
-            json=body,
-            timeout=45,
-        )
-        if response.status_code >= 400:
-            raise ApiError(502, "planner_provider_failed", "The edit planner provider failed.")
-        data = response.json()
-        content = _extract_content(data)
+        has_error = False
+        error_msg = ""
+        try:
+            response = httpx.post(
+                self.endpoint,
+                headers={"authorization": f"Bearer {self.api_key}", "content-type": "application/json"},
+                json=body,
+                timeout=45,
+            )
+            if response.status_code >= 400:
+                raise ApiError(502, "planner_provider_failed", f"The edit planner provider failed with status {response.status_code}.")
+            data = response.json()
+            content = _extract_content(data)
+        except Exception as exc:
+            has_error = True
+            error_msg = str(exc)
+            logger.error(
+                "edit_planner_provider_request_failed",
+                extra={
+                    "provider": self.provider_name,
+                    "model": self.model,
+                    "error_type": type(exc).__name__,
+                }
+            )
+
+        if has_error:
+            validation_errors = [f"provider_error: {error_msg}"]
+            plan = _fallback_plan(
+                transcript=transcript,
+                payload=payload,
+                video_duration_ms=video_duration_ms,
+                visual_manifest=visual_manifest,
+                style_classification=style_classification,
+            )
+            plan = normalize_plan(plan=plan, words=transcript.words, duration_ms=video_duration_ms)
+            return PlannerProviderResult(
+                plan=plan,
+                provider=self.provider_name,
+                model=self.model,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                cost_estimate_usd=None,
+                validation_errors=validation_errors,
+                raw_payload={
+                    "validation_errors": validation_errors,
+                    "fallback_used": True,
+                },
+            )
+
         validation_errors: list[str] = []
         try:
             raw_plan = json.loads(_extract_json_object(content))

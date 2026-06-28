@@ -236,6 +236,26 @@ async def dependencies(request: Request) -> DependencyHealthResponse:
         "redis": _redis_dependency_health(request),
         "supabase": await _supabase_health(settings),
     }
+    audio_ml_providers = getattr(request.app.state, "audio_ml_providers", None)
+    if not audio_ml_providers:
+        checks["audio_ml"] = DependencyHealth(status="degraded", message="Audio ML providers are disabled.")
+    else:
+        states = {}
+        all_ok = True
+        for name, provider in audio_ml_providers.items():
+            if hasattr(provider, "check_availability"):
+                ok, reason = provider.check_availability()
+                states[name] = {"available": ok, "status": reason}
+                if not ok:
+                    all_ok = False
+            else:
+                states[name] = {"available": True, "status": "unknown"}
+        status_str = "ok" if all_ok else "degraded"
+        checks["audio_ml"] = DependencyHealth(
+            status=status_str,
+            message="Audio ML dependencies check.",
+            metadata=states,
+        )
     aggregate = "ok" if all(item.status == "ok" for item in checks.values()) else "degraded"
     return DependencyHealthResponse(
         status=aggregate,

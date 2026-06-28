@@ -118,16 +118,67 @@ class WhisperCompatibleHttpProvider:
         if language_hint != LanguageHint.AUTO:
             data["language"] = language_hint.value
 
-        with audio_path.open("rb") as audio_file:
-            response = httpx.post(
-                self.endpoint,
-                headers=headers,
-                data=data,
-                files={"file": (audio_path.name, audio_file, "audio/wav")},
-                timeout=120,
-            )
-        response.raise_for_status()
-        payload = response.json()
+        import logging
+        import time
+        import random
+
+        logger = logging.getLogger(__name__)
+
+        max_attempts = 3
+        base_delay = 1.0
+        backoff_factor = 2.0
+        request_timeout = 30
+
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                with audio_path.open("rb") as audio_file:
+                    response = httpx.post(
+                        self.endpoint,
+                        headers=headers,
+                        data=data,
+                        files={"file": (audio_path.name, audio_file, "audio/wav")},
+                        timeout=request_timeout,
+                    )
+                if response.status_code == 429 or response.status_code >= 500:
+                    response.raise_for_status()
+                response.raise_for_status()
+                payload = response.json()
+                break
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
+                is_transient = True
+                status_code = None
+                if isinstance(exc, httpx.HTTPStatusError):
+                    status_code = exc.response.status_code
+                    if 400 <= status_code < 500 and status_code != 429:
+                        is_transient = False
+
+                if not is_transient or attempt >= max_attempts:
+                    logger.error(
+                        "transcription_provider_failed",
+                        extra={
+                            "provider": self.provider_name,
+                            "attempt": attempt,
+                            "status_code": status_code,
+                            "error_type": type(exc).__name__,
+                        }
+                    )
+                    if status_code:
+                        raise RuntimeError(f"Transcription provider returned status {status_code}") from None
+                    raise RuntimeError(f"Transcription provider failed: {type(exc).__name__}") from None
+
+                delay = base_delay * (backoff_factor ** (attempt - 1)) + random.uniform(0, 0.5)
+                logger.warning(
+                    "transcription_provider_transient_error",
+                    extra={
+                        "provider": self.provider_name,
+                        "attempt": attempt,
+                        "delay": round(delay, 2),
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                time.sleep(delay)
         language = normalize_transcription_language(payload.get("language"), language_hint)
         words = [
             TranscriptWord(

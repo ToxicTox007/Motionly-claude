@@ -82,38 +82,64 @@ class RunwayGen3Provider:
                 "runway_prompt_image_required",
                 "Runway Gen-3 requires a prompt image URL for image-to-video generation.",
             )
-        response = httpx.post(
-            f"{self.base_url}/image_to_video",
-            headers={
-                "authorization": f"Bearer {self.api_key}",
-                "x-runway-version": "2024-11-06",
-                "content-type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "promptImage": prompt_image_url,
-                "promptText": prompt,
-                "duration": duration_s,
-                "ratio": ratio,
-            },
-            timeout=30,
-        )
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            response = httpx.post(
+                f"{self.base_url}/image_to_video",
+                headers={
+                    "authorization": f"Bearer {self.api_key}",
+                    "x-runway-version": "2024-11-06",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "promptImage": prompt_image_url,
+                    "promptText": prompt,
+                    "duration": duration_s,
+                    "ratio": ratio,
+                },
+                timeout=30,
+            )
+        except Exception as exc:
+            logger.error(
+                "runway_generation_post_failed",
+                extra={
+                    "model": self.model,
+                    "duration_s": duration_s,
+                    "error_type": type(exc).__name__,
+                }
+            )
+            raise ApiError(502, "runway_generation_failed", f"Runway request failed: {type(exc).__name__}") from None
+
         if response.status_code >= 400:
-            raise ApiError(502, "runway_generation_failed", "Runway rejected video generation.")
+            raise ApiError(502, "runway_generation_failed", f"Runway rejected video generation with status {response.status_code}.")
         task_id = str(response.json().get("id") or "")
         if not task_id:
             raise ApiError(502, "runway_generation_failed", "Runway did not return a task id.")
         for _ in range(300):
-            task = httpx.get(
-                f"{self.base_url}/tasks/{task_id}",
-                headers={
-                    "authorization": f"Bearer {self.api_key}",
-                    "x-runway-version": "2024-11-06",
-                },
-                timeout=30,
-            )
+            try:
+                task = httpx.get(
+                    f"{self.base_url}/tasks/{task_id}",
+                    headers={
+                        "authorization": f"Bearer {self.api_key}",
+                        "x-runway-version": "2024-11-06",
+                    },
+                    timeout=30,
+                )
+            except Exception as exc:
+                logger.error(
+                    "runway_generation_poll_failed",
+                    extra={
+                        "task_id": task_id,
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                raise ApiError(502, "runway_generation_failed", f"Runway task polling failed: {type(exc).__name__}") from None
+
             if task.status_code >= 400:
-                raise ApiError(502, "runway_generation_failed", "Runway task polling failed.")
+                raise ApiError(502, "runway_generation_failed", f"Runway task polling failed with status {task.status_code}.")
             data = task.json()
             if data.get("status") == "SUCCEEDED":
                 outputs = data.get("output") or []

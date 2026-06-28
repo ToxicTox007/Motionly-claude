@@ -209,14 +209,50 @@ def _run_audio_ml_providers(
 ) -> dict[str, object]:
     if not providers or audio_path is None:
         return {}
+    import logging
+    logger = logging.getLogger(__name__)
+
     insights: dict[str, object] = {}
     diarization = providers.get("speaker_diarization")
     if diarization is not None and hasattr(diarization, "diarize"):
-        insights["speaker_diarization"] = diarization.diarize(audio_path=audio_path)
+        try:
+            insights["speaker_diarization"] = diarization.diarize(audio_path=audio_path)
+        except Exception as exc:
+            logger.error(
+                "audio_ml_provider_failed",
+                extra={"provider": "speaker_diarization", "error_type": type(exc).__name__, "error": str(exc)},
+            )
+            insights["speaker_diarization"] = {
+                "provider": getattr(diarization, "provider_name", "pyannote"),
+                "model": getattr(diarization, "model", "unknown"),
+                "speaker_count": 0,
+                "segments": [],
+                "confidence": None,
+                "degraded": True,
+            }
     emotion = providers.get("emotion")
     if emotion is not None and hasattr(emotion, "classify_windows"):
-        insights["emotion_windows"] = emotion.classify_windows(audio_path=audio_path)
+        try:
+            insights["emotion_windows"] = emotion.classify_windows(audio_path=audio_path)
+        except Exception as exc:
+            logger.error(
+                "audio_ml_provider_failed",
+                extra={"provider": "emotion", "error_type": type(exc).__name__, "error": str(exc)},
+            )
+            insights["emotion_windows"] = []
     sound = providers.get("sound")
     if sound is not None and hasattr(sound, "classify"):
-        insights["sound_classification"] = sound.classify(audio_path=audio_path)
+        try:
+            insights["sound_classification"] = sound.classify(audio_path=audio_path)
+        except Exception as exc:
+            logger.error(
+                "audio_ml_provider_failed",
+                extra={"provider": "sound", "error_type": type(exc).__name__, "error": str(exc)},
+            )
+            insights["sound_classification"] = {
+                "provider": getattr(sound, "provider_name", "yamnet"),
+                "model": getattr(sound, "model_url", "unknown"),
+                "labels": [],
+                "degraded": True,
+            }
     return insights

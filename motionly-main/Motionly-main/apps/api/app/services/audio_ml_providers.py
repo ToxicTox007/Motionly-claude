@@ -12,7 +12,33 @@ class PyannoteSpeakerDiarizationProvider:
         self.auth_token = auth_token
         self._pipeline = None
 
+    def check_availability(self) -> tuple[bool, str]:
+        if not self.auth_token:
+            return False, "auth_token_missing"
+        try:
+            from pyannote.audio import Pipeline
+            return True, "available"
+        except ImportError:
+            return False, "dependency_missing"
+
     def diarize(self, *, audio_path: Path) -> dict[str, Any]:
+        available, reason = self.check_availability()
+        if not available:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "pyannote_speaker_diarization_unavailable",
+                extra={"reason": reason, "model": self.model},
+            )
+            return {
+                "provider": self.provider_name,
+                "model": self.model,
+                "speaker_count": 0,
+                "segments": [],
+                "confidence": None,
+                "degraded": True,
+                "status": f"unavailable:{reason}",
+            }
         pipeline = self._load_pipeline()
         diarization = pipeline(str(audio_path))
         segments = []
@@ -57,7 +83,25 @@ class Wav2VecEmotionProvider:
         self.model = model
         self._loaded: dict[str, object] | None = None
 
+    def check_availability(self) -> tuple[bool, str]:
+        try:
+            import torch
+            import torchaudio
+            from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
+            return True, "available"
+        except ImportError:
+            return False, "dependency_missing"
+
     def classify_windows(self, *, audio_path: Path, window_ms: int = 500) -> list[dict[str, Any]]:
+        available, reason = self.check_availability()
+        if not available:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "wav2vec2_emotion_unavailable",
+                extra={"reason": reason, "model": self.model},
+            )
+            return []
         loaded = self._load()
         torch = loaded["torch"]
         torchaudio = loaded["torchaudio"]
@@ -150,7 +194,31 @@ class YamnetSoundClassifier:
         self.model_url = model_url
         self._model = None
 
+    def check_availability(self) -> tuple[bool, str]:
+        try:
+            import numpy as np
+            import tensorflow as tf
+            import tensorflow_hub as hub
+            return True, "available"
+        except ImportError:
+            return False, "dependency_missing"
+
     def classify(self, *, audio_path: Path) -> dict[str, Any]:
+        available, reason = self.check_availability()
+        if not available:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "yamnet_sound_classification_unavailable",
+                extra={"reason": reason, "model": self.model_url},
+            )
+            return {
+                "provider": self.provider_name,
+                "model": self.model_url,
+                "labels": [],
+                "degraded": True,
+                "status": f"unavailable:{reason}",
+            }
         try:
             import numpy as np
             import tensorflow as tf
