@@ -18,7 +18,7 @@ The main `package.json` exposes root-level developer commands.
 - `apps/web`: React / Next.js application using Supabase auth and the public API.
 - `apps/worker`: background worker using BullMQ and Redis, optionally runs premium Remotion rendering.
 - `apps/api`: FastAPI backend service for business logic, storage signing, billing, auth, and render orchestration.
-- `infra/migrations`: database schema and migration SQL.
+- `supabase/migrations`: canonical database schema and migration SQL.
 - `supabase`: Supabase project configuration files.
 
 ## Prerequisites
@@ -180,7 +180,7 @@ If you enable `REMOTION_ENABLED=true`, the worker container will also support pr
 
 The project expects a Supabase-compatible PostgreSQL backend.
 
-- Apply SQL migrations from `infra/migrations`
+- Apply SQL migrations from `supabase/migrations` (via `supabase db reset --local` or Supabase CLI)
 - Configure Supabase credentials in `.env`
 - Use `SUPABASE_SERVICE_ROLE_KEY` for server-side API access
 - Use `SUPABASE_ANON_KEY` for frontend authentication

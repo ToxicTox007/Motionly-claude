@@ -160,3 +160,41 @@
   ```
 - Remaining caveats: MediaPipe Selfie Segmentation is a lightweight stopgap (best for centered speakers). B-roll still uses legacy ellipse when `apply_to_broll` is enabled. Matte retention is not yet tied to upload delete triggers. Remotion golden `segmentation_off_center` scenario still pending GPU worker validation in CI media-goldens job.
 
+## Phase 5 — Consolidate Migration Trees
+
+- Date: 2026-06-28
+- Executor: Cursor / Implementer
+- Canonical migration source: supabase/migrations
+- Files touched:
+  - [supabase/migrations/](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/supabase/migrations/) (replaced symlink with 40 real SQL files)
+  - [infra/migrations_legacy/](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/infra/migrations_legacy/)
+  - [infra/migrations_legacy/README.md](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/infra/migrations_legacy/README.md)
+  - [scripts/check_forward_migrations.sh](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/scripts/check_forward_migrations.sh)
+  - [infra/docker-compose.gpu.yml](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/infra/docker-compose.gpu.yml#L27)
+  - [README.md](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/README.md)
+- Migrations ported: None. Both trees were byte-identical (40/40 files). `supabase/migrations` had been a symlink to `../infra/migrations`; it is now a real directory with the same content.
+- Non-canonical tree handling: `infra/migrations/` moved to `infra/migrations_legacy/` with README stating audit/history-only use; no new migrations may be added there.
+- Scripts/CI updated:
+  - `scripts/check_forward_migrations.sh` now guards `supabase/migrations` (forward-only) and fails on new `.sql` in `infra/migrations_legacy` or recreated `infra/migrations`.
+  - `infra/docker-compose.gpu.yml` Postgres init mount updated to `../supabase/migrations`.
+  - `README.md` database section updated to reference `supabase/migrations`.
+  - `.github/workflows/phase-0-safety.yml` unchanged (already uses `supabase db reset --local` + `check_forward_migrations.sh`).
+- Enum/status normalization: No backfill migration added. Legacy `running`/`succeeded` render statuses are mapped at read time in `apps/api/app/repositories/renders.py`; fresh bootstrap enum shape is established by existing repair migrations (`202606120004`, `202606220001`) and validated by `phase_0_schema_test.sql`.
+- Verification performed:
+  - `bash scripts/check_forward_migrations.sh origin/main`
+  - `npx supabase@2.104.0 db reset --local`
+  - `npx supabase@2.104.0 test db`
+- Verification output / evidence:
+  ```
+  Migration history is forward-only.
+
+  Finished supabase db reset on branch main.
+  (40 migrations applied from supabase/migrations/)
+
+  phase_0_schema_test.sql .. ok
+  phase_9_rls_test.sql ..... ok
+  All tests successful.
+  Files=2, Tests=69, Result: PASS
+  ```
+- Remaining caveats: Migration filenames still carry duplicate phase labels (e.g. two `phase_4_*`, two `phase_5_*`) and `phase_0_schema_repair` runs late by timestamp; week_01 vs week_04 `render_job_status` enum definitions remain compensated only by downstream repair migrations. Audit docs (`PROJECT_CODE_AUDIT.md`, `source-audit.md`) still mention `infra/migrations` and were not updated in this phase. Staging deploy hook sends `migration_strategy: forward-only` but does not name the migration directory in-repo.
+
