@@ -95,7 +95,11 @@ export function defaultJobOptions() {
 export function workerConcurrency(queueName) {
   const specific = queueName === "render_gpu"
     ? env("GPU_RENDER_WORKER_CONCURRENCY")
-    : queueName === "render" ? env("RENDER_WORKER_CONCURRENCY") : "";
+    : queueName === "render"
+    ? env("RENDER_WORKER_CONCURRENCY")
+    : queueName === "visual_analysis"
+    ? env("VISUAL_ANALYSIS_WORKER_CONCURRENCY", "1")
+    : "";
   return positiveIntValue(specific || env("WORKER_CONCURRENCY", "3"), 3);
 }
 

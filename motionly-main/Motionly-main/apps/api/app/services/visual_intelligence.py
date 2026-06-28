@@ -132,104 +132,128 @@ class LocalMLVisualIntelligenceProvider:
         sample_rate_fps: float,
         scene_threshold: float,
     ) -> VideoManifest:
-        models = self._load_models()
-        cv2 = models["cv2"]
-        np = models["np"]
-        Image = models["Image"]
-        torch = models["torch"]
-        device = models["device"]
-        clip_processor = models["clip_processor"]
-        clip_model = models["clip_model"]
-        blip_processor = models["blip_processor"]
-        blip_model = models["blip_model"]
-        yolo_model = models["yolo_model"]
-        face_detector = models["face_detector"]
+        models = {}
+        try:
+            models = self._load_models()
+            cv2 = models["cv2"]
+            np = models["np"]
+            Image = models["Image"]
+            torch = models["torch"]
+            device = models["device"]
+            clip_processor = models["clip_processor"]
+            clip_model = models["clip_model"]
+            blip_processor = models["blip_processor"]
+            blip_model = models["blip_model"]
+            yolo_model = models["yolo_model"]
+            face_detector = models["face_detector"]
 
-        raw_frames = _sample_video_frames(
-            cv2=cv2,
-            np=np,
-            source_path=source_path,
-            sample_rate_fps=sample_rate_fps,
-            scene_threshold=scene_threshold,
-        )
-        if not raw_frames:
-            raise ApiError(422, "visual_frames_empty", "No frames could be sampled from video.")
+            raw_frames = _sample_video_frames(
+                cv2=cv2,
+                np=np,
+                source_path=source_path,
+                sample_rate_fps=sample_rate_fps,
+                scene_threshold=scene_threshold,
+            )
+            if not raw_frames:
+                raise ApiError(422, "visual_frames_empty", "No frames could be sampled from video.")
 
-        samples: list[FrameSample] = []
-        previous_gray = None
-        for raw in raw_frames:
-            timestamp_ms = raw["timestamp_ms"]
-            frame = raw["frame"]
-            scene_change_score = raw["scene_change_score"]
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(rgb)
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            motion = _camera_motion(cv2=cv2, np=np, previous_gray=previous_gray, gray=gray)
-            previous_gray = gray
-            embedding = _clip_embedding(
-                torch=torch,
-                device=device,
-                processor=clip_processor,
-                model=clip_model,
-                image=image,
-            )
-            caption = _blip_caption(
-                torch=torch,
-                device=device,
-                processor=blip_processor,
-                model=blip_model,
-                image=image,
-            )
-            objects = _yolo_objects(yolo_model=yolo_model, frame=frame)
-            faces = _mediapipe_faces(face_detector=face_detector, rgb=rgb)
-            colors = _dominant_colors(image=image)
-            scene_type = _classify_scene_type(
-                caption=caption,
-                objects=objects,
-                faces=faces,
-                width=int(frame.shape[1]),
-                height=int(frame.shape[0]),
-            )
-            samples.append(
-                FrameSample(
-                    timestamp_ms=timestamp_ms,
-                    width=int(frame.shape[1]),
-                    height=int(frame.shape[0]),
-                    scene_change_score=scene_change_score,
-                    embedding=embedding,
+            samples: list[FrameSample] = []
+            previous_gray = None
+            for raw in raw_frames:
+                timestamp_ms = raw["timestamp_ms"]
+                frame = raw["frame"]
+                scene_change_score = raw["scene_change_score"]
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(rgb)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                motion = _camera_motion(cv2=cv2, np=np, previous_gray=previous_gray, gray=gray)
+                previous_gray = gray
+                embedding = _clip_embedding(
+                    torch=torch,
+                    device=device,
+                    processor=clip_processor,
+                    model=clip_model,
+                    image=image,
+                )
+                caption = _blip_caption(
+                    torch=torch,
+                    device=device,
+                    processor=blip_processor,
+                    model=blip_model,
+                    image=image,
+                )
+                objects = _yolo_objects(yolo_model=yolo_model, frame=frame)
+                faces = _mediapipe_faces(face_detector=face_detector, rgb=rgb)
+                colors = _dominant_colors(image=image)
+                scene_type = _classify_scene_type(
                     caption=caption,
-                    dominant_colors=colors,
                     objects=objects,
                     faces=faces,
-                    camera_motion=motion,
-                    scene_type=scene_type,
-                    visual_importance_score=_importance_score(
+                    width=int(frame.shape[1]),
+                    height=int(frame.shape[0]),
+                )
+                samples.append(
+                    FrameSample(
+                        timestamp_ms=timestamp_ms,
+                        width=int(frame.shape[1]),
+                        height=int(frame.shape[0]),
+                        scene_change_score=scene_change_score,
+                        embedding=embedding,
+                        caption=caption,
+                        dominant_colors=colors,
                         objects=objects,
                         faces=faces,
-                        scene_change_score=scene_change_score,
-                        motion=motion,
-                    ),
+                        camera_motion=motion,
+                        scene_type=scene_type,
+                        visual_importance_score=_importance_score(
+                            objects=objects,
+                            faces=faces,
+                            scene_change_score=scene_change_score,
+                            motion=motion,
+                        ),
+                    )
                 )
-            )
 
-        duration_ms = metadata.duration_ms or max(sample.timestamp_ms for sample in samples)
-        scenes = _build_scenes_from_samples(samples=samples, duration_ms=duration_ms)
-        return VideoManifest(
-            duration_ms=duration_ms,
-            sample_rate_fps=sample_rate_fps,
-            frame_count=len(samples),
-            provider=self.provider_name,
-            model_versions={
-                "clip": self.clip_model_name,
-                "blip": self.blip_model_name,
-                "object_detection": self.yolo_model_name,
-                "face_detection": "mediapipe-face-detection",
-                "segmentation": "mediapipe-selfie-segmentation",
-            },
-            frame_samples=samples,
-            scenes=scenes,
-            summary=_manifest_summary(samples=samples, scenes=scenes),
-        )
+            duration_ms = metadata.duration_ms or max(sample.timestamp_ms for sample in samples)
+            scenes = _build_scenes_from_samples(samples=samples, duration_ms=duration_ms)
+            return VideoManifest(
+                duration_ms=duration_ms,
+                sample_rate_fps=sample_rate_fps,
+                frame_count=len(samples),
+                provider=self.provider_name,
+                model_versions={
+                    "clip": self.clip_model_name,
+                    "blip": self.blip_model_name,
+                    "object_detection": self.yolo_model_name,
+                    "face_detection": "mediapipe-face-detection",
+                    "segmentation": "mediapipe-selfie-segmentation",
+                },
+                frame_samples=samples,
+                scenes=scenes,
+                summary=_manifest_summary(samples=samples, scenes=scenes),
+            )
+        except Exception as exc:
+            import logging
+            logger = logging.getLogger(__name__)
+
+            is_oom = "out of memory" in str(exc).lower() or type(exc).__name__ == "OutOfMemoryError"
+            if is_oom:
+                logger.error(
+                    "visual_analysis_cuda_oom",
+                    extra={
+                        "model": self.model,
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                if models and "torch" in models:
+                    try:
+                        models["torch"].cuda.empty_cache()
+                    except Exception:
+                        pass
+                import gc
+                gc.collect()
+                raise ApiError(500, "cuda_oom", "GPU out of memory during visual analysis.") from None
+            raise
 
     def _load_models(self) -> dict[str, object]:
         if self._loaded is not None:

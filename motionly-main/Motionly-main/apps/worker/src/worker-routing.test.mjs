@@ -18,3 +18,15 @@ test("standard worker defaults to the isolated Remotion queue", async () => {
     assert.match(source, new RegExp(`"${queue}"`));
   }
 });
+
+test("visual_analysis concurrency defaults to 1 and is configurable", async () => {
+  const { workerConcurrency } = await import("./queue-common.mjs");
+  
+  assert.equal(workerConcurrency("visual_analysis"), 1);
+  
+  process.env.VISUAL_ANALYSIS_WORKER_CONCURRENCY = "4";
+  assert.equal(workerConcurrency("visual_analysis"), 4);
+  delete process.env.VISUAL_ANALYSIS_WORKER_CONCURRENCY;
+
+  assert.equal(workerConcurrency("transcription"), 3);
+});

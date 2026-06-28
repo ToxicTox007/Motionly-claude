@@ -262,3 +262,31 @@
   ========================= 6 passed, 1 warning in 0.80s =========================
   ```
 - Remaining caveats: No paid fallback providers (e.g. Deepgram or AssemblyAI) were introduced, respecting the privacy/cost constraint. Local ML providers still depend on try-imports which may require manual dependency installation on startup.
+
+## Phase 8 — GPU Worker Resource Controls and Model Isolation
+
+- Date: 2026-06-28
+- Executor: Antigravity / Main Agent / Implementer
+- Files touched:
+  - [apps/worker/src/queue-common.mjs](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/worker/src/queue-common.mjs#L95-L105)
+  - [apps/api/app/services/visual_intelligence.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/visual_intelligence.py#L130-L235)
+  - [apps/worker/src/worker-routing.test.mjs](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/worker/src/worker-routing.test.mjs)
+  - [apps/api/tests/test_phase8_failure_injection.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_phase8_failure_injection.py)
+- Current GPU concurrency: Visual analysis queue previously defaulted to the global `WORKER_CONCURRENCY` value (which defaults to 3).
+- Model loading behavior: Models are loaded lazily on the first `analyze()` request inside the persistent `app.workers.visual_job` subprocess, caching weights across jobs.
+- Concurrency cap added: Enforced an explicit cap default of 1 concurrent visual analysis job per worker (configurable via `VISUAL_ANALYSIS_WORKER_CONCURRENCY` environment variable), causing concurrent requests to backlog and serialize instead of overloading PyTorch VRAM.
+- CUDA OOM handling: Captured `RuntimeError` and `OutOfMemoryError` containing "out of memory" in `LocalMLVisualIntelligenceProvider.analyze`, logged a safe structured reason, triggered `gc.collect()`, cleared PyTorch cache with `torch.cuda.empty_cache()` if loaded, and propagated a clean `ApiError(500, "cuda_oom", ...)`.
+- Model isolation decision: **DECISION NEEDED** (Currently using single persistent python process per worker queue + concurrency cap of 1 + lazy loading. Splitting into separate containers or worker processes remains pending).
+- VRAM budget decision: **DECISION NEEDED** (Currently unspecified target hardware or VRAM budgets, relying on concurrency cap of 1).
+- Autoscaling decision: **DECISION NEEDED** (Currently no Kubernetes or cloud auto-scaling configured. Manual replica scaling under Docker Compose/Compose profiles is supported via docker command-line scaling).
+- Verification performed:
+  - Added new Node unit tests in `worker-routing.test.mjs` verifying default and override behavior of visual analysis queue concurrency.
+  - Added new Python unit tests in `test_phase8_failure_injection.py` validating that CUDA OOM error code `cuda_oom` is propagated, PyTorch cleanup is called, and non-OOM errors preserve behavior.
+  - Ran both Python pytest (264 tests) and Node test runner suites.
+- Verification output / evidence:
+  ```
+  tests/test_phase8_failure_injection.py ...                               [100%]
+  ========================= 3 passed, 1 warning in 1.18s =========================
+  ✔ visual_analysis concurrency defaults to 1 and is configurable (232.239201ms)
+  ```
+- Remaining caveats: The persistent Python subprocess does not automatically restart on OOM (though the daemon stays alive and subsequent jobs process successfully). Under heavy backlogs, manual scaling of the `gpu-inference-worker` Docker service is required.
