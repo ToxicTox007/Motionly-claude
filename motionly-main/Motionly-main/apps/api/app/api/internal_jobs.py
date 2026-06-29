@@ -263,6 +263,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             stem_separator=request.app.state.stem_separator,
             runway_provider=request.app.state.runway_provider,
             operations_repository=request.app.state.operations_repository,
+            billing_repository=request.app.state.billing_repository,
         )
         return {
             "resource_id": str(resource.id),
@@ -298,6 +299,18 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         repository = request.app.state.plan_repository
         planner_provider = request.app.state.edit_planner_provider
         operations = getattr(request.app.state, "operations_repository", None)
+        billing_repository = getattr(request.app.state, "billing_repository", None)
+
+        max_attempts = getattr(settings, "max_paid_provider_attempts", 1)
+        if (
+            job.attempts >= max_attempts
+            and getattr(planner_provider, "provider_name", None) != "fixture"
+        ):
+            raise ApiError(
+                429,
+                "edit_planner_retry_limit_exceeded",
+                f"Paid edit planner retry attempt cap reached (attempts: {job.attempts}, max: {max_attempts}).",
+            )
 
         params = json.loads(job.render_engine)
         prompt = params["prompt"]
@@ -383,6 +396,8 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
                 video_duration_ms=video_duration_ms,
                 visual_manifest=visual_manifest,
                 style_classification=style_classification,
+                billing_repository=billing_repository,
+                operations_repository=operations,
             )
         except Exception as exc:
             if operations is not None:

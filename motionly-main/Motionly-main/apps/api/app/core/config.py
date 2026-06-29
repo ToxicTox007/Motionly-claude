@@ -140,6 +140,18 @@ class Settings(BaseSettings):
     google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
     stem_separation_provider: str = Field(default="demucs", alias="STEM_SEPARATION_PROVIDER")
     demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
+    quota_runway_free_limit_seconds: float = Field(default=0.0, alias="QUOTA_RUNWAY_FREE_LIMIT_SECONDS")
+    quota_runway_creator_limit_seconds: float = Field(default=60.0, alias="QUOTA_RUNWAY_CREATOR_LIMIT_SECONDS")
+    quota_runway_pro_limit_seconds: float = Field(default=300.0, alias="QUOTA_RUNWAY_PRO_LIMIT_SECONDS")
+    quota_runway_agency_limit_seconds: float = Field(default=1200.0, alias="QUOTA_RUNWAY_AGENCY_LIMIT_SECONDS")
+
+    quota_openrouter_free_limit_tokens: float = Field(default=100000.0, alias="QUOTA_OPENROUTER_FREE_LIMIT_TOKENS")
+    quota_openrouter_creator_limit_tokens: float = Field(default=500000.0, alias="QUOTA_OPENROUTER_CREATOR_LIMIT_TOKENS")
+    quota_openrouter_pro_limit_tokens: float = Field(default=2000000.0, alias="QUOTA_OPENROUTER_PRO_LIMIT_TOKENS")
+    quota_openrouter_agency_limit_tokens: float = Field(default=10000000.0, alias="QUOTA_OPENROUTER_AGENCY_LIMIT_TOKENS")
+
+    max_paid_provider_attempts: int = Field(default=1, alias="MAX_PAID_PROVIDER_ATTEMPTS")
+
     runway_api_key: str | None = Field(default=None, alias="RUNWAY_API_KEY")
     runway_model: str = Field(default="gen3a_turbo", alias="RUNWAY_MODEL")
 

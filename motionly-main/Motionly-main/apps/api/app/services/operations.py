@@ -99,6 +99,73 @@ class OperationsRepository:
         self.cost_events.append(values)
         self._insert("cost_attribution_events", values, upsert=True)
 
+    def count_usage(
+        self,
+        *,
+        workspace_id: Any,
+        provider: str,
+        category: str,
+        period_start: datetime,
+        period_end: datetime,
+    ) -> float:
+        if not self.base_url or not self.headers:
+            total = 0.0
+            for row in self.cost_events:
+                if (
+                    str(row.get("workspace_id")) == str(workspace_id)
+                    and row.get("provider") == provider
+                    and row.get("category") == category
+                ):
+                    created_at = row.get("created_at") or datetime.now(UTC)
+                    if isinstance(created_at, str):
+                        try:
+                            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                        except Exception:
+                            continue
+                    if period_start <= created_at < period_end:
+                        total += float(row.get("quantity") or 0.0)
+            return total
+
+        # Query PostgREST
+        start_str = period_start.isoformat()
+        end_str = period_end.isoformat()
+        params = [
+            ("workspace_id", f"eq.{workspace_id}"),
+            ("provider", f"eq.{provider}"),
+            ("category", f"eq.{category}"),
+            ("created_at", f"gte.{start_str}"),
+            ("created_at", f"lt.{end_str}"),
+            ("select", "quantity"),
+            ("limit", "10000"),
+        ]
+        try:
+            response = httpx.get(
+                f"{self.base_url}/cost_attribution_events",
+                headers=self.headers,
+                params=params,
+                timeout=10,
+            )
+            response.raise_for_status()
+            rows = response.json()
+            return sum(float(row.get("quantity") or 0.0) for row in rows)
+        except Exception:
+            total = 0.0
+            for row in self.cost_events:
+                if (
+                    str(row.get("workspace_id")) == str(workspace_id)
+                    and row.get("provider") == provider
+                    and row.get("category") == category
+                ):
+                    created_at = row.get("created_at") or datetime.now(UTC)
+                    if isinstance(created_at, str):
+                        try:
+                            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                        except Exception:
+                            continue
+                    if period_start <= created_at < period_end:
+                        total += float(row.get("quantity") or 0.0)
+            return total
+
     def cost_summary(self, *, render_job_id=None) -> dict[str, Any]:
         rows = self._cost_rows(render_job_id=render_job_id)
         by_category: dict[str, float] = defaultdict(float)

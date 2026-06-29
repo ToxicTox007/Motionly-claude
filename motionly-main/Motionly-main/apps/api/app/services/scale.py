@@ -68,14 +68,14 @@ class RunwayGen3Provider:
         self.model = model
         self.base_url = "https://api.dev.runwayml.com/v1"
 
-    def generate(
+    def initiate_generation(
         self,
         *,
         prompt: str,
         prompt_image_url: str | None,
         duration_s: int,
         ratio: str,
-    ) -> RunwayResult:
+    ) -> str:
         if not prompt_image_url:
             raise ApiError(
                 422,
@@ -118,6 +118,12 @@ class RunwayGen3Provider:
         task_id = str(response.json().get("id") or "")
         if not task_id:
             raise ApiError(502, "runway_generation_failed", "Runway did not return a task id.")
+        return task_id
+
+    def poll_task(self, task_id: str) -> str:
+        import logging
+        import time
+        logger = logging.getLogger(__name__)
         for _ in range(300):
             try:
                 task = httpx.get(
@@ -144,7 +150,7 @@ class RunwayGen3Provider:
             if data.get("status") == "SUCCEEDED":
                 outputs = data.get("output") or []
                 if outputs:
-                    return RunwayResult(task_id=task_id, video_url=str(outputs[0]))
+                    return str(outputs[0])
             if data.get("status") in {"FAILED", "CANCELLED"}:
                 raise ApiError(
                     502,
@@ -154,14 +160,52 @@ class RunwayGen3Provider:
             time.sleep(2)
         raise ApiError(504, "runway_generation_timeout", "Runway generation timed out.")
 
+    def generate(
+        self,
+        *,
+        prompt: str,
+        prompt_image_url: str | None,
+        duration_s: int,
+        ratio: str,
+    ) -> RunwayResult:
+        task_id = self.initiate_generation(
+            prompt=prompt,
+            prompt_image_url=prompt_image_url,
+            duration_s=duration_s,
+            ratio=ratio,
+        )
+        video_url = self.poll_task(task_id)
+        return RunwayResult(task_id=task_id, video_url=video_url)
+
 
 class FixtureRunwayProvider:
+    def initiate_generation(
+        self,
+        *,
+        prompt: str,
+        prompt_image_url: str | None,
+        duration_s: int,
+        ratio: str,
+    ) -> str:
+        del prompt_image_url, duration_s, ratio
+        slug = "-".join(prompt.lower().split())[:40] or "generated"
+        return f"fixture-{slug}"
+
+    def poll_task(self, task_id: str) -> str:
+        slug = task_id.replace("fixture-", "")
+        return f"fixture://runway/{slug}.mp4"
+
     def generate(
         self, *, prompt: str, prompt_image_url: str | None, duration_s: int, ratio: str
     ) -> RunwayResult:
-        del prompt_image_url, duration_s, ratio
-        slug = "-".join(prompt.lower().split())[:40] or "generated"
-        return RunwayResult(task_id=f"fixture-{slug}", video_url=f"fixture://runway/{slug}.mp4")
+        task_id = self.initiate_generation(
+            prompt=prompt,
+            prompt_image_url=prompt_image_url,
+            duration_s=duration_s,
+            ratio=ratio,
+        )
+        video_url = self.poll_task(task_id)
+        return RunwayResult(task_id=task_id, video_url=video_url)
 
 
 def execute_scale_resource(
@@ -177,6 +221,7 @@ def execute_scale_resource(
     stem_separator,
     runway_provider,
     operations_repository=None,
+    billing_repository=None,
 ) -> ScaleResourceRecord:
     record = repository.get(resource_id=resource_id, workspace_id=workspace_id)
     if record.status in {ScaleResourceStatus.READY, ScaleResourceStatus.COMPLETED}:
@@ -201,6 +246,8 @@ def execute_scale_resource(
                 broll_repository=broll_repository,
                 runway_provider=runway_provider,
                 operations_repository=operations_repository,
+                billing_repository=billing_repository,
+                repository=repository,
             )
         elif record.kind == "style_profile":
             result = _train_style(
@@ -282,19 +329,49 @@ def _remove_stem_temp_directory(stems: dict[str, Path]) -> None:
 
 
 def _generate_broll(
-    *, record, settings, broll_repository, runway_provider, operations_repository=None
+    *,
+    record,
+    settings,
+    broll_repository,
+    runway_provider,
+    operations_repository=None,
+    billing_repository=None,
+    repository=None,
 ) -> dict[str, Any]:
     if not record.project_id:
         raise ApiError(422, "scale_project_required", "Generated B-roll needs a project.")
     payload = record.payload
-    generated = runway_provider.generate(
-        prompt=str(payload["prompt"]),
-        prompt_image_url=str(payload["prompt_image_url"])
-        if payload.get("prompt_image_url")
-        else None,
-        duration_s=int(payload.get("duration_s") or 5),
-        ratio=str(payload.get("ratio") or "768:1280"),
-    )
+
+    from app.services.billing import check_quota
+
+    # Pre-call quota check
+    if billing_repository is not None and operations_repository is not None:
+        check_quota(
+            workspace_id=record.workspace_id,
+            provider="runway",
+            category="generated_seconds",
+            billing_repository=billing_repository,
+            operations_repository=operations_repository,
+            estimated_quantity=float(payload.get("duration_s") or 5),
+        )
+
+    task_id = payload.get("runway_task_id")
+    if not task_id:
+        task_id = runway_provider.initiate_generation(
+            prompt=str(payload["prompt"]),
+            prompt_image_url=str(payload["prompt_image_url"])
+            if payload.get("prompt_image_url")
+            else None,
+            duration_s=int(payload.get("duration_s") or 5),
+            ratio=str(payload.get("ratio") or "768:1280"),
+        )
+        payload["runway_task_id"] = task_id
+        if repository is not None:
+            repository.update(record=record, payload=payload)
+
+    video_url = runway_provider.poll_task(task_id)
+    generated = RunwayResult(task_id=task_id, video_url=video_url)
+
     if operations_repository is not None:
         operations_repository.record_cost(
             workspace_id=record.workspace_id,

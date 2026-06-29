@@ -322,3 +322,35 @@
   ======================== 36 passed, 1 warning in 1.32s =========================
   ```
 - Remaining caveats: The visual manifest must be pre-generated/ready for the visual manifest hash to be included in the cache key. If it is unavailable or status is pending/processing, the fallback visual context flags are used instead. No schema migrations were added, preserving compatibility.
+
+## Phase 10: Cost Controls and Provider Quotas
+
+- **File/Line Verified**:
+  - [apps/api/app/core/config.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/core/config.py#L143-L155) (Added new quota and retry settings fields)
+  - [apps/api/app/services/operations.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/operations.py#L102-L168) (Added `count_usage` counting query to PostgREST `cost_attribution_events` table)
+  - [apps/api/app/services/billing.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/billing.py#L109-L170) (Added `check_quota` helper checking subscription tier and limits)
+  - [apps/api/app/services/scale.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/scale.py#L71-L166) (Updated Runway Gen-3 code with separate `initiate_generation` and `poll_task` functions, checking quota pre-call and caching Runway task ID on record payload)
+  - [apps/api/app/services/edit_planner.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/edit_planner.py#L155-L168) (Added pre-call OpenRouter token quota check in `HttpEditPlannerProvider.create_plan`)
+  - [apps/api/app/api/internal_jobs.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/internal_jobs.py#L299-L315) (Added retry attempts cap check for paid planner jobs and passed billing/operations repositories down to planner)
+- **Validation/repair behavior inspected**:
+  - Confirmed that paid external calls (Runway and OpenRouter planner) check quota before calling the provider and reject over-quota requests.
+  - Confirmed that successful paid calls write actual usage to `cost_attribution_events` using `OperationsRepository.record_cost`.
+  - Confirmed that retries are capped at `max_paid_provider_attempts`.
+  - Confirmed Runway retries skip generation and resume polling with the existing task ID to avoid duplicate paid generation.
+- **Tests added**:
+  - Added unit/integration tests in `apps/api/tests/test_phase10_cost_controls.py`:
+    - `test_runway_over_quota_blocks_provider_call`: Verifies Runway quota failure blocks initiation.
+    - `test_runway_under_quota_calls_provider_and_records_usage`: Verifies Runway success records seconds usage.
+    - `test_openrouter_over_quota_blocks_provider_call`: Verifies OpenRouter quota failure blocks planner.
+    - `test_openrouter_under_quota_calls_provider_and_records_usage`: Verifies OpenRouter success records token usage.
+    - `test_runway_retry_resumes_polling_without_calling_provider_again`: Verifies Runway retry uses cached task ID.
+    - `test_planner_retry_attempts_cap`: Verifies retry attempts cap raises 429 for paid providers.
+- **Verification performed**:
+  - Ran `pytest tests/test_phase10_cost_controls.py` and the entire test suite.
+- **Verification output / evidence**:
+  ```
+  tests/test_phase10_cost_controls.py ......                               [100%]
+  ========================= 6 passed, 1 warning in 0.81s =========================
+  ```
+- **Remaining caveats**: None. Preserved existing schema/migrations and ensured full backward compatibility for free/fixture provider modes.
+

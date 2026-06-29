@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 from pydantic import ValidationError
@@ -57,6 +57,8 @@ class EditPlannerProvider(Protocol):
         video_duration_ms: int,
         visual_manifest: VideoManifest | None = None,
         style_classification: StyleClassification | None = None,
+        billing_repository: Any = None,
+        operations_repository: Any = None,
     ) -> PlannerProviderResult: ...
 
 
@@ -73,6 +75,8 @@ class FixtureEditPlannerProvider:
         video_duration_ms: int,
         visual_manifest: VideoManifest | None = None,
         style_classification: StyleClassification | None = None,
+        billing_repository: Any = None,
+        operations_repository: Any = None,
     ) -> PlannerProviderResult:
         started = time.perf_counter()
         words = transcript.words
@@ -156,8 +160,22 @@ class HttpEditPlannerProvider:
         video_duration_ms: int,
         visual_manifest: VideoManifest | None = None,
         style_classification: StyleClassification | None = None,
+        billing_repository: Any = None,
+        operations_repository: Any = None,
     ) -> PlannerProviderResult:
         started = time.perf_counter()
+
+        if billing_repository is not None and operations_repository is not None:
+            from app.services.billing import check_quota
+            check_quota(
+                workspace_id=transcript.workspace_id,
+                provider="openrouter",
+                category="tokens",
+                billing_repository=billing_repository,
+                operations_repository=operations_repository,
+                estimated_quantity=2000.0,
+            )
+
         style = _effective_payload_style(
             payload=payload,
             style_classification=style_classification,
