@@ -70,7 +70,8 @@ def _serve() -> None:
                 "result": execute(dict(request.get("payload") or {})),
             }
         except Exception as exc:
-            response = {"id": request.get("id"), "error": str(exc)}
+            from app.core.logging import redact_string
+            response = {"id": request.get("id"), "error": redact_string(str(exc))}
         print(json.dumps(response), flush=True)
 
 

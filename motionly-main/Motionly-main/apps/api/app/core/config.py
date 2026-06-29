@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     )
     retention_transcript_days: int = Field(default=365, alias="RETENTION_TRANSCRIPT_DAYS")
     retention_analytics_days: int = Field(default=365, alias="RETENTION_ANALYTICS_DAYS")
-    retention_export_days: int = Field(default=30, alias="RETENTION_EXPORT_DAYS")
+    retention_export_days: int = Field(default=90, alias="RETENTION_EXPORT_DAYS")
     retention_local_cache_days: int = Field(default=7, alias="RETENTION_LOCAL_CACHE_DAYS")
     media_cache_max_bytes: int = Field(default=10_737_418_240, alias="MEDIA_CACHE_MAX_BYTES")
     readiness_timeout_seconds: float = Field(default=3.0, alias="READINESS_TIMEOUT_SECONDS")

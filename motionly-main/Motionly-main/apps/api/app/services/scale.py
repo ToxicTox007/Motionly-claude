@@ -103,15 +103,18 @@ class RunwayGen3Provider:
                 timeout=30,
             )
         except Exception as exc:
+            from app.core.logging import redact_string
+            err_msg = redact_string(str(exc))
             logger.error(
                 "runway_generation_post_failed",
                 extra={
                     "model": self.model,
                     "duration_s": duration_s,
                     "error_type": type(exc).__name__,
+                    "error_detail": err_msg,
                 }
             )
-            raise ApiError(502, "runway_generation_failed", f"Runway request failed: {type(exc).__name__}") from None
+            raise ApiError(502, "runway_generation_failed", f"Runway request failed: {type(exc).__name__}: {err_msg}") from None
 
         if response.status_code >= 400:
             raise ApiError(502, "runway_generation_failed", f"Runway rejected video generation with status {response.status_code}.")
@@ -135,14 +138,17 @@ class RunwayGen3Provider:
                     timeout=30,
                 )
             except Exception as exc:
+                from app.core.logging import redact_string
+                err_msg = redact_string(str(exc))
                 logger.error(
                     "runway_generation_poll_failed",
                     extra={
                         "task_id": task_id,
                         "error_type": type(exc).__name__,
+                        "error_detail": err_msg,
                     }
                 )
-                raise ApiError(502, "runway_generation_failed", f"Runway task polling failed: {type(exc).__name__}") from None
+                raise ApiError(502, "runway_generation_failed", f"Runway task polling failed: {type(exc).__name__}: {err_msg}") from None
 
             if task.status_code >= 400:
                 raise ApiError(502, "runway_generation_failed", f"Runway task polling failed with status {task.status_code}.")

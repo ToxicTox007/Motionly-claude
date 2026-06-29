@@ -121,6 +121,7 @@ class WhisperCompatibleHttpProvider:
         import logging
         import time
         import random
+        from app.core.logging import redact_string
 
         logger = logging.getLogger(__name__)
 
@@ -155,6 +156,7 @@ class WhisperCompatibleHttpProvider:
                         is_transient = False
 
                 if not is_transient or attempt >= max_attempts:
+                    err_msg = redact_string(str(exc))
                     logger.error(
                         "transcription_provider_failed",
                         extra={
@@ -162,11 +164,12 @@ class WhisperCompatibleHttpProvider:
                             "attempt": attempt,
                             "status_code": status_code,
                             "error_type": type(exc).__name__,
+                            "error_detail": err_msg,
                         }
                     )
                     if status_code:
-                        raise RuntimeError(f"Transcription provider returned status {status_code}") from None
-                    raise RuntimeError(f"Transcription provider failed: {type(exc).__name__}") from None
+                        raise RuntimeError(f"Transcription provider returned status {status_code}: {err_msg}") from None
+                    raise RuntimeError(f"Transcription provider failed: {type(exc).__name__}: {err_msg}") from None
 
                 delay = base_delay * (backoff_factor ** (attempt - 1)) + random.uniform(0, 0.5)
                 logger.warning(

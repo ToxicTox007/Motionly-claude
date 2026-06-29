@@ -67,48 +67,41 @@ class RetentionService:
             "queued_storage_objects": 0,
         }
         if self.rest_url and self.settings.supabase_service_role_key:
+            # Drain deleted objects queued more than 30 days ago
             counts["queued_storage_objects"] += self._drain_storage_deletion_queue()
+            
+            # Delete exports older than retention_export_days (90 days)
             counts["exports"] = self._delete_media_rows(
                 table="exports",
                 older_than_days=self.settings.retention_export_days,
             )
-            counts["source_videos"] = self._delete_media_rows(
-                table="uploaded_videos",
-                older_than_days=self.settings.retention_source_days,
+            
+            # Redact/expire raw provider payloads in transcripts older than 30 days
+            cutoff_30 = self._cutoff(30)
+            self._request(
+                "PATCH",
+                "transcripts",
+                params={"created_at": f"lt.{cutoff_30}"},
+                json={"raw_payload": {}},
             )
-            counts["transcripts"] = self._delete_rows(
-                table="transcripts",
-                timestamp_column="updated_at",
-                older_than_days=self.settings.retention_transcript_days,
-            )
-            counts["analytics_events"] = self._delete_rows(
-                table="ai_edit_feedback_events",
-                timestamp_column="created_at",
-                older_than_days=self.settings.retention_analytics_days,
-            )
-            counts["generated_assets"] = self._delete_rows(
-                table="phase5_resources",
-                timestamp_column="created_at",
-                older_than_days=self.settings.retention_generated_asset_days,
-                extra_filter="kind=in.(generated_broll,stem_separation)",
-            )
-            counts["generated_assets"] += self._delete_rows(
-                table="stock_assets",
-                timestamp_column="created_at",
-                older_than_days=self.settings.retention_generated_asset_days,
-                extra_filter="provider=in.(pexels,pixabay,runway)",
-            )
+            
             counts["queued_storage_objects"] += self._drain_storage_deletion_queue()
+            
         evicted = self._evict_local_cache()
         counts["local_cache_files"] = evicted["removed_files"]
         counts["local_cache_bytes"] = evicted["removed_bytes"]
         return counts
 
     def _drain_storage_deletion_queue(self) -> int:
+        cutoff = self._cutoff(30) # Only delete objects queued for 30+ days
         rows = self._request(
             "GET",
             "storage_deletion_queue",
-            params={"select": "id,storage_bucket,storage_path", "order": "queued_at.asc"},
+            params={
+                "queued_at": f"lt.{cutoff}",
+                "select": "id,storage_bucket,storage_path",
+                "order": "queued_at.asc"
+            },
         )
         for row in rows:
             self.storage_signer.delete_object(

@@ -402,5 +402,37 @@
   tests/test_visual_golden.py::test_caption_timing_chronology_sanity PASSED [ 95%]
   tests/test_metrics_telemetry.py::test_metrics_telemetry_rendering[asyncio] PASSED [100%]
   ================== 13 passed, 10 skipped, 1 warning in 0.90s ===================
+  - Remaining caveats: Live provider contract tests require valid secret environment keys during GHA dispatch runs. The GA launch requirement of 3 weekly clean runs must be completed before general availability.
+
+## Phase 12 — Security, Privacy, Retention, and Secret Logging
+
+- Date: 2026-06-29
+- Executor: Antigravity / Main Agent / Implementer
+- Files touched:
+  - [apps/api/app/core/logging.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/core/logging.py)
+  - [apps/api/app/core/config.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/core/config.py)
+  - [apps/api/app/services/retention.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/retention.py)
+  - [apps/api/app/services/transcription_provider.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/transcription_provider.py)
+  - [apps/api/app/services/edit_planner.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/edit_planner.py)
+  - [apps/api/app/services/scale.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/services/scale.py)
+  - [apps/api/app/workers/domain_job.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/workers/domain_job.py)
+  - [apps/api/app/workers/visual_job.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/workers/visual_job.py)
+  - [DATA_HANDLING.md](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/DATA_HANDLING.md)
+  - [apps/api/tests/test_phase12_security.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_phase12_security.py)
+- Provider logging audited: Audited Groq whisper transcription, OpenRouter edit planner, Runway Gen-3 scale generation, and worker queue/internal job error logs to verify all potential token/secret/header leaks are caught.
+- Redaction utility added: Implemented centralized functions `redact_string` and `redact_data` along with `RedactingJsonFormatter` in `app/core/logging.py` to strip credentials, keys, bearer tokens, and signed URLs.
+- Secret leak tests added: Created `test_phase12_security.py` validating that bearer tokens, keys, URLs, and nested config structures are successfully redacted across formatting and exception paths.
+- Retention policy implemented:
+  - Default export lifespan extended to 90 days.
+  - Delayed `storage_deletion_queue` file deletion by exactly 30 days to support raw uploads, audio files, and thumbnails retention post project deletion or explicit cleanup.
+  - Automatically expire/redact raw provider payloads (`raw_payload`) in transcripts older than 30 days.
+  - Removed age-based deletion for transcripts, uploads, and generated assets to ensure they are retained with the project until cascade/deletion triggers execute.
+- DATA_HANDLING.md updated: Created `DATA_HANDLING.md` documenting comprehensive data flows, why data is sent, whether raw payloads are persisted, the exact retention duration, and log redaction policies.
+- Verification performed: Ran `pytest tests/test_phase12_security.py` and the complete pytest suite.
+- Verification output / evidence:
   ```
-- Remaining caveats: Live provider contract tests require valid secret environment keys during GHA dispatch runs. The GA launch requirement of 3 weekly clean runs must be completed before general availability.
+  tests/test_phase12_security.py .........                                 [100%]
+  ========================= 9 passed, 1 warning in 0.49s =========================
+  ```
+- Remaining caveats: Database triggers handle the cascade deletion queue mapping upon actual database project delete calls. Deleting objects in storage depends on the storage deletion queue draining task.
+- Human security/privacy review required: yes

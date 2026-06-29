@@ -226,14 +226,16 @@ class HttpEditPlannerProvider:
             data = response.json()
             content = _extract_content(data)
         except Exception as exc:
+            from app.core.logging import redact_string
             has_error = True
-            error_msg = str(exc)
+            error_msg = redact_string(str(exc))
             logger.error(
                 "edit_planner_provider_request_failed",
                 extra={
                     "provider": self.provider_name,
                     "model": self.model,
                     "error_type": type(exc).__name__,
+                    "error_detail": error_msg,
                 }
             )
 
