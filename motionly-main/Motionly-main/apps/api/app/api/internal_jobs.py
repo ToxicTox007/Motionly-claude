@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
 from app.schemas.renders import RenderJobStatus
+from app.services.matte_jobs import run_matte_for_upload
 from app.services.outcomes import record_render_success_outcome
 from app.services.publishing import execute_publish_job
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob, QueueJobStatus, QueueRegistry
@@ -106,19 +107,34 @@ async def run_queue_job(
                 )
     except Exception as exc:
         latency = monotonic_ms() - started_ms
+        error_code = exc.code if isinstance(exc, ApiError) else type(exc).__name__
         if metrics:
             metrics.observe("job_duration_ms", latency, kind=job.kind, status="failed")
             metrics.observe(
                 "job_failure_count",
                 1,
                 kind=job.kind,
-                error_code=type(exc).__name__,
+                error_code=error_code,
             )
-        registry.fail(queue_job_id)
+            if error_code == "cuda_oom":
+                metrics.observe("cuda_oom_count", 1, kind=job.kind)
+        backoff_seconds = min(300, 2 ** max(0, job.attempts) * 5)
+        registry.fail(
+            queue_job_id,
+            error_code=error_code,
+            error_message=_safe_job_error_message(exc),
+            backoff_seconds=backoff_seconds,
+        )
         raise
 
     if result.get("failed"):
-        failed = registry.fail(queue_job_id)
+        error_code = str(result.get("error_code") or "job_failed")
+        failed = registry.fail(
+            queue_job_id,
+            error_code=error_code,
+            error_message=str(result.get("error_message") or "Job failed."),
+            backoff_seconds=min(300, 2 ** max(0, job.attempts) * 5),
+        )
         return _response(failed, result=result)
 
     completed = registry.complete(queue_job_id)
@@ -199,6 +215,10 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         return {
             "transcript_id": str(transcript.id),
             "transcript_status": transcript.status.value,
+            "quality_status": transcript.quality_status.value,
+            "quality_reasons": transcript.quality_reasons,
+            "error_code": transcript.error_code,
+            "error_message": transcript.error_message,
             "failed": transcript.status.value == "failed",
         }
 
@@ -227,6 +247,29 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             "visual_status": record.status.value,
             "scene_count": len(record.manifest.scenes) if record.manifest else 0,
             "failed": record.status.value == "failed",
+        }
+
+    if job.kind == "matte_extraction":
+        from uuid import UUID
+
+        record = run_matte_for_upload(
+            repository=request.app.state.visual_repository,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            video_id=job.resource_id,
+            matte_id=UUID(job.render_engine) if job.render_engine else None,
+            media_work_dir=settings.media_work_dir,
+            supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
+            service_role_key=settings.supabase_service_role_key,
+            provider_models=request.app.state.matte_provider_models,
+        )
+        return {
+            "matte_id": str(record.id),
+            "matte_status": record.status.value,
+            "cache_key": record.cache_key,
+            "failed": record.status.value == "failed",
+            "error_code": record.error_code,
+            "error_message": record.error_message,
         }
 
     if job.kind == "render":
@@ -325,6 +368,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         from app.services.operations import monotonic_ms
         from app.services.style_classifier import classify_edit_style
         from app.services.timeline_compiler import migrate_legacy_plan_to_timeline
+        from app.services.transcript_quality import is_transcript_usable_for_planning
 
         repository = request.app.state.plan_repository
         planner_provider = request.app.state.edit_planner_provider
@@ -379,6 +423,15 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
                 409,
                 str(transcript.status),
                 transcript.error_message or "Transcript is not ready for edit planning.",
+            )
+        if not transcript.words or not is_transcript_usable_for_planning(transcript.quality_status):
+            raise ApiError(
+                409,
+                transcript.quality_reasons[0]
+                if transcript.quality_reasons
+                else "transcript_quality_blocked",
+                transcript.error_message
+                or "Transcript quality must be recovered before edit planning.",
             )
 
         upload = repository.get_active_upload(
@@ -689,6 +742,12 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         "failed": True,
     }
 
+
+
+def _safe_job_error_message(exc: Exception) -> str:
+    if isinstance(exc, ApiError):
+        return exc.message
+    return "Job failed. Retry if the failure is transient."
 
 
 def _response(job: EnqueuedJob, *, result: dict[str, Any]) -> WorkerJobRunResponse:

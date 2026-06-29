@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
+import { ToastProvider } from "@/components/toast";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -10,7 +11,9 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
       <body>
@@ -27,7 +30,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             } catch {}
           })();`}
         </Script>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );

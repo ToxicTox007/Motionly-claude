@@ -51,8 +51,11 @@ function persistentPythonExecutor(name, moduleName, payload) {
         const pending = state.pending.get(response.id);
         if (!pending) continue;
         state.pending.delete(response.id);
-        if (response.error) pending.reject(new Error(response.error));
-        else pending.resolve(response.result);
+        if (response.error) {
+          const error = new Error(response.error);
+          error.code = response.error_code || "python_worker_error";
+          pending.reject(error);
+        } else pending.resolve(response.result);
       }
     });
     child.stderr.on("data", (data) => globalThis.process.stderr.write(data));
@@ -92,6 +95,18 @@ async function runVisualJob(job) {
     workspace_id: String(job.data.workspace_id),
     project_id: String(job.data.project_id),
     video_id: String(job.data.resource_id),
+  });
+}
+
+async function runMatteJob(job) {
+  if (env("ML_WORKER_ENABLED") !== "true") {
+    throw new Error("matte_extraction requires the dedicated GPU/media worker image");
+  }
+  return persistentPythonExecutor("matte-gpu", "app.workers.matte_job", {
+    workspace_id: String(job.data.workspace_id),
+    project_id: String(job.data.project_id),
+    video_id: String(job.data.resource_id),
+    matte_id: String(job.data.render_engine || ""),
   });
 }
 
@@ -155,7 +170,14 @@ async function sendHeartbeat() {
 
 async function reportProviderSlo(job, success, latencyMs, errorCode = null) {
   if (!hasApiConfig()) return;
-  const providerKinds = new Set(["transcription", "visual_analysis", "phase5", "edit_plan", "batch_plan"]);
+  const providerKinds = new Set([
+    "transcription",
+    "visual_analysis",
+    "matte_extraction",
+    "phase5",
+    "edit_plan",
+    "batch_plan",
+  ]);
   if (!providerKinds.has(String(job.data.kind))) return;
   const response = await fetch(`${apiBaseUrl()}/internal/operations/provider-slo`, {
     method: "POST",
@@ -209,6 +231,8 @@ async function runJob(job) {
           : await runDomainJob(job)
         : job.data.kind === "visual_analysis"
           ? await runVisualJob(job)
+          : job.data.kind === "matte_extraction"
+          ? await runMatteJob(job)
           : await runDomainJob(job);
     await reportProviderSlo(job, true, Date.now() - startedAt);
   } catch (error) {
@@ -216,7 +240,7 @@ async function runJob(job) {
       job,
       false,
       Date.now() - startedAt,
-      error instanceof Error ? error.name : "worker_error",
+      error instanceof Error ? error.code || error.name : "worker_error",
     ).catch(() => {});
     throw error;
   }
@@ -254,6 +278,7 @@ function createWorker(queueName, connection) {
         kind: jobData.kind,
         attempts_made: job?.attemptsMade,
         attempts: job?.opts?.attempts,
+        error_code: error instanceof Error ? error.code || error.name : "worker_error",
         message: error instanceof Error ? error.message : String(error),
       }),
     );
@@ -341,12 +366,12 @@ async function main() {
     console.log("Worker queue config is not set; build check only.");
     return;
   }
-  if (queueNames.includes("visual_analysis")) {
+  if (queueNames.includes("visual_analysis") || queueNames.includes("matte_extraction")) {
     if (env("ML_WORKER_ENABLED") !== "true") {
-      throw new Error("visual_analysis must run with ML_WORKER_ENABLED=true.");
+      throw new Error("visual_analysis and matte_extraction must run with ML_WORKER_ENABLED=true.");
     }
     if (!env("SUPABASE_URL") || !env("SUPABASE_SERVICE_ROLE_KEY")) {
-      throw new Error("visual_analysis requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+      throw new Error("GPU/media queues require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
     }
   }
 

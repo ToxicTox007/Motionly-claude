@@ -1,4 +1,10 @@
-import { AlertTriangle, ArrowUpRight, Check, Gauge, Settings } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUpRight,
+  Check,
+  Gauge,
+  Settings,
+} from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
 import { getBillingStatus } from "@/lib/billing";
@@ -18,6 +24,20 @@ export default async function BillingPage({
   return (
     <AppShell title="Billing">
       <div className="space-y-5">
+        <Banner
+          tone="warning"
+          icon={AlertTriangle}
+          title={
+            env.billingEnabled
+              ? "Billing Sandbox Preview (Demo Mode)"
+              : "Billing Integration Offline"
+          }
+          body={
+            env.billingEnabled
+              ? "Stripe billing is running in sandbox/test mode. Upgrades will execute in a secure test sandbox and real credit cards will not be charged."
+              : "Stripe billing integration is currently disabled. All workspace plans listed below are mock/demo accounts only."
+          }
+        />
         {status.subscription.payment_issue ? (
           <Banner
             tone="danger"
@@ -38,8 +58,12 @@ export default async function BillingPage({
           <div className="pixel-panel pixel-corners p-5">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <p className="text-sm font-bold uppercase text-muted-foreground">Current plan</p>
-                <h2 className="mt-2 text-3xl font-black">{status.current_plan.name}</h2>
+                <p className="text-sm font-bold uppercase text-muted-foreground">
+                  Current plan
+                </p>
+                <h2 className="mt-2 text-3xl font-black">
+                  {status.current_plan.name}
+                </h2>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {status.subscription.status === "none"
                     ? "Free workspace"
@@ -50,21 +74,30 @@ export default async function BillingPage({
                 <form action={openCustomerPortal}>
                   <Button type="submit" variant="secondary">
                     <Settings className="mr-2 size-4" aria-hidden="true" />
-                    Manage
+                    Manage sandbox billing
                   </Button>
                 </form>
               ) : (
                 <Button type="button" variant="secondary" disabled>
                   <Settings className="mr-2 size-4" aria-hidden="true" />
-                  Disabled
+                  Billing unavailable
                 </Button>
               )}
             </div>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Metric label="Resolution" value={status.entitlements.max_resolution} />
-              <Metric label="Watermark" value={status.entitlements.watermark ? "On" : "Off"} />
-              <Metric label="B-roll" value={status.entitlements.broll ? "Included" : "Locked"} />
+              <Metric
+                label="Resolution"
+                value={status.entitlements.max_resolution}
+              />
+              <Metric
+                label="Watermark"
+                value={status.entitlements.watermark ? "On" : "Off"}
+              />
+              <Metric
+                label="B-roll"
+                value={status.entitlements.broll ? "Included" : "Locked"}
+              />
               <Metric label="Seats" value={String(status.entitlements.seats)} />
             </div>
           </div>
@@ -105,8 +138,15 @@ export default async function BillingPage({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-lg font-bold">{plan.name}</h3>
-                    <p className="mt-2 text-3xl font-black">{formatPrice(plan.price_cents)}</p>
+                    <h3 className="text-lg font-bold flex flex-wrap items-center gap-1.5">
+                      {plan.name}
+                      <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 bg-yellow-500/10 text-yellow-700 border border-yellow-500/20 rounded">
+                        Mock Plan
+                      </span>
+                    </h3>
+                    <p className="mt-2 text-3xl font-black">
+                      {formatPrice(plan.price_cents)}
+                    </p>
                     <p className="text-sm text-muted-foreground">per month</p>
                   </div>
                   {isCurrent ? (
@@ -118,7 +158,10 @@ export default async function BillingPage({
                 <ul className="mt-5 space-y-2 text-sm">
                   {plan.features.map((feature) => (
                     <li key={feature} className="flex gap-2">
-                      <Check className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                      <Check
+                        className="mt-0.5 size-4 shrink-0 text-primary"
+                        aria-hidden="true"
+                      />
                       <span>{feature}</span>
                     </li>
                   ))}
@@ -127,14 +170,17 @@ export default async function BillingPage({
                   <form action={startCheckout} className="mt-5">
                     <input type="hidden" name="plan" value={plan.key} />
                     <Button type="submit" className="w-full">
-                      <ArrowUpRight className="mr-2 size-4" aria-hidden="true" />
-                      Upgrade
+                      <ArrowUpRight
+                        className="mr-2 size-4"
+                        aria-hidden="true"
+                      />
+                      Preview checkout
                     </Button>
                   </form>
                 ) : plan.key !== "free" && !isCurrent ? (
                   <Button type="button" disabled className="mt-5 w-full">
                     <ArrowUpRight className="mr-2 size-4" aria-hidden="true" />
-                    Coming soon
+                    Billing unavailable
                   </Button>
                 ) : null}
               </div>
@@ -146,8 +192,14 @@ export default async function BillingPage({
           <h2 className="text-lg font-bold">Operations notes</h2>
           <div className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-3">
             <p>Paid upgrades are disabled until Stripe keys are configured.</p>
-            <p>Downgrades keep old exports available and only gate future premium actions.</p>
-            <p>Tax, VAT, refund, and dispute policies remain operational responsibilities.</p>
+            <p>
+              Downgrades keep old exports available and only gate future premium
+              actions.
+            </p>
+            <p>
+              Tax, VAT, refund, and dispute policies remain operational
+              responsibilities.
+            </p>
           </div>
         </section>
       </div>
@@ -158,7 +210,9 @@ export default async function BillingPage({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="border border-border bg-surface p-3 shadow-soft">
-      <p className="text-xs font-bold uppercase text-muted-foreground">{label}</p>
+      <p className="text-xs font-bold uppercase text-muted-foreground">
+        {label}
+      </p>
       <p className="mt-1 text-lg font-bold capitalize">{value}</p>
     </div>
   );
@@ -173,7 +227,7 @@ function Banner({
   icon: typeof AlertTriangle;
   title: string;
   body: string;
-  tone: "danger" | "neutral";
+  tone: "danger" | "neutral" | "warning";
 }) {
   return (
     <div
@@ -181,7 +235,9 @@ function Banner({
         "flex gap-3 border p-4 shadow-soft",
         tone === "danger"
           ? "border-red-200 bg-red-50 text-red-900"
-          : "border-border bg-muted text-muted-foreground",
+          : tone === "warning"
+            ? "border-amber-200 bg-amber-50 text-amber-900"
+            : "border-border bg-muted text-muted-foreground",
       )}
     >
       <Icon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />

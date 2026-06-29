@@ -3,6 +3,7 @@ import json
 import sys
 from uuid import UUID
 
+from app.api.errors import ApiError
 from app.core.config import get_settings
 from app.repositories.uploads import SupabaseUploadRepository
 from app.repositories.visual import SupabaseVisualRepository
@@ -69,9 +70,19 @@ def _serve() -> None:
                 "id": request.get("id"),
                 "result": execute(dict(request.get("payload") or {})),
             }
+        except ApiError as exc:
+            response = {
+                "id": request.get("id"),
+                "error": exc.message,
+                "error_code": exc.code,
+            }
         except Exception as exc:
             from app.core.logging import redact_string
-            response = {"id": request.get("id"), "error": redact_string(str(exc))}
+            response = {
+                "id": request.get("id"),
+                "error": redact_string(str(exc)),
+                "error_code": type(exc).__name__,
+            }
         print(json.dumps(response), flush=True)
 
 

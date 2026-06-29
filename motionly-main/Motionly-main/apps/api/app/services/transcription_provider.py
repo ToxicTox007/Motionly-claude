@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -5,6 +6,14 @@ from typing import Protocol
 import httpx
 
 from app.schemas.captions import LanguageHint, TranscriptWord
+from app.services.provider_resilience import (
+    ProviderCallFailure,
+    ProviderCircuitOpen,
+    ProviderErrorInfo,
+    bounded_backoff_seconds,
+    classify_provider_exception,
+    provider_circuit_breaker,
+)
 
 
 @dataclass(frozen=True)
@@ -119,21 +128,18 @@ class WhisperCompatibleHttpProvider:
             data["language"] = language_hint.value
 
         import logging
-        import time
-        import random
-        from app.core.logging import redact_string
 
         logger = logging.getLogger(__name__)
 
         max_attempts = 3
-        base_delay = 1.0
-        backoff_factor = 2.0
-        request_timeout = 30
+        request_timeout = httpx.Timeout(30.0, connect=5.0, read=25.0)
 
         attempt = 0
         while True:
             attempt += 1
+            started = time.perf_counter()
             try:
+                provider_circuit_breaker.check(self.provider_name)
                 with audio_path.open("rb") as audio_file:
                     response = httpx.post(
                         self.endpoint,
@@ -142,42 +148,71 @@ class WhisperCompatibleHttpProvider:
                         files={"file": (audio_path.name, audio_file, "audio/wav")},
                         timeout=request_timeout,
                     )
-                if response.status_code == 429 or response.status_code >= 500:
-                    response.raise_for_status()
                 response.raise_for_status()
-                payload = response.json()
+                try:
+                    payload = response.json()
+                except ValueError:
+                    raise ProviderCallFailure(
+                        provider=self.provider_name,
+                        error_info=ProviderErrorInfo("provider_malformed_response", False),
+                    ) from None
+                if not isinstance(payload, dict):
+                    raise ProviderCallFailure(
+                        provider=self.provider_name,
+                        error_info=ProviderErrorInfo("provider_malformed_response", False),
+                    )
+                provider_circuit_breaker.record_success(self.provider_name)
+                logger.info(
+                    "transcription_provider_succeeded",
+                    extra={
+                        "provider": self.provider_name,
+                        "attempt": attempt,
+                        "latency_ms": round((time.perf_counter() - started) * 1000),
+                    },
+                )
                 break
-            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
-                is_transient = True
-                status_code = None
-                if isinstance(exc, httpx.HTTPStatusError):
-                    status_code = exc.response.status_code
-                    if 400 <= status_code < 500 and status_code != 429:
-                        is_transient = False
-
-                if not is_transient or attempt >= max_attempts:
-                    err_msg = redact_string(str(exc))
+            except (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.HTTPStatusError,
+                ProviderCallFailure,
+                ProviderCircuitOpen,
+            ) as exc:
+                error_info = classify_provider_exception(exc)
+                latency_ms = round((time.perf_counter() - started) * 1000)
+                if not error_info.retryable or attempt >= max_attempts:
+                    if error_info.code != "provider_circuit_open":
+                        provider_circuit_breaker.record_failure(
+                            self.provider_name,
+                            retryable=error_info.retryable,
+                        )
                     logger.error(
                         "transcription_provider_failed",
                         extra={
                             "provider": self.provider_name,
                             "attempt": attempt,
-                            "status_code": status_code,
+                            "status_code": error_info.status_code,
+                            "error_code": error_info.code,
+                            "retryable": error_info.retryable,
+                            "latency_ms": latency_ms,
                             "error_type": type(exc).__name__,
-                            "error_detail": err_msg,
                         }
                     )
-                    if status_code:
-                        raise RuntimeError(f"Transcription provider returned status {status_code}: {err_msg}") from None
-                    raise RuntimeError(f"Transcription provider failed: {type(exc).__name__}: {err_msg}") from None
+                    raise ProviderCallFailure(
+                        provider=self.provider_name,
+                        error_info=error_info,
+                    ) from None
 
-                delay = base_delay * (backoff_factor ** (attempt - 1)) + random.uniform(0, 0.5)
+                delay = bounded_backoff_seconds(attempt)
                 logger.warning(
                     "transcription_provider_transient_error",
                     extra={
                         "provider": self.provider_name,
                         "attempt": attempt,
-                        "delay": round(delay, 2),
+                        "delay": delay,
+                        "error_code": error_info.code,
+                        "retryable": error_info.retryable,
+                        "latency_ms": latency_ms,
                         "error_type": type(exc).__name__,
                     }
                 )

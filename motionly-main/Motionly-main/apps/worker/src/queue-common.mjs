@@ -6,6 +6,7 @@ export const allQueueNames = [
   "upload_preprocess",
   "transcription",
   "visual_analysis",
+  "matte_extraction",
   "planning",
   "stock_search",
   "audio",
@@ -99,6 +100,8 @@ export function workerConcurrency(queueName) {
     ? env("RENDER_WORKER_CONCURRENCY")
     : queueName === "visual_analysis"
     ? env("VISUAL_ANALYSIS_WORKER_CONCURRENCY", "1")
+    : queueName === "matte_extraction"
+    ? env("MATTE_WORKER_CONCURRENCY", "1")
     : "";
   return positiveIntValue(specific || env("WORKER_CONCURRENCY", "3"), 3);
 }
@@ -140,6 +143,8 @@ export function normalizeJobRecord(job, state) {
     resource_id: data.resource_id || null,
     render_engine: data.render_engine || "ffmpeg_basic",
     trace_id: data.trace_id || null,
+    error_code: data.error_code || null,
+    error_message: data.error_message || null,
   };
 }
 

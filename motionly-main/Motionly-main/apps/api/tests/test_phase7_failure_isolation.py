@@ -12,6 +12,7 @@ from app.repositories.captions import TranscriptRecord
 from app.schemas.captions import LanguageHint, TranscriptWord
 from app.schemas.plans import EditPlanStyle, PlanCreateRequest
 from app.services.edit_planner import HttpEditPlannerProvider
+from app.services.provider_resilience import ProviderCallFailure
 from app.services.transcription_jobs import _run_audio_ml_providers
 from app.services.transcription_provider import WhisperCompatibleHttpProvider
 
@@ -89,13 +90,14 @@ def test_groq_whisper_retry_fails_max_attempts(monkeypatch) -> None:
 
     audio_file = Path(__file__)
     
-    with pytest.raises(RuntimeError) as exc_info:
+    with pytest.raises(ProviderCallFailure) as exc_info:
         provider.transcribe(
             audio_path=audio_file,
             language_hint=LanguageHint.AUTO
         )
-    
-    assert "returned status 503" in str(exc_info.value)
+
+    assert exc_info.value.error_info.code == "provider_unavailable"
+    assert exc_info.value.error_info.retryable is True
     assert len(calls) == 3 # max_attempts = 3
 
 # 3. Groq 401/403/non-429 4xx does not retry
@@ -119,13 +121,14 @@ def test_groq_whisper_non_transient_no_retry(monkeypatch) -> None:
 
     audio_file = Path(__file__)
     
-    with pytest.raises(RuntimeError) as exc_info:
+    with pytest.raises(ProviderCallFailure) as exc_info:
         provider.transcribe(
             audio_path=audio_file,
             language_hint=LanguageHint.AUTO
         )
-    
-    assert "returned status 401" in str(exc_info.value)
+
+    assert exc_info.value.error_info.code == "provider_auth_failed"
+    assert exc_info.value.error_info.retryable is False
     assert len(calls) == 1 # No retry on 401!
 
 # 4. audio ML provider failure does not fail transcription job
@@ -204,7 +207,7 @@ def test_openrouter_request_failure_fallback(monkeypatch) -> None:
 
     assert result.raw_payload["fallback_used"] is True
     assert any(
-        json.loads(err).get("code") == "provider_error"
+        json.loads(err).get("code") == "provider_network_error"
         for err in result.validation_errors
         if err.startswith("{")
     )

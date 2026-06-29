@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Input, Label, Select, Slider, TextArea } from "../ui";
+import { Input, Label, Select, Slider, TextArea, PanelSection } from "../ui";
 import { Button } from "../../button";
 import { Loader2, RefreshCw, Save } from "lucide-react";
 import type {
@@ -79,11 +79,19 @@ export function CaptionsTab({
   const router = useRouter();
   const [tracks, setTracks] = useState(initialTracks);
   const activeTrack = tracks[0] ?? null;
-  const [preset, setPreset] = useState<CaptionPresetKey>(activeTrack?.preset ?? "luxury_minimal");
-  const [style, setStyle] = useState<CaptionStyle | null>(activeTrack?.style ?? null);
-  const [hideFillerWords, setHideFillerWords] = useState(activeTrack?.hide_filler_words ?? false);
+  const [preset, setPreset] = useState<CaptionPresetKey>(
+    activeTrack?.preset ?? "luxury_minimal",
+  );
+  const [style, setStyle] = useState<CaptionStyle | null>(
+    activeTrack?.style ?? null,
+  );
+  const [hideFillerWords, setHideFillerWords] = useState(
+    activeTrack?.hide_filler_words ?? false,
+  );
   const [outputLanguage, setOutputLanguage] = useState("original");
-  const [segments, setSegments] = useState<CaptionSegment[]>(activeTrack?.segments ?? []);
+  const [segments, setSegments] = useState<CaptionSegment[]>(
+    activeTrack?.segments ?? [],
+  );
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState(0);
   const [transcriptText, setTranscriptText] = useState(
     (activeTrack?.segments ?? []).map((segment) => segment.text).join(" "),
@@ -105,7 +113,14 @@ export function CaptionsTab({
       hide_filler_words: hideFillerWords,
       segments,
     });
-  }, [activeTrack, hideFillerWords, onPreviewTrackUpdated, preset, segments, style]);
+  }, [
+    activeTrack,
+    hideFillerWords,
+    onPreviewTrackUpdated,
+    preset,
+    segments,
+    style,
+  ]);
 
   async function updateCaptions() {
     setLoading(true);
@@ -114,19 +129,23 @@ export function CaptionsTab({
       const endpoint = activeTrack
         ? `${env.apiBaseUrl}/projects/${projectId}/captions/${activeTrack.id}`
         : `${env.apiBaseUrl}/projects/${projectId}/captions/generate`;
-      const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(endpoint, {
-        method: activeTrack ? "PATCH" : "POST",
-        workspaceId,
-        userId,
-        accessToken: apiAccessToken,
-        friendlyError: "Caption settings could not be saved. Please try again.",
-        body: {
-          preset,
-          hide_filler_words: hideFillerWords,
-          style,
-          output_language: outputLanguage,
+      const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(
+        endpoint,
+        {
+          method: activeTrack ? "PATCH" : "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError:
+            "Caption settings could not be saved. Please try again.",
+          body: {
+            preset,
+            hide_filler_words: hideFillerWords,
+            style,
+            output_language: outputLanguage,
+          },
         },
-      });
+      );
       applyTrack(payload.track);
       setMessage("Caption style updated.");
       router.refresh();
@@ -149,7 +168,7 @@ export function CaptionsTab({
       const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(
         `${env.apiBaseUrl}/projects/${projectId}/captions/${activeTrack.id}/segments`,
         {
-        method: "PATCH",
+          method: "PATCH",
           workspaceId,
           userId,
           accessToken: apiAccessToken,
@@ -171,17 +190,19 @@ export function CaptionsTab({
 
   async function savePlanHighlights(nextSegments: CaptionSegment[]) {
     if (!activePlan) return;
-    const caption_highlights: CaptionHighlight[] = nextSegments.flatMap((segment) =>
-      (segment.highlight_words ?? []).slice(0, 4).map((word) => ({
-        timestamp_ms: segment.start_ms,
-        word,
-        effect: "color_pop" as const,
-      })),
-    ).slice(0, 12);
+    const caption_highlights: CaptionHighlight[] = nextSegments
+      .flatMap((segment) =>
+        (segment.highlight_words ?? []).slice(0, 4).map((word) => ({
+          timestamp_ms: segment.start_ms,
+          word,
+          effect: "color_pop" as const,
+        })),
+      )
+      .slice(0, 12);
     const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
       `${env.apiBaseUrl}/projects/${projectId}/plans/${activePlan.id}/caption-highlights`,
       {
-      method: "PATCH",
+        method: "PATCH",
         workspaceId,
         userId,
         accessToken: apiAccessToken,
@@ -193,9 +214,14 @@ export function CaptionsTab({
   }
 
   function applyTrack(track: CaptionTrackSummary) {
-    setTracks((current) => [track, ...current.filter((item) => item.id !== track.id)]);
+    setTracks((current) => [
+      track,
+      ...current.filter((item) => item.id !== track.id),
+    ]);
     setSegments(track.segments ?? []);
-    setTranscriptText((track.segments ?? []).map((segment) => segment.text).join(" "));
+    setTranscriptText(
+      (track.segments ?? []).map((segment) => segment.text).join(" "),
+    );
     setStyle(track.style);
     onPreviewTrackUpdated?.(track);
     onTrackUpdated(track);
@@ -221,10 +247,15 @@ export function CaptionsTab({
   function applyTranscriptText() {
     const words = transcriptText.split(/\s+/).filter(Boolean);
     if (!words.length || !segments.length) return;
-    const wordsPerSegment = Math.max(1, Math.ceil(words.length / segments.length));
+    const wordsPerSegment = Math.max(
+      1,
+      Math.ceil(words.length / segments.length),
+    );
     setSegments((current) =>
       current.map((segment, index) => {
-        const text = words.slice(index * wordsPerSegment, (index + 1) * wordsPerSegment).join(" ");
+        const text = words
+          .slice(index * wordsPerSegment, (index + 1) * wordsPerSegment)
+          .join(" ");
         return text
           ? {
               ...segment,
@@ -235,7 +266,9 @@ export function CaptionsTab({
           : segment;
       }),
     );
-    setMessage("Transcript text applied to caption segments. Save text to persist it.");
+    setMessage(
+      "Transcript text applied to caption segments. Save text to persist it.",
+    );
   }
 
   function updateHighlight(word: string) {
@@ -251,13 +284,15 @@ export function CaptionsTab({
   }
 
   function updateStyle(update: Partial<CaptionStyle>) {
-    setStyle((current) => current ? { ...current, ...update } : current);
+    setStyle((current) => (current ? { ...current, ...update } : current));
   }
 
   function handlePresetChange(value: string) {
     const nextPreset = value as CaptionPresetKey;
     setPreset(nextPreset);
-    setStyle((current) => current ? applyPresetDefaults(current, nextPreset) : current);
+    setStyle((current) =>
+      current ? applyPresetDefaults(current, nextPreset) : current,
+    );
   }
 
   return (
@@ -266,13 +301,29 @@ export function CaptionsTab({
         <PanelSection title="Basic" defaultOpen>
           <div className="grid gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="caption-preset" className="mb-0">Caption Preset</Label>
-              <Select id="caption-preset" label="Caption Preset" value={preset} onChange={handlePresetChange} options={presets} />
+              <Label htmlFor="caption-preset" className="mb-0">
+                Caption Preset
+              </Label>
+              <Select
+                id="caption-preset"
+                label="Caption Preset"
+                value={preset}
+                onChange={handlePresetChange}
+                options={presets}
+              />
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="caption-output-language" className="mb-0">Caption Language</Label>
-              <Select id="caption-output-language" label="Caption Language" value={outputLanguage} onChange={setOutputLanguage} options={outputLanguages} />
+              <Label htmlFor="caption-output-language" className="mb-0">
+                Caption Language
+              </Label>
+              <Select
+                id="caption-output-language"
+                label="Caption Language"
+                value={outputLanguage}
+                onChange={setOutputLanguage}
+                options={outputLanguages}
+              />
             </div>
 
             <label className="flex min-h-11 items-center justify-between gap-3 border border-border bg-muted/25 px-3 text-sm font-bold text-muted-foreground">
@@ -294,7 +345,9 @@ export function CaptionsTab({
               <Select
                 label="Caption mode"
                 value={style.mode}
-                onChange={(value) => updateStyle({ mode: value as CaptionStyle["mode"] })}
+                onChange={(value) =>
+                  updateStyle({ mode: value as CaptionStyle["mode"] })
+                }
                 options={[
                   { value: "word_pop", label: "Word Pop" },
                   { value: "impact_stamp", label: "Impact Stamp" },
@@ -306,35 +359,51 @@ export function CaptionsTab({
               <Select
                 label="Caption animation"
                 value={style.animation}
-                onChange={(value) => updateStyle({ animation: value as CaptionStyle["animation"] })}
+                onChange={(value) =>
+                  updateStyle({ animation: value as CaptionStyle["animation"] })
+                }
                 options={animations}
               />
-              <Input aria-label="Caption font family" value={style.font_family} onChange={(event) => updateStyle({ font_family: event.target.value })} />
+              <Input
+                aria-label="Caption font family"
+                value={style.font_family}
+                onChange={(event) =>
+                  updateStyle({ font_family: event.target.value })
+                }
+              />
               <Input
                 aria-label="Caption text color"
                 type="color"
                 value={style.text_color}
-                onChange={(event) => updateStyle({ text_color: event.target.value })}
+                onChange={(event) =>
+                  updateStyle({ text_color: event.target.value })
+                }
                 className="px-2"
               />
               <Input
                 aria-label="Caption accent color"
                 type="color"
                 value={style.accent_color}
-                onChange={(event) => updateStyle({ accent_color: event.target.value })}
+                onChange={(event) =>
+                  updateStyle({ accent_color: event.target.value })
+                }
                 className="px-2"
               />
               <Input
                 aria-label="Caption background color"
                 type="color"
                 value={style.background_color ?? "#000000"}
-                onChange={(event) => updateStyle({ background_color: event.target.value })}
+                onChange={(event) =>
+                  updateStyle({ background_color: event.target.value })
+                }
                 className="px-2"
               />
               <Select
                 label="Caption placement"
                 value={style.placement}
-                onChange={(value) => updateStyle({ placement: value as CaptionStyle["placement"] })}
+                onChange={(value) =>
+                  updateStyle({ placement: value as CaptionStyle["placement"] })
+                }
                 options={[
                   { value: "lower", label: "Lower" },
                   { value: "middle", label: "Middle" },
@@ -342,22 +411,44 @@ export function CaptionsTab({
                 ]}
               />
             </div>
-            <Slider label="Font Size" value={style.font_size_px} min={24} max={80} onChange={(value) => updateStyle({ font_size_px: value })} />
+            <Slider
+              label="Font Size"
+              value={style.font_size_px}
+              min={24}
+              max={80}
+              onChange={(value) => updateStyle({ font_size_px: value })}
+            />
             <Slider
               label="Background Opacity"
               value={Math.round((style.background_opacity ?? 0) * 100)}
               min={0}
               max={100}
-              onChange={(value) => updateStyle({ background_opacity: value / 100 })}
+              onChange={(value) =>
+                updateStyle({ background_opacity: value / 100 })
+              }
             />
-            <Slider label="Corner Radius" value={style.border_radius_px ?? 0} min={0} max={64} onChange={(value) => updateStyle({ border_radius_px: value })} />
-            <Slider label="Letter Spacing" value={Math.round(style.letter_spacing_px ?? 0)} min={0} max={12} onChange={(value) => updateStyle({ letter_spacing_px: value })} />
+            <Slider
+              label="Corner Radius"
+              value={style.border_radius_px ?? 0}
+              min={0}
+              max={64}
+              onChange={(value) => updateStyle({ border_radius_px: value })}
+            />
+            <Slider
+              label="Letter Spacing"
+              value={Math.round(style.letter_spacing_px ?? 0)}
+              min={0}
+              max={12}
+              onChange={(value) => updateStyle({ letter_spacing_px: value })}
+            />
             <PlacementPad style={style} onChange={updateStyle} />
           </PanelSection>
         ) : null}
 
         <PanelSection title="Transcript">
-          <Label htmlFor="full-transcript" className="mb-1">Full Transcript</Label>
+          <Label htmlFor="full-transcript" className="mb-1">
+            Full Transcript
+          </Label>
           <TextArea
             id="full-transcript"
             value={transcriptText}
@@ -365,10 +456,19 @@ export function CaptionsTab({
             className="min-h-24 px-3 py-2 text-sm"
             aria-describedby="full-transcript-help"
           />
-          <p id="full-transcript-help" className="mt-1.5 text-xs text-muted-foreground">
+          <p
+            id="full-transcript-help"
+            className="mt-1.5 text-xs text-muted-foreground"
+          >
             Edit the full speech text, apply it to segments, then save text.
           </p>
-          <Button type="button" variant="secondary" onClick={applyTranscriptText} disabled={!segments.length} className="mt-2 min-h-11 w-full">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={applyTranscriptText}
+            disabled={!segments.length}
+            className="mt-2 min-h-11 w-full"
+          >
             Apply Transcript To Segments
           </Button>
         </PanelSection>
@@ -376,10 +476,14 @@ export function CaptionsTab({
         <PanelSection title="Segments" defaultOpen>
           <div className="mb-2 flex items-center justify-between">
             <Label className="mb-0">Segments</Label>
-            <span className="text-[10px] font-bold text-muted-foreground">{segments.length} editable</span>
+            <span className="text-[10px] font-bold text-muted-foreground">
+              {segments.length} editable
+            </span>
           </div>
           {segments.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No caption track yet.</p>
+            <p className="text-xs text-muted-foreground">
+              No caption track yet.
+            </p>
           ) : (
             <div className="space-y-2">
               <div className="flex gap-2 overflow-x-auto pb-1">
@@ -387,7 +491,9 @@ export function CaptionsTab({
                   <button
                     key={segment.id ?? index}
                     onClick={() => setSelectedSegmentIndex(index)}
-                    aria-current={selectedSegmentIndex === index ? "true" : undefined}
+                    aria-current={
+                      selectedSegmentIndex === index ? "true" : undefined
+                    }
                     aria-label={`Caption segment ${index + 1}, ${segment.text}, starts at ${segment.start_ms} milliseconds, ends at ${segment.end_ms} milliseconds`}
                     className={cn(
                       "min-h-11 w-40 shrink-0 border p-2 text-left text-xs transition",
@@ -396,8 +502,12 @@ export function CaptionsTab({
                         : "border-border bg-muted/40 hover:border-primary/40",
                     )}
                   >
-                    <span className="block truncate font-bold">{segment.text}</span>
-                    <span className="text-[10px] text-muted-foreground">{segment.start_ms} - {segment.end_ms} ms</span>
+                    <span className="block truncate font-bold">
+                      {segment.text}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {segment.start_ms} - {segment.end_ms} ms
+                    </span>
                   </button>
                 ))}
               </div>
@@ -417,7 +527,11 @@ export function CaptionsTab({
                         aria-label="Selected caption start time in milliseconds"
                         type="number"
                         value={selectedSegment.start_ms}
-                        onChange={(event) => updateSelectedSegment({ start_ms: Number(event.target.value) })}
+                        onChange={(event) =>
+                          updateSelectedSegment({
+                            start_ms: Number(event.target.value),
+                          })
+                        }
                         className="mt-1 min-h-10 px-2 py-1 text-sm"
                       />
                     </label>
@@ -427,14 +541,19 @@ export function CaptionsTab({
                         aria-label="Selected caption end time in milliseconds"
                         type="number"
                         value={selectedSegment.end_ms}
-                        onChange={(event) => updateSelectedSegment({ end_ms: Number(event.target.value) })}
+                        onChange={(event) =>
+                          updateSelectedSegment({
+                            end_ms: Number(event.target.value),
+                          })
+                        }
                         className="mt-1 min-h-10 px-2 py-1 text-sm"
                       />
                     </label>
                   </div>
                   <div className="flex gap-2 overflow-x-auto pb-1">
                     {uniqueWords(selectedSegment.text).map((word) => {
-                      const selected = selectedSegment.highlight_words?.includes(word);
+                      const selected =
+                        selectedSegment.highlight_words?.includes(word);
                       return (
                         <button
                           key={word}
@@ -442,7 +561,9 @@ export function CaptionsTab({
                           aria-pressed={selected}
                           className={cn(
                             "min-h-10 shrink-0 whitespace-nowrap border px-3 py-1.5 text-xs font-bold",
-                            selected ? "border-primary bg-primary/10 text-primary" : "border-border",
+                            selected
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border",
                           )}
                         >
                           {word}
@@ -458,41 +579,45 @@ export function CaptionsTab({
       </div>
 
       <div className="sticky bottom-2 z-10 grid grid-cols-2 gap-2 bg-background/80 py-1 backdrop-blur">
-        <Button onClick={updateCaptions} disabled={loading} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 px-2 text-sm sm:h-12">
-          {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
+        <Button
+          onClick={updateCaptions}
+          disabled={loading}
+          aria-busy={loading}
+          aria-describedby={message ? "caption-message" : undefined}
+          className="h-11 px-2 text-sm sm:h-12"
+        >
+          {loading ? (
+            <Loader2 className="mr-2 size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-2 size-4" />
+          )}
           {activeTrack ? "Save Style" : "Generate"}
         </Button>
-        <Button onClick={saveSegments} disabled={loading || !activeTrack} aria-busy={loading} aria-describedby={message ? "caption-message" : undefined} className="h-11 px-2 text-sm sm:h-12">
-          {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
+        <Button
+          onClick={saveSegments}
+          disabled={loading || !activeTrack}
+          aria-busy={loading}
+          aria-describedby={message ? "caption-message" : undefined}
+          className="h-11 px-2 text-sm sm:h-12"
+        >
+          {loading ? (
+            <Loader2 className="mr-2 size-4 animate-spin" />
+          ) : (
+            <Save className="mr-2 size-4" />
+          )}
           Save Text
         </Button>
       </div>
       {message ? (
-        <p id="caption-message" role={/failed|could not|try/i.test(message) ? "alert" : "status"} className="border border-border bg-muted p-3 text-sm font-bold text-muted-foreground">
+        <p
+          id="caption-message"
+          role={/failed|could not|try/i.test(message) ? "alert" : "status"}
+          className="border border-border bg-muted p-3 text-sm font-bold text-muted-foreground"
+        >
           {message}
         </p>
       ) : null}
     </div>
-  );
-}
-
-function PanelSection({
-  title,
-  defaultOpen,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <details className="group border border-border bg-surface/55" open={defaultOpen}>
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground">
-        {title}
-        <span className="text-xs text-muted-foreground transition group-open:rotate-90">›</span>
-      </summary>
-      <div className="border-t border-border p-3">{children}</div>
-    </details>
   );
 }
 
@@ -515,7 +640,13 @@ function PlacementPad({
   }
   function updateFromKeyboard(event: React.KeyboardEvent<HTMLDivElement>) {
     const x = style.position_x_pct ?? 50;
-    const y = style.position_y_pct ?? (style.placement === "upper" ? 18 : style.placement === "middle" ? 50 : 82);
+    const y =
+      style.position_y_pct ??
+      (style.placement === "upper"
+        ? 18
+        : style.placement === "middle"
+          ? 50
+          : 82);
     const step = event.shiftKey ? 10 : 2;
     let nextX = x;
     let nextY = y;
@@ -545,7 +676,14 @@ function PlacementPad({
       aria-label="Caption placement"
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={Math.round(style.position_y_pct ?? (style.placement === "upper" ? 18 : style.placement === "middle" ? 50 : 82))}
+      aria-valuenow={Math.round(
+        style.position_y_pct ??
+          (style.placement === "upper"
+            ? 18
+            : style.placement === "middle"
+              ? 50
+              : 82),
+      )}
       aria-valuetext={`X ${style.position_x_pct ?? 50} percent, Y ${style.position_y_pct ?? (style.placement === "upper" ? 18 : style.placement === "middle" ? 50 : 82)} percent`}
       onKeyDown={updateFromKeyboard}
       onPointerDown={(event) => {
@@ -579,7 +717,10 @@ function wordsForText(segment: CaptionSegment, text: string): TranscriptWord[] {
     index,
     text: token,
     start_ms: segment.start_ms + index * step,
-    end_ms: index === tokens.length - 1 ? segment.end_ms : segment.start_ms + (index + 1) * step,
+    end_ms:
+      index === tokens.length - 1
+        ? segment.end_ms
+        : segment.start_ms + (index + 1) * step,
     confidence: null,
   }));
 }
@@ -592,8 +733,15 @@ function uniqueWords(text: string, dedupe = true) {
   return dedupe ? Array.from(new Set(words)) : words;
 }
 
-function applyPresetDefaults(style: CaptionStyle, preset: CaptionPresetKey): CaptionStyle {
-  const base = { ...style, mode: modeForPreset(preset), animation: animationForPreset(preset) };
+function applyPresetDefaults(
+  style: CaptionStyle,
+  preset: CaptionPresetKey,
+): CaptionStyle {
+  const base = {
+    ...style,
+    mode: modeForPreset(preset),
+    animation: animationForPreset(preset),
+  };
   switch (preset) {
     case "impact_stamp":
       return {
@@ -661,7 +809,9 @@ function modeForPreset(preset: CaptionPresetKey): CaptionStyle["mode"] {
   return "word_pop";
 }
 
-function animationForPreset(preset: CaptionPresetKey): CaptionStyle["animation"] {
+function animationForPreset(
+  preset: CaptionPresetKey,
+): CaptionStyle["animation"] {
   if (preset === "impact_stamp") return "impact_stamp";
   if (preset === "minimal_line") return "minimal_fade";
   if (preset === "educational_card") return "edu_step";

@@ -90,19 +90,49 @@ export async function editorApiRequest<T>(
     signal,
   }: EditorApiRequestOptions,
 ): Promise<T> {
-  const headers = await buildApiHeaders({
-    workspaceId,
-    userId,
-    accessToken,
-    json: json && method !== "GET",
-  });
-  const response = await fetch(path, {
-    method,
-    headers,
-    body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
-    cache: method === "GET" ? "no-store" : undefined,
-    signal,
-  });
+  let headers;
+  try {
+    headers = await buildApiHeaders({
+      workspaceId,
+      userId,
+      accessToken,
+      json: json && method !== "GET",
+    });
+  } catch (err: any) {
+    throw new EditorApiError({
+      message: err.message || "Authentication session expired. Please sign in again.",
+      status: 401,
+      code: "auth_session_expired",
+      technicalMessage: err.message,
+    });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method,
+      headers,
+      body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
+      cache: method === "GET" ? "no-store" : undefined,
+      signal,
+    });
+  } catch (err: any) {
+    if (err.name === "AbortError" || err.message?.includes("aborted")) {
+      throw new EditorApiError({
+        message: "The request was cancelled.",
+        status: 499,
+        code: "request_aborted",
+        technicalMessage: err.message,
+      });
+    }
+    throw new EditorApiError({
+      message: "Network connection lost. Please verify your internet connection.",
+      status: 0,
+      code: "network_failure",
+      technicalMessage: err.message,
+    });
+  }
+
   const payload = (await readJson(response)) as Record<string, unknown> | null;
 
   if (!response.ok) {

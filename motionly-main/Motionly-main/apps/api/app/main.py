@@ -67,6 +67,7 @@ from app.services.queue import (
     BrollQueue,
     BullMQQueueRegistry,
     EffectsQueue,
+    MatteQueue,
     MusicQueue,
     PlanQueue,
     PreprocessQueue,
@@ -281,6 +282,7 @@ def create_app() -> FastAPI:
     app.state.preprocess_queue = PreprocessQueue(app.state.queue_registry)
     app.state.transcription_queue = TranscriptionQueue(app.state.queue_registry)
     app.state.visual_queue = VisualQueue(app.state.queue_registry)
+    app.state.matte_queue = MatteQueue(app.state.queue_registry)
     app.state.plan_queue = PlanQueue(app.state.queue_registry)
     app.state.broll_queue = BrollQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)

@@ -36,6 +36,8 @@ class EnqueuedJob:
     # Render engine hint stored so the worker can route without a manifest fetch
     render_engine: str = "ffmpeg_basic"
     trace_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,8 @@ class QueueRegistry:
             resource_id=job.resource_id,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
+            error_code=None,
+            error_message=None,
         )
         self.jobs[job_id] = retried
         return retried
@@ -118,12 +122,20 @@ class QueueRegistry:
         self.jobs[job_id] = completed
         return completed
 
-    def fail(self, job_id: str) -> EnqueuedJob:
+    def fail(
+        self,
+        job_id: str,
+        *,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        backoff_seconds: int | None = None,
+    ) -> EnqueuedJob:
         job = self.jobs[job_id]
         attempts = job.attempts + 1
         status = (
             QueueJobStatus.DEAD_LETTER if attempts >= job.max_attempts else QueueJobStatus.QUEUED
         )
+        delay = timedelta(seconds=max(0, backoff_seconds or 0))
         failed = EnqueuedJob(
             id=job.id,
             kind=job.kind,
@@ -132,12 +144,14 @@ class QueueRegistry:
             attempts=attempts,
             max_attempts=job.max_attempts,
             status=status,
-            enqueued_at=datetime.now(UTC),
+            enqueued_at=datetime.now(UTC) + delay,
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             resource_id=job.resource_id,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
+            error_code=error_code,
+            error_message=error_message,
         )
         self.jobs[job_id] = failed
         return failed
@@ -158,6 +172,8 @@ class QueueRegistry:
             resource_id=job.resource_id,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
+            error_code=job.error_code,
+            error_message=job.error_message,
         )
         self.jobs[job_id] = canceled
         return canceled
@@ -184,6 +200,8 @@ class QueueRegistry:
                 resource_id=job.resource_id,
                 render_engine=job.render_engine,
                 trace_id=job.trace_id,
+                error_code=job.error_code,
+                error_message=job.error_message,
             )
             self.jobs[job.id] = dead
             moved.append(dead)
@@ -228,6 +246,8 @@ class QueueRegistry:
             resource_id=job.resource_id,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
+            error_code=job.error_code,
+            error_message=job.error_message,
         )
 
 
@@ -310,14 +330,26 @@ class BullMQQueueRegistry:
         job = self.jobs[job_id]
         return self._copy_job(job, status=QueueJobStatus.SUCCEEDED)
 
-    def fail(self, job_id: str) -> EnqueuedJob:
+    def fail(
+        self,
+        job_id: str,
+        *,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        backoff_seconds: int | None = None,
+    ) -> EnqueuedJob:
         job = self.jobs[job_id]
         status = (
             QueueJobStatus.DEAD_LETTER
             if job.attempts + 1 >= job.max_attempts
             else QueueJobStatus.FAILED
         )
-        return self._copy_job(job, status=status)
+        return self._copy_job(
+            job,
+            status=status,
+            error_code=error_code,
+            error_message=error_message,
+        )
 
     def cancel(self, job_id: str) -> EnqueuedJob:
         return self._job_from_bridge(self._bridge("cancel", {"id": job_id}))
@@ -424,9 +456,18 @@ class BullMQQueueRegistry:
             resource_id=UUID(str(data["resource_id"])) if data.get("resource_id") else None,
             render_engine=str(data.get("render_engine") or "ffmpeg_basic"),
             trace_id=str(data["trace_id"]) if data.get("trace_id") else None,
+            error_code=str(data["error_code"]) if data.get("error_code") else None,
+            error_message=str(data["error_message"]) if data.get("error_message") else None,
         )
 
-    def _copy_job(self, job: EnqueuedJob, *, status: QueueJobStatus) -> EnqueuedJob:
+    def _copy_job(
+        self,
+        job: EnqueuedJob,
+        *,
+        status: QueueJobStatus,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> EnqueuedJob:
         return EnqueuedJob(
             id=job.id,
             kind=job.kind,
@@ -441,6 +482,8 @@ class BullMQQueueRegistry:
             resource_id=job.resource_id,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
+            error_code=error_code if error_code is not None else job.error_code,
+            error_message=error_message if error_message is not None else job.error_message,
         )
 
 
@@ -552,6 +595,27 @@ class VisualQueue(BaseQueue):
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=video_id,
+        )
+
+
+class MatteQueue(BaseQueue):
+    queue_name = "matte_extraction"
+    kind = "matte_extraction"
+
+    def enqueue_matte(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        video_id: UUID,
+        matte_id: UUID,
+    ) -> EnqueuedJob:
+        return self._enqueue(
+            job_id=self._job_id("matte", project_id, video_id, workspace_id, matte_id),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            resource_id=video_id,
+            render_engine=str(matte_id),
         )
 
 

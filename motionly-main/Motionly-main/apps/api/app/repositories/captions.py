@@ -13,6 +13,7 @@ from app.schemas.captions import (
     CaptionStyle,
     CaptionTrackReadResponse,
     LanguageHint,
+    TranscriptQualityStatus,
     TranscriptReadResponse,
     TranscriptStatus,
     TranscriptWord,
@@ -35,6 +36,8 @@ class TranscriptRecord:
     model: str
     confidence: float | None
     duration_ms: int | None
+    quality_status: TranscriptQualityStatus = TranscriptQualityStatus.OK
+    quality_reasons: list[str] = field(default_factory=list)
     raw_payload: dict[str, object] = field(default_factory=dict)
     error_code: str | None = None
     error_message: str | None = None
@@ -54,6 +57,8 @@ class TranscriptRecord:
             provider=self.provider,
             model=self.model,
             confidence=self.confidence,
+            quality_status=self.quality_status,
+            quality_reasons=self.quality_reasons,
             duration_ms=self.duration_ms,
             raw_payload=self.raw_payload,
             error_code=self.error_code,
@@ -609,6 +614,14 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             provider=str(row["provider"]),
             model=str(row["model"]),
             confidence=row.get("confidence"),
+            quality_status=TranscriptQualityStatus(
+                str(row.get("quality_status") or TranscriptQualityStatus.OK)
+            ),
+            quality_reasons=[
+                str(reason)
+                for reason in row.get("quality_reasons", [])
+                if isinstance(reason, str)
+            ],
             duration_ms=row.get("duration_ms"),
             raw_payload=row.get("raw_payload") if isinstance(row.get("raw_payload"), dict) else {},
             error_code=str(row["error_code"]) if row.get("error_code") else None,

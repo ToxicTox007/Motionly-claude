@@ -1,18 +1,20 @@
-import pytest
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.api.errors import ApiError
-from app.api.internal_jobs import run_queue_job
-from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
+from app.repositories.uploads import InMemoryUploadRepository
 from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.uploads import UploadStatus, VideoMetadata
 from app.schemas.visual import VisualManifestStatus
 from app.services.local_storage import LocalObjectStorage
-from app.services.queue import QueueRegistry, VisualQueue
-from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider, run_visual_analysis_for_upload
+from app.services.visual_intelligence import (
+    LocalMLVisualIntelligenceProvider,
+    run_visual_analysis_for_upload,
+)
+
 
 class MockTorchCuda:
     def __init__(self):
@@ -25,12 +27,13 @@ class MockTorch:
     def __init__(self):
         self.cuda = MockTorchCuda()
 
+
 def _make_mock_models(mock_torch):
     return {
         "cv2": SimpleNamespace(
             cvtColor=lambda frame, code: frame,
             COLOR_BGR2RGB=1,
-            COLOR_BGR2GRAY=2
+            COLOR_BGR2GRAY=2,
         ),
         "np": SimpleNamespace(),
         "Image": SimpleNamespace(fromarray=lambda arr: arr),
@@ -44,9 +47,14 @@ def _make_mock_models(mock_torch):
         "face_detector": SimpleNamespace(),
     }
 
+
 def test_visual_analysis_cuda_oom_handling(monkeypatch) -> None:
     mock_torch = MockTorch()
-    monkeypatch.setattr(LocalMLVisualIntelligenceProvider, "_load_models", lambda self: _make_mock_models(mock_torch))
+    monkeypatch.setattr(
+        LocalMLVisualIntelligenceProvider,
+        "_load_models",
+        lambda self: _make_mock_models(mock_torch),
+    )
 
     def mock_sample_frames(*args, **kwargs):
         raise RuntimeError("CUDA out of memory. Tried to allocate 4.00 GiB")
@@ -56,7 +64,7 @@ def test_visual_analysis_cuda_oom_handling(monkeypatch) -> None:
     provider = LocalMLVisualIntelligenceProvider(
         clip_model="clip",
         blip_model="blip",
-        yolo_model="yolo"
+        yolo_model="yolo",
     )
 
     with pytest.raises(ApiError) as exc_info:
@@ -64,16 +72,21 @@ def test_visual_analysis_cuda_oom_handling(monkeypatch) -> None:
             source_path=Path(__file__),
             metadata=VideoMetadata(width=1920, height=1080, duration_ms=5000, has_audio=True),
             sample_rate_fps=1.0,
-            scene_threshold=0.3
+            scene_threshold=0.3,
         )
-    
+
     assert exc_info.value.code == "cuda_oom"
-    assert exc_info.value.status_code == 500
+    assert exc_info.value.status_code == 503
     assert mock_torch.cuda.empty_cache_called == 1
+
 
 def test_visual_analysis_non_oom_exception_propagation(monkeypatch) -> None:
     mock_torch = MockTorch()
-    monkeypatch.setattr(LocalMLVisualIntelligenceProvider, "_load_models", lambda self: _make_mock_models(mock_torch))
+    monkeypatch.setattr(
+        LocalMLVisualIntelligenceProvider,
+        "_load_models",
+        lambda self: _make_mock_models(mock_torch),
+    )
 
     def mock_sample_frames(*args, **kwargs):
         raise ValueError("Invalid frame rate configuration")
@@ -83,7 +96,7 @@ def test_visual_analysis_non_oom_exception_propagation(monkeypatch) -> None:
     provider = LocalMLVisualIntelligenceProvider(
         clip_model="clip",
         blip_model="blip",
-        yolo_model="yolo"
+        yolo_model="yolo",
     )
 
     with pytest.raises(ValueError) as exc_info:
@@ -91,19 +104,19 @@ def test_visual_analysis_non_oom_exception_propagation(monkeypatch) -> None:
             source_path=Path(__file__),
             metadata=VideoMetadata(width=1920, height=1080, duration_ms=5000, has_audio=True),
             sample_rate_fps=1.0,
-            scene_threshold=0.3
+            scene_threshold=0.3,
         )
-    
+
     assert "Invalid frame rate" in str(exc_info.value)
     assert mock_torch.cuda.empty_cache_called == 0
+
 
 def test_run_visual_analysis_transitions_to_failed_on_cuda_oom(monkeypatch, tmp_path) -> None:
     upload_repository = InMemoryUploadRepository()
     visual_repository = InMemoryVisualRepository(upload_repository)
     project_id = uuid4()
     workspace_id = uuid4()
-    video_id = uuid4()
-    
+
     upload_repository.seed_project(project_id=project_id, workspace_id=workspace_id)
     upload = upload_repository.create_upload(
         project_id=project_id,
@@ -134,12 +147,14 @@ def test_run_visual_analysis_transitions_to_failed_on_cuda_oom(monkeypatch, tmp_
     class MockOomProvider:
         provider_name = "local_ml"
         model = "clip|blip|yolo"
+
         def analyze(self, **kwargs):
             raise ApiError(500, "cuda_oom", "GPU out of memory")
 
-    monkeypatch.setattr("app.services.visual_intelligence.create_object_storage", lambda **kwargs: SimpleNamespace(
-        ensure_object=lambda **k: Path(__file__)
-    ))
+    monkeypatch.setattr(
+        "app.services.visual_intelligence.create_object_storage",
+        lambda **kwargs: SimpleNamespace(ensure_object=lambda **k: Path(__file__)),
+    )
 
     with pytest.raises(ApiError) as exc_info:
         run_visual_analysis_for_upload(
@@ -152,15 +167,15 @@ def test_run_visual_analysis_transitions_to_failed_on_cuda_oom(monkeypatch, tmp_
             supabase_url=None,
             service_role_key=None,
             sample_rate_fps=1.0,
-            scene_threshold=0.3
+            scene_threshold=0.3,
         )
 
     assert exc_info.value.code == "cuda_oom"
-    
+
     latest = visual_repository.latest_for_upload(
         uploaded_video_id=upload.id,
         project_id=project_id,
-        workspace_id=workspace_id
+        workspace_id=workspace_id,
     )
     assert latest is not None
     assert latest.status == VisualManifestStatus.FAILED

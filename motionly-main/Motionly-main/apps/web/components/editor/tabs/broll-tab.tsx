@@ -2,10 +2,14 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Input, Label, Slider } from "../ui";
+import { Input, Label, Slider, PanelSection } from "../ui";
 import { Button } from "../../button";
 import { Check, Film, Loader2, Sparkles, X } from "lucide-react";
-import type { BrollDensity, BrollSlotSummary, StockVideoAssetSummary } from "@motionly/shared";
+import type {
+  BrollDensity,
+  BrollSlotSummary,
+  StockVideoAssetSummary,
+} from "@motionly/shared";
 import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
@@ -51,7 +55,9 @@ export function BrollTab({
   onPreviewBrollUpdated,
 }: BrollTabProps) {
   const router = useRouter();
-  const [density, setDensity] = useState<BrollDensity>(activePlanBrollDensity || "medium");
+  const [density, setDensity] = useState<BrollDensity>(
+    activePlanBrollDensity || "medium",
+  );
   const [pickerSlotId, setPickerSlotId] = useState<string | null>(null);
   const [savingSlotId, setSavingSlotId] = useState<string | null>(null);
   const [searchingSlotId, setSearchingSlotId] = useState<string | null>(null);
@@ -59,12 +65,14 @@ export function BrollTab({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const pickerSlot = initialSlots.find((slot) => slot.id === pickerSlotId) ?? null;
+  const pickerSlot =
+    initialSlots.find((slot) => slot.id === pickerSlotId) ?? null;
 
   useEffect(() => {
     onPreviewBrollUpdated?.({
       density,
-      slotsCount: initialSlots.filter((slot) => slot.status !== "disabled").length,
+      slotsCount: initialSlots.filter((slot) => slot.status !== "disabled")
+        .length,
     });
   }, [density, initialSlots, onPreviewBrollUpdated]);
 
@@ -76,11 +84,12 @@ export function BrollTab({
       const payload = await editorApiRequest<{ slots?: BrollSlotSummary[] }>(
         `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
         {
-        method: "POST",
+          method: "POST",
           workspaceId,
           userId,
           accessToken: apiAccessToken,
-          friendlyError: "B-roll could not be generated. Please try another density or try again.",
+          friendlyError:
+            "B-roll could not be generated. Please try another density or try again.",
           body: {
             density,
             force: true,
@@ -101,14 +110,18 @@ export function BrollTab({
     }
   }
 
-  async function updateSlot(slot: BrollSlotSummary, assetId: string | null, disabled: boolean) {
+  async function updateSlot(
+    slot: BrollSlotSummary,
+    assetId: string | null,
+    disabled: boolean,
+  ) {
     setSavingSlotId(slot.id);
     setMessage(null);
     try {
       const payload = await editorApiRequest<{ slot: BrollSlotSummary }>(
         `${env.apiBaseUrl}/projects/${projectId}/broll/${slot.id}/swap`,
         {
-        method: "POST",
+          method: "POST",
           workspaceId,
           userId,
           accessToken: apiAccessToken,
@@ -121,7 +134,9 @@ export function BrollTab({
       );
       onSlotUpdated(payload.slot);
       setPickerSlotId(null);
-      setMessage(disabled ? "B-roll slot disabled." : "B-roll selection saved.");
+      setMessage(
+        disabled ? "B-roll slot disabled." : "B-roll selection saved.",
+      );
       router.refresh();
     } catch (error) {
       console.error(error);
@@ -140,13 +155,20 @@ export function BrollTab({
       const response = await fetch(
         `${env.apiBaseUrl}/projects/${projectId}/broll/${slot.id}/search?${params}`,
         {
-          headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken }),
+          headers: await buildApiHeaders({
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+          }),
         },
       );
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "B-roll search failed.");
+      if (!response.ok)
+        throw new Error(payload.error?.message ?? "B-roll search failed.");
       onSlotUpdated(payload.slot);
-      setMessage(`Found ${payload.candidates?.length ?? 0} candidates for "${payload.query}".`);
+      setMessage(
+        `Found ${payload.candidates?.length ?? 0} candidates for "${payload.query}".`,
+      );
       router.refresh();
     } catch (error) {
       console.error(error);
@@ -174,12 +196,16 @@ export function BrollTab({
         <PanelSection title="Selected Assets" defaultOpen>
           <div className="mb-3 flex items-center justify-between">
             <Label className="mb-0">Selected Assets</Label>
-            <span className="text-xs font-bold text-muted-foreground">{initialSlots.length} Slots</span>
+            <span className="text-xs font-bold text-muted-foreground">
+              {initialSlots.length} Slots
+            </span>
           </div>
           <div className="space-y-3">
             {initialSlots.length === 0 ? (
               <div className="border border-dashed border-border bg-muted/25 p-3 text-sm text-muted-foreground">
-                <p className="font-bold text-foreground">No B-roll slots yet.</p>
+                <p className="font-bold text-foreground">
+                  No B-roll slots yet.
+                </p>
                 <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs">
                   <li>Generate an AI edit.</li>
                   <li>Create B-roll slots from the timeline.</li>
@@ -195,7 +221,11 @@ export function BrollTab({
                   onChange={() => setPickerSlotId(slot.id)}
                   onDisable={() => updateSlot(slot, null, true)}
                   onRestore={() =>
-                    updateSlot(slot, slot.selected_asset_id ?? slot.candidates[0]?.id ?? null, false)
+                    updateSlot(
+                      slot,
+                      slot.selected_asset_id ?? slot.candidates[0]?.id ?? null,
+                      false,
+                    )
                   }
                 />
               ))
@@ -224,13 +254,26 @@ export function BrollTab({
         aria-describedby={message ? "broll-message" : undefined}
         className="h-11 w-full sm:h-12"
       >
-        {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Sparkles className="mr-2 size-4" />}
-        {loading ? "Generating, please wait" : initialSlots.length === 0 ? "Generate B-roll Slots" : "Regenerate B-Roll"}
+        {loading ? (
+          <Loader2 className="mr-2 size-4 animate-spin" />
+        ) : (
+          <Sparkles className="mr-2 size-4" />
+        )}
+        {loading
+          ? "Generating, please wait"
+          : initialSlots.length === 0
+            ? "Generate B-roll Slots"
+            : "Regenerate B-Roll"}
       </Button>
       {message ? (
         <p
           id="broll-message"
-          role={message.toLowerCase().includes("could not") || message.toLowerCase().includes("failed") ? "alert" : "status"}
+          role={
+            message.toLowerCase().includes("could not") ||
+            message.toLowerCase().includes("failed")
+              ? "alert"
+              : "status"
+          }
           aria-live="polite"
           className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground"
         >
@@ -238,26 +281,6 @@ export function BrollTab({
         </p>
       ) : null}
     </div>
-  );
-}
-
-function PanelSection({
-  title,
-  defaultOpen,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <details className="group border border-border bg-surface/55" open={defaultOpen}>
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground">
-        {title}
-        <span className="text-xs text-muted-foreground transition group-open:rotate-90">›</span>
-      </summary>
-      <div className="border-t border-border p-3">{children}</div>
-    </details>
   );
 }
 
@@ -278,18 +301,34 @@ function SlotRow({
   const canChange = slot.candidates.length > 0;
 
   return (
-    <div className={cn("border border-border bg-muted/30 p-2", disabled && "opacity-70")}>
+    <div
+      className={cn(
+        "border border-border bg-muted/30 p-2",
+        disabled && "opacity-70",
+      )}
+    >
       <div className="flex gap-3">
-        <AssetThumb asset={slot.selected_asset ?? slot.candidates[0] ?? null} disabled={disabled} />
+        <AssetThumb
+          asset={slot.selected_asset ?? slot.candidates[0] ?? null}
+          disabled={disabled}
+        />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-bold">{slot.keywords?.[0] ?? slot.intent ?? "B-roll"}</p>
-          <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">{slot.intent}</p>
+          <p className="truncate text-xs font-bold">
+            {slot.keywords?.[0] ?? slot.intent ?? "B-roll"}
+          </p>
+          <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">
+            {slot.intent}
+          </p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
               onClick={onChange}
               disabled={!canChange || saving || disabled}
               aria-label={`Change B-roll asset for ${slot.intent}`}
-              title={!canChange ? "No alternatives available" : "Choose B-roll alternative"}
+              title={
+                !canChange
+                  ? "No alternatives available"
+                  : "Choose B-roll alternative"
+              }
               className="min-h-11 border border-border px-3 py-2 text-xs font-bold transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
             >
               {canChange ? "Change" : "No alternatives available"}
@@ -297,7 +336,10 @@ function SlotRow({
             {disabled ? (
               <button
                 onClick={onRestore}
-                disabled={saving || !slot.selected_asset_id && slot.candidates.length === 0}
+                disabled={
+                  saving ||
+                  (!slot.selected_asset_id && slot.candidates.length === 0)
+                }
                 aria-label={`Restore B-roll asset for ${slot.intent}`}
                 className="min-h-11 border border-border px-3 py-2 text-xs font-bold transition hover:border-primary/40 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -315,7 +357,9 @@ function SlotRow({
             )}
           </div>
         </div>
-        {saving ? <Loader2 className="size-4 animate-spin text-primary" /> : null}
+        {saving ? (
+          <Loader2 className="size-4 animate-spin text-primary" />
+        ) : null}
       </div>
     </div>
   );
@@ -393,7 +437,9 @@ function AssetPicker({
                   </span>
                 ) : null}
               </div>
-              <p className="truncate px-2 py-1 text-[10px] font-bold">{asset.title}</p>
+              <p className="truncate px-2 py-1 text-[10px] font-bold">
+                {asset.title}
+              </p>
             </button>
           );
         })}

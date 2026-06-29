@@ -51,6 +51,11 @@ if (process.env.NODE_ENV === "production" && !isProductionBuild) {
     throw new Error("Security violation: SKIP_AUTH_MIDDLEWARE and NEXT_PUBLIC_SKIP_AUTH_MIDDLEWARE are not allowed in production.");
   }
 
+  const finalSupabaseAnonKey = parsedEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? parsedEnv.SUPABASE_ANON_KEY;
+  if (!finalSupabaseAnonKey || finalSupabaseAnonKey === "build-placeholder" || finalSupabaseAnonKey === "replace-with-supabase-anon-key") {
+    throw new Error("Security violation: A valid production SUPABASE_ANON_KEY is required in production runtime.");
+  }
+
   for (const [name, value] of [
     ["NEXT_PUBLIC_APP_URL", parsedEnv.NEXT_PUBLIC_APP_URL],
     ["NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL", parsedEnv.NEXT_PUBLIC_API_BASE_URL ?? parsedEnv.NEXT_PUBLIC_API_URL],

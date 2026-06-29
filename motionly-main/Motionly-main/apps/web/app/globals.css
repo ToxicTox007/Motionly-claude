@@ -9,14 +9,29 @@
   --foreground: 224 71% 4%;
   --surface: 0 0% 100%;
   --surface-elevated: 0 0% 100%;
-  --border: 220 13% 78%;
+  --border: 220 13% 60%;
   --border-strong: 222 18% 52%;
   --primary: 172 72% 34%;
   --primary-foreground: 0 0% 100%;
   --muted: 220 14% 94%;
-  --muted-foreground: 220 12% 32%;
+  --muted-foreground: 220 16% 24%;
   --focus: 39 100% 50%;
   --shadow-color: 220 35% 14%;
+
+  /* Semantic HSL values */
+  --danger: 346 84% 50%;
+  --warning: 38 92% 50%;
+  --success: 142 76% 36%;
+  --info: 217 91% 53%;
+
+  /* Semantic Design Tokens */
+  --color-pixel-border: hsl(var(--border-strong));
+  --color-focus-ring: hsl(var(--focus));
+  --color-panel-shadow: hsl(var(--shadow-color) / 0.12);
+  --color-danger: hsl(var(--danger));
+  --color-warning: hsl(var(--warning));
+  --color-success: hsl(var(--success));
+  --color-info: hsl(var(--info));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -33,6 +48,21 @@
     --muted-foreground: 220 14% 78%;
     --focus: 45 100% 55%;
     --shadow-color: 220 50% 2%;
+
+    /* Semantic HSL values */
+    --danger: 346 84% 60%;
+    --warning: 48 96% 53%;
+    --success: 142 70% 45%;
+    --info: 217 90% 65%;
+
+    /* Semantic Design Tokens */
+    --color-pixel-border: hsl(var(--border-strong));
+    --color-focus-ring: hsl(var(--focus));
+    --color-panel-shadow: hsl(var(--shadow-color) / 0.12);
+    --color-danger: hsl(var(--danger));
+    --color-warning: hsl(var(--warning));
+    --color-success: hsl(var(--success));
+    --color-info: hsl(var(--info));
   }
 }
 
@@ -49,6 +79,21 @@
   --muted-foreground: 220 14% 78%;
   --focus: 45 100% 55%;
   --shadow-color: 220 50% 2%;
+
+  /* Semantic HSL values */
+  --danger: 346 84% 60%;
+  --warning: 48 96% 53%;
+  --success: 142 70% 45%;
+  --info: 217 90% 65%;
+
+  /* Semantic Design Tokens */
+  --color-pixel-border: hsl(var(--border-strong));
+  --color-focus-ring: hsl(var(--focus));
+  --color-panel-shadow: hsl(var(--shadow-color) / 0.12);
+  --color-danger: hsl(var(--danger));
+  --color-warning: hsl(var(--warning));
+  --color-success: hsl(var(--success));
+  --color-info: hsl(var(--info));
 }
 
 :root[data-theme="light"] {
@@ -56,14 +101,29 @@
   --foreground: 224 71% 4%;
   --surface: 0 0% 100%;
   --surface-elevated: 0 0% 100%;
-  --border: 220 13% 78%;
+  --border: 220 13% 60%;
   --border-strong: 222 18% 52%;
   --primary: 172 72% 34%;
   --primary-foreground: 0 0% 100%;
   --muted: 220 14% 94%;
-  --muted-foreground: 220 12% 32%;
+  --muted-foreground: 220 16% 24%;
   --focus: 39 100% 50%;
   --shadow-color: 220 35% 14%;
+
+  /* Semantic HSL values */
+  --danger: 346 84% 50%;
+  --warning: 38 92% 50%;
+  --success: 142 76% 36%;
+  --info: 217 91% 53%;
+
+  /* Semantic Design Tokens */
+  --color-pixel-border: hsl(var(--border-strong));
+  --color-focus-ring: hsl(var(--focus));
+  --color-panel-shadow: hsl(var(--shadow-color) / 0.12);
+  --color-danger: hsl(var(--danger));
+  --color-warning: hsl(var(--warning));
+  --color-success: hsl(var(--success));
+  --color-info: hsl(var(--info));
 }
 
 * {
@@ -87,10 +147,23 @@ body {
   background:
     linear-gradient(hsl(var(--border) / 0.18) 1px, transparent 1px),
     linear-gradient(90deg, hsl(var(--border) / 0.18) 1px, transparent 1px),
-    radial-gradient(circle at top left, hsl(var(--primary) / 0.08), transparent 26rem),
-    radial-gradient(circle at 85% 10%, hsl(var(--foreground) / 0.04), transparent 24rem),
+    radial-gradient(
+      circle at top left,
+      hsl(var(--primary) / 0.08),
+      transparent 26rem
+    ),
+    radial-gradient(
+      circle at 85% 10%,
+      hsl(var(--foreground) / 0.04),
+      transparent 24rem
+    ),
     hsl(var(--background));
-  background-size: 18px 18px, 18px 18px, auto, auto, auto;
+  background-size:
+    18px 18px,
+    18px 18px,
+    auto,
+    auto,
+    auto;
   color: hsl(var(--foreground));
   font-family: "Inter", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -104,8 +177,8 @@ a {
 
 :where(a, button, input, textarea, select, [tabindex]):focus-visible {
   outline: 2px solid hsl(var(--focus));
-  outline-offset: 3px;
-  box-shadow: 0 0 0 4px hsl(var(--focus) / 0.18);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px hsl(var(--shadow-color));
 }
 
 ::placeholder {
@@ -165,6 +238,18 @@ a {
 }
 
 @layer components {
+  .pixel-focus-ring:focus-visible {
+    outline: 2px solid hsl(var(--focus)) !important;
+    outline-offset: 2px !important;
+    box-shadow: 0 0 0 2px hsl(var(--shadow-color)) !important;
+  }
+
+  summary:focus-visible {
+    outline: 2px solid hsl(var(--focus)) !important;
+    outline-offset: -2px !important;
+    box-shadow: inset 0 0 0 2px hsl(var(--shadow-color)) !important;
+  }
+
   .pixel-grid {
     background-image:
       linear-gradient(hsl(var(--border) / 0.26) 1px, transparent 1px),
@@ -183,7 +268,11 @@ a {
     position: relative;
     border: 1px solid hsl(var(--border));
     background:
-      linear-gradient(180deg, hsl(var(--surface-elevated) / 0.88), hsl(var(--surface) / 0.95)),
+      linear-gradient(
+        180deg,
+        hsl(var(--surface-elevated) / 0.88),
+        hsl(var(--surface) / 0.95)
+      ),
       hsl(var(--surface));
     box-shadow:
       8px 8px 0 hsl(var(--shadow-color) / 0.06),
@@ -195,7 +284,11 @@ a {
     position: relative;
     border: 2px solid hsl(var(--border-strong));
     background:
-      linear-gradient(180deg, hsl(var(--surface-elevated) / 0.94), hsl(var(--surface) / 0.98)),
+      linear-gradient(
+        180deg,
+        hsl(var(--surface-elevated) / 0.94),
+        hsl(var(--surface) / 0.98)
+      ),
       hsl(var(--surface));
     box-shadow:
       12px 12px 0 hsl(var(--shadow-color) / 0.08),
@@ -234,8 +327,16 @@ a {
     inset: -1px;
     pointer-events: none;
     background:
-      radial-gradient(circle at top left, hsl(var(--primary) / 0.18), transparent 30%),
-      radial-gradient(circle at bottom right, hsl(var(--primary) / 0.12), transparent 30%);
+      radial-gradient(
+        circle at top left,
+        hsl(var(--primary) / 0.18),
+        transparent 30%
+      ),
+      radial-gradient(
+        circle at bottom right,
+        hsl(var(--primary) / 0.12),
+        transparent 30%
+      );
     opacity: 0.9;
   }
 
@@ -254,11 +355,11 @@ a {
     border: 1px solid hsl(var(--border-strong));
     box-shadow: 4px 4px 0 hsl(var(--shadow-color) / 0.12);
     transition:
-      transform 150ms ease,
-      box-shadow 150ms ease,
-      border-color 150ms ease,
-      background-color 150ms ease,
-      color 150ms ease;
+      transform 80ms steps(4, end),
+      box-shadow 80ms steps(4, end),
+      border-color 80ms steps(4, end),
+      background-color 80ms steps(4, end),
+      color 80ms steps(4, end);
   }
 
   .pixel-button:hover {
@@ -273,37 +374,39 @@ a {
 
   .pixel-input {
     border: 1px solid hsl(var(--border));
-    background:
-      linear-gradient(180deg, hsl(var(--background) / 0.88), hsl(var(--surface) / 0.92));
+    background: linear-gradient(
+      180deg,
+      hsl(var(--background) / 0.88),
+      hsl(var(--surface) / 0.92)
+    );
     box-shadow:
       inset 0 1px 0 hsl(0 0% 100% / 0.18),
       0 0 0 1px transparent;
     transition:
-      border-color 150ms ease,
-      box-shadow 150ms ease,
-      background-color 150ms ease;
+      border-color 80ms steps(4, end),
+      box-shadow 80ms steps(4, end),
+      background-color 80ms steps(4, end);
   }
 
   .pixel-input:focus {
     outline: none;
-    border-color: hsl(var(--primary));
+    border-color: hsl(var(--focus));
     box-shadow:
-      0 0 0 1px hsl(var(--primary) / 0.5),
-      0 0 0 4px hsl(var(--focus) / 0.18),
+      0 0 0 2px hsl(var(--focus)),
+      0 0 0 4px hsl(var(--shadow-color)),
       inset 0 1px 0 hsl(0 0% 100% / 0.18);
   }
 
   .pixel-progress {
     overflow: hidden;
     border: 1px solid hsl(var(--border));
-    background:
-      repeating-linear-gradient(
-        90deg,
-        hsl(var(--muted)) 0,
-        hsl(var(--muted)) 10px,
-        hsl(var(--border) / 0.45) 10px,
-        hsl(var(--border) / 0.45) 11px
-      );
+    background: repeating-linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0,
+      hsl(var(--muted)) 10px,
+      hsl(var(--border) / 0.45) 10px,
+      hsl(var(--border) / 0.45) 11px
+    );
   }
 
   .pixel-progress-fill {
@@ -319,13 +422,12 @@ a {
   }
 
   .pixel-skeleton {
-    background:
-      linear-gradient(
-        90deg,
-        hsl(var(--muted)) 0%,
-        hsl(var(--surface-elevated)) 45%,
-        hsl(var(--muted)) 100%
-      );
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--surface-elevated)) 45%,
+      hsl(var(--muted)) 100%
+    );
     background-size: 200% 100%;
     animation: pixel-shimmer 1.8s ease infinite;
   }
@@ -344,14 +446,82 @@ a {
     width: min(100% - 2rem, 84rem);
     margin-inline: auto;
   }
+
+  /* Custom pixel range input styling */
+  input[type="range"].pixel-range {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  input[type="range"].pixel-range::-webkit-slider-runnable-track {
+    background: hsl(var(--muted));
+    border: 2px solid hsl(var(--border));
+    height: 12px;
+  }
+  input[type="range"].pixel-range::-moz-range-track {
+    background: hsl(var(--muted));
+    border: 2px solid hsl(var(--border));
+    height: 12px;
+  }
+
+  input[type="range"].pixel-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    margin-top: -6px;
+    background-color: hsl(var(--primary));
+    border: 2px solid hsl(var(--border));
+    width: 16px;
+    height: 20px;
+    box-shadow: 2px 2px 0 hsl(var(--shadow-color) / 0.15);
+    transition: transform 80ms steps(4, end);
+  }
+  input[type="range"].pixel-range::-webkit-slider-thumb:hover {
+    transform: scale(1.05);
+  }
+  input[type="range"].pixel-range::-moz-range-thumb {
+    background-color: hsl(var(--primary));
+    border: 2px solid hsl(var(--border));
+    width: 16px;
+    height: 20px;
+    box-shadow: 2px 2px 0 hsl(var(--shadow-color) / 0.15);
+    border-radius: 0;
+    transition: transform 80ms steps(4, end);
+  }
+  input[type="range"].pixel-range::-moz-range-thumb:hover {
+    transform: scale(1.05);
+  }
+
+  input[type="range"].pixel-range:focus {
+    outline: none;
+  }
+  input[type="range"].pixel-range:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid hsl(var(--focus));
+    outline-offset: 2px;
+  }
+  input[type="range"].pixel-range:focus-visible::-moz-range-thumb {
+    outline: 2px solid hsl(var(--focus));
+    outline-offset: 2px;
+  }
 }
 
 @media (max-width: 640px) {
   body {
-    background-size: 24px 24px, 24px 24px, auto, auto, auto;
+    background-size:
+      24px 24px,
+      24px 24px,
+      auto,
+      auto,
+      auto;
   }
 
-  :where(.pixel-panel, .pixel-panel-strong, [role="tabpanel"], [role="dialog"]) {
+  :where(
+    .pixel-panel,
+    .pixel-panel-strong,
+    [role="tabpanel"],
+    [role="dialog"]
+  ) {
     max-width: 100%;
     min-width: 0;
   }
@@ -426,8 +596,12 @@ a {
 }
 
 @keyframes pixel-shimmer {
-  0% { background-position: 100% 0; }
-  100% { background-position: 0 0; }
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

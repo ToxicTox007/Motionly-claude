@@ -14,6 +14,7 @@ import { Button } from "@/components/button";
 import { buildApiHeaders } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
+import { useToast } from "./toast";
 
 type UploadPanelProps = {
   projectId: string;
@@ -69,7 +70,8 @@ const SERVER_WARNING_MESSAGES: Record<string, string> = {
   square_source: "Square source may need cropping for 9:16 export.",
   unknown_aspect_ratio: "Aspect ratio could not be classified.",
   long_video: "Long source may take longer to process and render.",
-  very_short_video: "Very short source may not produce enough captioned content.",
+  very_short_video:
+    "Very short source may not produce enough captioned content.",
   low_resolution: "Low-resolution source may look soft after export.",
   unusual_frame_rate: "Unusual frame rate will be normalized during export.",
   large_file: "Large upload may take longer on slower connections.",
@@ -91,6 +93,7 @@ export function UploadPanel({
   hasExistingSource = false,
 }: UploadPanelProps) {
   const router = useRouter();
+  const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -211,13 +214,17 @@ export function UploadPanel({
   function selectFile(nextFile: File | null) {
     if (phase === "uploading") abortRef.current?.abort();
     setFile(nextFile);
-    setMediaProbe(nextFile && canProbeBrowserMedia(nextFile) ? {
-      status: "loading",
-      durationMs: null,
-      width: null,
-      height: null,
-      warnings: [],
-    } : idleProbe);
+    setMediaProbe(
+      nextFile && canProbeBrowserMedia(nextFile)
+        ? {
+            status: "loading",
+            durationMs: null,
+            width: null,
+            height: null,
+            warnings: [],
+          }
+        : idleProbe,
+    );
     setPhase(nextFile ? "preflight" : "idle");
     setProgress(0);
     setMessage(null);
@@ -333,7 +340,15 @@ export function UploadPanel({
       }
       setProgress(100);
       setPhase("complete");
-      setMessage(serverValidationMessage(readyUpload?.metadata?.warnings));
+      const completeMsg = serverValidationMessage(
+        readyUpload?.metadata?.warnings,
+      );
+      setMessage(completeMsg);
+      toast({
+        title: "Upload Complete",
+        description: "Your video was uploaded and validated successfully.",
+        variant: "success",
+      });
       router.refresh();
     } catch (error) {
       if ((error as Error).name === "AbortError") {
@@ -350,10 +365,21 @@ export function UploadPanel({
         setMessage(
           "Upload canceled. The incomplete source was not attached to this project.",
         );
+        toast({
+          title: "Upload Canceled",
+          description: "The upload process was canceled. No files were saved.",
+          variant: "info",
+        });
         return;
       }
       setPhase("failed");
-      setMessage(friendlyUploadError((error as Error).message));
+      const failMsg = friendlyUploadError((error as Error).message);
+      setMessage(failMsg);
+      toast({
+        title: "Upload Failed",
+        description: failMsg,
+        variant: "error",
+      });
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
@@ -513,10 +539,7 @@ export function UploadPanel({
               </div>
             ) : null}
             <div>
-              <div
-                className="pixel-progress h-2"
-                aria-label="Upload progress"
-              >
+              <div className="pixel-progress h-2" aria-label="Upload progress">
                 <div
                   className="pixel-progress-fill h-full transition-all"
                   style={{ width: `${progress}%` }}
@@ -895,24 +918,30 @@ function storageUploadErrorMessage(status: number, responseText: string) {
 
 function friendlyUploadError(message: string) {
   if (/file exceeds|too large/i.test(message))
-    return "This file exceeds the upload limit for the current plan.";
+    return "This file exceeds the upload limit for your current workspace plan. Please upgrade your plan or upload a shorter/compressed video.";
   if (/mime|unsupported|extension/i.test(message))
-    return "Choose an MP4, MOV, or WebM file with a matching extension.";
+    return "Unsupported format. Please select a valid MP4, MOV, or WebM video file and try again.";
   if (/audio track|audio availability/i.test(message))
-    return "Server validation failed: no audio track was detected. Upload a video with audio.";
+    return "No audio track detected. The system requires an audio track to generate captions. Please upload a video containing audio.";
   if (/duration|resolution|frame rate|codec|render ready/i.test(message))
     return `Server validation failed: ${message}`;
   if (/probe|inspect|decode|thumbnail/i.test(message))
-    return "Server validation failed: the video could not be decoded reliably. Try re-exporting as H.264 MP4.";
+    return "Video decoding failed. The uploaded file appears corrupt or encoded in an unsupported format. Try re-exporting your video as a standard H.264 MP4 before re-uploading.";
   if (/size did not match/i.test(message))
-    return "The uploaded object size changed during upload. Try again.";
-  if (/storage/i.test(message)) return message;
-  return message || "Upload failed. Try again with a supported video file.";
+    return "Upload connection interrupted (size mismatch). Please check your internet connection and try uploading again.";
+  if (/storage/i.test(message))
+    return `Storage upload error: ${message}. Check your local storage quota or retry.`;
+  return (
+    message ||
+    "Upload failed due to a network connection issue. Check your internet connection and try again."
+  );
 }
 
 function serverValidationMessage(warnings: unknown) {
   const warningCodes = Array.isArray(warnings)
-    ? warnings.filter((warning): warning is string => typeof warning === "string")
+    ? warnings.filter(
+        (warning): warning is string => typeof warning === "string",
+      )
     : [];
   if (!warningCodes.length) {
     return "Server validation passed. Source video, metadata, thumbnail, and render readiness are confirmed.";

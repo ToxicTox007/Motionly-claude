@@ -7,6 +7,7 @@ test("media work is dispatched directly and never through the API job runner", a
   assert.doesNotMatch(source, /\/internal\/jobs\//);
   assert.match(source, /app\.workers\.domain_job/);
   assert.match(source, /app\.workers\.visual_job/);
+  assert.match(source, /app\.workers\.matte_job/);
   assert.match(source, /persistentPythonExecutor/);
   assert.match(source, /"--serve"/);
 });
@@ -14,7 +15,7 @@ test("media work is dispatched directly and never through the API job runner", a
 test("standard worker defaults to the isolated Remotion queue", async () => {
   const source = await readFile(new URL("./queue-common.mjs", import.meta.url), "utf8");
   assert.match(source, /defaultQueueNames = \["render_remotion"\]/);
-  for (const queue of ["audio_demucs", "provider_calls", "visual_analysis"]) {
+  for (const queue of ["audio_demucs", "provider_calls", "visual_analysis", "matte_extraction"]) {
     assert.match(source, new RegExp(`"${queue}"`));
   }
 });
@@ -27,6 +28,11 @@ test("visual_analysis concurrency defaults to 1 and is configurable", async () =
   process.env.VISUAL_ANALYSIS_WORKER_CONCURRENCY = "4";
   assert.equal(workerConcurrency("visual_analysis"), 4);
   delete process.env.VISUAL_ANALYSIS_WORKER_CONCURRENCY;
+
+  assert.equal(workerConcurrency("matte_extraction"), 1);
+  process.env.MATTE_WORKER_CONCURRENCY = "2";
+  assert.equal(workerConcurrency("matte_extraction"), 2);
+  delete process.env.MATTE_WORKER_CONCURRENCY;
 
   assert.equal(workerConcurrency("transcription"), 3);
 });

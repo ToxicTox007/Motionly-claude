@@ -53,6 +53,7 @@ from app.services.edit_plan_validation import (
     EditPlanValidationFailure,
     validate_edit_plan_for_render,
 )
+from app.services.matte_jobs import matte_availability
 from app.services.queue import RenderQueue
 from app.services.render_templates import (
     build_props_hash,
@@ -655,20 +656,33 @@ async def create_render(
     source_timeline = compiled_timeline.model_dump(mode="json")
     render_edit_plan["timeline"] = source_timeline
     segmentation_matte = None
-    if (
-        effects_props
-        and effects_props.get("background_removal", {}).get("enabled")
-        and visual_record
-        and visual_record.manifest
-        and visual_record.manifest.segmentation_matte
-    ):
-        matte = visual_record.manifest.segmentation_matte
-        segmentation_matte = {
-            "src": f"supabase://{matte.bucket}/{matte.path}",
-            "model": matte.model,
-            "bucket": matte.bucket,
-            "path": matte.path,
+    matte_status = {"status": "skipped", "reason": "matte_not_requested"}
+    if effects_props and effects_props.get("background_removal", {}).get("enabled"):
+        visual_repository = getattr(request.app.state, "visual_repository", None)
+        matte_record = (
+            visual_repository.latest_matte_for_upload(
+                workspace_id=actor.workspace_id,
+                project_id=project_id,
+                uploaded_video_id=upload.id,
+            )
+            if visual_repository is not None
+            else None
+        )
+        availability = matte_availability(matte_record)
+        matte_status = {
+            "status": availability["status"],
+            "reason": availability["reason"],
         }
+        matte = availability["matte"]
+        if matte is not None:
+            segmentation_matte = {
+                "src": f"supabase://{matte.bucket}/{matte.path}",
+                "model": matte.model,
+                "bucket": matte.bucket,
+                "path": matte.path,
+                "cache_key": matte.cache_key,
+                "status": matte.status.value,
+            }
     render_props = {
         "sourceVideo": {
             "src": f"supabase://{upload.storage_bucket}/{upload.storage_path}",
@@ -689,6 +703,7 @@ async def create_render(
         "sourceStems": source_stems,
         "timeline": source_timeline,
         "segmentationMatte": segmentation_matte,
+        "segmentationMatteStatus": matte_status,
     }
     props_hash = build_props_hash(render_props)
     manual_element_types = {

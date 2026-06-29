@@ -2,9 +2,16 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Input, Label, Select, Slider } from "../ui";
+import { Input, Label, Select, Slider, PanelSection } from "../ui";
 import { Button } from "../../button";
-import { AlertTriangle, Check, Loader2, Palette, Plus, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Loader2,
+  Palette,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import type {
   AfterEffectsPresetSummary,
   BackgroundRemovalSettings,
@@ -179,7 +186,9 @@ export function LookTab({
   const [texture, setTexture] = useState<EffectsTextureSettings>(
     initialConfig?.texture ?? defaultTexture,
   );
-  const [selectedMotionEffects, setSelectedMotionEffects] = useState<MotionEffectKey[]>(() => {
+  const [selectedMotionEffects, setSelectedMotionEffects] = useState<
+    MotionEffectKey[]
+  >(() => {
     const effects = initialConfig?.motion_effects ?? [];
     return prefersReducedMotion()
       ? effects.filter((effect) => !motionHeavyEffects.includes(effect))
@@ -187,17 +196,22 @@ export function LookTab({
   });
   const [motion, setMotion] = useState<MotionSettings>(() => {
     const settings = initialConfig?.motion ?? defaultMotionSettings();
-    return prefersReducedMotion() ? motionWithReducedMotion(settings) : settings;
+    return prefersReducedMotion()
+      ? motionWithReducedMotion(settings)
+      : settings;
   });
-  const [backgroundRemoval, setBackgroundRemoval] = useState<BackgroundRemovalSettings>(
-    initialConfig?.background_removal ?? defaultBackground,
-  );
+  const [backgroundRemoval, setBackgroundRemoval] =
+    useState<BackgroundRemovalSettings>(
+      initialConfig?.background_removal ?? defaultBackground,
+    );
   const [gradientRamp, setGradientRamp] = useState<GradientRampSettings>(
     initialConfig?.gradient_ramp ?? defaultGradient,
   );
   const [resetToDefaults, setResetToDefaults] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
-  const [premiumBlockedMessage, setPremiumBlockedMessage] = useState<string | null>(null);
+  const [premiumBlockedMessage, setPremiumBlockedMessage] = useState<
+    string | null
+  >(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const previewPreset = hoverPreset ?? preset;
@@ -236,15 +250,23 @@ export function LookTab({
         angleDeg: gradientRamp.angle_deg,
       },
       motionEffects: reducedMotion
-        ? selectedMotionEffects.filter((effect) => !motionHeavyEffects.includes(effect))
+        ? selectedMotionEffects.filter(
+            (effect) => !motionHeavyEffects.includes(effect),
+          )
         : selectedMotionEffects,
       motion: reducedMotion ? motionWithReducedMotion(motion) : motion,
       selectedSourceClipId:
-        selectedTimelineClip?.sourceRef.kind === "cut" ? selectedTimelineClip.id : null,
+        selectedTimelineClip?.sourceRef.kind === "cut"
+          ? selectedTimelineClip.id
+          : null,
       selectedSourceClipStartMs:
-        selectedTimelineClip?.sourceRef.kind === "cut" ? selectedTimelineClip.startMs : null,
+        selectedTimelineClip?.sourceRef.kind === "cut"
+          ? selectedTimelineClip.startMs
+          : null,
       selectedSourceClipEndMs:
-        selectedTimelineClip?.sourceRef.kind === "cut" ? selectedTimelineClip.endMs : null,
+        selectedTimelineClip?.sourceRef.kind === "cut"
+          ? selectedTimelineClip.endMs
+          : null,
       zoomMoments: null,
       reducedMotion,
     });
@@ -281,9 +303,13 @@ export function LookTab({
 
   function buildEffectsBody(): EffectsBody {
     const effectiveMotionEffects = reducedMotion
-      ? selectedMotionEffects.filter((effect) => !motionHeavyEffects.includes(effect))
+      ? selectedMotionEffects.filter(
+          (effect) => !motionHeavyEffects.includes(effect),
+        )
       : selectedMotionEffects;
-    const effectiveMotion = reducedMotion ? motionWithReducedMotion(motion) : motion;
+    const effectiveMotion = reducedMotion
+      ? motionWithReducedMotion(motion)
+      : motion;
     return {
       preset,
       lut_intensity: Math.max(50, intensity) / 100,
@@ -310,7 +336,8 @@ export function LookTab({
           workspaceId,
           userId,
           accessToken: apiAccessToken,
-          friendlyError: "Look settings could not be applied. Please try again.",
+          friendlyError:
+            "Look settings could not be applied. Please try again.",
           body,
         },
       );
@@ -354,8 +381,10 @@ export function LookTab({
       pushHistory({
         id: `look-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         label: "Look",
-        undo: () => applyEffectsBody(previousBody).then(() => "Look settings restored."),
-        redo: () => applyEffectsBody(nextBody).then(() => "Look settings reapplied."),
+        undo: () =>
+          applyEffectsBody(previousBody).then(() => "Look settings restored."),
+        redo: () =>
+          applyEffectsBody(nextBody).then(() => "Look settings reapplied."),
       });
     } catch {
       // Error already surfaced by applyEffectsBody.
@@ -364,13 +393,19 @@ export function LookTab({
 
   function toggleMotionEffect(effect: MotionEffectKey) {
     if (reducedMotion && motionHeavyEffects.includes(effect)) {
-      setMessage("Reduced motion is on. Motion-heavy effects are disabled for accessibility.");
+      setMessage(
+        "Reduced motion is on. Motion-heavy effects are disabled for accessibility.",
+      );
       return;
     }
     setSelectedMotionEffects((current) => {
       const enabled = !current.includes(effect);
-      setMotion((currentMotion) => motionWithEffectEnabled(currentMotion, effect, enabled));
-      return enabled ? [...current, effect] : current.filter((item) => item !== effect);
+      setMotion((currentMotion) =>
+        motionWithEffectEnabled(currentMotion, effect, enabled),
+      );
+      return enabled
+        ? [...current, effect]
+        : current.filter((item) => item !== effect);
     });
     if (effect === "gradient_ramp") {
       setGradientRamp((current) => ({ ...current, enabled: !current.enabled }));
@@ -379,13 +414,17 @@ export function LookTab({
 
   function setMotionEffectEnabled(effect: MotionEffectKey, enabled: boolean) {
     if (reducedMotion && enabled && motionHeavyEffects.includes(effect)) {
-      setMessage("Reduced motion is on. Motion-heavy effects are disabled for accessibility.");
+      setMessage(
+        "Reduced motion is on. Motion-heavy effects are disabled for accessibility.",
+      );
       return;
     }
     setMotion((current) => motionWithEffectEnabled(current, effect, enabled));
     setSelectedMotionEffects((current) =>
       enabled
-        ? current.includes(effect) ? current : [...current, effect]
+        ? current.includes(effect)
+          ? current
+          : [...current, effect]
         : current.filter((item) => item !== effect),
     );
   }
@@ -400,7 +439,9 @@ export function LookTab({
   }
 
   function addMotionKeyframe(targetedClip?: TimelineClip | null) {
-    const clipTarget = targetedClip ? motionTargetForTimelineClip(targetedClip) : null;
+    const clipTarget = targetedClip
+      ? motionTargetForTimelineClip(targetedClip)
+      : null;
     setMotion((current) => ({
       ...current,
       keyframes: [
@@ -408,9 +449,11 @@ export function LookTab({
         {
           target: clipTarget?.target ?? "source",
           clip_id: clipTarget?.clipId ?? null,
-          at_ms: clipTarget?.atMs ?? (
-            current.keyframes.length ? current.keyframes[current.keyframes.length - 1].at_ms + 600 : 0
-          ),
+          at_ms:
+            clipTarget?.atMs ??
+            (current.keyframes.length
+              ? current.keyframes[current.keyframes.length - 1].at_ms + 600
+              : 0),
           scale: 1.06,
           x_pct: 50,
           y_pct: 50,
@@ -425,14 +468,20 @@ export function LookTab({
   function removeMotionKeyframe(index: number) {
     setMotion((current) => ({
       ...current,
-      keyframes: current.keyframes.filter((_, keyframeIndex) => keyframeIndex !== index),
+      keyframes: current.keyframes.filter(
+        (_, keyframeIndex) => keyframeIndex !== index,
+      ),
     }));
   }
 
   function selectedClipIdForMotion(): string | null {
     if (!selectedTimelineClip) return null;
-    if (selectedTimelineClip.sourceRef.kind === "cut") return selectedTimelineClip.id;
-    if (selectedTimelineClip.sourceRef.kind === "broll_slot" && selectedTimelineClip.sourceRef.id) {
+    if (selectedTimelineClip.sourceRef.kind === "cut")
+      return selectedTimelineClip.id;
+    if (
+      selectedTimelineClip.sourceRef.kind === "broll_slot" &&
+      selectedTimelineClip.sourceRef.id
+    ) {
       return selectedTimelineClip.id;
     }
     return null;
@@ -448,7 +497,9 @@ export function LookTab({
     const clipId = selectedClipIdForMotion();
     if (!clipId) return;
     if (reducedMotion && motionHeavyEffects.includes(effect)) {
-      setMessage("Reduced motion is on. Motion-heavy effects are disabled for accessibility.");
+      setMessage(
+        "Reduced motion is on. Motion-heavy effects are disabled for accessibility.",
+      );
       return;
     }
     setMotion((current) => {
@@ -515,7 +566,13 @@ export function LookTab({
             </div>
           </div>
 
-          <Slider label="LUT Intensity" value={intensity} min={50} max={100} onChange={setIntensity} />
+          <Slider
+            label="LUT Intensity"
+            value={intensity}
+            min={50}
+            max={100}
+            onChange={setIntensity}
+          />
         </PanelSection>
 
         <PanelSection title="Texture">
@@ -523,12 +580,16 @@ export function LookTab({
           <Slider
             label="Grain"
             value={Math.round(texture.grain * 100)}
-            onChange={(value) => setTexture((current) => ({ ...current, grain: value / 100 }))}
+            onChange={(value) =>
+              setTexture((current) => ({ ...current, grain: value / 100 }))
+            }
           />
           <Slider
             label="Vignette"
             value={Math.round(texture.vignette * 100)}
-            onChange={(value) => setTexture((current) => ({ ...current, vignette: value / 100 }))}
+            onChange={(value) =>
+              setTexture((current) => ({ ...current, vignette: value / 100 }))
+            }
           />
           <Slider
             label="Light Leak"
@@ -536,12 +597,17 @@ export function LookTab({
             onChange={(value) =>
               setTexture((current) => ({
                 ...current,
-                light_leak: reducedMotion ? Math.min(value / 100, 0.2) : value / 100,
+                light_leak: reducedMotion
+                  ? Math.min(value / 100, 0.2)
+                  : value / 100,
               }))
             }
           />
           {texture.light_leak > 0.2 ? (
-            <p role="alert" className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800">
+            <p
+              role="alert"
+              className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800"
+            >
               <AlertTriangle className="size-3.5 shrink-0" />
               Flashing risk: lower Light Leak.
             </p>
@@ -553,7 +619,10 @@ export function LookTab({
               aria-label="Enable anamorphic flare"
               checked={texture.anamorphic_flare}
               onChange={(event) =>
-                setTexture((current) => ({ ...current, anamorphic_flare: event.target.checked }))
+                setTexture((current) => ({
+                  ...current,
+                  anamorphic_flare: event.target.checked,
+                }))
               }
               className="size-6 accent-primary"
             />
@@ -561,514 +630,601 @@ export function LookTab({
         </PanelSection>
 
         <PanelSection title="Motion" defaultOpen>
-        <div className="mt-3">
-          <Label>Motion Effects</Label>
-          <p className="mb-2 text-xs text-muted-foreground">
-            Reduced Motion removes flashing and aggressive effects automatically.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {motionEffects.map((effect) => {
-              const selected = selectedMotionEffects.includes(effect.value);
-              const disabled = reducedMotion && motionHeavyEffects.includes(effect.value);
-              const flashing = flashingEffects.includes(effect.value);
-              return (
-                <button
-                  key={effect.value}
-                  onClick={() => toggleMotionEffect(effect.value)}
-                  disabled={disabled}
-                  aria-pressed={selected}
-                  aria-describedby={flashing ? "motion-effects-warning" : undefined}
-                  className={cn(
-                    "inline-flex min-h-11 items-center gap-1.5 border px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55",
-                    selected
-                      ? "border-primary bg-primary/10 text-primary"
-                      : disabled
-                        ? "border-border bg-muted/35 text-muted-foreground"
-                        : "border-border hover:border-primary/40 hover:bg-muted",
-                  )}
-                >
-                  {selected ? <Check className="size-3.5" aria-hidden="true" /> : disabled ? <AlertTriangle className="size-3.5" aria-hidden="true" /> : null}
-                  {effect.label}
-                  <span className="text-[10px] opacity-75">
-                    {disabled ? "Disabled" : selected ? "Selected" : "Off"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <p id="motion-effects-warning" className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800">
-            <AlertTriangle className="size-3.5 shrink-0" />
-            Flash/Glitch are risky for sensitive viewers.
-          </p>
-          <div className="mt-4 space-y-4 border-t border-border pt-4">
-            <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
-              Ken Burns
-              <input
-                type="checkbox"
-                aria-label="Enable Ken Burns motion"
-                checked={motion.ken_burns.enabled}
-                onChange={(event) => setMotionEffectEnabled("ken_burns", event.target.checked)}
-                className="size-6 accent-primary"
-              />
-            </label>
-            {motion.ken_burns.enabled ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Select
-                  label="Ken Burns Direction"
-                  value={motion.ken_burns.direction}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      ken_burns: {
-                        ...current.ken_burns,
-                        direction: value as MotionSettings["ken_burns"]["direction"],
-                      },
-                    }))
+          <div className="mt-3">
+            <Label>Motion Effects</Label>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Reduced Motion removes flashing and aggressive effects
+              automatically.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {motionEffects.map((effect) => {
+                const selected = selectedMotionEffects.includes(effect.value);
+                const disabled =
+                  reducedMotion && motionHeavyEffects.includes(effect.value);
+                const flashing = flashingEffects.includes(effect.value);
+                return (
+                  <button
+                    key={effect.value}
+                    onClick={() => toggleMotionEffect(effect.value)}
+                    disabled={disabled}
+                    aria-pressed={selected}
+                    aria-describedby={
+                      flashing ? "motion-effects-warning" : undefined
+                    }
+                    className={cn(
+                      "inline-flex min-h-11 items-center gap-1.5 border px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55",
+                      selected
+                        ? "border-primary bg-primary/10 text-primary"
+                        : disabled
+                          ? "border-border bg-muted/35 text-muted-foreground"
+                          : "border-border hover:border-primary/40 hover:bg-muted",
+                    )}
+                  >
+                    {selected ? (
+                      <Check className="size-3.5" aria-hidden="true" />
+                    ) : disabled ? (
+                      <AlertTriangle className="size-3.5" aria-hidden="true" />
+                    ) : null}
+                    {effect.label}
+                    <span className="text-[10px] opacity-75">
+                      {disabled ? "Disabled" : selected ? "Selected" : "Off"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p
+              id="motion-effects-warning"
+              className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800"
+            >
+              <AlertTriangle className="size-3.5 shrink-0" />
+              Flash/Glitch are risky for sensitive viewers.
+            </p>
+            <div className="mt-4 space-y-4 border-t border-border pt-4">
+              <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
+                Ken Burns
+                <input
+                  type="checkbox"
+                  aria-label="Enable Ken Burns motion"
+                  checked={motion.ken_burns.enabled}
+                  onChange={(event) =>
+                    setMotionEffectEnabled("ken_burns", event.target.checked)
                   }
-                  options={kenBurnsDirectionOptions}
+                  className="size-6 accent-primary"
                 />
-                <Select
-                  label="Ken Burns Easing"
-                  value={motion.ken_burns.easing}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      ken_burns: { ...current.ken_burns, easing: value as MotionEasing },
-                    }))
-                  }
-                  options={easingOptions}
-                />
-                <div className="sm:col-span-2">
-                  <Slider
-                    label="Ken Burns Intensity"
-                    value={Math.round(motion.ken_burns.intensity * 100)}
-                    min={0}
-                    max={35}
+              </label>
+              {motion.ken_burns.enabled ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Select
+                    label="Ken Burns Direction"
+                    value={motion.ken_burns.direction}
                     onChange={(value) =>
                       setMotion((current) => ({
                         ...current,
-                        ken_burns: { ...current.ken_burns, intensity: value / 100 },
+                        ken_burns: {
+                          ...current.ken_burns,
+                          direction:
+                            value as MotionSettings["ken_burns"]["direction"],
+                        },
                       }))
                     }
+                    options={kenBurnsDirectionOptions}
                   />
+                  <Select
+                    label="Ken Burns Easing"
+                    value={motion.ken_burns.easing}
+                    onChange={(value) =>
+                      setMotion((current) => ({
+                        ...current,
+                        ken_burns: {
+                          ...current.ken_burns,
+                          easing: value as MotionEasing,
+                        },
+                      }))
+                    }
+                    options={easingOptions}
+                  />
+                  <div className="sm:col-span-2">
+                    <Slider
+                      label="Ken Burns Intensity"
+                      value={Math.round(motion.ken_burns.intensity * 100)}
+                      min={0}
+                      max={35}
+                      onChange={(value) =>
+                        setMotion((current) => ({
+                          ...current,
+                          ken_burns: {
+                            ...current.ken_burns,
+                            intensity: value / 100,
+                          },
+                        }))
+                      }
+                    />
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
-              Speed ramp
-              <input
-                type="checkbox"
-                aria-label="Enable speed ramp"
-                checked={motion.speed_ramp.enabled}
-                onChange={(event) => setMotionEffectEnabled("speed_ramp", event.target.checked)}
-                className="size-6 accent-primary"
-              />
-            </label>
-            {motion.speed_ramp.enabled ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label>Ramp In MS</Label>
-                  <Input
-                    type="number"
-                    min={80}
-                    max={1200}
-                    value={motion.speed_ramp.ramp_in_ms}
-                    onChange={(event) =>
+              <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
+                Speed ramp
+                <input
+                  type="checkbox"
+                  aria-label="Enable speed ramp"
+                  checked={motion.speed_ramp.enabled}
+                  onChange={(event) =>
+                    setMotionEffectEnabled("speed_ramp", event.target.checked)
+                  }
+                  className="size-6 accent-primary"
+                />
+              </label>
+              {motion.speed_ramp.enabled ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label>Ramp In MS</Label>
+                    <Input
+                      type="number"
+                      min={80}
+                      max={1200}
+                      value={motion.speed_ramp.ramp_in_ms}
+                      onChange={(event) =>
+                        setMotion((current) => ({
+                          ...current,
+                          speed_ramp: {
+                            ...current.speed_ramp,
+                            ramp_in_ms: numberFromInput(
+                              event.target.value,
+                              280,
+                            ),
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Ramp Out MS</Label>
+                    <Input
+                      type="number"
+                      min={80}
+                      max={1600}
+                      value={motion.speed_ramp.ramp_out_ms}
+                      onChange={(event) =>
+                        setMotion((current) => ({
+                          ...current,
+                          speed_ramp: {
+                            ...current.speed_ramp,
+                            ramp_out_ms: numberFromInput(
+                              event.target.value,
+                              320,
+                            ),
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                  <Select
+                    label="Speed Easing"
+                    value={motion.speed_ramp.easing}
+                    onChange={(value) =>
                       setMotion((current) => ({
                         ...current,
                         speed_ramp: {
                           ...current.speed_ramp,
-                          ramp_in_ms: numberFromInput(event.target.value, 280),
+                          easing: value as MotionEasing,
                         },
                       }))
                     }
+                    options={easingOptions}
                   />
-                </div>
-                <div>
-                  <Label>Ramp Out MS</Label>
-                  <Input
-                    type="number"
-                    min={80}
-                    max={1600}
-                    value={motion.speed_ramp.ramp_out_ms}
-                    onChange={(event) =>
+                  <Slider
+                    label="Peak Speed"
+                    value={Math.round(motion.speed_ramp.peak_speed * 100)}
+                    min={100}
+                    max={300}
+                    step={5}
+                    onChange={(value) =>
                       setMotion((current) => ({
                         ...current,
                         speed_ramp: {
                           ...current.speed_ramp,
-                          ramp_out_ms: numberFromInput(event.target.value, 320),
+                          peak_speed: value / 100,
                         },
                       }))
                     }
                   />
                 </div>
-                <Select
-                  label="Speed Easing"
-                  value={motion.speed_ramp.easing}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      speed_ramp: { ...current.speed_ramp, easing: value as MotionEasing },
-                    }))
-                  }
-                  options={easingOptions}
-                />
-                <Slider
-                  label="Peak Speed"
-                  value={Math.round(motion.speed_ramp.peak_speed * 100)}
-                  min={100}
-                  max={300}
-                  step={5}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      speed_ramp: { ...current.speed_ramp, peak_speed: value / 100 },
-                    }))
-                  }
-                />
-              </div>
-            ) : null}
+              ) : null}
 
-            <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
-              Beat impact
-              <input
-                type="checkbox"
-                aria-label="Enable beat impact"
-                checked={motion.beat_impact.enabled}
-                onChange={(event) => setMotionEffectEnabled("beat_impact", event.target.checked)}
-                className="size-6 accent-primary"
-              />
-            </label>
-            {motion.beat_impact.enabled ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Slider
-                  label="Impact Intensity"
-                  value={Math.round(motion.beat_impact.intensity * 100)}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      beat_impact: { ...current.beat_impact, intensity: value / 100 },
-                    }))
+              <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
+                Beat impact
+                <input
+                  type="checkbox"
+                  aria-label="Enable beat impact"
+                  checked={motion.beat_impact.enabled}
+                  onChange={(event) =>
+                    setMotionEffectEnabled("beat_impact", event.target.checked)
                   }
+                  className="size-6 accent-primary"
                 />
-                <div>
-                  <Label>Shake PX</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={48}
-                    value={motion.beat_impact.shake_px}
-                    onChange={(event) =>
+              </label>
+              {motion.beat_impact.enabled ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Slider
+                    label="Impact Intensity"
+                    value={Math.round(motion.beat_impact.intensity * 100)}
+                    onChange={(value) =>
                       setMotion((current) => ({
                         ...current,
                         beat_impact: {
                           ...current.beat_impact,
-                          shake_px: numberFromInput(event.target.value, 10),
+                          intensity: value / 100,
                         },
                       }))
                     }
                   />
-                </div>
-                <Slider
-                  label="Impact Zoom"
-                  value={Math.round((motion.beat_impact.zoom - 1) * 500)}
-                  min={0}
-                  max={100}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      beat_impact: { ...current.beat_impact, zoom: 1 + value / 500 },
-                    }))
-                  }
-                />
-                <div>
-                  <Label>Max Impacts</Label>
-                  <Input
-                    type="number"
+                  <div>
+                    <Label>Shake PX</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={48}
+                      value={motion.beat_impact.shake_px}
+                      onChange={(event) =>
+                        setMotion((current) => ({
+                          ...current,
+                          beat_impact: {
+                            ...current.beat_impact,
+                            shake_px: numberFromInput(event.target.value, 10),
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                  <Slider
+                    label="Impact Zoom"
+                    value={Math.round((motion.beat_impact.zoom - 1) * 500)}
                     min={0}
-                    max={48}
-                    value={motion.beat_impact.max_impacts}
-                    onChange={(event) =>
+                    max={100}
+                    onChange={(value) =>
                       setMotion((current) => ({
                         ...current,
                         beat_impact: {
                           ...current.beat_impact,
-                          max_impacts: numberFromInput(event.target.value, 12),
+                          zoom: 1 + value / 500,
                         },
                       }))
                     }
                   />
+                  <div>
+                    <Label>Max Impacts</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={48}
+                      value={motion.beat_impact.max_impacts}
+                      onChange={(event) =>
+                        setMotion((current) => ({
+                          ...current,
+                          beat_impact: {
+                            ...current.beat_impact,
+                            max_impacts: numberFromInput(
+                              event.target.value,
+                              12,
+                            ),
+                          },
+                        }))
+                      }
+                    />
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
-              Auto-reframe 9:16
-              <input
-                type="checkbox"
-                aria-label="Enable auto reframe"
-                checked={motion.auto_reframe.enabled}
-                onChange={(event) =>
-                  setMotion((current) => ({
-                    ...current,
-                    auto_reframe: { ...current.auto_reframe, enabled: event.target.checked },
-                  }))
-                }
-                className="size-6 accent-primary"
-              />
-            </label>
-            {motion.auto_reframe.enabled ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Select
-                  label="Target Aspect"
-                  value={motion.auto_reframe.target_aspect}
-                  onChange={(value) =>
+              <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
+                Auto-reframe 9:16
+                <input
+                  type="checkbox"
+                  aria-label="Enable auto reframe"
+                  checked={motion.auto_reframe.enabled}
+                  onChange={(event) =>
                     setMotion((current) => ({
                       ...current,
                       auto_reframe: {
                         ...current.auto_reframe,
-                        target_aspect: value as MotionSettings["auto_reframe"]["target_aspect"],
+                        enabled: event.target.checked,
                       },
                     }))
                   }
-                  options={[
-                    { value: "9:16", label: "9:16" },
-                    { value: "1:1", label: "1:1" },
-                    { value: "4:5", label: "4:5" },
-                    { value: "16:9", label: "16:9" },
-                  ]}
+                  className="size-6 accent-primary"
                 />
-                <Slider
-                  label="Reframe Smoothing"
-                  value={Math.round(motion.auto_reframe.smoothing * 100)}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      auto_reframe: { ...current.auto_reframe, smoothing: value / 100 },
-                    }))
-                  }
-                />
-                <Slider
-                  label="Subject X"
-                  value={Math.round(motion.auto_reframe.subject_x_pct)}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-                      auto_reframe: { ...current.auto_reframe, subject_x_pct: value },
-                    }))
-                  }
-                />
-                <Slider
-                  label="Subject Y"
-                  value={Math.round(motion.auto_reframe.subject_y_pct)}
-                  onChange={(value) =>
-                    setMotion((current) => ({
-                      ...current,
-          auto_reframe: { ...current.auto_reframe, subject_y_pct: value },
-                    }))
-                  }
-                />
-              </div>
-            ) : null}
-
-            <div className="space-y-3 border-t border-border pt-4">
-              <div className="flex items-center justify-between gap-3">
-                <Label className="mb-0">Motion Keyframes</Label>
-                <Button type="button" variant="secondary" onClick={() => addMotionKeyframe()} className="min-h-10 px-3">
-                  <Plus className="mr-2 size-4" />
-                  Add
-                </Button>
-              </div>
-              {selectedTimelineClip &&
-              ["cut", "broll_slot"].includes(selectedTimelineClip.sourceRef.kind) ? (
-                <div className="space-y-3 border border-primary/20 bg-primary/5 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-black uppercase text-primary">
-                        Selected clip motion
-                      </p>
-                      <p className="mt-1 text-xs font-bold text-muted-foreground">
-                        {selectedTimelineClip.label}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => addMotionKeyframe(selectedTimelineClip)}
-                      className="min-h-10 px-3"
-                    >
-                      <Plus className="mr-2 size-4" />
-                      Add keyframe
-                    </Button>
-                  </div>
-                  <div>
-                    <p className="mb-2 text-[11px] font-bold text-muted-foreground">
-                      Apply effects to this clip only
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {motionEffects.map((effect) => {
-                        const clipEffects = selectedClipEffects();
-                        const selected = clipEffects.includes(effect.value);
-                        const disabled = reducedMotion && motionHeavyEffects.includes(effect.value);
-                        return (
-                          <button
-                            key={effect.value}
-                            type="button"
-                            onClick={() => toggleClipMotionEffect(effect.value)}
-                            disabled={disabled}
-                            aria-pressed={selected}
-                            className={cn(
-                              "inline-flex min-h-9 items-center gap-1.5 border px-2 py-1 text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-55",
-                              selected
-                                ? "border-primary bg-primary/10 text-primary"
-                                : disabled
-                                  ? "border-border bg-muted/35 text-muted-foreground"
-                                  : "border-border hover:border-primary/40 hover:bg-muted",
-                            )}
-                          >
-                            {selected ? <Check className="size-3" aria-hidden="true" /> : null}
-                            {effect.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {selectedClipEffects().length > 0 ? (
-                      <button
-                        type="button"
-                        onClick={clearClipMotionEffects}
-                        className="mt-2 text-[11px] font-bold text-destructive hover:underline"
-                      >
-                        Clear clip effects
-                      </button>
-                    ) : null}
-                  </div>
+              </label>
+              {motion.auto_reframe.enabled ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Select
+                    label="Target Aspect"
+                    value={motion.auto_reframe.target_aspect}
+                    onChange={(value) =>
+                      setMotion((current) => ({
+                        ...current,
+                        auto_reframe: {
+                          ...current.auto_reframe,
+                          target_aspect:
+                            value as MotionSettings["auto_reframe"]["target_aspect"],
+                        },
+                      }))
+                    }
+                    options={[
+                      { value: "9:16", label: "9:16" },
+                      { value: "1:1", label: "1:1" },
+                      { value: "4:5", label: "4:5" },
+                      { value: "16:9", label: "16:9" },
+                    ]}
+                  />
+                  <Slider
+                    label="Reframe Smoothing"
+                    value={Math.round(motion.auto_reframe.smoothing * 100)}
+                    onChange={(value) =>
+                      setMotion((current) => ({
+                        ...current,
+                        auto_reframe: {
+                          ...current.auto_reframe,
+                          smoothing: value / 100,
+                        },
+                      }))
+                    }
+                  />
+                  <Slider
+                    label="Subject X"
+                    value={Math.round(motion.auto_reframe.subject_x_pct)}
+                    onChange={(value) =>
+                      setMotion((current) => ({
+                        ...current,
+                        auto_reframe: {
+                          ...current.auto_reframe,
+                          subject_x_pct: value,
+                        },
+                      }))
+                    }
+                  />
+                  <Slider
+                    label="Subject Y"
+                    value={Math.round(motion.auto_reframe.subject_y_pct)}
+                    onChange={(value) =>
+                      setMotion((current) => ({
+                        ...current,
+                        auto_reframe: {
+                          ...current.auto_reframe,
+                          subject_y_pct: value,
+                        },
+                      }))
+                    }
+                  />
                 </div>
               ) : null}
-              {motion.keyframes.length ? (
-                <div className="space-y-3">
-                  {motion.keyframes.map((keyframe, index) => (
-                    <div key={`${keyframe.target}-${index}`} className="border border-border bg-muted/20 p-3">
-                      <div className="mb-3 flex items-center justify-between gap-3">
-                        <span className="text-xs font-black uppercase text-muted-foreground">
-                          Keyframe {index + 1}
-                        </span>
+
+              <div className="space-y-3 border-t border-border pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="mb-0">Motion Keyframes</Label>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => addMotionKeyframe()}
+                    className="min-h-10 px-3"
+                  >
+                    <Plus className="mr-2 size-4" />
+                    Add
+                  </Button>
+                </div>
+                {selectedTimelineClip &&
+                ["cut", "broll_slot"].includes(
+                  selectedTimelineClip.sourceRef.kind,
+                ) ? (
+                  <div className="space-y-3 border border-primary/20 bg-primary/5 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black uppercase text-primary">
+                          Selected clip motion
+                        </p>
+                        <p className="mt-1 text-xs font-bold text-muted-foreground">
+                          {selectedTimelineClip.label}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => addMotionKeyframe(selectedTimelineClip)}
+                        className="min-h-10 px-3"
+                      >
+                        <Plus className="mr-2 size-4" />
+                        Add keyframe
+                      </Button>
+                    </div>
+                    <div>
+                      <p className="mb-2 text-[11px] font-bold text-muted-foreground">
+                        Apply effects to this clip only
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {motionEffects.map((effect) => {
+                          const clipEffects = selectedClipEffects();
+                          const selected = clipEffects.includes(effect.value);
+                          const disabled =
+                            reducedMotion &&
+                            motionHeavyEffects.includes(effect.value);
+                          return (
+                            <button
+                              key={effect.value}
+                              type="button"
+                              onClick={() =>
+                                toggleClipMotionEffect(effect.value)
+                              }
+                              disabled={disabled}
+                              aria-pressed={selected}
+                              className={cn(
+                                "inline-flex min-h-9 items-center gap-1.5 border px-2 py-1 text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-55",
+                                selected
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : disabled
+                                    ? "border-border bg-muted/35 text-muted-foreground"
+                                    : "border-border hover:border-primary/40 hover:bg-muted",
+                              )}
+                            >
+                              {selected ? (
+                                <Check className="size-3" aria-hidden="true" />
+                              ) : null}
+                              {effect.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {selectedClipEffects().length > 0 ? (
                         <button
                           type="button"
-                          aria-label={`Remove keyframe ${index + 1}`}
-                          onClick={() => removeMotionKeyframe(index)}
-                          className="inline-flex min-h-9 items-center justify-center border border-border px-2 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+                          onClick={clearClipMotionEffects}
+                          className="mt-2 text-[11px] font-bold text-destructive hover:underline"
                         >
-                          <Trash2 className="size-4" />
+                          Clear clip effects
                         </button>
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <Select
-                          label={`Target ${index + 1}`}
-                          value={keyframe.target}
-                          onChange={(value) =>
-                            updateMotionKeyframe(index, { target: value as MotionTarget })
-                          }
-                          options={motionTargetOptions}
-                        />
-                        <div>
-                          <Label>Clip ID</Label>
-                          <Input
-                            value={keyframe.clip_id ?? ""}
-                            onChange={(event) =>
-                              updateMotionKeyframe(index, {
-                                clip_id: event.target.value.trim() || null,
-                              })
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Label>At MS</Label>
-                          <Input
-                            type="number"
-                            min={0}
-                            value={keyframe.at_ms}
-                            onChange={(event) =>
-                              updateMotionKeyframe(index, {
-                                at_ms: numberFromInput(event.target.value, 0),
-                              })
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Label>Scale</Label>
-                          <Input
-                            type="number"
-                            min={0.5}
-                            max={3}
-                            step={0.01}
-                            value={keyframe.scale}
-                            onChange={(event) =>
-                              updateMotionKeyframe(index, {
-                                scale: numberFromInput(event.target.value, 1),
-                              })
-                            }
-                          />
-                        </div>
-                        <Slider
-                          label={`X Position ${index + 1}`}
-                          value={Math.round(keyframe.x_pct)}
-                          onChange={(value) => updateMotionKeyframe(index, { x_pct: value })}
-                        />
-                        <Slider
-                          label={`Y Position ${index + 1}`}
-                          value={Math.round(keyframe.y_pct)}
-                          onChange={(value) => updateMotionKeyframe(index, { y_pct: value })}
-                        />
-                        <div>
-                          <Label>Rotation Deg</Label>
-                          <Input
-                            type="number"
-                            min={-45}
-                            max={45}
-                            step={0.1}
-                            value={keyframe.rotation_deg}
-                            onChange={(event) =>
-                              updateMotionKeyframe(index, {
-                                rotation_deg: numberFromInput(event.target.value, 0),
-                              })
-                            }
-                          />
-                        </div>
-                        <Select
-                          label={`Easing ${index + 1}`}
-                          value={keyframe.easing}
-                          onChange={(value) =>
-                            updateMotionKeyframe(index, { easing: value as MotionEasing })
-                          }
-                          options={easingOptions}
-                        />
-                        <div className="sm:col-span-2">
-                          <Slider
-                            label={`Opacity ${index + 1}`}
-                            value={Math.round(keyframe.opacity * 100)}
-                            onChange={(value) =>
-                              updateMotionKeyframe(index, { opacity: value / 100 })
-                            }
-                          />
-                        </div>
-                      </div>
+                      ) : null}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="border border-border bg-muted/25 p-3 text-xs font-bold text-muted-foreground">
-                  No keyframes.
-                </p>
-              )}
+                  </div>
+                ) : null}
+                {motion.keyframes.length ? (
+                  <div className="space-y-3">
+                    {motion.keyframes.map((keyframe, index) => (
+                      <div
+                        key={`${keyframe.target}-${index}`}
+                        className="border border-border bg-muted/20 p-3"
+                      >
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <span className="text-xs font-black uppercase text-muted-foreground">
+                            Keyframe {index + 1}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Remove keyframe ${index + 1}`}
+                            onClick={() => removeMotionKeyframe(index)}
+                            className="inline-flex min-h-9 items-center justify-center border border-border px-2 text-muted-foreground hover:border-destructive/40 hover:text-destructive"
+                          >
+                            <Trash2 className="size-4" />
+                          </button>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <Select
+                            label={`Target ${index + 1}`}
+                            value={keyframe.target}
+                            onChange={(value) =>
+                              updateMotionKeyframe(index, {
+                                target: value as MotionTarget,
+                              })
+                            }
+                            options={motionTargetOptions}
+                          />
+                          <div>
+                            <Label>Clip ID</Label>
+                            <Input
+                              value={keyframe.clip_id ?? ""}
+                              onChange={(event) =>
+                                updateMotionKeyframe(index, {
+                                  clip_id: event.target.value.trim() || null,
+                                })
+                              }
+                            />
+                          </div>
+                          <div>
+                            <Label>At MS</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              value={keyframe.at_ms}
+                              onChange={(event) =>
+                                updateMotionKeyframe(index, {
+                                  at_ms: numberFromInput(event.target.value, 0),
+                                })
+                              }
+                            />
+                          </div>
+                          <div>
+                            <Label>Scale</Label>
+                            <Input
+                              type="number"
+                              min={0.5}
+                              max={3}
+                              step={0.01}
+                              value={keyframe.scale}
+                              onChange={(event) =>
+                                updateMotionKeyframe(index, {
+                                  scale: numberFromInput(event.target.value, 1),
+                                })
+                              }
+                            />
+                          </div>
+                          <Slider
+                            label={`X Position ${index + 1}`}
+                            value={Math.round(keyframe.x_pct)}
+                            onChange={(value) =>
+                              updateMotionKeyframe(index, { x_pct: value })
+                            }
+                          />
+                          <Slider
+                            label={`Y Position ${index + 1}`}
+                            value={Math.round(keyframe.y_pct)}
+                            onChange={(value) =>
+                              updateMotionKeyframe(index, { y_pct: value })
+                            }
+                          />
+                          <div>
+                            <Label>Rotation Deg</Label>
+                            <Input
+                              type="number"
+                              min={-45}
+                              max={45}
+                              step={0.1}
+                              value={keyframe.rotation_deg}
+                              onChange={(event) =>
+                                updateMotionKeyframe(index, {
+                                  rotation_deg: numberFromInput(
+                                    event.target.value,
+                                    0,
+                                  ),
+                                })
+                              }
+                            />
+                          </div>
+                          <Select
+                            label={`Easing ${index + 1}`}
+                            value={keyframe.easing}
+                            onChange={(value) =>
+                              updateMotionKeyframe(index, {
+                                easing: value as MotionEasing,
+                              })
+                            }
+                            options={easingOptions}
+                          />
+                          <div className="sm:col-span-2">
+                            <Slider
+                              label={`Opacity ${index + 1}`}
+                              value={Math.round(keyframe.opacity * 100)}
+                              onChange={(value) =>
+                                updateMotionKeyframe(index, {
+                                  opacity: value / 100,
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="border border-border bg-muted/25 p-3 text-xs font-bold text-muted-foreground">
+                    No keyframes.
+                  </p>
+                )}
+              </div>
             </div>
+            {premiumBlockedMessage ? (
+              <p className="mt-3 border border-destructive/30 bg-destructive/10 p-2 text-xs font-bold text-destructive">
+                {premiumBlockedMessage}
+              </p>
+            ) : null}
           </div>
-          {premiumBlockedMessage ? (
-            <p className="mt-3 border border-destructive/30 bg-destructive/10 p-2 text-xs font-bold text-destructive">
-              {premiumBlockedMessage}
-            </p>
-          ) : null}
-        </div>
         </PanelSection>
 
         <PanelSection title="Accessibility" defaultOpen>
@@ -1078,12 +1234,16 @@ export function LookTab({
               Reduced motion
             </span>
             <span className="inline-flex items-center gap-3">
-              <span className="text-xs text-muted-foreground">{reducedMotion ? "On" : "Off"}</span>
+              <span className="text-xs text-muted-foreground">
+                {reducedMotion ? "On" : "Off"}
+              </span>
               <input
                 type="checkbox"
                 aria-label="Reduce motion and flashing effects"
                 checked={reducedMotion}
-                onChange={(event) => applyReducedMotionPreference(event.target.checked)}
+                onChange={(event) =>
+                  applyReducedMotionPreference(event.target.checked)
+                }
                 className="size-6 accent-primary"
               />
             </span>
@@ -1098,7 +1258,10 @@ export function LookTab({
               aria-label="Enable subject segmentation"
               checked={backgroundRemoval.enabled}
               onChange={(event) =>
-                setBackgroundRemoval((current) => ({ ...current, enabled: event.target.checked }))
+                setBackgroundRemoval((current) => ({
+                  ...current,
+                  enabled: event.target.checked,
+                }))
               }
               className="size-6 accent-primary"
             />
@@ -1106,22 +1269,35 @@ export function LookTab({
           {backgroundRemoval.enabled ? (
             <div className="mt-4 space-y-4">
               <p className="text-xs text-muted-foreground">
-                Uses lightweight MediaPipe subject segmentation after visual analysis completes.
+                Uses lightweight MediaPipe subject segmentation after visual
+                analysis completes.
+              </p>
+              <p className="border border-border bg-muted/40 p-2 text-[10px] font-bold text-muted-foreground/80 leading-normal">
+                ⚠️ Preview runs a lightweight browser model. The final
+                server-rendered export utilizes a high-precision neural
+                segmentation model.
               </p>
               <Slider
                 label="Feather"
                 value={backgroundRemoval.feather_px}
                 min={0}
                 max={80}
+                suffix="px"
                 onChange={(value) =>
-                  setBackgroundRemoval((current) => ({ ...current, feather_px: value }))
+                  setBackgroundRemoval((current) => ({
+                    ...current,
+                    feather_px: value,
+                  }))
                 }
               />
               <Slider
                 label="Spill Suppression"
                 value={Math.round(backgroundRemoval.spill_suppression * 100)}
                 onChange={(value) =>
-                  setBackgroundRemoval((current) => ({ ...current, spill_suppression: value / 100 }))
+                  setBackgroundRemoval((current) => ({
+                    ...current,
+                    spill_suppression: value / 100,
+                  }))
                 }
               />
             </div>
@@ -1136,7 +1312,10 @@ export function LookTab({
               aria-label="Enable gradient ramp"
               checked={gradientRamp.enabled}
               onChange={(event) =>
-                setGradientRamp((current) => ({ ...current, enabled: event.target.checked }))
+                setGradientRamp((current) => ({
+                  ...current,
+                  enabled: event.target.checked,
+                }))
               }
               className="size-6 accent-primary"
             />
@@ -1150,7 +1329,10 @@ export function LookTab({
                   aria-label="Gradient start color"
                   value={gradientRamp.start_color}
                   onChange={(event) =>
-                    setGradientRamp((current) => ({ ...current, start_color: event.target.value }))
+                    setGradientRamp((current) => ({
+                      ...current,
+                      start_color: event.target.value,
+                    }))
                   }
                   className="px-2"
                 />
@@ -1162,7 +1344,10 @@ export function LookTab({
                   aria-label="Gradient end color"
                   value={gradientRamp.end_color}
                   onChange={(event) =>
-                    setGradientRamp((current) => ({ ...current, end_color: event.target.value }))
+                    setGradientRamp((current) => ({
+                      ...current,
+                      end_color: event.target.value,
+                    }))
                   }
                   className="px-2"
                 />
@@ -1172,7 +1357,10 @@ export function LookTab({
                   label="Opacity"
                   value={Math.round(gradientRamp.opacity * 100)}
                   onChange={(value) =>
-                    setGradientRamp((current) => ({ ...current, opacity: value / 100 }))
+                    setGradientRamp((current) => ({
+                      ...current,
+                      opacity: value / 100,
+                    }))
                   }
                 />
               </div>
@@ -1192,12 +1380,30 @@ export function LookTab({
         </label>
       </div>
 
-      <Button onClick={applyEffects} disabled={loading} aria-busy={loading} className="h-12 w-full">
-        {loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Palette className="mr-2 size-4" />}
+      <Button
+        onClick={applyEffects}
+        disabled={loading}
+        aria-busy={loading}
+        className="h-12 w-full"
+      >
+        {loading ? (
+          <Loader2 className="mr-2 size-4 animate-spin" />
+        ) : (
+          <Palette className="mr-2 size-4" />
+        )}
         {loading ? "Applying, please wait" : "Apply Look"}
       </Button>
       {message ? (
-        <p role={message.toLowerCase().includes("could not") || message.toLowerCase().includes("disabled") ? "alert" : "status"} aria-live="polite" className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+        <p
+          role={
+            message.toLowerCase().includes("could not") ||
+            message.toLowerCase().includes("disabled")
+              ? "alert"
+              : "status"
+          }
+          aria-live="polite"
+          className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground"
+        >
           {message}
         </p>
       ) : null}
@@ -1249,24 +1455,4 @@ function motionTargetForTimelineClip(clip: TimelineClip): {
     return { target: "broll", clipId: clip.sourceRef.id, atMs: 0 };
   }
   return null;
-}
-
-function PanelSection({
-  title,
-  defaultOpen,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <details className="group border border-border bg-surface/55" open={defaultOpen}>
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground">
-        {title}
-        <span className="text-xs text-muted-foreground transition group-open:rotate-90">›</span>
-      </summary>
-      <div className="border-t border-border p-3">{children}</div>
-    </details>
-  );
 }

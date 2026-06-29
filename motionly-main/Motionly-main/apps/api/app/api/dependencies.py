@@ -30,6 +30,7 @@ from app.services.music import MusicProvider
 from app.services.queue import (
     BrollQueue,
     EffectsQueue,
+    MatteQueue,
     MusicQueue,
     PlanQueue,
     PreprocessQueue,
@@ -128,6 +129,10 @@ def get_transcription_queue(request: Request) -> TranscriptionQueue:
 
 def get_visual_queue(request: Request) -> VisualQueue:
     return request.app.state.visual_queue
+
+
+def get_matte_queue(request: Request) -> MatteQueue:
+    return request.app.state.matte_queue
 
 
 def get_plan_queue(request: Request) -> PlanQueue:

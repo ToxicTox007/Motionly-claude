@@ -3,11 +3,13 @@ from uuid import UUID
 
 from app.repositories.captions import InMemoryCaptionRepository, TranscriptRecord
 from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
-from app.schemas.captions import LanguageHint, TranscriptStatus
+from app.schemas.captions import LanguageHint, TranscriptQualityStatus, TranscriptStatus
 from app.services.audio_extraction import FFmpegAudioExtractor
 from app.services.audio_intelligence import merge_audio_intelligence
 from app.services.local_storage import create_object_storage
+from app.services.provider_resilience import ProviderCallFailure, classify_provider_exception
 from app.services.queue import TranscriptionQueue
+from app.services.transcript_quality import assess_transcript_quality
 from app.services.transcription_provider import FixtureTranscriptionProvider, TranscriptionProvider
 
 
@@ -65,6 +67,8 @@ def queue_transcription_for_upload(
             error_code="audio_track_missing",
             error_message="This video has no audio track, so captions cannot be generated.",
             duration_ms=upload.metadata.duration_ms,
+            quality_status=TranscriptQualityStatus.AUDIO_FAILED,
+            quality_reasons=["audio_extraction_failed"],
         )
     transcription_queue.enqueue_transcription(
         project_id=upload.project_id,
@@ -133,6 +137,8 @@ def run_transcription_for_upload(
             error_code="audio_track_missing",
             error_message="This video has no audio track, so captions cannot be generated.",
             duration_ms=upload.metadata.duration_ms,
+            quality_status=TranscriptQualityStatus.AUDIO_FAILED,
+            quality_reasons=["audio_extraction_failed"],
         )
 
     caption_repository.update_transcript(
@@ -141,12 +147,16 @@ def run_transcription_for_upload(
         error_code=None,
         error_message=None,
         words=[],
+        quality_status=TranscriptQualityStatus.OK,
+        quality_reasons=[],
     )
 
     audio_path = None
+    stage = "transcription"
     extractor = FFmpegAudioExtractor()
     try:
         if not isinstance(transcription_provider, FixtureTranscriptionProvider):
+            stage = "audio_extraction"
             storage = create_object_storage(
                 root=media_work_dir,
                 supabase_url=supabase_url,
@@ -158,15 +168,38 @@ def run_transcription_for_upload(
             )
             audio_path = source_path.with_suffix(".transcription.wav")
             extractor.extract_mono_wav(source_path=source_path, output_path=audio_path)
+            stage = "transcription"
 
         result = transcription_provider.transcribe(
             audio_path=audio_path,
             language_hint=transcript.language_hint,
         )
-        ml_insights = _run_audio_ml_providers(
-            providers=audio_ml_providers,
-            audio_path=audio_path,
+        raw_payload = merge_audio_intelligence(
+            raw_payload=result.raw_payload,
+            words=result.words,
+            duration_ms=upload.metadata.duration_ms,
+            has_audio=upload.metadata.has_audio,
+            ml_insights=_run_audio_ml_providers(
+                providers=audio_ml_providers,
+                audio_path=audio_path,
+            ),
         )
+        quality = assess_transcript_quality(
+            words=result.words,
+            duration_ms=upload.metadata.duration_ms,
+            confidence=result.confidence,
+            language=result.language,
+            language_hint=transcript.language_hint,
+            raw_payload=raw_payload,
+        )
+        error_code = None
+        error_message = None
+        if quality.status in {TranscriptQualityStatus.EMPTY, TranscriptQualityStatus.AUDIO_FAILED}:
+            error_code = quality.reasons[0] if quality.reasons else quality.status.value
+            error_message = "Transcript quality must be recovered before automatic planning."
+        elif quality.status == TranscriptQualityStatus.LOW_CONFIDENCE:
+            error_code = quality.reasons[0] if quality.reasons else "low_confidence"
+            error_message = "Transcript quality is low and should be reviewed."
         return caption_repository.update_transcript(
             transcript=transcript,
             status=TranscriptStatus.READY,
@@ -175,26 +208,48 @@ def run_transcription_for_upload(
             model=result.model,
             confidence=result.confidence,
             words=result.words,
-            raw_payload=merge_audio_intelligence(
-                raw_payload=result.raw_payload,
-                words=result.words,
-                duration_ms=upload.metadata.duration_ms,
-                has_audio=upload.metadata.has_audio,
-                ml_insights=ml_insights,
-            ),
-            error_code=None,
-            error_message=None,
+            raw_payload=raw_payload,
+            error_code=error_code,
+            error_message=error_message,
             duration_ms=upload.metadata.duration_ms,
+            quality_status=quality.status,
+            quality_reasons=quality.reasons,
         )
-    except Exception as exc:
+    except ProviderCallFailure as exc:
+        error_info = classify_provider_exception(exc)
         caption_repository.update_transcript(
             transcript=transcript,
             status=TranscriptStatus.FAILED,
             words=[],
             confidence=None,
             raw_payload={},
-            error_code="transcription_failed",
-            error_message=str(exc)[:300],
+            error_code=error_info.code,
+            error_message=exc.safe_message,
+            quality_status=TranscriptQualityStatus.AUDIO_FAILED,
+            quality_reasons=[error_info.code],
+        )
+        raise
+    except Exception:
+        error_code = (
+            "audio_extraction_failed"
+            if stage == "audio_extraction"
+            else "transcription_failed"
+        )
+        error_message = (
+            "Audio extraction failed. Upload a replacement file or retry transcription."
+            if error_code == "audio_extraction_failed"
+            else "Transcription failed. Retry the job or use a different provider."
+        )
+        caption_repository.update_transcript(
+            transcript=transcript,
+            status=TranscriptStatus.FAILED,
+            words=[],
+            confidence=None,
+            raw_payload={"audio_extraction_failed": error_code == "audio_extraction_failed"},
+            error_code=error_code,
+            error_message=error_message,
+            quality_status=TranscriptQualityStatus.AUDIO_FAILED,
+            quality_reasons=[error_code],
         )
         raise
     finally:
@@ -220,7 +275,11 @@ def _run_audio_ml_providers(
         except Exception as exc:
             logger.error(
                 "audio_ml_provider_failed",
-                extra={"provider": "speaker_diarization", "error_type": type(exc).__name__, "error": str(exc)},
+                extra={
+                    "provider": "speaker_diarization",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
             )
             insights["speaker_diarization"] = {
                 "provider": getattr(diarization, "provider_name", "pyannote"),

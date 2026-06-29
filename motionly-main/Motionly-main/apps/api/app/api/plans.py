@@ -15,7 +15,6 @@ from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.captions import TranscriptStatus
 from app.schemas.plans import (
-    EDIT_PLAN_SCHEMA_VERSION,
     BrollDensity,
     EditPlanStatus,
     EditPlanStyle,
@@ -24,10 +23,9 @@ from app.schemas.plans import (
     PlanCaptionHighlightsUpdateResponse,
     PlanCreateRequest,
     PlanCreateResponse,
-    PlanJobStatusResponse,
-
     PlanCutsUpdateRequest,
     PlanCutsUpdateResponse,
+    PlanJobStatusResponse,
     PlanListResponse,
     PlanManualElementsUpdateRequest,
     PlanManualElementsUpdateResponse,
@@ -40,16 +38,13 @@ from app.schemas.plans import (
 )
 from app.schemas.scale import ScaleResourceStatus
 from app.schemas.visual import VideoManifest
-from app.services.ai_feedback import record_ai_feedback, record_plan_suggestions
+from app.services.ai_feedback import record_ai_feedback
 from app.services.edit_planner import (
-    PLANNER_SCHEMA_HASH,
     EditPlannerProvider,
     build_plan_cache_key,
-    normalize_plan,
     summarize_plan,
 )
 from app.services.layer_job_enqueue import prepare_heavy_job_enqueue
-from app.services.operations import monotonic_ms
 from app.services.queue import PlanQueue
 from app.services.style_classifier import classify_edit_style
 from app.services.timeline_compiler import (
@@ -57,6 +52,7 @@ from app.services.timeline_compiler import (
     migrate_legacy_plan_to_timeline,
     project_timeline_to_legacy_plan,
 )
+from app.services.transcript_quality import is_transcript_usable_for_planning
 
 router = APIRouter(prefix="/projects/{project_id}/plans", tags=["AI plans"])
 
@@ -95,6 +91,18 @@ async def create_plan(
             409,
             str(transcript.status),
             transcript.error_message or "Transcript is not ready for edit planning.",
+        )
+    if not transcript.words or not is_transcript_usable_for_planning(transcript.quality_status):
+        reason = (
+            transcript.quality_reasons[0]
+            if transcript.quality_reasons
+            else "transcript_quality_blocked"
+        )
+        raise ApiError(
+            409,
+            reason,
+            transcript.error_message
+            or "Transcript quality must be recovered before edit planning.",
         )
 
     upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
@@ -145,7 +153,13 @@ async def create_plan(
                     summary=cached.summary,
                     target_duration_s=cached.target_duration_s,
                 )
-            return PlanCreateResponse(plan=cached.to_response(), job_id=execution_id, cached=True, status="ready", project_id=project_id)
+            return PlanCreateResponse(
+                plan=cached.to_response(),
+                job_id=execution_id,
+                cached=True,
+                status="ready",
+                project_id=project_id,
+            )
 
     # Cache miss: Enqueue on PlanQueue and return 202 Accepted
     import json

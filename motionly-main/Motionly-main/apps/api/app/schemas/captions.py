@@ -27,6 +27,14 @@ class TranscriptStatus(StrEnum):
     CAPTIONS_UNAVAILABLE = "captions_unavailable"
 
 
+class TranscriptQualityStatus(StrEnum):
+    OK = "ok"
+    LOW_CONFIDENCE = "low_confidence"
+    EMPTY = "empty"
+    AUDIO_FAILED = "audio_failed"
+    PARTIAL = "partial"
+
+
 class CaptionPresetKey(StrEnum):
     LUXURY_MINIMAL = "luxury_minimal"
     BOLD_INFLUENCER = "bold_influencer"
@@ -79,6 +87,8 @@ class TranscriptReadResponse(BaseModel):
     provider: str
     model: str
     confidence: float | None = Field(default=None, ge=0, le=1)
+    quality_status: TranscriptQualityStatus = TranscriptQualityStatus.OK
+    quality_reasons: list[str] = Field(default_factory=list)
     duration_ms: int | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     error_code: str | None = None

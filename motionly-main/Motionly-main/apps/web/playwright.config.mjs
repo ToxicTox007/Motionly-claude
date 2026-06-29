@@ -18,13 +18,23 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: {
+          args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        },
+      },
+    },
+  ],
   webServer: [
     {
       command: "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000",
       cwd: "../api",
       url: "http://127.0.0.1:8000/health/live",
-      reuseExistingServer: false,
+      reuseExistingServer: true,
       timeout: 120_000,
       env: {
         ...process.env,
@@ -49,7 +59,7 @@ export default defineConfig({
     {
       command: "pnpm dev",
       url: "http://127.0.0.1:3000/login",
-      reuseExistingServer: false,
+      reuseExistingServer: true,
       timeout: 120_000,
       env: {
         ...process.env,

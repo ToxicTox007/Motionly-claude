@@ -66,6 +66,26 @@ class Settings(BaseSettings):
     job_backoff_ms: int = Field(default=30000, alias="JOB_BACKOFF_MS")
     worker_concurrency: int = Field(default=3, alias="WORKER_CONCURRENCY")
     render_worker_concurrency: int = Field(default=1, alias="RENDER_WORKER_CONCURRENCY")
+    gpu_worker_instance_type: str = Field(default="g5.xlarge", alias="GPU_WORKER_INSTANCE_TYPE")
+    gpu_max_concurrent_jobs_per_gpu: int = Field(
+        default=1,
+        alias="GPU_MAX_CONCURRENT_JOBS_PER_GPU",
+    )
+    gpu_memory_ceiling_mb: int = Field(default=16_000, alias="GPU_MEMORY_CEILING_MB")
+    matte_worker_concurrency: int = Field(default=1, alias="MATTE_WORKER_CONCURRENCY")
+    visual_worker_concurrency: int = Field(default=1, alias="VISUAL_ANALYSIS_WORKER_CONCURRENCY")
+    gpu_scale_up_queue_depth: int = Field(default=4, alias="GPU_SCALE_UP_QUEUE_DEPTH")
+    gpu_scale_down_queue_depth: int = Field(default=1, alias="GPU_SCALE_DOWN_QUEUE_DEPTH")
+    gpu_autoscale_cooldown_seconds: int = Field(
+        default=300,
+        alias="GPU_AUTOSCALE_COOLDOWN_SECONDS",
+    )
+    gpu_max_worker_count: int = Field(default=4, alias="GPU_MAX_WORKER_COUNT")
+    gpu_oom_alert_threshold: int = Field(default=2, alias="GPU_OOM_ALERT_THRESHOLD")
+    gpu_long_job_timeout_seconds: int = Field(
+        default=1800,
+        alias="GPU_LONG_JOB_TIMEOUT_SECONDS",
+    )
     rate_limit_per_minute: int = Field(default=120, alias="RATE_LIMIT_PER_MINUTE")
     publish_token_encryption_key: str | None = Field(
         default=None, alias="PUBLISH_TOKEN_ENCRYPTION_KEY"

@@ -22,6 +22,7 @@ from app.schemas.visual import (
     VisualManifestStatus,
 )
 from app.services.local_storage import create_object_storage
+from app.services.ml_failures import CudaOomFailure, clear_cuda_cache, is_cuda_oom_error
 from app.services.segmentation_matte import generate_selfie_segmentation_matte
 
 
@@ -234,25 +235,23 @@ class LocalMLVisualIntelligenceProvider:
             )
         except Exception as exc:
             import logging
+
             logger = logging.getLogger(__name__)
 
-            is_oom = "out of memory" in str(exc).lower() or type(exc).__name__ == "OutOfMemoryError"
-            if is_oom:
+            if is_cuda_oom_error(exc):
                 logger.error(
                     "visual_analysis_cuda_oom",
                     extra={
                         "model": self.model,
                         "error_type": type(exc).__name__,
-                    }
+                    },
                 )
                 if models and "torch" in models:
-                    try:
-                        models["torch"].cuda.empty_cache()
-                    except Exception:
-                        pass
-                import gc
-                gc.collect()
-                raise ApiError(500, "cuda_oom", "GPU out of memory during visual analysis.") from None
+                    clear_cuda_cache(models["torch"])
+                else:
+                    clear_cuda_cache()
+                failure = CudaOomFailure()
+                raise ApiError(503, failure.code, failure.message) from exc
             raise
 
     def _load_models(self) -> dict[str, object]:
@@ -371,17 +370,15 @@ def run_visual_analysis_for_upload(
             sample_rate_fps=sample_rate_fps,
             scene_threshold=scene_threshold,
         )
-        if provider.provider_name == LocalMLVisualIntelligenceProvider.provider_name:
-            manifest = _attach_segmentation_matte(
-                manifest=manifest,
-                provider=provider,
-                source_path=source_path,
-                storage=storage,
-                upload_bucket=upload.storage_bucket,
-                workspace_id=workspace_id,
-                project_id=project_id,
-                video_id=video_id,
-            )
+    except CudaOomFailure as exc:
+        repository.transition_manifest(
+            record=record,
+            status=VisualManifestStatus.FAILED,
+            manifest=None,
+            error_code=exc.code,
+            error_message=exc.message,
+        )
+        raise ApiError(503, exc.code, exc.message) from exc
     except ApiError as exc:
         repository.transition_manifest(
             record=record,

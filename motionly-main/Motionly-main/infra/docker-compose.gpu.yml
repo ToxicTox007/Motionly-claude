@@ -9,6 +9,15 @@ x-media-environment: &media-environment
   PROCESS_ROLE: worker
   MEDIA_WORK_DIR: /var/data/motionly
   WORKER_API_BASE_URL: http://api:8000
+  GPU_WORKER_INSTANCE_TYPE: ${GPU_WORKER_INSTANCE_TYPE:-g5.xlarge}
+  GPU_MAX_CONCURRENT_JOBS_PER_GPU: ${GPU_MAX_CONCURRENT_JOBS_PER_GPU:-1}
+  GPU_MEMORY_CEILING_MB: ${GPU_MEMORY_CEILING_MB:-16000}
+  GPU_SCALE_UP_QUEUE_DEPTH: ${GPU_SCALE_UP_QUEUE_DEPTH:-4}
+  GPU_SCALE_DOWN_QUEUE_DEPTH: ${GPU_SCALE_DOWN_QUEUE_DEPTH:-1}
+  GPU_AUTOSCALE_COOLDOWN_SECONDS: ${GPU_AUTOSCALE_COOLDOWN_SECONDS:-300}
+  GPU_MAX_WORKER_COUNT: ${GPU_MAX_WORKER_COUNT:-4}
+  GPU_OOM_ALERT_THRESHOLD: ${GPU_OOM_ALERT_THRESHOLD:-2}
+  GPU_LONG_JOB_TIMEOUT_SECONDS: ${GPU_LONG_JOB_TIMEOUT_SECONDS:-1800}
 
 x-media-volumes: &media-volumes
   - motionly-media:/var/data/motionly
@@ -152,6 +161,21 @@ services:
       <<: *media-environment
       WORKER_QUEUES: visual_analysis,transcription
       WORKER_CONCURRENCY: "1"
+      VISUAL_ANALYSIS_WORKER_CONCURRENCY: "1"
+      MODEL_PREFETCH: "true"
+    volumes: *media-volumes
+    secrets: *app-secrets
+
+  matte-worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.gpu
+    gpus: all
+    environment:
+      <<: *media-environment
+      WORKER_QUEUES: matte_extraction
+      WORKER_CONCURRENCY: "1"
+      MATTE_WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
     volumes: *media-volumes
     secrets: *app-secrets

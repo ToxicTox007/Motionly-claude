@@ -29,6 +29,7 @@ import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/browser";
 import type { PreviewExportState } from "./preview/VideoPreview";
+import { useToast } from "../toast";
 
 interface ExportStepProps {
   projectId: string;
@@ -90,7 +91,13 @@ const templates: { value: RenderTemplateId; label: string }[] = [
   { value: "fashion_reel_v1", label: "Fashion reel" },
 ];
 
-type RenderUiState = "idle" | "queued" | "rendering" | "completed" | "failed" | "canceled";
+type RenderUiState =
+  | "idle"
+  | "queued"
+  | "rendering"
+  | "completed"
+  | "failed"
+  | "canceled";
 type PublishPlatform = "tiktok" | "instagram" | "youtube";
 type PublishConnection = {
   id: string;
@@ -121,7 +128,9 @@ export function ExportStep({
   onPreviewExportUpdated,
 }: ExportStepProps) {
   const router = useRouter();
-  const [templateId, setTemplateId] = useState<RenderTemplateId>("luxury_reel_v1");
+  const { toast } = useToast();
+  const [templateId, setTemplateId] =
+    useState<RenderTemplateId>("luxury_reel_v1");
   const [platform, setPlatform] = useState<PlatformPreset>("instagram");
   const [resolution, setResolution] = useState<ExportResolution>(
     maxExportResolution === "720p" ? "720p" : "1080p",
@@ -152,7 +161,8 @@ export function ExportStep({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [connections, setConnections] = useState<PublishConnection[]>([]);
   const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
-  const [connectPlatform, setConnectPlatform] = useState<PublishPlatform>("tiktok");
+  const [connectPlatform, setConnectPlatform] =
+    useState<PublishPlatform>("tiktok");
   const [connectAccountId, setConnectAccountId] = useState("");
   const [connectAccountName, setConnectAccountName] = useState("");
   const [connectToken, setConnectToken] = useState("");
@@ -161,7 +171,10 @@ export function ExportStep({
 
   const latestJob = jobs[0];
   const latestExport = exports[0];
-  const activeStatuses = useMemo(() => ["queued", "processing", "preparing", "rendering", "uploading"], []);
+  const activeStatuses = useMemo(
+    () => ["queued", "processing", "preparing", "rendering", "uploading"],
+    [],
+  );
   const isRendering = latestJob && activeStatuses.includes(latestJob.status);
   const renderUiState = getRenderUiState(latestJob);
   const progress = getDisplayProgress(latestJob);
@@ -178,9 +191,13 @@ export function ExportStep({
     retryRender,
   });
   const activeStreamJobId =
-    streamingJobId ?? jobs.find((job) => activeStatuses.includes(job.status))?.id ?? null;
+    streamingJobId ??
+    jobs.find((job) => activeStatuses.includes(job.status))?.id ??
+    null;
   const sourceAspectLabel =
-    sourceWidth && sourceHeight ? `${sourceWidth}x${sourceHeight}` : "source size";
+    sourceWidth && sourceHeight
+      ? `${sourceWidth}x${sourceHeight}`
+      : "source size";
   const framing: ExportFraming = {
     output_aspect: outputAspect,
     fit_mode: fitMode,
@@ -215,7 +232,12 @@ export function ExportStep({
   }, [apiAccessToken, projectId, userId, workspaceId]);
 
   useEffect(() => {
-    if (!publishJobs.some((job) => job.status === "queued" || job.status === "publishing")) return;
+    if (
+      !publishJobs.some(
+        (job) => job.status === "queued" || job.status === "publishing",
+      )
+    )
+      return;
     const timer = window.setInterval(() => void refreshPublishing(), 3000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -225,39 +247,51 @@ export function ExportStep({
     setLoading(true);
     setMessage(null);
     try {
-      const payload = await editorApiRequest<{ job: RenderJobSummary; queue_job_id: string }>(
-        `${env.apiBaseUrl}/projects/${projectId}/renders`,
-        {
+      const payload = await editorApiRequest<{
+        job: RenderJobSummary;
+        queue_job_id: string;
+      }>(`${env.apiBaseUrl}/projects/${projectId}/renders`, {
         method: "POST",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError: "Render could not be started. Please try again.",
-          body: {
-            caption_track_id: captionTrackId ?? null,
-            edit_plan_id: activePlanId ?? null,
-            template_id: templateId,
-            duration_preset: "medium",
-            include_captions: true,
-            include_broll: true,
-            export_options: {
-              platform,
-              resolution,
-              format: "mp4",
-              framing,
-            },
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Render could not be started. Please try again.",
+        body: {
+          caption_track_id: captionTrackId ?? null,
+          edit_plan_id: activePlanId ?? null,
+          template_id: templateId,
+          duration_preset: "medium",
+          include_captions: true,
+          include_broll: true,
+          export_options: {
+            platform,
+            resolution,
+            format: "mp4",
+            framing,
           },
         },
-      );
+      });
       setJobs((current) => [
         payload.job,
         ...current.filter((job) => job.id !== payload.job.id),
       ]);
       setMessage(`Render queued: ${payload.queue_job_id}`);
       setStreamingJobId(payload.job.id);
+      toast({
+        title: "Render Queued",
+        description: "Your video has been added to the render queue.",
+        variant: "success",
+      });
     } catch (error) {
       console.error(error);
-      setMessage((error as Error).message);
+      const errMsg = (error as Error).message;
+      setMessage(errMsg);
+      toast({
+        title: "Export Failed to Start",
+        description:
+          "Check for missing timeline clips, verify your network connection, or try again.",
+        variant: "error",
+      });
     } finally {
       setLoading(false);
     }
@@ -270,42 +304,52 @@ export function ExportStep({
       const payload = await editorApiRequest<{
         jobs: RenderJobSummary[];
         queue_job_ids: string[];
-      }>(
-        `${env.apiBaseUrl}/projects/${projectId}/renders/bulk`,
-        {
+      }>(`${env.apiBaseUrl}/projects/${projectId}/renders/bulk`, {
         method: "POST",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError: "Bulk export could not be started. Please try again.",
-          body: {
-            caption_track_id: captionTrackId ?? null,
-            edit_plan_id: activePlanId ?? null,
-            template_id: templateId,
-            duration_preset: "medium",
-            include_captions: true,
-            include_broll: true,
-            export_targets: bulkPlatforms.map((targetPlatform) => ({
-              platform: targetPlatform,
-              resolution,
-              format: "mp4",
-              framing: {
-                ...framing,
-                output_aspect: defaultAspectForPlatform(targetPlatform),
-              },
-            })),
-          },
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Bulk export could not be started. Please try again.",
+        body: {
+          caption_track_id: captionTrackId ?? null,
+          edit_plan_id: activePlanId ?? null,
+          template_id: templateId,
+          duration_preset: "medium",
+          include_captions: true,
+          include_broll: true,
+          export_targets: bulkPlatforms.map((targetPlatform) => ({
+            platform: targetPlatform,
+            resolution,
+            format: "mp4",
+            framing: {
+              ...framing,
+              output_aspect: defaultAspectForPlatform(targetPlatform),
+            },
+          })),
         },
-      );
+      });
       setJobs((current) => [
         ...payload.jobs,
-        ...current.filter((job) => !payload.jobs.some((next) => next.id === job.id)),
+        ...current.filter(
+          (job) => !payload.jobs.some((next) => next.id === job.id),
+        ),
       ]);
       setMessage(`Queued ${payload.jobs.length} export targets.`);
       setStreamingJobId(payload.jobs[0]?.id ?? null);
+      toast({
+        title: "Bulk Render Queued",
+        description: `Successfully enqueued ${payload.jobs.length} export targets.`,
+        variant: "success",
+      });
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);
+      toast({
+        title: "Bulk Render Failed",
+        description:
+          "Failed to queue multiple exports. Verify that captions are active and try again.",
+        variant: "error",
+      });
     } finally {
       setLoading(false);
     }
@@ -355,9 +399,26 @@ export function ExportStep({
             void refreshExports();
             setStreamingJobId(null);
             setMessage("Export is ready to download.");
+            toast({
+              title: "Export Ready",
+              description: "Your video has compiled successfully.",
+              variant: "success",
+            });
           } else if (status === "failed" || status === "canceled") {
             setStreamingJobId(null);
-            setMessage(status === "failed" ? row.error_message ?? "Render failed." : "Render canceled.");
+            setMessage(
+              status === "failed"
+                ? (row.error_message ?? "Render failed.")
+                : "Render canceled.",
+            );
+            toast({
+              title: status === "failed" ? "Render Failed" : "Render Canceled",
+              description:
+                status === "failed"
+                  ? "Server-side compilation failed. Reducing effects or retrying may help."
+                  : "The render was canceled.",
+              variant: status === "failed" ? "error" : "info",
+            });
           } else if (status) {
             setMessage(`${statusLabel(status)} (${row.progress_pct ?? 0}%)`);
           }
@@ -367,8 +428,8 @@ export function ExportStep({
     return () => {
       void supabase.removeChannel(channel);
     };
-  // refreshExports reads the latest auth/project props and is also used by polling.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // refreshExports reads the latest auth/project props and is also used by polling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeStreamJobId]);
 
   useEffect(() => {
@@ -417,18 +478,35 @@ export function ExportStep({
               await refreshExports();
               setStreamingJobId(null);
               router.refresh();
+              toast({
+                title: "Render Complete",
+                description: "Your video export is ready.",
+                variant: "success",
+              });
               return;
             }
             if (job.status === "failed" || job.status === "canceled") {
               setStreamingJobId(null);
               setLoading(false);
+              toast({
+                title:
+                  job.status === "failed" ? "Render Failed" : "Render Canceled",
+                description:
+                  job.status === "failed"
+                    ? "Server-side compilation failed. Click Retry or reduce complexity."
+                    : "Render was canceled.",
+                variant: job.status === "failed" ? "error" : "info",
+              });
               return;
             }
           }
         }
       } catch (error) {
         if (abortController.signal.aborted || canceled) return;
-        console.warn("Render event stream unavailable; falling back to polling.", error);
+        console.warn(
+          "Render event stream unavailable; falling back to polling.",
+          error,
+        );
         await pollRender(renderJobId);
       } finally {
         if (!canceled) setLoading(false);
@@ -442,10 +520,20 @@ export function ExportStep({
     };
     // pollRender and refreshExports intentionally read the latest auth/project props.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStreamJobId, apiAccessToken, projectId, router, userId, workspaceId]);
+  }, [
+    activeStreamJobId,
+    apiAccessToken,
+    projectId,
+    router,
+    userId,
+    workspaceId,
+  ]);
 
   function updateJob(job: RenderJobSummary) {
-    setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+    setJobs((current) => [
+      job,
+      ...current.filter((item) => item.id !== job.id),
+    ]);
   }
 
   async function pollRender(renderJobId: string) {
@@ -453,17 +541,28 @@ export function ExportStep({
       if (attempt > 0) await sleep(2500);
       let response: Response;
       try {
-        response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}`, {
-          cache: "no-store",
-          headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken, json: false }),
-        });
+        response = await fetch(
+          `${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}`,
+          {
+            cache: "no-store",
+            headers: await buildApiHeaders({
+              workspaceId,
+              userId,
+              accessToken: apiAccessToken,
+              json: false,
+            }),
+          },
+        );
       } catch (error) {
         console.warn("Render status poll failed; retrying.", error);
         continue;
       }
       const payload = await response.json();
       if (!response.ok) {
-        console.warn("Render status poll returned an error; retrying.", payload);
+        console.warn(
+          "Render status poll returned an error; retrying.",
+          payload,
+        );
         continue;
       }
       updateJob(payload);
@@ -476,7 +575,11 @@ export function ExportStep({
       }
       if (payload.status === "failed" || payload.status === "canceled") {
         setStreamingJobId(null);
-        setMessage(payload.status === "failed" ? payload.error_message ?? "Render failed." : "Render canceled.");
+        setMessage(
+          payload.status === "failed"
+            ? (payload.error_message ?? "Render failed.")
+            : "Render canceled.",
+        );
         return;
       }
     }
@@ -487,7 +590,10 @@ export function ExportStep({
     setLoading(true);
     setMessage("Requeueing render...");
     try {
-      const payload = await editorApiRequest<{ job: RenderJobSummary; queue_job_id: string }>(
+      const payload = await editorApiRequest<{
+        job: RenderJobSummary;
+        queue_job_id: string;
+      }>(
         `${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}/retry`,
         {
           method: "POST",
@@ -533,9 +639,17 @@ export function ExportStep({
   }
 
   async function refreshExports() {
-    const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}/exports`, {
-      headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken, json: false }),
-    });
+    const response = await fetch(
+      `${env.apiBaseUrl}/projects/${projectId}/exports`,
+      {
+        headers: await buildApiHeaders({
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          json: false,
+        }),
+      },
+    );
     const payload = await response.json();
     if (response.ok) setExports(payload.exports ?? []);
   }
@@ -544,13 +658,26 @@ export function ExportStep({
     setLoading(true);
     setMessage("Creating secure download link...");
     try {
-      const response = await fetch(`${env.apiBaseUrl}/exports/${exportId}/download-url`, {
-        headers: await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken, json: false }),
-      });
+      const response = await fetch(
+        `${env.apiBaseUrl}/exports/${exportId}/download-url`,
+        {
+          headers: await buildApiHeaders({
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+            json: false,
+          }),
+        },
+      );
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message ?? "Download link could not be created.");
+      if (!response.ok)
+        throw new Error(
+          payload.error?.message ?? "Download link could not be created.",
+        );
       window.location.href = payload.signed_download_url;
-      setMessage(`Download link expires in ${payload.expires_in_seconds} seconds.`);
+      setMessage(
+        `Download link expires in ${payload.expires_in_seconds} seconds.`,
+      );
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -559,10 +686,21 @@ export function ExportStep({
   }
 
   async function refreshPublishing() {
-    const headers = await buildApiHeaders({ workspaceId, userId, accessToken: apiAccessToken, json: false });
+    const headers = await buildApiHeaders({
+      workspaceId,
+      userId,
+      accessToken: apiAccessToken,
+      json: false,
+    });
     const [connectionsResponse, jobsResponse] = await Promise.all([
-      fetch(`${env.apiBaseUrl}/publish/connections`, { cache: "no-store", headers }),
-      fetch(`${env.apiBaseUrl}/projects/${projectId}/publish`, { cache: "no-store", headers }),
+      fetch(`${env.apiBaseUrl}/publish/connections`, {
+        cache: "no-store",
+        headers,
+      }),
+      fetch(`${env.apiBaseUrl}/projects/${projectId}/publish`, {
+        cache: "no-store",
+        headers,
+      }),
     ]);
     if (connectionsResponse.ok) {
       const payload = await connectionsResponse.json();
@@ -579,9 +717,17 @@ export function ExportStep({
     setMessage(null);
     try {
       await editorApiRequest(`${env.apiBaseUrl}/publish/connections`, {
-        method: "POST", workspaceId, userId, accessToken: apiAccessToken,
+        method: "POST",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
         friendlyError: "Social account could not be connected.",
-        body: { platform: connectPlatform, access_token: connectToken, external_account_id: connectAccountId, account_name: connectAccountName },
+        body: {
+          platform: connectPlatform,
+          access_token: connectToken,
+          external_account_id: connectAccountId,
+          account_name: connectAccountName,
+        },
       });
       setConnectToken("");
       setConnectAccountId("");
@@ -620,10 +766,16 @@ export function ExportStep({
   async function disconnectPublishingAccount(connectionId: string) {
     setLoading(true);
     try {
-      await editorApiRequest(`${env.apiBaseUrl}/publish/connections/${connectionId}`, {
-        method: "DELETE", workspaceId, userId, accessToken: apiAccessToken,
-        friendlyError: "Social account could not be disconnected.",
-      });
+      await editorApiRequest(
+        `${env.apiBaseUrl}/publish/connections/${connectionId}`,
+        {
+          method: "DELETE",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Social account could not be disconnected.",
+        },
+      );
       await refreshPublishing();
     } catch (error) {
       setMessage((error as Error).message);
@@ -637,17 +789,23 @@ export function ExportStep({
     setLoading(true);
     setMessage(`Queueing ${socialLabel(connection.platform)} publish...`);
     try {
-      await editorApiRequest(`${env.apiBaseUrl}/projects/${projectId}/publish`, {
-        method: "POST", workspaceId, userId, accessToken: apiAccessToken,
-        friendlyError: `Could not publish to ${socialLabel(connection.platform)}.`,
-        body: {
-          export_id: latestExport.id,
-          connection_id: connection.id,
-          title: `Motionly export v${latestExport.version}`,
-          caption: publishCaption,
-          privacy: "private",
+      await editorApiRequest(
+        `${env.apiBaseUrl}/projects/${projectId}/publish`,
+        {
+          method: "POST",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: `Could not publish to ${socialLabel(connection.platform)}.`,
+          body: {
+            export_id: latestExport.id,
+            connection_id: connection.id,
+            title: `Motionly export v${latestExport.version}`,
+            caption: publishCaption,
+            privacy: "private",
+          },
         },
-      });
+      );
       await refreshPublishing();
       setMessage(`${socialLabel(connection.platform)} publish queued.`);
     } catch (error) {
@@ -658,9 +816,15 @@ export function ExportStep({
   }
 
   return (
-    <div id="editor-export" className="space-y-4" aria-labelledby="export-heading">
+    <div
+      id="editor-export"
+      className="space-y-4"
+      aria-labelledby="export-heading"
+    >
       <div className="space-y-2">
-        <h2 id="export-heading" className="text-xl font-black tracking-tight">Export</h2>
+        <h2 id="export-heading" className="text-xl font-black tracking-tight">
+          Export
+        </h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           Ready to post? Choose the export frame, then render your MP4.
         </p>
@@ -713,8 +877,12 @@ export function ExportStep({
                         onChange={(event) => {
                           setBulkPlatforms((current) =>
                             event.target.checked
-                              ? current.includes(item.value) ? current : [...current, item.value]
-                              : current.filter((target) => target !== item.value),
+                              ? current.includes(item.value)
+                                ? current
+                                : [...current, item.value]
+                              : current.filter(
+                                  (target) => target !== item.value,
+                                ),
                           );
                         }}
                         className="size-5 accent-primary"
@@ -726,7 +894,11 @@ export function ExportStep({
           </div>
         </ExportStepSection>
 
-        <ExportStepSection step="2" title="Frame" status={fitMode === "custom" ? "active" : "completed"}>
+        <ExportStepSection
+          step="2"
+          title="Frame"
+          status={fitMode === "custom" ? "active" : "completed"}
+        >
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label className="mb-0">Output Frame</Label>
@@ -796,11 +968,17 @@ export function ExportStep({
         </ExportStepSection>
       </div>
 
-      <Button 
-        onClick={primaryRenderAction.onClick} 
+      <Button
+        onClick={primaryRenderAction.onClick}
         disabled={primaryRenderAction.disabled}
         aria-busy={loading || Boolean(isRendering)}
-        aria-describedby={message ? "export-message" : !captionTrackId ? "export-missing-captions" : undefined}
+        aria-describedby={
+          message
+            ? "export-message"
+            : !captionTrackId
+              ? "export-missing-captions"
+              : undefined
+        }
         className="h-14 w-full bg-primary text-primary-foreground"
       >
         {loading || isRendering ? (
@@ -810,15 +988,18 @@ export function ExportStep({
         ) : (
           <Video className="mr-2 size-5" />
         )}
-        <span className="text-base font-bold">
-          {primaryRenderAction.label}
-        </span>
+        <span className="text-base font-bold">{primaryRenderAction.label}</span>
       </Button>
       <Button
         type="button"
         variant="secondary"
         onClick={startBulkRender}
-        disabled={loading || Boolean(isRendering) || !captionTrackId || bulkPlatforms.length === 0}
+        disabled={
+          loading ||
+          Boolean(isRendering) ||
+          !captionTrackId ||
+          bulkPlatforms.length === 0
+        }
         aria-busy={loading || Boolean(isRendering)}
         className="h-12 w-full"
       >
@@ -831,18 +1012,28 @@ export function ExportStep({
       </Button>
 
       {latestJob ? (
-        <div className="space-y-3 border border-border bg-muted/40 p-3" aria-live="polite">
+        <div
+          className="space-y-3 border border-border bg-muted/40 p-3"
+          aria-live="polite"
+        >
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              <RenderStatusIcon state={renderUiState} loading={loading || Boolean(isRendering)} />
+              <RenderStatusIcon
+                state={renderUiState}
+                loading={loading || Boolean(isRendering)}
+              />
               <div className="min-w-0">
-              <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
-                Render job
-              </p>
-              <p className="truncate text-sm font-bold">{uiStateLabel(renderUiState)}</p>
+                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+                  Render job
+                </p>
+                <p className="truncate text-sm font-bold">
+                  {uiStateLabel(renderUiState)}
+                </p>
               </div>
             </div>
-            {renderUiState === "queued" || renderUiState === "rendering" || renderUiState === "completed" ? (
+            {renderUiState === "queued" ||
+            renderUiState === "rendering" ||
+            renderUiState === "completed" ? (
               <span className="text-right text-sm font-black">
                 {progress}%
                 {etaLabel ? (
@@ -853,7 +1044,9 @@ export function ExportStep({
               </span>
             ) : null}
           </div>
-          {renderUiState === "queued" || renderUiState === "rendering" || renderUiState === "completed" ? (
+          {renderUiState === "queued" ||
+          renderUiState === "rendering" ||
+          renderUiState === "completed" ? (
             <div
               className="h-3 overflow-hidden border border-border bg-background"
               role="progressbar"
@@ -870,9 +1063,25 @@ export function ExportStep({
             </div>
           ) : null}
           {renderUiState === "failed" && latestJob.error_message ? (
-            <div role="alert" className="flex gap-2 border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700">
-              <AlertTriangle className="size-4 shrink-0" />
-              <span>{latestJob.error_message} Try again, or reduce caption/B-roll complexity before retrying.</span>
+            <div
+              role="alert"
+              className="flex flex-col gap-1.5 border border-danger/45 bg-danger/5 p-3 text-xs font-bold text-danger"
+            >
+              <div className="flex gap-2 items-center">
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>Render Failed: {latestJob.error_message}</span>
+              </div>
+              <div className="pl-6 font-medium text-muted-foreground leading-relaxed">
+                What you can do next:
+                <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                  <li>Verify that no timeline clips are missing or empty.</li>
+                  <li>Reduce caption formatting or B-roll complexity.</li>
+                  <li>
+                    Check your network connection and click &quot;Retry&quot;
+                    below to compile again.
+                  </li>
+                </ul>
+              </div>
             </div>
           ) : null}
           <div className="flex gap-2">
@@ -921,65 +1130,171 @@ export function ExportStep({
 
       {latestExport && (
         <div className="space-y-4 border-t border-border pt-6">
-           <Label>Latest Export</Label>
-           <div className="flex items-center justify-between border border-border bg-muted/50 p-4 shadow-soft">
-              <div className="flex items-center gap-3">
-                 <div className="flex size-10 items-center justify-center border border-emerald-200 bg-emerald-50 text-emerald-600">
-                    <CheckCircle2 className="size-5" />
-                 </div>
-                 <div>
-                    <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">v{latestExport.version}</p>
-                    <p className="text-sm font-bold truncate max-w-[120px]">Ready to post</p>
-                 </div>
+          <Label>Latest Export</Label>
+          <div className="flex items-center justify-between border border-border bg-muted/50 p-4 shadow-soft">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center border border-emerald-200 bg-emerald-50 text-emerald-600">
+                <CheckCircle2 className="size-5" />
               </div>
-              <Button
-                variant="secondary"
-                aria-label="Download latest export"
-                className="min-h-11 gap-2 px-4 text-xs font-bold"
-                onClick={() => downloadExport(latestExport.id)}
-                disabled={loading}
-              >
-                 <Download className="size-3.5" />
-                 Download
-              </Button>
-           </div>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                  v{latestExport.version}
+                </p>
+                <p className="text-sm font-bold truncate max-w-[120px]">
+                  Ready to post
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="secondary"
+              aria-label="Download latest export"
+              className="min-h-11 gap-2 px-4 text-xs font-bold"
+              onClick={() => downloadExport(latestExport.id)}
+              disabled={loading}
+            >
+              <Download className="size-3.5" />
+              Download
+            </Button>
+          </div>
         </div>
       )}
       <section className="space-y-3 border-t border-border pt-5">
         <div>
           <Label>Direct publish</Label>
-          <p className="mt-1 text-xs text-muted-foreground">Connect an API-enabled creator account, then send the latest export without downloading it.</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Connect an API-enabled creator account, then send the latest export
+            without downloading it.
+          </p>
         </div>
         <div>
-          <select aria-label="Social platform" value={connectPlatform} onChange={(event) => setConnectPlatform(event.target.value as PublishPlatform)} className="min-h-11 border border-border bg-background px-3 text-xs font-bold">
+          <select
+            aria-label="Social platform"
+            value={connectPlatform}
+            onChange={(event) =>
+              setConnectPlatform(event.target.value as PublishPlatform)
+            }
+            className="min-h-11 border border-border bg-background px-3 text-xs font-bold"
+          >
             <option value="tiktok">TikTok</option>
             <option value="instagram">Instagram</option>
             <option value="youtube">YouTube</option>
           </select>
         </div>
-        <Button type="button" className="min-h-11 w-full" disabled={loading} onClick={connectPublishingOAuth}>Connect {socialLabel(connectPlatform)} with OAuth</Button>
-        <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Developer fallback</p>
+        <Button
+          type="button"
+          className="min-h-11 w-full"
+          disabled={loading}
+          onClick={connectPublishingOAuth}
+        >
+          Connect {socialLabel(connectPlatform)} with OAuth
+        </Button>
+        <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          Developer fallback
+        </p>
         <div className="grid gap-2 sm:grid-cols-2">
-          <input aria-label="Account name" placeholder="Account name" value={connectAccountName} onChange={(event) => setConnectAccountName(event.target.value)} className="min-h-11 border border-border bg-background px-3 text-xs" />
-          <input aria-label="Platform account ID" placeholder="Platform account ID" value={connectAccountId} onChange={(event) => setConnectAccountId(event.target.value)} className="min-h-11 border border-border bg-background px-3 text-xs" />
+          <input
+            aria-label="Account name"
+            placeholder="Account name"
+            value={connectAccountName}
+            onChange={(event) => setConnectAccountName(event.target.value)}
+            className="min-h-11 border border-border bg-background px-3 text-xs"
+          />
+          <input
+            aria-label="Platform account ID"
+            placeholder="Platform account ID"
+            value={connectAccountId}
+            onChange={(event) => setConnectAccountId(event.target.value)}
+            className="min-h-11 border border-border bg-background px-3 text-xs"
+          />
         </div>
-        <input type="password" autoComplete="off" aria-label="Platform access token" placeholder="Platform access token (stored server-side)" value={connectToken} onChange={(event) => setConnectToken(event.target.value)} className="min-h-11 w-full border border-border bg-background px-3 text-xs" />
-        <Button type="button" variant="secondary" className="min-h-11 w-full" disabled={loading || connectToken.length < 8 || !connectAccountId.trim() || !connectAccountName.trim()} onClick={connectPublishingAccount}>Connect account</Button>
+        <input
+          type="password"
+          autoComplete="off"
+          aria-label="Platform access token"
+          placeholder="Platform access token (stored server-side)"
+          value={connectToken}
+          onChange={(event) => setConnectToken(event.target.value)}
+          className="min-h-11 w-full border border-border bg-background px-3 text-xs"
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          className="min-h-11 w-full"
+          disabled={
+            loading ||
+            connectToken.length < 8 ||
+            !connectAccountId.trim() ||
+            !connectAccountName.trim()
+          }
+          onClick={connectPublishingAccount}
+        >
+          Connect account
+        </Button>
         {connections.length > 0 ? (
           <div className="space-y-2 border-t border-border pt-3">
-            <textarea aria-label="Post caption" placeholder="Post caption" value={publishCaption} onChange={(event) => setPublishCaption(event.target.value)} maxLength={2200} className="min-h-20 w-full resize-y border border-border bg-background p-3 text-xs" />
+            <textarea
+              aria-label="Post caption"
+              placeholder="Post caption"
+              value={publishCaption}
+              onChange={(event) => setPublishCaption(event.target.value)}
+              maxLength={2200}
+              className="min-h-20 w-full resize-y border border-border bg-background p-3 text-xs"
+            />
             {connections.map((connection) => {
-              const job = publishJobs.find((item) => item.platform === connection.platform);
+              const job = publishJobs.find(
+                (item) => item.platform === connection.platform,
+              );
               return (
-                <div key={connection.id} className="flex items-center justify-between gap-2 border border-border bg-muted/30 p-3">
+                <div
+                  key={connection.id}
+                  className="flex items-center justify-between gap-2 border border-border bg-muted/30 p-3"
+                >
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-black">{socialLabel(connection.platform)} · {connection.account_name}</p>
-                    <p className="text-[10px] font-bold text-muted-foreground">{job ? publishStatusLabel(job.status) : "Ready"}{job?.error_message ? ` · ${job.error_message}` : ""}</p>
+                    <p className="truncate text-xs font-black">
+                      {socialLabel(connection.platform)} ·{" "}
+                      {connection.account_name}
+                    </p>
+                    <p className="text-[10px] font-bold text-muted-foreground">
+                      {job ? publishStatusLabel(job.status) : "Ready"}
+                      {job?.error_message ? ` · ${job.error_message}` : ""}
+                    </p>
                   </div>
                   <div className="flex gap-2">
-                    {job?.external_url ? <a href={job.external_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center border border-border px-3 text-xs font-bold">View</a> : null}
-                    <Button type="button" variant="secondary" className="min-h-11 gap-1 px-3 text-xs" disabled={loading || !latestExport || job?.status === "queued" || job?.status === "publishing"} onClick={() => publishExport(connection)}><Send className="size-3.5" />Publish</Button>
-                    <Button type="button" variant="secondary" aria-label={`Disconnect ${connection.account_name}`} className="min-h-11 px-3" disabled={loading} onClick={() => disconnectPublishingAccount(connection.id)}><Trash2 className="size-3.5" /></Button>
+                    {job?.external_url ? (
+                      <a
+                        href={job.external_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex min-h-11 items-center border border-border px-3 text-xs font-bold"
+                      >
+                        View
+                      </a>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="min-h-11 gap-1 px-3 text-xs"
+                      disabled={
+                        loading ||
+                        !latestExport ||
+                        job?.status === "queued" ||
+                        job?.status === "publishing"
+                      }
+                      onClick={() => publishExport(connection)}
+                    >
+                      <Send className="size-3.5" />
+                      Publish
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      aria-label={`Disconnect ${connection.account_name}`}
+                      className="min-h-11 px-3"
+                      disabled={loading}
+                      onClick={() => disconnectPublishingAccount(connection.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
                   </div>
                 </div>
               );
@@ -988,12 +1303,27 @@ export function ExportStep({
         ) : null}
       </section>
       {!captionTrackId ? (
-        <p id="export-missing-captions" role="alert" className="border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700">
-          Generate captions before export. Open the Text tab and generate or save captions, then start render again.
+        <p
+          id="export-missing-captions"
+          role="alert"
+          className="border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700"
+        >
+          Generate captions before export. Open the Text tab and generate or
+          save captions, then start render again.
         </p>
       ) : null}
       {message ? (
-        <p id="export-message" role={message.toLowerCase().includes("failed") || message.toLowerCase().includes("could not") ? "alert" : "status"} aria-live="polite" className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground">
+        <p
+          id="export-message"
+          role={
+            message.toLowerCase().includes("failed") ||
+            message.toLowerCase().includes("could not")
+              ? "alert"
+              : "status"
+          }
+          aria-live="polite"
+          className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground"
+        >
           {message}
         </p>
       ) : null}
@@ -1020,8 +1350,12 @@ function ExportStepSection({
         </span>
         <h3 className="flex-1 text-sm font-black">{title}</h3>
         <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-          {status === "completed" ? <CheckCircle2 className="size-3.5 text-primary" /> : null}
-          {status === "active" ? <Video className="size-3.5 text-primary" /> : null}
+          {status === "completed" ? (
+            <CheckCircle2 className="size-3.5 text-primary" />
+          ) : null}
+          {status === "active" ? (
+            <Video className="size-3.5 text-primary" />
+          ) : null}
           {status}
         </span>
       </div>
@@ -1038,18 +1372,43 @@ function RenderStatusIcon({
   loading: boolean;
 }) {
   if (loading || state === "queued" || state === "rendering") {
-    return <Loader2 className="size-5 shrink-0 animate-spin text-primary" aria-hidden="true" />;
+    return (
+      <Loader2
+        className="size-5 shrink-0 animate-spin text-primary"
+        aria-hidden="true"
+      />
+    );
   }
   if (state === "completed") {
-    return <CheckCircle2 className="size-5 shrink-0 text-primary" aria-hidden="true" />;
+    return (
+      <CheckCircle2
+        className="size-5 shrink-0 text-primary"
+        aria-hidden="true"
+      />
+    );
   }
   if (state === "failed") {
-    return <AlertTriangle className="size-5 shrink-0 text-red-600" aria-hidden="true" />;
+    return (
+      <AlertTriangle
+        className="size-5 shrink-0 text-red-600"
+        aria-hidden="true"
+      />
+    );
   }
   if (state === "canceled") {
-    return <Square className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />;
+    return (
+      <Square
+        className="size-5 shrink-0 text-muted-foreground"
+        aria-hidden="true"
+      />
+    );
   }
-  return <Video className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />;
+  return (
+    <Video
+      className="size-5 shrink-0 text-muted-foreground"
+      aria-hidden="true"
+    />
+  );
 }
 
 function sleep(ms: number) {
@@ -1057,11 +1416,18 @@ function sleep(ms: number) {
 }
 
 function socialLabel(platform: PublishPlatform) {
-  return { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube" }[platform];
+  return { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube" }[
+    platform
+  ];
 }
 
 function publishStatusLabel(status: PublishJob["status"]) {
-  return { queued: "Queued", publishing: "Publishing", published: "Published", failed: "Failed" }[status];
+  return {
+    queued: "Queued",
+    publishing: "Publishing",
+    published: "Published",
+    failed: "Failed",
+  }[status];
 }
 
 function statusLabel(status: RenderJobSummary["status"]) {
@@ -1088,7 +1454,8 @@ function getRenderUiState(job?: RenderJobSummary): RenderUiState {
 }
 
 function defaultAspectForPlatform(platform: PlatformPreset): OutputAspect {
-  if (platform === "youtube_landscape" || platform === "x_landscape") return "16:9";
+  if (platform === "youtube_landscape" || platform === "x_landscape")
+    return "16:9";
   if (platform === "instagram_post") return "4:5";
   if (platform === "custom") return "original";
   return "9:16";
@@ -1114,7 +1481,12 @@ function getDisplayProgress(job?: RenderJobSummary) {
 }
 
 function estimateRenderEta(job: RenderJobSummary | undefined, nowMs: number) {
-  if (!job || job.status === "complete" || job.status === "failed" || job.status === "canceled") {
+  if (
+    !job ||
+    job.status === "complete" ||
+    job.status === "failed" ||
+    job.status === "canceled"
+  ) {
     return null;
   }
   const progress = getDisplayProgress(job);

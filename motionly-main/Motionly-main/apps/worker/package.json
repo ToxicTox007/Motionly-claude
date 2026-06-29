@@ -3,12 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node src/worker.mjs --check",
-    "dev": "node src/worker.mjs --once",
-    "lint": "node src/worker.mjs --check",
-    "start": "node src/worker.mjs --loop",
-    "typecheck": "node src/worker.mjs --check",
-    "test": "node --test src/*.test.mjs && node src/worker.mjs --check"
+    "build": "node --env-file=.env src/worker.mjs --check",
+    "dev": "node --env-file=.env src/worker.mjs --loop",
+    "lint": "node --env-file=.env src/worker.mjs --check",
+    "start": "node --env-file=.env src/worker.mjs --loop",
+    "typecheck": "node --env-file=.env src/worker.mjs --check",
+    "test": "node --env-file=.env --test src/*.test.mjs && node --env-file=.env src/worker.mjs --check"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",

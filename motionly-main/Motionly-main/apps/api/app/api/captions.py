@@ -32,7 +32,6 @@ from app.schemas.uploads import UploadStatus
 from app.services.ai_feedback import record_ai_feedback
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import (
-    CAPTION_SCHEMA_VERSION,
     get_caption_preset,
     list_caption_presets,
 )
@@ -42,6 +41,7 @@ from app.services.layer_job_enqueue import (
     serialize_layer_job_payload,
 )
 from app.services.queue import TranscriptionQueue
+from app.services.transcript_quality import is_transcript_usable_for_planning
 from app.services.transcription_jobs import queue_transcription_for_upload
 from app.services.transcription_provider import TranscriptionProvider
 
@@ -140,6 +140,17 @@ async def generate_captions(
             409,
             str(transcript.status),
             transcript.error_message or "Transcript is not ready.",
+        )
+    if not transcript.words or not is_transcript_usable_for_planning(transcript.quality_status):
+        reason = (
+            transcript.quality_reasons[0]
+            if transcript.quality_reasons
+            else "transcript_quality_blocked"
+        )
+        raise ApiError(
+            409,
+            reason,
+            transcript.error_message or "Transcript quality must be recovered before captions.",
         )
 
     prepare_heavy_job_enqueue(request=request)

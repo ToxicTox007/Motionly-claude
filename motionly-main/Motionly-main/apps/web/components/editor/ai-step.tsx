@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Input, Label, Select, TextArea, Slider } from "./ui";
 import { Button } from "../button";
@@ -101,6 +101,10 @@ export function AIStep({
   const [snapshots, setSnapshots] = useState<PlanSnapshotSummary[]>([]);
   const [snapshotName, setSnapshotName] = useState("");
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const isGeneratingRef = useRef(false);
+  const isTranscribingRef = useRef(false);
+  const isSnapshotSavingRef = useRef(false);
+  const isSnapshotRestoringRef = useRef(false);
   const [message, setMessage] = useState<string | null>(null);
   const [visualStatus, setVisualStatus] = useState(initialVisualStatus);
   const hasTranscript = transcript?.status === "ready" && Boolean(transcript.words?.length);
@@ -122,19 +126,24 @@ export function AIStep({
   useEffect(() => {
     if (visualStatus.status !== "processing") return;
     let canceled = false;
+    const abortController = new AbortController();
     const poll = async () => {
       try {
         const next = await editorApiRequest<VisualAnalysisStatusSummary>(
           `${env.apiBaseUrl}/projects/${projectId}/visual/status`,
-          { method: "GET", workspaceId, userId, accessToken: apiAccessToken },
+          { method: "GET", workspaceId, userId, accessToken: apiAccessToken, signal: abortController.signal },
         );
         if (!canceled) setVisualStatus(next);
       } catch (error) {
-        console.error(error);
+        if (!canceled) console.error(error);
       }
     };
     const timer = window.setInterval(() => void poll(), 5000);
-    return () => { canceled = true; window.clearInterval(timer); };
+    return () => {
+      canceled = true;
+      abortController.abort();
+      window.clearInterval(timer);
+    };
   }, [apiAccessToken, projectId, userId, visualStatus.status, workspaceId]);
 
   useEffect(() => {
@@ -142,30 +151,34 @@ export function AIStep({
       return;
     }
     let canceled = false;
+    const abortController = new AbortController();
     async function loadSnapshots() {
       try {
-        const payload = await editorApiRequest<{ snapshots: PlanSnapshotSummary[] }>(
-          `${env.apiBaseUrl}/projects/${projectId}/plans/snapshots`,
-          {
-            method: "GET",
-            workspaceId,
-            userId,
-            accessToken: apiAccessToken,
-            friendlyError: "Timeline versions could not be loaded.",
-          },
-        );
+        const payload = await editorApiRequest<{
+          snapshots: PlanSnapshotSummary[];
+        }>(`${env.apiBaseUrl}/projects/${projectId}/plans/snapshots`, {
+          method: "GET",
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Timeline versions could not be loaded.",
+          signal: abortController.signal,
+        });
         if (!canceled) setSnapshots(payload.snapshots ?? []);
       } catch (error) {
-        console.error(error);
+        if (!canceled) console.error(error);
       }
     }
     void loadSnapshots();
     return () => {
       canceled = true;
+      abortController.abort();
     };
   }, [activePlanId, apiAccessToken, projectId, userId, workspaceId]);
 
   async function generatePlan() {
+    if (isGeneratingRef.current || loading || !hasTranscript) return;
+    isGeneratingRef.current = true;
     setLoading(true);
     setMessage(null);
     try {
@@ -254,7 +267,8 @@ export function AIStep({
       console.error(error);
       setMessage((error as Error).message);
     }
- finally {
+  finally {
+      isGeneratingRef.current = false;
       setLoading(false);
     }
   }
@@ -319,6 +333,8 @@ export function AIStep({
   }
 
   async function requestTranscript(force = false) {
+    if (isTranscribingRef.current || transcriptLoading) return;
+    isTranscribingRef.current = true;
     setTranscriptLoading(true);
     setMessage(null);
     try {
@@ -351,6 +367,7 @@ export function AIStep({
       console.error(error);
       setMessage((error as Error).message);
     } finally {
+      isTranscribingRef.current = false;
       setTranscriptLoading(false);
     }
   }
@@ -360,6 +377,8 @@ export function AIStep({
       setMessage("Generate an AI edit before saving a timeline version.");
       return;
     }
+    if (isSnapshotSavingRef.current || snapshotLoading) return;
+    isSnapshotSavingRef.current = true;
     setSnapshotLoading(true);
     setMessage(null);
     try {
@@ -389,11 +408,14 @@ export function AIStep({
       console.error(error);
       setMessage((error as Error).message);
     } finally {
+      isSnapshotSavingRef.current = false;
       setSnapshotLoading(false);
     }
   }
 
   async function restoreSnapshot(snapshotId: string) {
+    if (isSnapshotRestoringRef.current || snapshotLoading) return;
+    isSnapshotRestoringRef.current = true;
     setSnapshotLoading(true);
     setMessage(null);
     try {
@@ -415,6 +437,7 @@ export function AIStep({
       console.error(error);
       setMessage((error as Error).message);
     } finally {
+      isSnapshotRestoringRef.current = false;
       setSnapshotLoading(false);
     }
   }

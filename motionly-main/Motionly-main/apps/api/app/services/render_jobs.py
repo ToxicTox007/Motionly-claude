@@ -456,8 +456,13 @@ def _segmentation_matte_path_from_manifest(
     background = effects_config.get("background_removal")
     if not isinstance(background, dict) or not background.get("enabled"):
         return None
+    matte_status = render_props.get("segmentationMatteStatus")
+    if isinstance(matte_status, dict) and matte_status.get("status") != "available":
+        return None
     matte = render_props.get("segmentationMatte")
     if not isinstance(matte, dict):
+        return None
+    if matte.get("status") not in {None, "completed"}:
         return None
     bucket = matte.get("bucket")
     path = matte.get("path")

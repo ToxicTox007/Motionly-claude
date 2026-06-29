@@ -1,11 +1,24 @@
-import { Activity, AlertTriangle, Gauge, RotateCcw, Square, WalletCards } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  Gauge,
+  RotateCcw,
+  Square,
+  WalletCards,
+} from "lucide-react";
 import { redirect } from "next/navigation";
 import type { ComponentType } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ButtonLink } from "@/components/button";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
-import { cancelQueueJob, cancelRenderJob, retryQueueJob, retryRenderJob } from "./actions";
+import { AdminJobsList } from "./AdminJobsList";
+import {
+  cancelQueueJob,
+  cancelRenderJob,
+  retryQueueJob,
+  retryRenderJob,
+} from "./actions";
 
 type QueueSnapshot = {
   queue_name: string;
@@ -52,7 +65,7 @@ type OpsOverview = {
     recent_render_completions?: number;
     render_success_rate?: number | null;
   };
-  provider_costs?: Record<string, unknown>;
+  provider_costs?: Record<string, number | string>;
   render_failure_diagnostics?: Array<Record<string, unknown>>;
   health?: Record<string, unknown>;
 };
@@ -91,7 +104,7 @@ export default async function LaunchOpsPage() {
         <MetricCard
           icon={WalletCards}
           label="Cost tracking"
-          value={overview?.provider_costs ? "Placeholder" : "No data"}
+          value={formatProviderCosts(overview?.provider_costs)}
         />
       </div>
 
@@ -118,18 +131,25 @@ export default async function LaunchOpsPage() {
             <tbody>
               {(overview?.queues ?? []).map((queue) => (
                 <tr key={queue.queue_name} className="border-t border-border">
-                  <td className="px-4 py-3 font-semibold">{queue.queue_name}</td>
+                  <td className="px-4 py-3 font-semibold">
+                    {queue.queue_name}
+                  </td>
                   <td className="px-4 py-3">{queue.queued}</td>
                   <td className="px-4 py-3">{queue.running}</td>
                   <td className="px-4 py-3">{queue.succeeded}</td>
                   <td className="px-4 py-3">{queue.failed}</td>
                   <td className="px-4 py-3">{queue.dead_letter}</td>
-                  <td className="px-4 py-3">{formatAge(queue.oldest_queued_seconds)}</td>
+                  <td className="px-4 py-3">
+                    {formatAge(queue.oldest_queued_seconds)}
+                  </td>
                 </tr>
               ))}
               {!overview?.queues.length ? (
                 <tr>
-                  <td className="px-4 py-8 text-center text-muted-foreground" colSpan={7}>
+                  <td
+                    className="px-4 py-8 text-center text-muted-foreground"
+                    colSpan={7}
+                  >
                     No queued jobs reported.
                   </td>
                 </tr>
@@ -141,31 +161,11 @@ export default async function LaunchOpsPage() {
 
       <section className="mb-8">
         <h2 className="mb-3 text-base font-bold">Queue jobs</h2>
-        <div className="grid gap-3">
-          {(queues?.jobs ?? []).slice(0, 20).map((job) => (
-            <div key={job.id} className="pixel-panel flex flex-wrap items-center justify-between gap-3 p-4">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{job.id}</p>
-                <p className="text-xs text-muted-foreground">
-                  {job.queue_name} | {job.kind} | {job.status} | attempts {job.attempts}/{job.max_attempts}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                {["failed", "dead_letter", "canceled"].includes(job.status) ? (
-                  <ActionForm action={retryQueueJob} jobId={job.id} label="Retry" icon={RotateCcw} />
-                ) : null}
-                {["queued", "running"].includes(job.status) ? (
-                  <ActionForm action={cancelQueueJob} jobId={job.id} label="Cancel" icon={Square} />
-                ) : null}
-              </div>
-            </div>
-          ))}
-          {!queues?.jobs?.length ? (
-            <div className="pixel-panel p-8 text-center text-sm text-muted-foreground">
-              No queue job details reported.
-            </div>
-          ) : null}
-        </div>
+        <AdminJobsList
+          jobs={queues?.jobs ?? []}
+          onRetry={retryQueueJob}
+          onCancel={cancelQueueJob}
+        />
       </section>
 
       <section>
@@ -189,10 +189,26 @@ export default async function LaunchOpsPage() {
               </span>
               <div className="flex gap-2">
                 {["failed", "canceled"].includes(render.status) ? (
-                  <ActionForm action={retryRenderJob} jobId={render.id} label="Retry" icon={RotateCcw} />
+                  <ActionForm
+                    action={retryRenderJob}
+                    jobId={render.id}
+                    label="Retry"
+                    icon={RotateCcw}
+                  />
                 ) : null}
-                {["queued", "processing", "preparing", "rendering", "uploading"].includes(render.status) ? (
-                  <ActionForm action={cancelRenderJob} jobId={render.id} label="Cancel" icon={Square} />
+                {[
+                  "queued",
+                  "processing",
+                  "preparing",
+                  "rendering",
+                  "uploading",
+                ].includes(render.status) ? (
+                  <ActionForm
+                    action={cancelRenderJob}
+                    jobId={render.id}
+                    label="Cancel"
+                    icon={Square}
+                  />
                 ) : null}
               </div>
             </div>
@@ -208,9 +224,13 @@ export default async function LaunchOpsPage() {
       <section className="mt-8">
         <h2 className="mb-3 text-base font-bold">Health checks</h2>
         <div className="grid gap-3 md:grid-cols-2">
-          {Object.entries(dependencyHealth?.dependencies ?? overview?.health ?? {}).map(([name, value]) => (
+          {Object.entries(
+            dependencyHealth?.dependencies ?? overview?.health ?? {},
+          ).map(([name, value]) => (
             <div key={name} className="pixel-panel p-4">
-              <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">{name}</p>
+              <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+                {name}
+              </p>
               <p className="mt-2 text-sm font-semibold">
                 {typeof value === "object" && value && "status" in value
                   ? String((value as { status: unknown }).status)
@@ -283,7 +303,10 @@ async function fetchQueues(headers: Record<string, string>) {
       },
     });
     if (!response.ok) return null;
-    return (await response.json()) as { queues: QueueSnapshot[]; jobs: QueueJob[] };
+    return (await response.json()) as {
+      queues: QueueSnapshot[];
+      jobs: QueueJob[];
+    };
   } catch {
     return null;
   }
@@ -353,4 +376,39 @@ function formatAge(seconds: number | null) {
   if (seconds == null) return "None";
   if (seconds < 60) return `${seconds}s`;
   return `${Math.round(seconds / 60)}m`;
+}
+
+function formatProviderCosts(
+  costs: Record<string, number | string> | undefined,
+): string {
+  if (!costs) return "No cost data yet";
+
+  const filteredCosts = Object.entries(costs).filter(([k, v]) => {
+    const keyLower = k.toLowerCase();
+    const valString = String(v ?? "").toLowerCase();
+    return !keyLower.includes("placeholder") && !valString.includes("placeholder");
+  });
+
+  if (filteredCosts.length === 0) return "No cost data yet";
+
+  let total = 0;
+  let hasNumericCost = false;
+  const costLines: string[] = [];
+
+  for (const [k, v] of filteredCosts) {
+    const num = Number(v);
+    if (!isNaN(num) && v !== "" && v !== null) {
+      total += num;
+      hasNumericCost = true;
+      costLines.push(`${k}: $${num.toFixed(2)}`);
+    } else {
+      costLines.push(`${k}: ${v}`);
+    }
+  }
+
+  if (hasNumericCost) {
+    return `$${total.toFixed(2)}`;
+  }
+
+  return costLines.join(", ");
 }

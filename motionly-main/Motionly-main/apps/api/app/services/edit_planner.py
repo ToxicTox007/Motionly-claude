@@ -34,6 +34,15 @@ from app.services.edit_plan_validation import (
     validate_edit_plan,
     validate_generated_plan_payload,
 )
+from app.services.provider_resilience import (
+    ProviderCallFailure,
+    ProviderCircuitOpen,
+    ProviderErrorInfo,
+    bounded_backoff_seconds,
+    classify_provider_exception,
+    classify_provider_status,
+    provider_circuit_breaker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +216,7 @@ class HttpEditPlannerProvider:
             project_id=getattr(transcript, "project_id", None),
         )
         validation_errors: list[str] = []
+        last_provider_error_info: ProviderErrorInfo | None = None
         last_usage: object = {}
         attempts = [
             ("llm", 0, None),
@@ -252,11 +262,13 @@ class HttpEditPlannerProvider:
             except Exception as exc:
                 from app.core.logging import redact_string
 
+                error_info = classify_provider_exception(exc)
+                last_provider_error_info = error_info
                 validation_errors = compact_validation_errors(
                     [
                         json.dumps(
                             {
-                                "code": "provider_error",
+                                "code": error_info.code,
                                 "path": "provider",
                                 "error_type": type(exc).__name__,
                             },
@@ -272,10 +284,14 @@ class HttpEditPlannerProvider:
                         "model": self.model,
                         "planner_source": planner_source,
                         "retry_count": retry_count,
+                        "error_code": error_info.code,
+                        "retryable": error_info.retryable,
                         "error_type": type(exc).__name__,
                         "error_detail": redact_string(str(exc))[:240],
                     },
                 )
+                if not error_info.retryable:
+                    break
                 continue
 
             usage = last_usage if isinstance(last_usage, dict) else {}
@@ -308,6 +324,11 @@ class HttpEditPlannerProvider:
                 },
             )
 
+        if last_provider_error_info and last_provider_error_info.code != "provider_circuit_open":
+            provider_circuit_breaker.record_failure(
+                self.provider_name,
+                retryable=last_provider_error_info.retryable,
+            )
         fallback_reason = "llm_validation_failed"
         plan = _fallback_plan(
             transcript=transcript,
@@ -373,24 +394,68 @@ class HttpEditPlannerProvider:
             validation_errors=validation_errors,
             minimal=minimal,
         )
-        response = httpx.post(
-            self.endpoint,
-            headers={
-                "authorization": f"Bearer {self.api_key}",
-                "content-type": "application/json",
-            },
-            json=body,
-            timeout=45,
-        )
-        if response.status_code >= 400:
-            raise ApiError(
-                502,
-                "planner_provider_failed",
-                f"The edit planner provider failed with status {response.status_code}.",
+        started = time.perf_counter()
+        try:
+            provider_circuit_breaker.check(self.provider_name)
+            response = httpx.post(
+                self.endpoint,
+                headers={
+                    "authorization": f"Bearer {self.api_key}",
+                    "content-type": "application/json",
+                },
+                json=body,
+                timeout=httpx.Timeout(45.0, connect=5.0, read=40.0),
             )
-        data = response.json()
+            status_code = int(getattr(response, "status_code", 200) or 200)
+            if status_code >= 400:
+                error_info = classify_provider_status(status_code)
+                raise ProviderCallFailure(provider=self.provider_name, error_info=error_info)
+            raise_for_status = getattr(response, "raise_for_status", None)
+            if callable(raise_for_status):
+                raise_for_status()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise ProviderCallFailure(
+                    provider=self.provider_name,
+                    error_info=ProviderErrorInfo("provider_malformed_response", False),
+                ) from exc
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.HTTPStatusError,
+            ProviderCallFailure,
+            ProviderCircuitOpen,
+        ) as exc:
+            error_info = classify_provider_exception(exc)
+            logger.warning(
+                "edit_planner_provider_request_failed",
+                extra={
+                    "provider": self.provider_name,
+                    "model": self.model,
+                    "error_code": error_info.code,
+                    "retryable": error_info.retryable,
+                    "status_code": error_info.status_code,
+                    "latency_ms": round((time.perf_counter() - started) * 1000),
+                },
+            )
+            if error_info.retryable:
+                time.sleep(bounded_backoff_seconds(max(1, len(validation_errors))))
+            raise ProviderCallFailure(provider=self.provider_name, error_info=error_info) from None
         if not isinstance(data, dict):
-            raise ApiError(502, "planner_provider_invalid_response", "Planner response invalid.")
+            raise ProviderCallFailure(
+                provider=self.provider_name,
+                error_info=ProviderErrorInfo("provider_malformed_response", False),
+            )
+        provider_circuit_breaker.record_success(self.provider_name)
+        logger.info(
+            "edit_planner_provider_succeeded",
+            extra={
+                "provider": self.provider_name,
+                "model": self.model,
+                "latency_ms": round((time.perf_counter() - started) * 1000),
+            },
+        )
         return data
 
 

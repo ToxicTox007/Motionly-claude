@@ -12,10 +12,15 @@ from app.repositories.music import InMemoryMusicRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.regeneration import InMemoryRegenerationRepository
 from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
-from app.schemas.broll import BROLL_SCHEMA_VERSION, BrollGenerateRequest, BrollSlotStatus, StockOrientation
+from app.schemas.broll import (
+    BROLL_SCHEMA_VERSION,
+    BrollGenerateRequest,
+    BrollSlotStatus,
+    StockOrientation,
+)
 from app.schemas.captions import CaptionGenerateRequest, TranscriptStatus
 from app.schemas.effects import EffectsConfigRequest, EffectsStatus
-from app.schemas.music import MusicSelectRequest, MusicSelectionStatus
+from app.schemas.music import MusicRegion, MusicSelectionStatus, MusicSelectRequest
 from app.schemas.regeneration import REGENERATION_SCHEMA_VERSION, RegenerateRequest
 from app.services.ai_feedback import record_ai_feedback
 from app.services.broll_intelligence import (
@@ -36,6 +41,8 @@ from app.services.effects import (
     preview_urls,
     render_time_impact,
 )
+from app.services.matte_jobs import enqueue_matte_for_upload
+from app.services.music import MusicTrackCandidate
 from app.services.regeneration import (
     affected_layers_for_request,
     build_regeneration_cache_key,
@@ -54,8 +61,7 @@ from app.services.stock_video import (
     semantic_match_score,
 )
 from app.services.storage import StorageSigner
-from app.schemas.music import MusicRegion
-from app.services.music import MusicTrackCandidate
+from app.services.transcript_quality import is_transcript_usable_for_planning
 
 
 def execute_broll_generation(
@@ -538,6 +544,25 @@ def execute_effects_update(
         preview_after_url=preview_after_url,
         cache_key=cache_key,
     )
+    matte_job_id = None
+    if background_removal.enabled and request is not None:
+        visual_repository = getattr(request.app.state, "visual_repository", None)
+        matte_queue = getattr(request.app.state, "matte_queue", None)
+        if visual_repository is not None and matte_queue is not None:
+            upload = plan_repository.get_active_upload(
+                project_id=project_id,
+                workspace_id=workspace_id,
+            )
+            _matte, matte_job = enqueue_matte_for_upload(
+                repository=visual_repository,
+                matte_queue=matte_queue,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                upload_id=upload.id,
+                background_removal=background_removal,
+                force=payload.force,
+            )
+            matte_job_id = matte_job.id if matte_job else None
     record_ai_feedback(
         request=request,
         workspace_id=workspace_id,
@@ -563,7 +588,7 @@ def execute_effects_update(
         user_payload=repository.response_for_config(config).model_dump(mode="json"),
         metadata={"reset_to_defaults": payload.reset_to_defaults},
     )
-    return {"config_id": str(config.id), "cached": False}
+    return {"config_id": str(config.id), "cached": False, "matte_job_id": matte_job_id}
 
 
 def execute_regeneration(
@@ -584,7 +609,10 @@ def execute_regeneration(
         controls = repository.get_control_settings(control_settings_id)
 
     if controls is not None:
-        artifacts = repository.get_artifact_versions_by_cache_key(project_id=project_id, cache_key=cache_key)
+        artifacts = repository.get_artifact_versions_by_cache_key(
+            project_id=project_id,
+            cache_key=cache_key,
+        )
     else:
         controls = repository.create_control_settings(
             workspace_id=workspace_id,
@@ -635,6 +663,17 @@ def execute_caption_generation(
             409,
             str(transcript.status),
             transcript.error_message or "Transcript is not ready.",
+        )
+    if not transcript.words or not is_transcript_usable_for_planning(transcript.quality_status):
+        reason = (
+            transcript.quality_reasons[0]
+            if transcript.quality_reasons
+            else "transcript_quality_blocked"
+        )
+        raise ApiError(
+            409,
+            reason,
+            transcript.error_message or "Transcript quality must be recovered before captions.",
         )
 
     from app.api.captions import translate_segments_if_requested

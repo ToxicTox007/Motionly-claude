@@ -17,6 +17,14 @@ class VisualManifestStatus(StrEnum):
     FAILED = "failed"
 
 
+class MatteStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 class CameraMotion(StrEnum):
     STATIC = "static"
     PAN = "pan"
@@ -85,6 +93,9 @@ class SegmentationMatte(BaseModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     frame_count: int = Field(gt=0)
+    cache_key: str | None = Field(default=None, max_length=160)
+    status: MatteStatus = MatteStatus.COMPLETED
+    failure_reason: str | None = Field(default=None, max_length=120)
 
 
 class SceneSegment(BaseModel):

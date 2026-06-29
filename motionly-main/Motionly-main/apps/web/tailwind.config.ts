@@ -12,7 +12,13 @@ const config: Config = {
         "primary-foreground": "hsl(var(--primary-foreground))",
         muted: "hsl(var(--muted))",
         "muted-foreground": "hsl(var(--muted-foreground))",
-        surface: "hsl(var(--surface))"
+        surface: "hsl(var(--surface))",
+        danger: "hsl(var(--danger))",
+        warning: "hsl(var(--warning))",
+        success: "hsl(var(--success))",
+        info: "hsl(var(--info))",
+        "pixel-border": "var(--color-pixel-border)",
+        "focus-ring": "var(--color-focus-ring)"
       }
     }
   },
