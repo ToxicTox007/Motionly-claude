@@ -27,6 +27,13 @@ from app.schemas.plans import (
 )
 from app.schemas.visual import VideoManifest
 from app.services.broll_intelligence import apply_stage4_broll_rules
+from app.services.edit_plan_validation import (
+    EditPlanValidationContext,
+    EditPlanValidationFailure,
+    compact_validation_errors,
+    validate_edit_plan,
+    validate_generated_plan_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +45,11 @@ SYSTEM_PROMPT = (
     "You are an expert short-form video editor for Instagram Reels, TikTok, and YouTube Shorts. "
     "Return exactly one JSON object and no Markdown, prose, comments, or code fences. "
     "The object must match the provided JSON schema exactly. Required top-level keys are "
-    "schema_version, style, target_duration_s, cuts, caption_highlights, broll_requests, "
-    "zoom_moments, music_mood, effects, color_grade, and risk_flags. Use only enum values from "
-    "the schema. Use integer millisecond timestamps inside the source duration. Keep every cut "
-    "and B-roll range with end_ms greater than start_ms. Preserve meaning. Do not overuse effects."
+    "schema_version, prompt_version, style, aspect_ratio, render_dimensions, layout, "
+    "target_duration_s, cuts, caption_highlights, broll_requests, zoom_moments, music_mood, "
+    "effects, color_grade, and risk_flags. Use only enum values from the schema. Use integer "
+    "millisecond timestamps inside the source duration. Keep every cut and B-roll range with "
+    "end_ms greater than start_ms. Preserve meaning. Do not overuse effects."
 )
 
 
@@ -135,10 +143,20 @@ class FixtureEditPlannerProvider:
             color_grade=_color_grade(style),
             risk_flags=_risk_flags(payload=payload, duration_ms=duration_ms, cuts=cuts),
         )
+        context = EditPlanValidationContext(
+            source_duration_ms=duration_ms,
+            transcript_words=words,
+            project_id=transcript.project_id,
+        )
+        plan = normalize_plan(plan=plan, words=words, duration_ms=duration_ms)
+        plan = validate_edit_plan(plan=plan, context=context)
         return PlannerProviderResult(
             plan=plan,
             provider=self.provider_name,
             model=self.model,
+            planner_source="deterministic_fixture",
+            prompt_version=plan.prompt_version,
+            retry_count=0,
             latency_ms=round((time.perf_counter() - started) * 1000),
             cost_estimate_usd=0,
             raw_payload={"mode": "deterministic_fixture"},
@@ -180,151 +198,200 @@ class HttpEditPlannerProvider:
             payload=payload,
             style_classification=style_classification,
         )
-        body = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "schema": EditPlan.model_json_schema(),
-                            "style": style.value,
-                            "requested_style": payload.style.value if payload.style else None,
-                            "style_classification": (
-                                style_classification.model_dump(mode="json")
-                                if style_classification
-                                else None
-                            ),
-                            "target_duration_s": payload.target_duration_s,
-                            "broll_density": payload.broll_density.value,
-                            "prompt": payload.prompt,
-                            "feedback": payload.feedback,
-                            "duration_ms": video_duration_ms,
-                            "words": [word.model_dump(mode="json") for word in transcript.words],
-                            "audio_intelligence": _audio_intelligence(transcript),
-                            "visual_intelligence": _visual_intelligence_summary(visual_manifest),
-                        },
-                        separators=(",", ":"),
-                    ),
-                },
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2,
-        }
-        has_error = False
-        error_msg = ""
-        try:
-            response = httpx.post(
-                self.endpoint,
-                headers={"authorization": f"Bearer {self.api_key}", "content-type": "application/json"},
-                json=body,
-                timeout=45,
-            )
-            if response.status_code >= 400:
-                raise ApiError(502, "planner_provider_failed", f"The edit planner provider failed with status {response.status_code}.")
-            data = response.json()
-            content = _extract_content(data)
-        except Exception as exc:
-            from app.core.logging import redact_string
-            has_error = True
-            error_msg = redact_string(str(exc))
-            logger.error(
-                "edit_planner_provider_request_failed",
-                extra={
-                    "provider": self.provider_name,
-                    "model": self.model,
-                    "error_type": type(exc).__name__,
-                    "error_detail": error_msg,
-                }
-            )
-
-        if has_error:
-            validation_errors = [
-                f"provider_error: {error_msg}",
-                json.dumps({"code": "fallback_used", "reason": "provider_error"}),
-            ]
-            plan = _fallback_plan(
-                transcript=transcript,
-                payload=payload,
-                video_duration_ms=video_duration_ms,
-                visual_manifest=visual_manifest,
-                style_classification=style_classification,
-            )
-            plan = normalize_plan(plan=plan, words=transcript.words, duration_ms=video_duration_ms)
-            return PlannerProviderResult(
-                plan=plan,
-                provider=self.provider_name,
-                model=self.model,
-                latency_ms=round((time.perf_counter() - started) * 1000),
-                cost_estimate_usd=None,
-                validation_errors=validation_errors,
-                raw_payload={
-                    "validation_errors": validation_errors,
-                    "fallback_used": True,
-                },
-            )
-
+        context = EditPlanValidationContext(
+            source_duration_ms=max(
+                video_duration_ms or getattr(transcript, "duration_ms", None) or 0,
+                1,
+            ),
+            transcript_words=transcript.words,
+            project_id=getattr(transcript, "project_id", None),
+        )
         validation_errors: list[str] = []
-        try:
-            raw_plan = json.loads(_extract_json_object(content))
-        except json.JSONDecodeError as exc:
-            validation_errors = [
-                f"json_decode: {exc.msg} at line {exc.lineno} column {exc.colno}",
-                json.dumps({"code": "fallback_used", "reason": "json_decode_failed"}),
-            ]
-            logger.warning(
-                "edit_planner_json_decode_failed",
-                extra={"validation_errors": validation_errors, "provider": self.provider_name},
+        last_usage: object = {}
+        attempts = [
+            ("llm", 0, None),
+            ("llm_retry", 1, "Use these validation errors to correct only the JSON plan."),
+            ("llm_minimal", 2, "Return a minimal strict JSON-only plan with one safe cut."),
+        ]
+        for planner_source, retry_count, retry_instruction in attempts:
+            try:
+                data = self._request_plan(
+                    transcript=transcript,
+                    payload=payload,
+                    style=style,
+                    video_duration_ms=video_duration_ms,
+                    visual_manifest=visual_manifest,
+                    style_classification=style_classification,
+                    retry_instruction=retry_instruction,
+                    validation_errors=validation_errors,
+                    minimal=planner_source == "llm_minimal",
+                )
+                last_usage = data.get("usage") if isinstance(data, dict) else {}
+                raw_plan = json.loads(_extract_json_object(_extract_content(data)))
+                plan = validate_generated_plan_payload(payload=raw_plan, context=context)
+                plan = normalize_plan(
+                    plan=plan,
+                    words=transcript.words,
+                    duration_ms=context.source_duration_ms,
+                )
+                plan = validate_edit_plan(plan=plan, context=context)
+            except (json.JSONDecodeError, EditPlanValidationFailure) as exc:
+                validation_errors = _validation_errors_from_exception(exc)
+                logger.warning(
+                    "edit_planner_validation_attempt_failed",
+                    extra={
+                        "provider": self.provider_name,
+                        "model": self.model,
+                        "planner_source": planner_source,
+                        "retry_count": retry_count,
+                        "project_id": str(transcript.project_id),
+                        "validation_errors": validation_errors,
+                    },
+                )
+                continue
+            except Exception as exc:
+                from app.core.logging import redact_string
+
+                validation_errors = compact_validation_errors(
+                    [
+                        json.dumps(
+                            {
+                                "code": "provider_error",
+                                "path": "provider",
+                                "error_type": type(exc).__name__,
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    ]
+                )
+                logger.error(
+                    "edit_planner_provider_request_failed",
+                    extra={
+                        "provider": self.provider_name,
+                        "model": self.model,
+                        "planner_source": planner_source,
+                        "retry_count": retry_count,
+                        "error_type": type(exc).__name__,
+                        "error_detail": redact_string(str(exc))[:240],
+                    },
+                )
+                continue
+
+            usage = last_usage if isinstance(last_usage, dict) else {}
+            tokens = int(usage.get("total_tokens") or 0)
+            is_free_model = self.model == "openrouter/free" or self.model.endswith(":free")
+            cost_estimate_usd = (
+                0
+                if is_free_model
+                else round(tokens * 0.000002, 6)
+                if tokens
+                else None
             )
-            plan = _fallback_plan(
-                transcript=transcript,
-                payload=payload,
-                video_duration_ms=video_duration_ms,
-                visual_manifest=visual_manifest,
-                style_classification=style_classification,
-            )
-            plan = normalize_plan(plan=plan, words=transcript.words, duration_ms=video_duration_ms)
             return PlannerProviderResult(
                 plan=plan,
                 provider=self.provider_name,
                 model=self.model,
+                planner_source=planner_source,
+                prompt_version=plan.prompt_version,
+                retry_count=retry_count,
+                fallback_reason=None,
                 latency_ms=round((time.perf_counter() - started) * 1000),
-                cost_estimate_usd=None,
+                cost_estimate_usd=cost_estimate_usd,
                 validation_errors=validation_errors,
                 raw_payload={
+                    "usage": usage,
                     "validation_errors": validation_errors,
-                    "fallback_used": True,
+                    "fallback_used": False,
+                    "planner_source": planner_source,
+                    "retry_count": retry_count,
                 },
             )
-        else:
-            plan, validation_errors, fallback_used = _validate_or_repair_plan(
-                raw_plan=raw_plan,
-                transcript=transcript,
-                payload=payload,
-                video_duration_ms=video_duration_ms,
-                provider_name=self.provider_name,
-                visual_manifest=visual_manifest,
-                style_classification=style_classification,
-            )
-        plan = normalize_plan(plan=plan, words=transcript.words, duration_ms=video_duration_ms)
-        usage = data.get("usage") if isinstance(data, dict) else None
-        tokens = int(usage.get("total_tokens") or 0) if isinstance(usage, dict) else 0
-        is_free_model = self.model == "openrouter/free" or self.model.endswith(":free")
-        cost_estimate_usd = 0 if is_free_model else round(tokens * 0.000002, 6) if tokens else None
+
+        fallback_reason = "llm_validation_failed"
+        plan = _fallback_plan(
+            transcript=transcript,
+            payload=payload,
+            video_duration_ms=context.source_duration_ms,
+            visual_manifest=visual_manifest,
+            style_classification=style_classification,
+        )
+        plan = normalize_plan(
+            plan=plan,
+            words=transcript.words,
+            duration_ms=context.source_duration_ms,
+        )
+        plan = validate_edit_plan(plan=plan, context=context)
+        validation_errors = compact_validation_errors(
+            [
+                *validation_errors,
+                json.dumps({"code": "deterministic_fallback_used", "path": "planner"}),
+            ]
+        )
         return PlannerProviderResult(
             plan=plan,
             provider=self.provider_name,
             model=self.model,
+            planner_source="deterministic_fallback",
+            prompt_version=plan.prompt_version,
+            retry_count=2,
+            fallback_reason=fallback_reason,
             latency_ms=round((time.perf_counter() - started) * 1000),
-            cost_estimate_usd=cost_estimate_usd,
+            cost_estimate_usd=None,
             validation_errors=validation_errors,
             raw_payload={
-                "usage": usage or {},
                 "validation_errors": validation_errors,
-                "fallback_used": fallback_used,
+                "fallback_used": True,
+                "fallback_reason": fallback_reason,
+                "planner_source": "deterministic_fallback",
+                "retry_count": 2,
             },
         )
+
+    def _request_plan(
+        self,
+        *,
+        transcript: TranscriptRecord,
+        payload: PlanCreateRequest,
+        style: EditPlanStyle,
+        video_duration_ms: int,
+        visual_manifest: VideoManifest | None,
+        style_classification: StyleClassification | None,
+        retry_instruction: str | None,
+        validation_errors: list[str],
+        minimal: bool,
+    ) -> dict[str, object]:
+        body = _planner_request_body(
+            model=self.model,
+            transcript=transcript,
+            payload=payload,
+            style=style,
+            video_duration_ms=video_duration_ms,
+            visual_manifest=visual_manifest,
+            style_classification=style_classification,
+            retry_instruction=retry_instruction,
+            validation_errors=validation_errors,
+            minimal=minimal,
+        )
+        response = httpx.post(
+            self.endpoint,
+            headers={
+                "authorization": f"Bearer {self.api_key}",
+                "content-type": "application/json",
+            },
+            json=body,
+            timeout=45,
+        )
+        if response.status_code >= 400:
+            raise ApiError(
+                502,
+                "planner_provider_failed",
+                f"The edit planner provider failed with status {response.status_code}.",
+            )
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ApiError(502, "planner_provider_invalid_response", "Planner response invalid.")
+        return data
 
 
 def normalize_plan(*, plan: EditPlan, words: list[TranscriptWord], duration_ms: int) -> EditPlan:
@@ -345,6 +412,29 @@ def normalize_plan(*, plan: EditPlan, words: list[TranscriptWord], duration_ms: 
             target_ms=min(plan.target_duration_s * 1000, duration_ms),
             duration_ms=duration_ms,
         )
+    output_duration_ms = max(1, sum(cut.end_ms - cut.start_ms for cut in cuts))
+    normalized_broll: list[BrollRequest] = []
+    for index, item in enumerate(plan.broll_requests):
+        if item.start_ms >= duration_ms:
+            continue
+        start_ms = _source_to_output_timestamp(
+            min(item.start_ms, duration_ms),
+            cuts,
+            output_duration_ms=output_duration_ms,
+        )
+        end_ms = _source_to_output_timestamp(
+            min(max(item.end_ms, item.start_ms + 500), duration_ms),
+            cuts,
+            output_duration_ms=output_duration_ms,
+        )
+        if end_ms <= start_ms:
+            fallback_start = min(index * 1600, max(0, output_duration_ms - 500))
+            start_ms = fallback_start
+            end_ms = min(output_duration_ms, max(fallback_start + 500, fallback_start + 1200))
+        if start_ms < output_duration_ms and end_ms > start_ms:
+            normalized_broll.append(
+                item.model_copy(update={"start_ms": start_ms, "end_ms": end_ms})
+            )
     return plan.model_copy(
         update={
             "schema_version": EDIT_PLAN_SCHEMA_VERSION,
@@ -353,21 +443,109 @@ def normalize_plan(*, plan: EditPlan, words: list[TranscriptWord], duration_ms: 
                 item.model_copy(update={"timestamp_ms": min(item.timestamp_ms, duration_ms)})
                 for item in plan.caption_highlights
             ],
-            "broll_requests": [
+            "broll_requests": normalized_broll,
+            "zoom_moments": [
                 item.model_copy(
                     update={
-                        "start_ms": min(item.start_ms, duration_ms),
-                        "end_ms": min(max(item.end_ms, item.start_ms + 500), duration_ms),
+                        "timestamp_ms": _source_to_output_timestamp(
+                            min(item.timestamp_ms, duration_ms),
+                            cuts,
+                            output_duration_ms=output_duration_ms,
+                        )
                     }
                 )
-                for item in plan.broll_requests
-                if item.start_ms < duration_ms
-            ],
-            "zoom_moments": [
-                item.model_copy(update={"timestamp_ms": min(item.timestamp_ms, duration_ms)})
                 for item in plan.zoom_moments
             ],
         }
+    )
+
+
+def _source_to_output_timestamp(
+    timestamp_ms: int,
+    cuts: list[EditPlanCut],
+    *,
+    output_duration_ms: int,
+) -> int:
+    output_cursor = 0
+    for cut in cuts:
+        cut_duration = cut.end_ms - cut.start_ms
+        if timestamp_ms <= cut.start_ms:
+            return output_cursor
+        if cut.start_ms <= timestamp_ms <= cut.end_ms:
+            return min(output_duration_ms, output_cursor + timestamp_ms - cut.start_ms)
+        output_cursor += cut_duration
+    return output_duration_ms
+
+
+def _planner_request_body(
+    *,
+    model: str,
+    transcript: TranscriptRecord,
+    payload: PlanCreateRequest,
+    style: EditPlanStyle,
+    video_duration_ms: int,
+    visual_manifest: VideoManifest | None,
+    style_classification: StyleClassification | None,
+    retry_instruction: str | None,
+    validation_errors: list[str],
+    minimal: bool,
+) -> dict[str, object]:
+    user_payload: dict[str, object] = {
+        "schema": EditPlan.model_json_schema(),
+        "style": style.value,
+        "requested_style": payload.style.value if payload.style else None,
+        "style_classification": (
+            style_classification.model_dump(mode="json") if style_classification else None
+        ),
+        "target_duration_s": payload.target_duration_s,
+        "broll_density": payload.broll_density.value,
+        "prompt": payload.prompt,
+        "feedback": payload.feedback,
+        "duration_ms": video_duration_ms,
+        "words": [word.model_dump(mode="json") for word in transcript.words],
+        "audio_intelligence": _audio_intelligence(transcript),
+        "visual_intelligence": _visual_intelligence_summary(visual_manifest),
+    }
+    if retry_instruction:
+        user_payload["retry_instruction"] = retry_instruction
+        user_payload["validation_errors"] = validation_errors
+    if minimal:
+        user_payload["minimal_plan"] = True
+        user_payload["constraints"] = {
+            "one_safe_cut": True,
+            "empty_broll_allowed": True,
+            "json_only": True,
+        }
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(user_payload, separators=(",", ":"))},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.0 if minimal else 0.2,
+    }
+
+
+def _validation_errors_from_exception(exc: Exception) -> list[str]:
+    if isinstance(exc, EditPlanValidationFailure):
+        return exc.errors
+    if isinstance(exc, json.JSONDecodeError):
+        return compact_validation_errors(
+            [
+                json.dumps(
+                    {
+                        "code": "malformed_json",
+                        "path": "root",
+                        "detail": exc.msg[:80],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            ]
+        )
+    return compact_validation_errors(
+        [json.dumps({"code": type(exc).__name__, "path": "planner"}, separators=(",", ":"))]
     )
 
 
@@ -422,7 +600,9 @@ def build_plan_cache_key(
     digest_payload = {
         "schema_hash": PLANNER_SCHEMA_HASH,
         "transcript_id": str(transcript.id),
-        "transcript_updated_at": transcript.updated_at.isoformat() if getattr(transcript, "updated_at", None) else "",
+        "transcript_updated_at": (
+            transcript.updated_at.isoformat() if getattr(transcript, "updated_at", None) else ""
+        ),
         "duration_ms": transcript.duration_ms,
         "words_hash": words_hash,
         "prompt": payload.prompt.strip(),

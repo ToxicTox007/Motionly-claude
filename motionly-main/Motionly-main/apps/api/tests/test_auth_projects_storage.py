@@ -18,11 +18,24 @@ from app.schemas.projects import ProjectCreateRequest, ProjectStatus, ProjectUpd
 from app.services.auth import VerifiedToken
 
 
-def test_get_actor_verifies_supabase_jwt_and_ignores_spoofed_user_header() -> None:
+def test_get_actor_verifies_supabase_jwt_and_ignores_spoofed_user_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     user_id = uuid4()
     workspace_id = uuid4()
     token = _jwt({"sub": str(user_id), "aud": "authenticated", "exp": int(time.time()) + 60})
-    request = _request(app_env="test", supabase_jwt_secret="secret")
+    request = _request(
+        app_env="test",
+        supabase_jwt_secret="secret",
+        supabase_url="https://supabase.example.com",
+        supabase_service_role_key="service-role",
+    )
+
+    def fake_membership_check(**kwargs):
+        assert kwargs["user_id"] == user_id
+        assert kwargs["workspace_id"] == workspace_id
+
+    monkeypatch.setattr("app.api.dependencies.require_workspace_membership", fake_membership_check)
 
     actor = asyncio.run(
         get_actor(
@@ -35,6 +48,73 @@ def test_get_actor_verifies_supabase_jwt_and_ignores_spoofed_user_header() -> No
 
     assert actor.user_id == user_id
     assert actor.workspace_id == workspace_id
+
+
+def test_get_actor_rejects_invalid_token() -> None:
+    request = _request(app_env="test", supabase_jwt_secret="secret")
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            get_actor(
+                request=request,
+                authorization="Bearer not-a-jwt",
+                x_motionly_user_id=str(uuid4()),
+                x_motionly_workspace_id=str(uuid4()),
+            )
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.code == "auth_token_invalid"
+
+
+def test_get_actor_rejects_forged_user_header_without_bearer_token() -> None:
+    request = _request(app_env="test", supabase_jwt_secret="secret")
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            get_actor(
+                request=request,
+                authorization=None,
+                x_motionly_user_id=str(uuid4()),
+                x_motionly_workspace_id=str(uuid4()),
+            )
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.code == "auth_required"
+
+
+def test_get_actor_rejects_forged_workspace_header_without_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = uuid4()
+    forged_workspace_id = uuid4()
+    token = _jwt({"sub": str(user_id), "aud": "authenticated", "exp": int(time.time()) + 60})
+    request = _request(
+        app_env="production",
+        supabase_jwt_secret="secret",
+        supabase_url="https://supabase.example.com",
+        supabase_service_role_key="service-role",
+    )
+
+    def fake_membership_check(**kwargs):
+        assert kwargs["user_id"] == user_id
+        assert kwargs["workspace_id"] == forged_workspace_id
+        raise ApiError(403, "workspace_access_denied", "You do not have access.")
+
+    monkeypatch.setattr("app.api.dependencies.require_workspace_membership", fake_membership_check)
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            get_actor(
+                request=request,
+                authorization=f"Bearer {token}",
+                x_motionly_workspace_id=str(forged_workspace_id),
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "workspace_access_denied"
 
 
 def test_get_actor_falls_back_to_supabase_auth_for_asymmetric_tokens(monkeypatch) -> None:
@@ -90,6 +170,33 @@ def test_get_actor_fails_closed_in_production_without_jwt_secret() -> None:
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.code == "auth_not_configured"
+
+
+def test_get_actor_fails_closed_in_staging_without_jwt_secret() -> None:
+    request = _request(app_env="staging", supabase_jwt_secret=None)
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            get_actor(
+                request=request,
+                authorization=None,
+                x_motionly_user_id=str(uuid4()),
+                x_motionly_workspace_id=str(uuid4()),
+            )
+        )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.code == "auth_not_configured"
+
+
+def test_mock_bearer_token_is_not_a_jwt_bypass() -> None:
+    from app.services.auth import verify_supabase_jwt
+
+    with pytest.raises(ApiError) as exc_info:
+        verify_supabase_jwt(token="mock-local-bearer", jwt_secret="test_secret")
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.code == "auth_token_invalid"
 
 
 def test_project_api_create_seeds_local_upload_repository() -> None:

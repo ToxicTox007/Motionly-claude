@@ -11,23 +11,28 @@ from app.api.errors import ApiError, request_validation_error_handler
 from app.api.plans import (
     activate_plan,
     compile_project_timeline,
-    create_plan as _create_plan_api,
     create_plan_snapshot,
+    get_plan_job_status,
     list_plan_snapshots,
     list_plans,
     restore_plan_snapshot,
     update_plan_cuts,
     update_plan_manual_elements,
     update_project_timeline,
-    get_plan_job_status,
+)
+from app.api.plans import (
+    create_plan as _create_plan_api,
 )
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.repositories.visual import InMemoryVisualRepository
-from app.schemas.captions import CaptionPresetKey, LanguageHint
+from app.schemas.captions import CaptionPresetKey, LanguageHint, TranscriptWord
 from app.schemas.plans import (
+    EDIT_PLAN_PROMPT_VERSION,
+    EDIT_PLAN_SCHEMA_VERSION,
     BrollDensity,
+    EditPlanCut,
     EditPlanStatus,
     EditPlanStyle,
     ManualElement,
@@ -35,6 +40,7 @@ from app.schemas.plans import (
     PlanCutsUpdateRequest,
     PlanManualElementsUpdateRequest,
     PlanSnapshotCreateRequest,
+    PlanSummary,
     StyleClassification,
     TimelineUpdateRequest,
 )
@@ -51,6 +57,12 @@ from app.schemas.visual import (
 )
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
+from app.services.edit_plan_validation import (
+    EditPlanValidationContext,
+    EditPlanValidationFailure,
+    validate_edit_plan,
+    validate_generated_plan_payload,
+)
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.queue import PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
@@ -91,19 +103,24 @@ async def create_plan(
         response=None,
         request=request,
     )
-    
+
     if response.status == "ready":
         return response
-        
+
     job_id = response.job_id
     job = plan_queue.registry.jobs[job_id]
-    
+
     from app.api.internal_jobs import _execute_job
+
     result = _execute_job(job=job, request=request)
-    
+
     plan_id = UUID(result["plan_id"])
-    record = repository.get_plan(project_id=project_id, workspace_id=actor.workspace_id, plan_id=plan_id)
-    
+    record = repository.get_plan(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+    )
+
     return response.model_copy(
         update={
             "plan": record.to_response(),
@@ -154,6 +171,230 @@ def make_plan_repository(
             .words,
         )
     return InMemoryPlanRepository(caption_repository), project_id, workspace_id, user_id
+
+
+def valid_generated_plan_payload(**overrides: object) -> dict[str, object]:
+    plan: dict[str, object] = {
+        "schema_version": EDIT_PLAN_SCHEMA_VERSION,
+        "prompt_version": EDIT_PLAN_PROMPT_VERSION,
+        "style": "luxury",
+        "aspect_ratio": "9:16",
+        "render_dimensions": {"width": 1080, "height": 1920},
+        "layout": {"preset_key": "short_form_vertical", "safe_area": {}},
+        "target_duration_s": 10,
+        "cuts": [{"start_ms": 0, "end_ms": 3500, "reason": "hook"}],
+        "caption_highlights": [{"timestamp_ms": 500, "word": "Hello", "effect": "pulse"}],
+        "broll_requests": [
+            {
+                "start_ms": 700,
+                "end_ms": 2400,
+                "keywords": ["office"],
+                "priority": 0.8,
+            }
+        ],
+        "zoom_moments": [{"timestamp_ms": 600, "intensity": 1.2, "reason": "focus"}],
+        "music_mood": "clean",
+        "effects": [],
+        "color_grade": "neutral",
+        "risk_flags": [],
+    }
+    plan.update(overrides)
+    return plan
+
+
+def validation_context_for_repository(
+    repository: InMemoryPlanRepository,
+    *,
+    project_id: UUID,
+    workspace_id: UUID,
+) -> EditPlanValidationContext:
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    upload = repository.get_active_upload(project_id=project_id, workspace_id=workspace_id)
+    return EditPlanValidationContext(
+        source_duration_ms=upload.metadata.duration_ms or transcript.duration_ms or 1,
+        transcript_words=transcript.words,
+        project_id=project_id,
+    )
+
+
+def assert_validation_error(errors: list[str], code: str, path: str | None = None) -> None:
+    parsed = [json.loads(error) for error in errors]
+    assert any(
+        item.get("code") == code and (path is None or item.get("path") == path)
+        for item in parsed
+    ), errors
+
+
+def test_generated_plan_validation_rejects_malformed_json() -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    context = validation_context_for_repository(
+        repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+
+    with pytest.raises(EditPlanValidationFailure) as exc_info:
+        validate_generated_plan_payload(payload="{not json", context=context)
+
+    assert_validation_error(exc_info.value.errors, "malformed_json", "root")
+
+
+def test_generated_plan_validation_rejects_missing_required_fields() -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    context = validation_context_for_repository(
+        repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    payload = valid_generated_plan_payload()
+    del payload["prompt_version"]
+
+    with pytest.raises(EditPlanValidationFailure) as exc_info:
+        validate_generated_plan_payload(payload=payload, context=context)
+
+    assert_validation_error(exc_info.value.errors, "missing_required_field", "prompt_version")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "code", "path"),
+    [
+        (
+            {"cuts": [{"start_ms": -1, "end_ms": 3500, "reason": "negative"}]},
+            "greater_than_equal",
+            "cuts.0.start_ms",
+        ),
+        (
+            {"cuts": [{"start_ms": 0, "end_ms": 20_000, "reason": "too long"}]},
+            "cut_outside_source_duration",
+            "cuts.0.end_ms",
+        ),
+        (
+            {
+                "cuts": [
+                    {"start_ms": 0, "end_ms": 3000, "reason": "first"},
+                    {"start_ms": 2500, "end_ms": 4000, "reason": "overlap"},
+                ]
+            },
+            "invalid_cut_overlap",
+            "cuts.1",
+        ),
+        (
+            {"caption_highlights": [{"timestamp_ms": 20_000, "word": "late", "effect": "pulse"}]},
+            "caption_outside_transcript_range",
+            "caption_highlights.0.timestamp_ms",
+        ),
+        (
+            {
+                "broll_requests": [
+                    {
+                        "start_ms": 3000,
+                        "end_ms": 5000,
+                        "keywords": ["office"],
+                        "priority": 0.8,
+                    }
+                ]
+            },
+            "broll_outside_output_timeline",
+            "broll_requests.0.end_ms",
+        ),
+        ({"aspect_ratio": "2:1"}, "literal_error", "aspect_ratio"),
+        (
+            {"layout": {"preset_key": "unsupported", "safe_area": {}}},
+            "literal_error",
+            "layout.preset_key",
+        ),
+        (
+            {"schema_version": EDIT_PLAN_SCHEMA_VERSION - 1},
+            "stale_schema_version",
+            "schema_version",
+        ),
+    ],
+)
+def test_generated_plan_validation_rejects_invalid_ranges_and_metadata(
+    overrides: dict[str, object],
+    code: str,
+    path: str,
+) -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    context = validation_context_for_repository(
+        repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+
+    with pytest.raises(EditPlanValidationFailure) as exc_info:
+        validate_generated_plan_payload(
+            payload=valid_generated_plan_payload(**overrides),
+            context=context,
+        )
+
+    assert_validation_error(exc_info.value.errors, code, path)
+
+
+def test_deterministic_fixture_plan_validates_successfully() -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    context = validation_context_for_repository(
+        repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+
+    result = FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+
+    assert result.planner_source == "deterministic_fixture"
+    assert validate_edit_plan(plan=result.plan, context=context) == result.plan
+
+
+def test_invalid_plan_does_not_persist_to_repository() -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    valid_plan = FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
+        video_duration_ms=12_000,
+    ).plan
+    invalid_plan = valid_plan.model_copy(
+        update={"cuts": [EditPlanCut.model_construct(start_ms=-1, end_ms=1000, reason="invalid")]}
+    )
+
+    with pytest.raises(EditPlanValidationFailure):
+        repository.create_plan(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            transcript_id=transcript.id,
+            schema_version=EDIT_PLAN_SCHEMA_VERSION,
+            status=EditPlanStatus.READY,
+            style=EditPlanStyle.LUXURY,
+            target_duration_s=10,
+            broll_density=BrollDensity.MEDIUM,
+            prompt="",
+            feedback=None,
+            provider="test",
+            model="test",
+            cache_key="bad",
+            schema_hash="hash",
+            summary=PlanSummary(
+                duration_s=10,
+                cut_count=1,
+                broll_count=0,
+                zoom_count=0,
+                music_mood="clean",
+                effects=[],
+                color_grade="neutral",
+                risk_flags=[],
+            ),
+            plan=invalid_plan,
+        )
+
+    assert repository.plans == {}
 
 
 def test_create_plan_returns_valid_structured_plan() -> None:
@@ -790,29 +1031,49 @@ def test_update_plan_cuts_persists_trim_split_delete_and_reorder() -> None:
     original = created.plan.plan.cuts
     first = original[0]
     second = original[1] if len(original) > 1 else first
+    if len(original) > 1:
+        edited_cuts = [
+            {
+                "start_ms": second.start_ms,
+                "end_ms": second.end_ms,
+                "reason": "moved first",
+            },
+            {
+                "start_ms": first.start_ms,
+                "end_ms": first.start_ms + 900,
+                "reason": "trimmed intro",
+            },
+            {
+                "start_ms": first.start_ms + 900,
+                "end_ms": min(first.end_ms, first.start_ms + 1800),
+                "reason": "split intro",
+            },
+        ]
+    else:
+        edited_cuts = [
+            {
+                "start_ms": first.start_ms,
+                "end_ms": first.start_ms + 900,
+                "reason": "moved first",
+            },
+            {
+                "start_ms": first.start_ms + 900,
+                "end_ms": min(first.end_ms, first.start_ms + 1800),
+                "reason": "trimmed intro",
+            },
+            {
+                "start_ms": first.start_ms + 1800,
+                "end_ms": min(first.end_ms, first.start_ms + 2700),
+                "reason": "split intro",
+            },
+        ]
 
     updated = asyncio.run(
         update_plan_cuts(
             project_id=project_id,
             plan_id=created.plan.id,
             payload=PlanCutsUpdateRequest(
-                cuts=[
-                    {
-                        "start_ms": second.start_ms,
-                        "end_ms": second.end_ms,
-                        "reason": "moved first",
-                    },
-                    {
-                        "start_ms": first.start_ms,
-                        "end_ms": first.start_ms + 900,
-                        "reason": "trimmed intro",
-                    },
-                    {
-                        "start_ms": first.start_ms + 900,
-                        "end_ms": min(first.end_ms, first.start_ms + 1800),
-                        "reason": "split intro",
-                    },
-                ],
+                cuts=edited_cuts,
             ),
             actor=actor,
             repository=repository,
@@ -967,19 +1228,12 @@ def test_http_planner_receives_audio_intelligence(monkeypatch: pytest.MonkeyPatc
                     {
                         "message": {
                             "content": json.dumps(
-                                {
-                                    "schema_version": 1,
-                                    "style": "luxury",
-                                    "target_duration_s": 10,
-                                    "cuts": [{"start_ms": 240, "end_ms": 3500, "reason": "hook"}],
-                                    "caption_highlights": [],
-                                    "broll_requests": [],
-                                    "zoom_moments": [],
-                                    "music_mood": "clean",
-                                    "effects": [],
-                                    "color_grade": "neutral",
-                                    "risk_flags": [],
-                                }
+                                valid_generated_plan_payload(
+                                    cuts=[{"start_ms": 240, "end_ms": 3500, "reason": "hook"}],
+                                    caption_highlights=[],
+                                    broll_requests=[],
+                                    zoom_moments=[],
+                                )
                             )
                         }
                     }
@@ -1023,52 +1277,41 @@ def test_http_planner_receives_audio_intelligence(monkeypatch: pytest.MonkeyPatc
     assert content["visual_intelligence"]["top_scenes"][0]["scene_type"] == "product"
 
 
-def test_http_planner_repairs_invalid_provider_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_http_planner_retries_after_invalid_provider_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     repository, project_id, workspace_id, _user_id = make_plan_repository()
     transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
     assert transcript is not None
+    responses = iter(
+        [
+            """
+            {
+              "plan": {
+                "style": "LUXURY",
+                "target_duration_s": 8,
+                "cuts": [{"start_ms": 0, "end_ms": 3500, "reason": "hook"}],
+                "caption_highlights": [
+                  {"timestamp_ms": 500, "word": "Hello", "effect": "pop"}
+                ],
+                "b_roll_requests": [
+                  {"start_ms": 700, "end_ms": 2400, "keywords": "office", "priority": 2}
+                ],
+                "zoom_moments": [{"timestamp_ms": 600, "intensity": 2, "reason": "focus"}],
+                "music_mood": "clean",
+                "effects": "warm_grade",
+                "color_grade": "neutral",
+                "risk_flags": []
+              }
+            }
+            """,
+            json.dumps(valid_generated_plan_payload()),
+        ]
+    )
 
     def fake_post(*args: object, **kwargs: object):
         return SimpleNamespace(
             status_code=200,
             json=lambda: {
-                "choices": [
-                    {
-                        "message": {
-                            "content": """
-                            {
-                              "plan": {
-                                "style": "LUXURY",
-                                "target_duration_s": 8,
-                                "cuts": [{"start_ms": 0, "end_ms": 3500, "reason": "hook"}],
-                                "caption_highlights": [
-                                  {"timestamp_ms": 500, "word": "Hello", "effect": "pop"}
-                                ],
-                                "b_roll_requests": [
-                                  {
-                                    "start_ms": 700,
-                                    "end_ms": 2400,
-                                    "keywords": "office",
-                                    "priority": 2
-                                  }
-                                ],
-                                "zoom_moments": [
-                                  {
-                                    "timestamp_ms": 600,
-                                    "intensity": 2,
-                                    "reason": "focus"
-                                  }
-                                ],
-                                "music_mood": "clean",
-                                "effects": "warm_grade",
-                                "color_grade": "neutral",
-                                "risk_flags": []
-                              }
-                            }
-                            """
-                        }
-                    }
-                ],
+                "choices": [{"message": {"content": next(responses)}}],
                 "usage": {"total_tokens": 100},
             },
         )
@@ -1087,9 +1330,11 @@ def test_http_planner_repairs_invalid_provider_shape(monkeypatch: pytest.MonkeyP
 
     assert result.plan.style == EditPlanStyle.LUXURY
     assert result.plan.target_duration_s == 10
-    assert result.plan.caption_highlights[0].effect == "pulse"
+    assert result.planner_source == "llm_retry"
+    assert result.retry_count == 1
+    assert result.fallback_reason is None
     assert result.validation_errors
-    assert "repair_used" in result.validation_errors[-1]
+    assert result.raw_payload["fallback_used"] is False
 
 
 def test_http_planner_falls_back_and_records_validation_errors(
@@ -1119,8 +1364,47 @@ def test_http_planner_falls_back_and_records_validation_errors(
 
     assert result.plan.style == EditPlanStyle.FOUNDER
     assert result.plan.cuts
+    assert result.planner_source == "deterministic_fallback"
+    assert result.retry_count == 2
+    assert result.fallback_reason == "llm_validation_failed"
     assert result.validation_errors
     assert result.raw_payload["fallback_used"] is True
+
+
+def test_http_planner_uses_strict_minimal_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    captured_requests: list[dict[str, object]] = []
+    responses = iter(["not json", "still not json", json.dumps(valid_generated_plan_payload())])
+
+    def fake_post(*args: object, **kwargs: object):
+        captured_requests.append(kwargs["json"])
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "choices": [{"message": {"content": next(responses)}}],
+                "usage": {"total_tokens": 100},
+            },
+        )
+
+    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
+    result = HttpEditPlannerProvider(
+        endpoint="https://planner.test",
+        api_key="test",
+        model="test-model",
+        provider_name="openrouter",
+    ).create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+
+    assert result.planner_source == "llm_minimal"
+    assert result.retry_count == 2
+    assert result.fallback_reason is None
+    third_request_content = json.loads(str(captured_requests[2]["messages"][1]["content"]))
+    assert third_request_content["minimal_plan"] is True
 
 
 def _sample_visual_manifest() -> VideoManifest:
@@ -1425,12 +1709,13 @@ def test_async_planner_failed_job() -> None:
 
 
 def test_phase9_cache_keys() -> None:
-    from app.services.edit_planner import build_plan_cache_key
-    from app.repositories.captions import TranscriptRecord
-    from app.schemas.plans import PlanCreateRequest, EditPlanStyle
-    from app.schemas.visual import VideoManifest
+    from datetime import UTC, datetime
     from uuid import uuid4
-    from datetime import datetime, UTC
+
+    from app.repositories.captions import TranscriptRecord
+    from app.schemas.plans import EditPlanStyle, PlanCreateRequest
+    from app.schemas.visual import VideoManifest
+    from app.services.edit_planner import build_plan_cache_key
 
     transcript = TranscriptRecord(
         id=uuid4(),
@@ -1561,13 +1846,12 @@ def test_phase9_cache_keys() -> None:
 
 
 def test_phase9_repair_vs_fallback() -> None:
-    from app.services.edit_planner import _validate_or_repair_plan
-    from app.repositories.captions import TranscriptRecord
-    from app.schemas.plans import PlanCreateRequest, EditPlanStyle
-    from app.schemas.captions import TranscriptWord
+    from datetime import UTC, datetime
     from uuid import uuid4
-    from datetime import datetime, UTC
-    import json
+
+    from app.repositories.captions import TranscriptRecord
+    from app.schemas.plans import EditPlanStyle, PlanCreateRequest
+    from app.services.edit_planner import _validate_or_repair_plan
 
     transcript = TranscriptRecord(
         id=uuid4(),
@@ -1650,12 +1934,12 @@ def test_phase9_repair_vs_fallback() -> None:
 
 
 def test_phase9_http_provider_json_decode_failure(monkeypatch) -> None:
-    from app.services.edit_planner import HttpEditPlannerProvider
-    from app.repositories.captions import TranscriptRecord
-    from app.schemas.plans import PlanCreateRequest, EditPlanStyle
-    from app.schemas.captions import TranscriptWord, LanguageHint
     from uuid import uuid4
-    import json
+
+    from app.repositories.captions import TranscriptRecord
+    from app.schemas.captions import LanguageHint
+    from app.schemas.plans import EditPlanStyle, PlanCreateRequest
+    from app.services.edit_planner import HttpEditPlannerProvider
 
     class MockResponse:
         def __init__(self, text: str, status_code: int = 200):
@@ -1704,7 +1988,7 @@ def test_phase9_http_provider_json_decode_failure(monkeypatch) -> None:
     )
 
     assert result.raw_payload["fallback_used"] is True
-    assert any("json_decode:" in err for err in result.validation_errors)
-    assert any("json_decode_failed" in err for err in result.validation_errors)
+    assert result.planner_source == "deterministic_fallback"
+    assert result.retry_count == 2
+    assert any("malformed_json" in err for err in result.validation_errors)
     assert result.plan is not None
-

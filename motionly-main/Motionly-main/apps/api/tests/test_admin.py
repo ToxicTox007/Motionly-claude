@@ -195,7 +195,10 @@ def test_admin_access_rejects_non_admin_with_different_allowlisted_identity() ->
 
 
 def test_every_admin_route_requires_the_admin_authorization_dependency(monkeypatch) -> None:
-    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_ENV", "local")
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     from app.core.config import get_settings
 
     get_settings.cache_clear()

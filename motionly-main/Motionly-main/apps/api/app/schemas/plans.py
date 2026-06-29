@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field, model_validator
 from app.schemas.request_body import JsonStringBodyMixin
 
 EDIT_PLAN_SCHEMA_VERSION = 2
+EDIT_PLAN_PROMPT_VERSION = "edit-planner-prompt-v2"
+SUPPORTED_EDIT_PLAN_ASPECT_RATIOS = {"9:16", "16:9", "1:1", "4:5"}
+SUPPORTED_EDIT_PLAN_PRESET_KEYS = {
+    "short_form_vertical",
+    "landscape",
+    "square",
+    "portrait_4_5",
+}
 
 
 class EditPlanStyle(StrEnum):
@@ -82,6 +90,18 @@ class ZoomMoment(BaseModel):
     timestamp_ms: int = Field(ge=0)
     intensity: float = Field(ge=1.0, le=1.5)
     reason: str = Field(min_length=1, max_length=120)
+
+
+class RenderDimensions(BaseModel):
+    width: int = Field(default=1080, ge=1, le=7680)
+    height: int = Field(default=1920, ge=1, le=7680)
+
+
+class EditPlanLayoutMetadata(BaseModel):
+    preset_key: Literal["short_form_vertical", "landscape", "square", "portrait_4_5"] = (
+        "short_form_vertical"
+    )
+    safe_area: dict[str, Any] = Field(default_factory=dict)
 
 
 class ManualElement(BaseModel):
@@ -199,7 +219,11 @@ class TimelineDocument(BaseModel):
 
 class EditPlan(BaseModel):
     schema_version: int = EDIT_PLAN_SCHEMA_VERSION
+    prompt_version: str = EDIT_PLAN_PROMPT_VERSION
     style: EditPlanStyle
+    aspect_ratio: Literal["9:16", "16:9", "1:1", "4:5"] = "9:16"
+    render_dimensions: RenderDimensions = Field(default_factory=RenderDimensions)
+    layout: EditPlanLayoutMetadata = Field(default_factory=EditPlanLayoutMetadata)
     target_duration_s: int = Field(ge=10, le=90)
     cuts: list[EditPlanCut] = Field(default_factory=list, min_length=1, max_length=24)
     caption_highlights: list[CaptionHighlight] = Field(default_factory=list, max_length=12)
@@ -269,6 +293,11 @@ class EditPlanResponse(BaseModel):
     feedback: str | None = None
     provider: str
     model: str
+    planner_source: str = "unknown"
+    model_name: str = ""
+    prompt_version: str = EDIT_PLAN_PROMPT_VERSION
+    retry_count: int = 0
+    fallback_reason: str | None = None
     cache_key: str
     schema_hash: str
     latency_ms: int | None = None
@@ -405,6 +434,16 @@ class PlannerProviderResult(BaseModel):
     plan: EditPlan
     provider: str
     model: str
+    planner_source: Literal[
+        "llm",
+        "llm_retry",
+        "llm_minimal",
+        "deterministic_fixture",
+        "deterministic_fallback",
+    ] = "llm"
+    prompt_version: str = EDIT_PLAN_PROMPT_VERSION
+    retry_count: int = 0
+    fallback_reason: str | None = None
     latency_ms: int
     cost_estimate_usd: float | None = None
     validation_errors: list[str] = Field(default_factory=list)

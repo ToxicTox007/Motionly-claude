@@ -8,7 +8,6 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.plans import create_plan
 from app.api.renders import (
     _select_render_engine,
     create_bulk_render,
@@ -63,9 +62,8 @@ from app.schemas.renders import (
 from app.schemas.uploads import UploadStatus
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
-from app.services.edit_planner import FixtureEditPlannerProvider
 from app.services.ffmpeg_render import FFmpegCaptionRenderer
-from app.services.queue import PlanQueue, RenderQueue
+from app.services.queue import RenderQueue
 from app.services.render_jobs import complete_render_job
 from app.services.transcription_provider import FixtureTranscriptionProvider
 

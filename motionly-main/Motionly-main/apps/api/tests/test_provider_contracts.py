@@ -1,10 +1,12 @@
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from app.api.errors import ApiError
 from app.schemas.broll import StockOrientation
 from app.schemas.captions import LanguageHint, TranscriptWord
 from app.schemas.plans import BrollDensity, PlanCreateRequest
@@ -108,13 +110,6 @@ def test_recorded_runway_generation_contract(monkeypatch) -> None:
     assert result.task_id == "task_recorded_123"
     assert result.video_url.endswith("task_recorded_123.mp4")
 
-
-# ==============================================================================
-# Gated Live Provider Contract Tests
-# ==============================================================================
-
-import os
-from app.api.errors import ApiError
 
 LIVE_PROVIDER_CONTRACTS = os.environ.get("LIVE_PROVIDER_CONTRACTS") == "true"
 

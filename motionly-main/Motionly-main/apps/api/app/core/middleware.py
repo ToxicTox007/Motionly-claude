@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
+from app.core.config import LOCAL_AUTH_BYPASS_ENVS, env_flag_enabled
 from app.core.logging import get_logger
 from app.services.auth import verify_supabase_jwt, verify_supabase_token_with_auth_api
 from app.services.tracing import current_trace_id
@@ -154,6 +155,6 @@ def _verified_identity(request: Request) -> str | None:
             except Exception:
                 return None
         return f"user:{verified.user_id}"
-    if os.getenv("SKIP_API_AUTH") == "true" and settings.app_env != "production":
+    if env_flag_enabled(os.getenv("SKIP_API_AUTH")) and settings.app_env in LOCAL_AUTH_BYPASS_ENVS:
         return "user:local-development"
     return None

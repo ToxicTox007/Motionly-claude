@@ -303,31 +303,34 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
     if job.kind == "edit_plan":
         import json
         from uuid import UUID
+
         from app.schemas.captions import TranscriptStatus
         from app.schemas.plans import (
+            EDIT_PLAN_PROMPT_VERSION,
             EDIT_PLAN_SCHEMA_VERSION,
-            EditPlanStatus,
-            EditPlanStyle,
             BrollDensity,
             EditPlan,
-            PlanSummary,
             EditPlanCut,
+            EditPlanStatus,
+            EditPlanStyle,
+            PlanSummary,
         )
-        from app.services.style_classifier import classify_edit_style
+        from app.services.ai_feedback import record_plan_suggestions
         from app.services.edit_planner import (
             PLANNER_SCHEMA_HASH,
             build_plan_cache_key,
             normalize_plan,
             summarize_plan,
         )
-        from app.services.timeline_compiler import migrate_legacy_plan_to_timeline
         from app.services.operations import monotonic_ms
-        from app.services.ai_feedback import record_plan_suggestions
+        from app.services.style_classifier import classify_edit_style
+        from app.services.timeline_compiler import migrate_legacy_plan_to_timeline
 
         repository = request.app.state.plan_repository
         planner_provider = request.app.state.edit_planner_provider
         operations = getattr(request.app.state, "operations_repository", None)
         billing_repository = getattr(request.app.state, "billing_repository", None)
+        metrics = getattr(request.app.state, "metrics_registry", None)
 
         max_attempts = getattr(settings, "max_paid_provider_attempts", 1)
         if (
@@ -337,7 +340,10 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             raise ApiError(
                 429,
                 "edit_planner_retry_limit_exceeded",
-                f"Paid edit planner retry attempt cap reached (attempts: {job.attempts}, max: {max_attempts}).",
+                (
+                    "Paid edit planner retry attempt cap reached "
+                    f"(attempts: {job.attempts}, max: {max_attempts})."
+                ),
             )
 
         params = json.loads(job.render_engine)
@@ -346,17 +352,28 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         target_duration_s = int(params["target_duration_s"])
         broll_density = BrollDensity(params["broll_density"])
         feedback = params["feedback"]
-        style_profile_id = UUID(params["style_profile_id"]) if params.get("style_profile_id") else None
-        saved_template_id = UUID(params["saved_template_id"]) if params.get("saved_template_id") else None
+        style_profile_id = (
+            UUID(params["style_profile_id"]) if params.get("style_profile_id") else None
+        )
+        saved_template_id = (
+            UUID(params["saved_template_id"]) if params.get("saved_template_id") else None
+        )
         user_id = UUID(params["user_id"]) if params.get("user_id") else None
 
-        repository.get_project_for_workspace(project_id=job.project_id, workspace_id=job.workspace_id)
+        repository.get_project_for_workspace(
+            project_id=job.project_id,
+            workspace_id=job.workspace_id,
+        )
         transcript = repository.latest_transcript(
             project_id=job.project_id,
             workspace_id=job.workspace_id,
         )
         if not transcript:
-            raise ApiError(404, "transcript_not_found", "Generate a transcript before planning edits.")
+            raise ApiError(
+                404,
+                "transcript_not_found",
+                "Generate a transcript before planning edits.",
+            )
         if transcript.status != TranscriptStatus.READY:
             raise ApiError(
                 409,
@@ -364,9 +381,12 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
                 transcript.error_message or "Transcript is not ready for edit planning.",
             )
 
-        upload = repository.get_active_upload(project_id=job.project_id, workspace_id=job.workspace_id)
+        upload = repository.get_active_upload(
+            project_id=job.project_id,
+            workspace_id=job.workspace_id,
+        )
         video_duration_ms = upload.metadata.duration_ms or transcript.duration_ms or 0
-        
+
         visual_manifest = None
         visual_context_flag = "visual_context_unavailable"
         visual_repository = getattr(repository, "visual_repository", None)
@@ -451,6 +471,11 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
                 feedback=feedback.strip() if feedback else None,
                 provider=planner_provider.provider_name,
                 model="failed_generation",
+                planner_source="deterministic_fallback",
+                model_name="failed_generation",
+                prompt_version=EDIT_PLAN_PROMPT_VERSION,
+                retry_count=0,
+                fallback_reason="planner_exception",
                 cache_key=cache_key,
                 schema_hash=PLANNER_SCHEMA_HASH,
                 latency_ms=monotonic_ms() - started_ms,
@@ -493,7 +518,9 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
         )
         if visual_context_flag and visual_context_flag not in plan.risk_flags:
-            plan = plan.model_copy(update={"risk_flags": [*plan.risk_flags, visual_context_flag][:10]})
+            plan = plan.model_copy(
+                update={"risk_flags": [*plan.risk_flags, visual_context_flag][:10]}
+            )
         plan = migrate_legacy_plan_to_timeline(
             plan=plan,
             source_video_id=upload.id,
@@ -512,6 +539,11 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             feedback=effective_payload.feedback.strip() if effective_payload.feedback else None,
             provider=result.provider,
             model=result.model,
+            planner_source=result.planner_source,
+            model_name=result.model,
+            prompt_version=result.prompt_version,
+            retry_count=result.retry_count,
+            fallback_reason=result.fallback_reason,
             cache_key=cache_key,
             schema_hash=PLANNER_SCHEMA_HASH,
             latency_ms=result.latency_ms,

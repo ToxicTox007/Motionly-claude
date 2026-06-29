@@ -5,6 +5,12 @@ from pathlib import Path
 from pydantic import AnyHttpUrl, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+LOCAL_AUTH_BYPASS_ENVS = {"development", "local"}
+
+
+def env_flag_enabled(value: str | None) -> bool:
+    return bool(value and value.lower() in ("true", "1", "yes", "on"))
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -140,15 +146,39 @@ class Settings(BaseSettings):
     google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
     stem_separation_provider: str = Field(default="demucs", alias="STEM_SEPARATION_PROVIDER")
     demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
-    quota_runway_free_limit_seconds: float = Field(default=0.0, alias="QUOTA_RUNWAY_FREE_LIMIT_SECONDS")
-    quota_runway_creator_limit_seconds: float = Field(default=60.0, alias="QUOTA_RUNWAY_CREATOR_LIMIT_SECONDS")
-    quota_runway_pro_limit_seconds: float = Field(default=300.0, alias="QUOTA_RUNWAY_PRO_LIMIT_SECONDS")
-    quota_runway_agency_limit_seconds: float = Field(default=1200.0, alias="QUOTA_RUNWAY_AGENCY_LIMIT_SECONDS")
+    quota_runway_free_limit_seconds: float = Field(
+        default=0.0,
+        alias="QUOTA_RUNWAY_FREE_LIMIT_SECONDS",
+    )
+    quota_runway_creator_limit_seconds: float = Field(
+        default=60.0,
+        alias="QUOTA_RUNWAY_CREATOR_LIMIT_SECONDS",
+    )
+    quota_runway_pro_limit_seconds: float = Field(
+        default=300.0,
+        alias="QUOTA_RUNWAY_PRO_LIMIT_SECONDS",
+    )
+    quota_runway_agency_limit_seconds: float = Field(
+        default=1200.0,
+        alias="QUOTA_RUNWAY_AGENCY_LIMIT_SECONDS",
+    )
 
-    quota_openrouter_free_limit_tokens: float = Field(default=100000.0, alias="QUOTA_OPENROUTER_FREE_LIMIT_TOKENS")
-    quota_openrouter_creator_limit_tokens: float = Field(default=500000.0, alias="QUOTA_OPENROUTER_CREATOR_LIMIT_TOKENS")
-    quota_openrouter_pro_limit_tokens: float = Field(default=2000000.0, alias="QUOTA_OPENROUTER_PRO_LIMIT_TOKENS")
-    quota_openrouter_agency_limit_tokens: float = Field(default=10000000.0, alias="QUOTA_OPENROUTER_AGENCY_LIMIT_TOKENS")
+    quota_openrouter_free_limit_tokens: float = Field(
+        default=100000.0,
+        alias="QUOTA_OPENROUTER_FREE_LIMIT_TOKENS",
+    )
+    quota_openrouter_creator_limit_tokens: float = Field(
+        default=500000.0,
+        alias="QUOTA_OPENROUTER_CREATOR_LIMIT_TOKENS",
+    )
+    quota_openrouter_pro_limit_tokens: float = Field(
+        default=2000000.0,
+        alias="QUOTA_OPENROUTER_PRO_LIMIT_TOKENS",
+    )
+    quota_openrouter_agency_limit_tokens: float = Field(
+        default=10000000.0,
+        alias="QUOTA_OPENROUTER_AGENCY_LIMIT_TOKENS",
+    )
 
     max_paid_provider_attempts: int = Field(default=1, alias="MAX_PAID_PROVIDER_ATTEMPTS")
 
@@ -157,17 +187,35 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
+        skip_api_auth = os.getenv("SKIP_API_AUTH")
+        if env_flag_enabled(skip_api_auth) and self.app_env not in LOCAL_AUTH_BYPASS_ENVS:
+            raise ValueError(
+                "Security violation: SKIP_API_AUTH can only be enabled when "
+                "APP_ENV is exactly 'development' or 'local'."
+            )
+        if not self.supabase_jwt_secret and self.app_env not in LOCAL_AUTH_BYPASS_ENVS:
+            raise ValueError(
+                "Security violation: SUPABASE_JWT_SECRET is required outside local development."
+            )
+        if (
+            self.supabase_jwt_secret
+            and self.app_env not in LOCAL_AUTH_BYPASS_ENVS
+            and (not self.supabase_url or not self.supabase_service_role_key)
+        ):
+            raise ValueError(
+                "Security violation: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required "
+                "outside local development to verify workspace membership."
+            )
         if self.app_env == "production":
-            skip_api_auth = os.getenv("SKIP_API_AUTH")
-            if skip_api_auth and skip_api_auth.lower() in ("true", "1", "yes", "on"):
-                raise ValueError("Security violation: SKIP_API_AUTH cannot be enabled in production environment.")
             if self.publish_sync_completion:
                 raise ValueError(
-                    "Security violation: PUBLISH_SYNC_COMPLETION cannot be enabled in production environment."
+                    "Security violation: PUBLISH_SYNC_COMPLETION cannot be enabled in "
+                    "production environment."
                 )
             if self.force_local_media_storage:
                 raise ValueError(
-                    "Security violation: FORCE_LOCAL_MEDIA_STORAGE cannot be enabled in production environment."
+                    "Security violation: FORCE_LOCAL_MEDIA_STORAGE cannot be enabled in "
+                    "production environment."
                 )
         return self
 

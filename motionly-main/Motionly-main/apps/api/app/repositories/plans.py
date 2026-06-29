@@ -8,6 +8,7 @@ from app.api.errors import ApiError
 from app.repositories.captions import InMemoryCaptionRepository, TranscriptRecord
 from app.repositories.uploads import UploadRecord
 from app.schemas.plans import (
+    EDIT_PLAN_PROMPT_VERSION,
     BrollDensity,
     EditPlan,
     EditPlanResponse,
@@ -16,6 +17,7 @@ from app.schemas.plans import (
     PlanSnapshotResponse,
     PlanSummary,
 )
+from app.services.edit_plan_validation import EditPlanValidationContext, validate_edit_plan
 
 
 @dataclass
@@ -39,6 +41,11 @@ class EditPlanRecord:
     schema_hash: str
     summary: PlanSummary
     plan: EditPlan
+    planner_source: str = "unknown"
+    model_name: str = ""
+    prompt_version: str = EDIT_PLAN_PROMPT_VERSION
+    retry_count: int = 0
+    fallback_reason: str | None = None
     latency_ms: int | None = None
     cost_estimate_usd: float | None = None
     validation_errors: list[str] = field(default_factory=list)
@@ -62,6 +69,11 @@ class EditPlanRecord:
             feedback=self.feedback,
             provider=self.provider,
             model=self.model,
+            planner_source=self.planner_source,
+            model_name=self.model_name or self.model,
+            prompt_version=self.prompt_version,
+            retry_count=self.retry_count,
+            fallback_reason=self.fallback_reason,
             cache_key=self.cache_key,
             schema_hash=self.schema_hash,
             latency_ms=self.latency_ms,
@@ -97,6 +109,11 @@ class EditPlanSnapshotRecord:
     name: str
     notes: str | None
     created_by_user_id: UUID
+    planner_source: str = "unknown"
+    model_name: str = ""
+    prompt_version: str = EDIT_PLAN_PROMPT_VERSION
+    retry_count: int = 0
+    fallback_reason: str | None = None
     validation_errors: list[str] = field(default_factory=list)
     latency_ms: int | None = None
     cost_estimate_usd: float | None = None
@@ -198,6 +215,7 @@ class InMemoryPlanRepository:
         return sorted(matches, key=lambda plan: plan.updated_at, reverse=True)[0]
 
     def create_plan(self, **values: object) -> EditPlanRecord:
+        values = self._prepare_plan_values_for_write(values)
         version = (
             len(
                 [
@@ -244,9 +262,17 @@ class InMemoryPlanRepository:
         target_duration_s: int,
     ) -> EditPlanRecord:
         record = self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
-        record.plan = plan
+        record.plan = self._validate_plan_for_write(
+            plan=plan,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            transcript_id=record.transcript_id,
+            plan_id=plan_id,
+        )
         record.summary = summary
-        record.target_duration_s = target_duration_s
+        record.schema_version = record.plan.schema_version
+        record.target_duration_s = record.plan.target_duration_s
+        record.prompt_version = record.plan.prompt_version
         record.updated_at = datetime.now(UTC)
         return record
 
@@ -287,6 +313,11 @@ class InMemoryPlanRepository:
             name=name.strip(),
             notes=notes.strip() if notes else None,
             created_by_user_id=created_by_user_id,
+            planner_source=source_plan.planner_source,
+            model_name=source_plan.model_name,
+            prompt_version=source_plan.prompt_version,
+            retry_count=source_plan.retry_count,
+            fallback_reason=source_plan.fallback_reason,
             validation_errors=list(source_plan.validation_errors),
             latency_ms=source_plan.latency_ms,
             cost_estimate_usd=source_plan.cost_estimate_usd,
@@ -354,6 +385,11 @@ class InMemoryPlanRepository:
             feedback=snapshot.feedback,
             provider="motionly_snapshot",
             model=f"snapshot:{snapshot.id}",
+            planner_source=snapshot.planner_source,
+            model_name=snapshot.model_name,
+            prompt_version=snapshot.prompt_version,
+            retry_count=snapshot.retry_count,
+            fallback_reason=snapshot.fallback_reason,
             cache_key=f"snapshot:{snapshot.id}:{snapshot.cache_key}",
             schema_hash=snapshot.schema_hash,
             latency_ms=None,
@@ -364,6 +400,69 @@ class InMemoryPlanRepository:
             ],
             summary=snapshot.summary,
             plan=snapshot.plan,
+        )
+
+    def _prepare_plan_values_for_write(self, values: dict[str, object]) -> dict[str, object]:
+        prepared = dict(values)
+        plan = self._validate_plan_for_write(
+            plan=prepared["plan"],
+            project_id=prepared["project_id"],
+            workspace_id=prepared["workspace_id"],
+            transcript_id=prepared["transcript_id"],
+        )
+        prepared["plan"] = plan
+        prepared["schema_version"] = plan.schema_version
+        prepared["target_duration_s"] = plan.target_duration_s
+        prepared.setdefault("planner_source", "unknown")
+        prepared.setdefault("model_name", str(prepared.get("model") or ""))
+        prepared.setdefault("prompt_version", plan.prompt_version)
+        prepared.setdefault("retry_count", 0)
+        prepared.setdefault("fallback_reason", None)
+        return prepared
+
+    def _validate_plan_for_write(
+        self,
+        *,
+        plan: EditPlan | dict[str, object] | object,
+        project_id: object,
+        workspace_id: object,
+        transcript_id: object,
+        plan_id: UUID | None = None,
+    ) -> EditPlan:
+        context = self._validation_context_for_plan_write(
+            project_id=UUID(str(project_id)),
+            workspace_id=UUID(str(workspace_id)),
+            transcript_id=UUID(str(transcript_id)),
+            plan_id=plan_id,
+        )
+        return validate_edit_plan(plan=plan, context=context)  # type: ignore[arg-type]
+
+    def _validation_context_for_plan_write(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        transcript_id: UUID,
+        plan_id: UUID | None = None,
+    ) -> EditPlanValidationContext:
+        upload = self.get_active_upload(project_id=project_id, workspace_id=workspace_id)
+        transcript = self.caption_repository.get_transcript(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            transcript_id=transcript_id,
+        )
+        transcript_end_ms = max((word.end_ms for word in transcript.words), default=0)
+        source_duration_ms = (
+            upload.metadata.duration_ms
+            or transcript.duration_ms
+            or transcript_end_ms
+            or 1
+        )
+        return EditPlanValidationContext(
+            source_duration_ms=source_duration_ms,
+            transcript_words=transcript.words,
+            project_id=project_id,
+            plan_id=plan_id,
         )
 
 
@@ -450,6 +549,7 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         return self._plan_from_row(rows[0]) if rows else None
 
     def create_plan(self, **values: object) -> EditPlanRecord:
+        values = self._prepare_plan_values_for_write(values)
         existing = self.list_plans(
             project_id=values["project_id"],
             workspace_id=values["workspace_id"],
@@ -613,7 +713,14 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         summary: PlanSummary,
         target_duration_s: int,
     ) -> EditPlanRecord:
-        self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+        existing = self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+        plan = self._validate_plan_for_write(
+            plan=plan,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            transcript_id=existing.transcript_id,
+            plan_id=plan_id,
+        )
         response = httpx.patch(
             f"{self.rest_url}/edit_plans",
             headers=self.headers,
@@ -622,7 +729,9 @@ class SupabasePlanRepository(InMemoryPlanRepository):
                 {
                     "plan": plan,
                     "summary": summary,
-                    "target_duration_s": target_duration_s,
+                    "schema_version": plan.schema_version,
+                    "target_duration_s": plan.target_duration_s,
+                    "prompt_version": plan.prompt_version,
                     "updated_at": datetime.now(UTC).isoformat(),
                 }
             ),
@@ -658,6 +767,11 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             feedback=str(row["feedback"]) if row.get("feedback") else None,
             provider=str(row["provider"]),
             model=str(row["model"]),
+            planner_source=str(row.get("planner_source") or "unknown"),
+            model_name=str(row.get("model_name") or row.get("model") or ""),
+            prompt_version=str(row.get("prompt_version") or EDIT_PLAN_PROMPT_VERSION),
+            retry_count=int(row.get("retry_count") or 0),
+            fallback_reason=str(row["fallback_reason"]) if row.get("fallback_reason") else None,
             cache_key=str(row["cache_key"]),
             schema_hash=str(row["schema_hash"]),
             latency_ms=row.get("latency_ms"),
@@ -694,6 +808,11 @@ class SupabasePlanRepository(InMemoryPlanRepository):
                 "feedback": source_plan.feedback,
                 "provider": source_plan.provider,
                 "model": source_plan.model,
+                "planner_source": source_plan.planner_source,
+                "model_name": source_plan.model_name,
+                "prompt_version": source_plan.prompt_version,
+                "retry_count": source_plan.retry_count,
+                "fallback_reason": source_plan.fallback_reason,
                 "cache_key": source_plan.cache_key,
                 "schema_hash": source_plan.schema_hash,
                 "summary": source_plan.summary,
@@ -723,6 +842,11 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             feedback=str(row["feedback"]) if row.get("feedback") else None,
             provider=str(row["provider"]),
             model=str(row["model"]),
+            planner_source=str(row.get("planner_source") or "unknown"),
+            model_name=str(row.get("model_name") or row.get("model") or ""),
+            prompt_version=str(row.get("prompt_version") or EDIT_PLAN_PROMPT_VERSION),
+            retry_count=int(row.get("retry_count") or 0),
+            fallback_reason=str(row["fallback_reason"]) if row.get("fallback_reason") else None,
             cache_key=str(row["cache_key"]),
             schema_hash=str(row["schema_hash"]),
             summary=PlanSummary.model_validate(row.get("summary") or {}),

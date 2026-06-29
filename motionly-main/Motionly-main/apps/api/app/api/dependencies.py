@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import Header, Request
 
 from app.api.errors import ApiError
+from app.core.config import LOCAL_AUTH_BYPASS_ENVS, env_flag_enabled
 from app.repositories.analytics import InMemoryAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
@@ -57,15 +58,17 @@ async def get_actor(
     x_motionly_workspace_id: str | None = Header(default=None),
 ) -> Actor:
     settings = request.app.state.settings
-    # Local bypass: return a mock actor when explicitly enabled and not in production
-    if os.getenv("SKIP_API_AUTH") == "true" and settings.app_env != "production":
-        try:
-            return Actor(
-                user_id=UUID("00000000-0000-4000-8000-000000000001"),
-                workspace_id=UUID("00000000-0000-4000-8000-000000000002"),
-            )
-        except Exception:
-            pass
+    if env_flag_enabled(os.getenv("SKIP_API_AUTH")):
+        if settings.app_env not in LOCAL_AUTH_BYPASS_ENVS:
+            raise ApiError(500, "auth_not_configured", "API authentication is not configured.")
+        return Actor(
+            user_id=UUID("00000000-0000-4000-8000-000000000001"),
+            workspace_id=UUID("00000000-0000-4000-8000-000000000002"),
+        )
+
+    if not settings.supabase_jwt_secret:
+        raise ApiError(500, "auth_not_configured", "API authentication is not configured.")
+
     if settings.supabase_jwt_secret:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise ApiError(401, "auth_required", "Sign in before using Motionly.")
@@ -98,26 +101,9 @@ async def get_actor(
                 user_id=verified.user_id,
                 workspace_id=workspace_id,
             )
-        elif settings.app_env == "production":
+        elif settings.app_env not in LOCAL_AUTH_BYPASS_ENVS:
             raise ApiError(500, "auth_not_configured", "Workspace auth is not configured.")
         return Actor(user_id=verified.user_id, workspace_id=workspace_id)
-
-    if settings.app_env == "production":
-        raise ApiError(500, "auth_not_configured", "API authentication is not configured.")
-
-    if not x_motionly_user_id or not x_motionly_workspace_id:
-        if authorization:
-            raise ApiError(
-                401,
-                "auth_context_missing",
-                "Workspace context is required for uploads.",
-            )
-        raise ApiError(401, "auth_required", "Sign in before uploading video.")
-
-    try:
-        return Actor(user_id=UUID(x_motionly_user_id), workspace_id=UUID(x_motionly_workspace_id))
-    except ValueError as exc:
-        raise ApiError(401, "auth_context_invalid", "Upload auth context is invalid.") from exc
 
 
 def get_upload_repository(request: Request) -> InMemoryUploadRepository:

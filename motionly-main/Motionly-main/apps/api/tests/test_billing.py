@@ -4,7 +4,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.api.billing import apply_stripe_event, build_billing_status, enforce_render_entitlement
+from app.api.billing import (
+    apply_stripe_event,
+    build_billing_status,
+    enforce_render_entitlement,
+    handle_stripe_webhook,
+)
 from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository, SupabaseBillingRepository
 from app.schemas.billing import BillingPlanKey, SubscriptionStatus, UsageEventType
@@ -130,6 +135,88 @@ def test_stripe_webhook_rejects_bad_signature() -> None:
     assert exc_info.value.code == "stripe_signature_invalid"
 
 
+def test_stripe_webhook_endpoint_rejects_missing_signature() -> None:
+    payload = b'{"id":"evt_missing","type":"checkout.session.completed"}'
+    repository = InMemoryBillingRepository()
+
+    with pytest.raises(ApiError) as exc_info:
+        _run_webhook(payload=payload, signature=None, repository=repository)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "stripe_signature_missing"
+
+
+def test_stripe_webhook_endpoint_rejects_invalid_signature() -> None:
+    payload = b'{"id":"evt_invalid","type":"checkout.session.completed"}'
+    repository = InMemoryBillingRepository()
+
+    with pytest.raises(ApiError) as exc_info:
+        _run_webhook(
+            payload=payload,
+            signature=stripe_signature_header(payload=payload, secret="wrong-secret"),
+            repository=repository,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "stripe_signature_invalid"
+
+
+def test_stripe_webhook_endpoint_accepts_signed_checkout_event() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    payload = _checkout_payload(event_id="evt_checkout_signed", workspace_id=workspace_id)
+
+    response = _run_webhook(
+        payload=payload,
+        signature=stripe_signature_header(payload=payload, secret="whsec_test"),
+        repository=repository,
+    )
+
+    subscription = repository.get_subscription(workspace_id=workspace_id)
+    assert response.received is True
+    assert response.duplicate is False
+    assert subscription.plan == BillingPlanKey.CREATOR
+    assert subscription.status == SubscriptionStatus.ACTIVE
+
+
+def test_stripe_webhook_duplicate_event_does_not_duplicate_subscription_state() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    payload = _checkout_payload(event_id="evt_duplicate", workspace_id=workspace_id)
+    signature = stripe_signature_header(payload=payload, secret="whsec_test")
+
+    first = _run_webhook(payload=payload, signature=signature, repository=repository)
+    second = _run_webhook(payload=payload, signature=signature, repository=repository)
+
+    assert first.duplicate is False
+    assert second.duplicate is True
+    assert len(repository.subscriptions) == 1
+    assert len(repository.stripe_events) == 1
+    assert (
+        repository.get_subscription(workspace_id=workspace_id).stripe_subscription_id
+        == "sub_123"
+    )
+
+
+def test_checkout_webhook_entitlement_sync_works_with_staging_test_secret() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    payload = _checkout_payload(event_id="evt_staging_checkout", workspace_id=workspace_id)
+
+    _run_webhook(
+        payload=payload,
+        signature=stripe_signature_header(payload=payload, secret="whsec_staging_test"),
+        repository=repository,
+        webhook_secret="whsec_staging_test",
+        app_env="staging",
+    )
+
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.CREATOR
+    assert status.entitlements.broll is True
+    assert status.entitlements.watermark is False
+
+
 def test_stripe_payment_failure_marks_subscription_past_due_from_signed_sandbox_event() -> None:
     repository = InMemoryBillingRepository()
     workspace_id = uuid4()
@@ -214,3 +301,70 @@ def test_stripe_refund_records_idempotent_billing_adjustment_from_signed_sandbox
     assert adjustment.adjustment_type == "refund"
     assert adjustment.amount_cents == -2900
     assert adjustment.metadata["stripe_charge_id"] == "ch_refund"
+
+
+class _WebhookRequest:
+    def __init__(
+        self,
+        *,
+        payload: bytes,
+        webhook_secret: str,
+        app_env: str = "test",
+    ) -> None:
+        self._payload = payload
+        self.app = SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    app_env=app_env,
+                    billing_enabled=True,
+                    stripe_webhook_secret=webhook_secret,
+                    stripe_price_creator="price_creator",
+                )
+            )
+        )
+
+    async def body(self) -> bytes:
+        return self._payload
+
+
+def _run_webhook(
+    *,
+    payload: bytes,
+    signature: str | None,
+    repository: InMemoryBillingRepository,
+    webhook_secret: str = "whsec_test",
+    app_env: str = "test",
+):
+    import asyncio
+
+    return asyncio.run(
+        handle_stripe_webhook(
+            request=_WebhookRequest(
+                payload=payload,
+                webhook_secret=webhook_secret,
+                app_env=app_env,
+            ),
+            repository=repository,
+            stripe_signature=signature,
+        )
+    )
+
+
+def _checkout_payload(*, event_id: str, workspace_id) -> bytes:
+    return json.dumps(
+        {
+            "id": event_id,
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "client_reference_id": str(workspace_id),
+                    "customer": "cus_123",
+                    "subscription": "sub_123",
+                    "metadata": {
+                        "plan": "creator",
+                        "stripe_price_id": "price_creator",
+                    },
+                }
+            },
+        },
+    ).encode()

@@ -1,6 +1,5 @@
 import asyncio
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -10,9 +9,6 @@ from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.api.internal_jobs import run_queue_job
 from app.core.config import get_settings
-from app.repositories.billing import InMemoryBillingRepository
-from app.repositories.broll import InMemoryBrollRepository
-from app.schemas.billing import BillingPlanKey, SubscriptionStatus
 from app.schemas.broll import BrollGenerateRequest
 from app.services.queue import BrollQueue, QueueRegistry
 from app.services.queue_guard import require_worker_queue
@@ -22,6 +18,9 @@ from tests.test_broll import make_broll_repository, make_creator_billing_reposit
 
 def test_production_blocks_publish_sync_completion(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("SUPABASE_URL", "https://supabase.example.com")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
     monkeypatch.setenv("PUBLISH_SYNC_COMPLETION", "true")
     get_settings.cache_clear()
 
@@ -33,6 +32,9 @@ def test_production_blocks_publish_sync_completion(monkeypatch) -> None:
 
 def test_production_blocks_force_local_media_storage(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("SUPABASE_URL", "https://supabase.example.com")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
     monkeypatch.setenv("FORCE_LOCAL_MEDIA_STORAGE", "true")
     get_settings.cache_clear()
 

@@ -1,17 +1,20 @@
-import pytest
-import httpx
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.schemas.captions import LanguageHint, TranscriptWord
-from app.services.transcription_provider import WhisperCompatibleHttpProvider
-from app.services.transcription_jobs import _run_audio_ml_providers
-from app.services.edit_planner import HttpEditPlannerProvider
-from app.repositories.captions import TranscriptRecord
-from app.schemas.plans import PlanCreateRequest, EditPlanStyle
+import httpx
+import pytest
+
 from app.api.health import dependencies
+from app.repositories.captions import TranscriptRecord
+from app.schemas.captions import LanguageHint, TranscriptWord
+from app.schemas.plans import EditPlanStyle, PlanCreateRequest
+from app.services.edit_planner import HttpEditPlannerProvider
+from app.services.transcription_jobs import _run_audio_ml_providers
+from app.services.transcription_provider import WhisperCompatibleHttpProvider
+
 
 # 1. Groq retry test (transient error -> success)
 def test_groq_whisper_retry_success(monkeypatch) -> None:
@@ -22,7 +25,11 @@ def test_groq_whisper_retry_success(monkeypatch) -> None:
         if len(calls) < 2:
             # First attempt: transient 429
             response = httpx.Response(429, request=httpx.Request("POST", args[0]))
-            raise httpx.HTTPStatusError("Too Many Requests", request=response.request, response=response)
+            raise httpx.HTTPStatusError(
+                "Too Many Requests",
+                request=response.request,
+                response=response,
+            )
         # Second attempt: success
         return httpx.Response(
             200,
@@ -64,7 +71,11 @@ def test_groq_whisper_retry_fails_max_attempts(monkeypatch) -> None:
     def mock_post(*args, **kwargs):
         calls.append(kwargs)
         response = httpx.Response(503, request=httpx.Request("POST", args[0]))
-        raise httpx.HTTPStatusError("Service Unavailable", request=response.request, response=response)
+        raise httpx.HTTPStatusError(
+            "Service Unavailable",
+            request=response.request,
+            response=response,
+        )
 
     monkeypatch.setattr("httpx.post", mock_post)
     monkeypatch.setattr("time.sleep", lambda seconds: None)
@@ -192,7 +203,11 @@ def test_openrouter_request_failure_fallback(monkeypatch) -> None:
     )
 
     assert result.raw_payload["fallback_used"] is True
-    assert any("provider_error:" in err for err in result.validation_errors)
+    assert any(
+        json.loads(err).get("code") == "provider_error"
+        for err in result.validation_errors
+        if err.startswith("{")
+    )
     assert result.plan is not None
 
 # 6. health dependencies endpoint test with audio_ml
@@ -238,5 +253,11 @@ def test_health_dependencies_endpoint_with_audio_ml(monkeypatch) -> None:
 
     assert "audio_ml" in response.dependencies
     assert response.dependencies["audio_ml"].status == "degraded"
-    assert response.dependencies["audio_ml"].metadata["emotion"] == {"available": True, "status": "available"}
-    assert response.dependencies["audio_ml"].metadata["speaker_diarization"] == {"available": False, "status": "dependency_missing"}
+    assert response.dependencies["audio_ml"].metadata["emotion"] == {
+        "available": True,
+        "status": "available",
+    }
+    assert response.dependencies["audio_ml"].metadata["speaker_diarization"] == {
+        "available": False,
+        "status": "dependency_missing",
+    }

@@ -48,6 +48,11 @@ from app.schemas.uploads import UploadStatus
 from app.services.ass_captions import caption_track_to_ass
 from app.services.billing import PLAN_DEFINITIONS
 from app.services.cut_planning import PLANNER_VERSION, build_crop_warnings, plan_keep_segments
+from app.services.edit_plan_validation import (
+    EditPlanValidationContext,
+    EditPlanValidationFailure,
+    validate_edit_plan_for_render,
+)
 from app.services.queue import RenderQueue
 from app.services.render_templates import (
     build_props_hash,
@@ -601,6 +606,30 @@ async def create_render(
         keep_segments=keep_segments,
         template_default_color_grade=template.default_color_grade,
     )
+    if edit_plan_record:
+        render_source_duration_ms = (
+            upload.metadata.duration_ms
+            or max((word.end_ms for word in caption_words_for_render), default=0)
+            or max((segment.end_ms for segment in keep_segments), default=0)
+            or 1
+        )
+        try:
+            validated_render_plan = validate_edit_plan_for_render(
+                plan=EditPlan.model_validate(render_edit_plan),
+                    context=EditPlanValidationContext(
+                        source_duration_ms=render_source_duration_ms,
+                        transcript_words=caption_words,
+                        project_id=project_id,
+                        plan_id=edit_plan_record.id,
+                    ),
+            )
+        except EditPlanValidationFailure as exc:
+            raise ApiError(
+                409,
+                "invalid_edit_plan_for_render",
+                "Edit plan must be regenerated before rendering.",
+            ) from exc
+        render_edit_plan = validated_render_plan.model_dump(mode="json")
     render_edit_plan["manual_elements"] = retime_manual_elements_for_keep_segments(
         elements=list(render_edit_plan.get("manual_elements") or []),
         keep_segments=keep_segments,

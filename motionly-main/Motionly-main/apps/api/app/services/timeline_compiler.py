@@ -109,6 +109,7 @@ def migrate_legacy_plan_to_timeline(
 
 def project_timeline_to_legacy_plan(*, plan: EditPlan, timeline: TimelineDocument) -> EditPlan:
     """Keep old API clients operational while the timeline remains authoritative."""
+    duration_ms = max(1, timeline.duration_ms)
     cuts = [
         EditPlanCut(
             start_ms=clip.source_start_ms,
@@ -118,14 +119,29 @@ def project_timeline_to_legacy_plan(*, plan: EditPlan, timeline: TimelineDocumen
         for clip in timeline.clips
     ]
     manual_elements = [*timeline.manual_layers, *timeline.transitions]
+    broll_requests = [
+        request.model_copy(
+            update={
+                "start_ms": min(request.start_ms, max(0, duration_ms - 1)),
+                "end_ms": min(max(request.end_ms, request.start_ms + 1), duration_ms),
+            }
+        )
+        for request in plan.broll_requests
+        if request.start_ms < duration_ms
+    ]
+    zoom_moments = [
+        moment.model_copy(update={"timestamp_ms": min(moment.timestamp_ms, duration_ms)})
+        for moment in timeline.effects.zoom_moments
+    ]
     return plan.model_copy(
         update={
             "cuts": cuts,
+            "broll_requests": broll_requests,
             "manual_elements": manual_elements,
             "color_grade": timeline.effects.color_grade,
             "effects": timeline.effects.effects,
-            "zoom_moments": timeline.effects.zoom_moments,
-            "target_duration_s": max(10, round(timeline.duration_ms / 1000)),
+            "zoom_moments": zoom_moments,
+            "target_duration_s": max(10, round(duration_ms / 1000)),
             "timeline": timeline,
         }
     )
