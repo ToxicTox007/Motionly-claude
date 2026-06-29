@@ -354,3 +354,53 @@
   ```
 - **Remaining caveats**: None. Preserved existing schema/migrations and ensured full backward compatibility for free/fixture provider modes.
 
+## Phase 11 — Observability, Live Provider Contract Tests, and AI Evals
+
+- Date: 2026-06-29
+- Executor: Antigravity / Main Agent / Implementer
+- Files touched:
+  - [apps/api/app/api/operations.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/operations.py#L34-L52)
+  - [apps/api/app/api/internal_jobs.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/internal_jobs.py#L74-L115)
+  - [apps/api/app/api/internal_jobs.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/app/api/internal_jobs.py#L538-L548)
+  - [apps/api/tests/test_provider_contracts.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_provider_contracts.py#L107-L298)
+  - [.github/workflows/live-provider-contracts.yml](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/.github/workflows/live-provider-contracts.yml)
+  - [apps/api/tests/test_planner_eval.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_planner_eval.py)
+  - [apps/api/tests/test_visual_golden.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_visual_golden.py)
+  - [apps/api/tests/test_metrics_telemetry.py](file:///workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api/tests/test_metrics_telemetry.py)
+- Audit finding resolved: Live provider integration checks were missing, SLO/cost tracking relied on manual reports, and no visual/AI quality evals existed. Provider drift and quality regressions could go undetected.
+- What changed:
+  - Added gated live provider contract tests to `test_provider_contracts.py` skipped by default unless `LIVE_PROVIDER_CONTRACTS=true` is set.
+  - Added a GitHub Actions workflow `live-provider-contracts.yml` to trigger manual or weekly live provider contract tests.
+  - Implemented an offline planner eval dataset/harness in `test_planner_eval.py` to assert expected planner schema/constraints/repairs/fallbacks.
+  - Added visual/AI golden tests in `test_visual_golden.py` validating reframe stability coordinate smoothing and caption chronological timing constraints.
+  - Wired telemetry metrics (job durations, retry counts, failure counts, fallback counts, workspace/provider costs) to the `metrics_registry` and exposed them cleanly on the GET `/metrics` endpoint.
+- Verification performed:
+  - Ran `python -m pytest -v tests/test_provider_contracts.py tests/test_planner_eval.py tests/test_visual_golden.py tests/test_metrics_telemetry.py` to verify that all mock contract, eval, golden, and telemetry tests pass successfully.
+- Verification output / evidence:
+  ```
+  tests/test_provider_contracts.py::test_recorded_openrouter_plan_contract PASSED [  4%]
+  tests/test_provider_contracts.py::test_recorded_groq_whisper_contract PASSED [  8%]
+  tests/test_provider_contracts.py::test_recorded_stock_provider_contracts PASSED [ 13%]
+  tests/test_provider_contracts.py::test_recorded_runway_generation_contract PASSED [ 17%]
+  tests/test_provider_contracts.py::test_live_openrouter_plan_contract SKIPPED [ 21%]
+  tests/test_provider_contracts.py::test_live_openrouter_plan_contract_invalid_key SKIPPED [ 26%]
+  tests/test_provider_contracts.py::test_live_groq_whisper_contract SKIPPED [ 30%]
+  tests/test_provider_contracts.py::test_live_groq_whisper_contract_invalid_key SKIPPED [ 34%]
+  tests/test_live_runway_poll_contract SKIPPED [ 39%]
+  tests/test_live_runway_initiate_bad_credentials SKIPPED [ 43%]
+  tests/test_live_pexels_stock_contract SKIPPED [ 47%]
+  tests/test_live_pexels_stock_bad_credentials SKIPPED [ 52%]
+  tests/test_live_pixabay_stock_contract SKIPPED [ 56%]
+  tests/test_live_pixabay_stock_bad_credentials SKIPPED [ 60%]
+  tests/test_planner_eval.py::test_eval_perfect_provider_plan PASSED       [ 65%]
+  tests/test_planner_eval.py::test_eval_negative_durations_and_overlaps PASSED [ 69%]
+  tests/test_planner_eval.py::test_eval_insane_target_duration PASSED      [ 73%]
+  tests/test_planner_eval.py::test_eval_invalid_broll_requests PASSED      [ 78%]
+  tests/test_planner_eval.py::test_eval_json_decode_and_fallback_triggered PASSED [ 82%]
+  tests/test_planner_eval.py::test_eval_known_bad_fixture_fails_validation PASSED [ 86%]
+  tests/test_visual_golden.py::test_visual_auto_reframe_stability_smoothing PASSED [ 91%]
+  tests/test_visual_golden.py::test_caption_timing_chronology_sanity PASSED [ 95%]
+  tests/test_metrics_telemetry.py::test_metrics_telemetry_rendering[asyncio] PASSED [100%]
+  ================== 13 passed, 10 skipped, 1 warning in 0.90s ===================
+  ```
+- Remaining caveats: Live provider contract tests require valid secret environment keys during GHA dispatch runs. The GA launch requirement of 3 weekly clean runs must be completed before general availability.

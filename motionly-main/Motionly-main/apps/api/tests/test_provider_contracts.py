@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from app.schemas.broll import StockOrientation
 from app.schemas.captions import LanguageHint, TranscriptWord
@@ -106,3 +107,191 @@ def test_recorded_runway_generation_contract(monkeypatch) -> None:
     )
     assert result.task_id == "task_recorded_123"
     assert result.video_url.endswith("task_recorded_123.mp4")
+
+
+# ==============================================================================
+# Gated Live Provider Contract Tests
+# ==============================================================================
+
+import os
+from app.api.errors import ApiError
+
+LIVE_PROVIDER_CONTRACTS = os.environ.get("LIVE_PROVIDER_CONTRACTS") == "true"
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_openrouter_plan_contract() -> None:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        pytest.skip("OPENROUTER_API_KEY not set")
+    transcript = SimpleNamespace(
+        words=[
+            TranscriptWord(index=0, text="Build", start_ms=0, end_ms=500, confidence=0.96),
+            TranscriptWord(index=1, text="better", start_ms=550, end_ms=1100, confidence=0.95),
+        ],
+        raw_payload={},
+    )
+    result = HttpEditPlannerProvider(
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        api_key=api_key,
+        model="openrouter/free",
+        provider_name="openrouter",
+    ).create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(
+            style="founder", target_duration_s=10, broll_density=BrollDensity.NONE
+        ),
+        video_duration_ms=2000,
+    )
+    assert result.provider == "openrouter"
+    assert result.plan.style == "founder"
+    assert len(result.plan.cuts) > 0
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_openrouter_plan_contract_invalid_key() -> None:
+    transcript = SimpleNamespace(
+        words=[
+            TranscriptWord(index=0, text="Build", start_ms=0, end_ms=500, confidence=0.96),
+        ],
+        raw_payload={},
+    )
+    provider = HttpEditPlannerProvider(
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        api_key="bad-key-xyz",
+        model="openrouter/free",
+        provider_name="openrouter",
+    )
+    with pytest.raises(Exception) as excinfo:
+        provider.create_plan(
+            transcript=transcript,
+            payload=PlanCreateRequest(
+                style="founder", target_duration_s=10, broll_density=BrollDensity.NONE
+            ),
+            video_duration_ms=2000,
+        )
+    assert "bad-key-xyz" not in str(excinfo.value)
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_groq_whisper_contract(tmp_path) -> None:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        pytest.skip("GROQ_API_KEY not set")
+    import wave
+    audio = tmp_path / "test.wav"
+    with wave.open(str(audio), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00" * 16000)
+
+    result = WhisperCompatibleHttpProvider(
+        endpoint="https://api.groq.com/openai/v1/audio/transcriptions",
+        api_key=api_key,
+        model="whisper-large-v3-turbo",
+        provider_name="groq",
+    ).transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
+    assert result.provider == "groq"
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_groq_whisper_contract_invalid_key(tmp_path) -> None:
+    import wave
+    audio = tmp_path / "test.wav"
+    with wave.open(str(audio), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00" * 16000)
+
+    provider = WhisperCompatibleHttpProvider(
+        endpoint="https://api.groq.com/openai/v1/audio/transcriptions",
+        api_key="bad-key-xyz",
+        model="whisper-large-v3-turbo",
+        provider_name="groq",
+    )
+    with pytest.raises(Exception) as excinfo:
+        provider.transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
+    assert "bad-key-xyz" not in str(excinfo.value)
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_runway_poll_contract() -> None:
+    api_key = os.environ.get("RUNWAY_API_KEY")
+    if not api_key:
+        pytest.skip("RUNWAY_API_KEY not set")
+    provider = RunwayGen3Provider(api_key=api_key)
+    with pytest.raises(ApiError) as excinfo:
+        provider.poll_task("invalid-task-id")
+    assert excinfo.value.status_code == 502
+    assert api_key not in str(excinfo.value)
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_runway_initiate_bad_credentials() -> None:
+    provider = RunwayGen3Provider(api_key="bad-key-xyz")
+    with pytest.raises(ApiError) as excinfo:
+        provider.initiate_generation(
+            prompt="test prompt",
+            prompt_image_url="https://images.test/test.jpg",
+            duration_s=5,
+            ratio="768:1280",
+        )
+    assert "bad-key-xyz" not in str(excinfo.value)
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_pexels_stock_contract() -> None:
+    api_key = os.environ.get("PEXELS_API_KEY")
+    if not api_key:
+        pytest.skip("PEXELS_API_KEY not set")
+    provider = PexelsStockVideoProvider(api_key=api_key)
+    result = provider.search(
+        query="office",
+        orientation=StockOrientation.PORTRAIT,
+        min_width=720,
+        min_height=1280,
+    )
+    assert isinstance(result, list)
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_pexels_stock_bad_credentials() -> None:
+    provider = PexelsStockVideoProvider(api_key="bad-key-xyz")
+    with pytest.raises(Exception) as excinfo:
+        provider.search(
+            query="office",
+            orientation=StockOrientation.PORTRAIT,
+            min_width=720,
+            min_height=1280,
+        )
+    assert "bad-key-xyz" not in str(excinfo.value)
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_pixabay_stock_contract() -> None:
+    api_key = os.environ.get("PIXABAY_API_KEY")
+    if not api_key:
+        pytest.skip("PIXABAY_API_KEY not set")
+    provider = PixabayStockVideoProvider(api_key=api_key)
+    result = provider.search(
+        query="office",
+        orientation=StockOrientation.PORTRAIT,
+        min_width=720,
+        min_height=1280,
+    )
+    assert isinstance(result, list)
+
+
+@pytest.mark.skipif(not LIVE_PROVIDER_CONTRACTS, reason="Live provider contracts are disabled")
+def test_live_pixabay_stock_bad_credentials() -> None:
+    provider = PixabayStockVideoProvider(api_key="bad-key-xyz")
+    with pytest.raises(Exception) as excinfo:
+        provider.search(
+            query="office",
+            orientation=StockOrientation.PORTRAIT,
+            min_width=720,
+            min_height=1280,
+        )
+    assert "bad-key-xyz" not in str(excinfo.value)

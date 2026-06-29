@@ -73,6 +73,13 @@ async def run_queue_job(
 
     if job.status != QueueJobStatus.RUNNING:
         job = registry.start(queue_job_id)
+    
+    from app.services.operations import monotonic_ms
+    metrics = getattr(request.app.state, "metrics_registry", None)
+    if metrics:
+        metrics.observe("job_retry_count", job.attempts, kind=job.kind)
+        
+    started_ms = monotonic_ms()
     try:
         if job.kind == "batch_plan" and job.workspace_id and job.resource_id:
             from app.api.internal_batches import run_batch
@@ -85,7 +92,28 @@ async def run_queue_job(
             )
         else:
             result = _execute_job(job=job, request=request)
-    except Exception:
+            
+        latency = monotonic_ms() - started_ms
+        status = "failed" if result.get("failed") else "succeeded"
+        if metrics:
+            metrics.observe("job_duration_ms", latency, kind=job.kind, status=status)
+            if status == "failed":
+                metrics.observe(
+                    "job_failure_count",
+                    1,
+                    kind=job.kind,
+                    error_code=str(result.get("error_code") or "job_failed"),
+                )
+    except Exception as exc:
+        latency = monotonic_ms() - started_ms
+        if metrics:
+            metrics.observe("job_duration_ms", latency, kind=job.kind, status="failed")
+            metrics.observe(
+                "job_failure_count",
+                1,
+                kind=job.kind,
+                error_code=type(exc).__name__,
+            )
         registry.fail(queue_job_id)
         raise
 
@@ -510,6 +538,15 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
                 ),
                 metadata={"model": result.model, "plan_id": str(record.id)},
             )
+            fallback_used = result.raw_payload.get("fallback_used", False)
+            if fallback_used and metrics is not None:
+                metrics.observe(
+                    "fallback_degraded_mode_count",
+                    1,
+                    provider=result.provider,
+                    model=result.model,
+                    reason="edit_plan_fallback",
+                )
 
         record_plan_suggestions(
             request=request,

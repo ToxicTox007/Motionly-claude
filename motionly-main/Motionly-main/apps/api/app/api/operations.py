@@ -41,6 +41,18 @@ async def metrics(request: Request, authorization: str | None = Header(default=N
             f'motionly_queue_oldest_seconds{{queue="{queue}"}} '
             f'{snapshot.oldest_queued_seconds or 0}\n'
         )
+    ops_repo = getattr(request.app.state, "operations_repository", None)
+    if ops_repo is not None:
+        cost_by_workspace_provider = {}
+        for event in getattr(ops_repo, "cost_events", []):
+            ws_id = str(event.get("workspace_id") or "unknown").replace('"', "")
+            provider = str(event.get("provider") or "unknown").replace('"', "")
+            qty = float(event.get("quantity") or 0.0)
+            unit_cost = float(event.get("unit_cost_usd") or 0.0)
+            key = (ws_id, provider)
+            cost_by_workspace_provider[key] = cost_by_workspace_provider.get(key, 0.0) + (qty * unit_cost)
+        for (ws_id, provider), cost in sorted(cost_by_workspace_provider.items()):
+            output += f'motionly_cost_usd{{workspace_id="{ws_id}",provider="{provider}"}} {cost:.6f}\n'
     return output
 
 
