@@ -74,7 +74,7 @@ export function EditorLayout({
       {/* Mobile/Tablet View (< 1024px) */}
       <div className="lg:hidden flex flex-col flex-1 min-h-0 relative">
         {/* Compact Mobile Toolbar */}
-        <div className="bg-surface border-b-2 border-foreground flex items-center justify-around p-1 shrink-0 z-30 font-bold gap-1">
+        <div className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-around gap-1 border-t-4 border-foreground bg-surface p-1 font-bold shadow-brutal lg:hidden">
           <button
             type="button"
             className={cn(
@@ -117,7 +117,7 @@ export function EditorLayout({
         </div>
 
         {/* Responsive Content Area */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-2 gap-2">
+        <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-2 pb-20 gap-2">
           <section
             id="editor-preview"
             aria-labelledby="preview-heading"
@@ -140,7 +140,7 @@ export function EditorLayout({
             <button
               type="button"
               aria-label="Close Elements Panel"
-              className="fixed inset-0 top-[8rem] z-40 bg-background/60 backdrop-blur-sm w-full h-full text-left"
+              className="fixed inset-x-0 bottom-16 top-[4rem] z-40 bg-background/75 w-full text-left"
               onClick={() => setActiveSheet(null)}
             />
             <div
@@ -148,7 +148,7 @@ export function EditorLayout({
               role="dialog"
               aria-modal="true"
               aria-label="Element Palette"
-              className="fixed bottom-0 left-0 right-0 top-[8.25rem] z-50 flex flex-col bg-surface border-t-2 border-x-2 border-foreground rounded-t-xl overflow-hidden shadow-xl"
+              className="fixed bottom-16 left-0 right-0 top-[4.25rem] z-50 flex flex-col overflow-hidden border-x-2 border-t-4 border-foreground bg-surface shadow-brutal-lg"
             >
               <div className="flex items-center justify-between border-b-2 border-foreground p-4 shrink-0 bg-surface-elevated">
                 <h2 className="text-sm font-black uppercase tracking-tight">
@@ -173,7 +173,7 @@ export function EditorLayout({
             <button
               type="button"
               aria-label="Close Settings Panel"
-              className="fixed inset-0 top-[8rem] z-40 bg-background/60 backdrop-blur-sm w-full h-full text-left"
+              className="fixed inset-x-0 bottom-16 top-[4rem] z-40 bg-background/75 w-full text-left"
               onClick={() => setActiveSheet(null)}
             />
             <div
@@ -181,7 +181,7 @@ export function EditorLayout({
               role="dialog"
               aria-modal="true"
               aria-label="Editor Settings"
-              className="fixed bottom-0 left-0 right-0 top-[8.25rem] z-50 flex flex-col bg-surface border-t-2 border-x-2 border-foreground rounded-t-xl overflow-hidden shadow-xl"
+              className="fixed bottom-16 left-0 right-0 top-[4.25rem] z-50 flex flex-col overflow-hidden border-x-2 border-t-4 border-foreground bg-surface shadow-brutal-lg"
             >
               <div className="flex items-center justify-between border-b-2 border-foreground p-4 shrink-0 bg-surface-elevated">
                 <h2 className="text-sm font-black uppercase tracking-tight">
@@ -271,7 +271,7 @@ function TopToolbar({
           alt=""
           width={22}
           height={22}
-          className="hidden size-5 sm:block invert dark:invert-0"
+          className="hidden size-5 sm:block"
         />
         <span className="hidden text-xs font-black uppercase tracking-[0.18em] sm:inline">
           Motionly

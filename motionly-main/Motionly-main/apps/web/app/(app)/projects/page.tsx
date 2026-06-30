@@ -1,7 +1,8 @@
-import { AlertTriangle, Film, Pencil, PlusCircle, Trash2 } from "lucide-react";
+import { Film, Pencil, PlusCircle, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { Button, ButtonLink } from "@/components/button";
+import { Alert } from "@/components/brutal-ui";
 import { EmptyState } from "@/components/empty-state";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
@@ -70,15 +71,10 @@ export default async function ProjectsPage({
         </section>
 
         {notice ? (
-          <div className="border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">
-            {notice}
-          </div>
+          <Alert tone="success">{notice}</Alert>
         ) : null}
         {error ? (
-          <div className="flex gap-2 border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
-            <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
-            {error}
-          </div>
+          <Alert tone="danger">{error}</Alert>
         ) : null}
 
         {projects.length ? (

@@ -345,11 +345,6 @@ export function UploadPanel({
         readyUpload?.metadata?.warnings,
       );
       setMessage(completeMsg);
-      toast({
-        title: "Upload Complete",
-        description: "Your video was uploaded and validated successfully.",
-        variant: "success",
-      });
       router.refresh();
     } catch (error) {
       if ((error as Error).name === "AbortError") {
@@ -366,11 +361,6 @@ export function UploadPanel({
         setMessage(
           "Upload canceled. The incomplete source was not attached to this project.",
         );
-        toast({
-          title: "Upload Canceled",
-          description: "The upload process was canceled. No files were saved.",
-          variant: "info",
-        });
         return;
       }
       setPhase("failed");

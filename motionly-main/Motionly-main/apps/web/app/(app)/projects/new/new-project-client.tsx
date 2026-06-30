@@ -2,8 +2,10 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { ArrowRight, Loader2, Sparkles } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/button";
+import { Badge } from "@/components/brutal-ui";
+import { PixelIcon } from "@/components/pixel-icons";
 import { createProject } from "../actions";
 
 function SubmitButton() {
@@ -49,22 +51,28 @@ export function NewProjectClient() {
   };
 
   return (
-    <div className="mx-auto max-w-xl py-8 sm:py-12">
-      <div className="mb-12 space-y-4 text-center">
-        <div className="pixel-button inline-flex size-16 items-center justify-center bg-primary text-primary-foreground">
-          <Sparkles className="size-8" aria-hidden="true" />
+    <div className="mx-auto max-w-2xl py-8 sm:py-12">
+      <div className="mb-8 space-y-4 text-center">
+        <div className="inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary text-primary-foreground shadow-brutal">
+          <PixelIcon name="new" className="size-8" />
         </div>
-        <h2 className="text-4xl font-black tracking-tight">Ready to create?</h2>
-        <p className="text-lg text-muted-foreground">
-          Give your project a name to get started.
+        <Badge variant="primary">Step 1 / Launch terminal</Badge>
+        <h2 className="text-4xl font-black uppercase">Name the reel</h2>
+        <p className="text-base font-bold text-muted-foreground">
+          Create the project record, then continue directly to upload.
         </p>
       </div>
 
       <form
         action={createProject}
         onSubmit={handleSubmit}
-        className="pixel-panel-strong pixel-corners space-y-8 p-6 sm:p-8"
+        className="pixel-panel-strong space-y-8 p-6 sm:p-8"
       >
+        <div className="grid gap-2 border-2 border-foreground bg-background p-3 font-mono text-xs font-black uppercase sm:grid-cols-3">
+          <span className="text-primary">01 Name</span>
+          <span className="text-muted-foreground">02 Upload</span>
+          <span className="text-muted-foreground">03 AI edit</span>
+        </div>
         <div className="space-y-3">
           <label
             className="text-sm font-bold uppercase tracking-widest text-muted-foreground/70"
@@ -78,7 +86,7 @@ export function NewProjectClient() {
             name="title"
             required
             maxLength={120}
-            placeholder="e.g. My Amazing Founder Story"
+            placeholder="Founder story cutdown"
             value={title}
             onChange={handleTitleChange}
             aria-describedby={error ? "title-error" : undefined}
@@ -94,8 +102,8 @@ export function NewProjectClient() {
         <SubmitButton />
       </form>
 
-      <p className="mt-8 text-center text-sm text-muted-foreground">
-        Step 1 of 4: Project setup
+      <p className="mt-8 text-center font-mono text-sm font-bold text-muted-foreground">
+        The next screen keeps upload validation and accepted file rules unchanged.
       </p>
     </div>
   );

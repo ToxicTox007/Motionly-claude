@@ -1,12 +1,12 @@
 import {
-  AlertTriangle,
   ArrowUpRight,
-  Check,
   Gauge,
   Settings,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
+import { Alert } from "@/components/brutal-ui";
+import { PixelIcon } from "@/components/pixel-icons";
 import { getBillingStatus } from "@/lib/billing";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
@@ -24,40 +24,41 @@ export default async function BillingPage({
   return (
     <AppShell title="Billing">
       <div className="space-y-5">
-        <Banner
+        <Alert
           tone="warning"
-          icon={AlertTriangle}
           title={
             env.billingEnabled
               ? "Billing Sandbox Preview (Demo Mode)"
               : "Billing Integration Offline"
           }
-          body={
+        >
+          {
             env.billingEnabled
               ? "Stripe billing is running in sandbox/test mode. Upgrades will execute in a secure test sandbox and real credit cards will not be charged."
               : "Stripe billing integration is currently disabled. All workspace plans listed below are mock/demo accounts only."
           }
-        />
+        </Alert>
         {status.subscription.payment_issue ? (
-          <Banner
+          <Alert
             tone="danger"
-            icon={AlertTriangle}
             title="Payment issue"
-            body="Update your payment method to keep future premium renders and actions available."
-          />
+          >
+            Update your payment method to keep future premium renders and
+            actions available.
+          </Alert>
         ) : null}
         {error ? (
-          <Banner
+          <Alert
             tone="danger"
-            icon={AlertTriangle}
             title="Billing action failed"
-            body={error.replaceAll("_", " ")}
-          />
+          >
+            {error.replaceAll("_", " ")}
+          </Alert>
         ) : null}
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
           {/* Current plan card */}
-          <div className="card-elevated rounded-2xl p-6">
+          <div className="card-elevated p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-bold uppercase text-muted-foreground">
@@ -162,11 +163,7 @@ export default async function BillingPage({
                 <ul className="mt-5 space-y-2 text-sm flex-1">
                   {plan.features.map((feature) => (
                     <li key={feature} className="flex gap-2">
-                      <Check
-                        className="mt-0.5 size-4 shrink-0 text-primary"
-                        strokeWidth={1.5}
-                        aria-hidden="true"
-                      />
+                      <PixelIcon name="success" className="mt-0.5 size-4 shrink-0 text-primary" />
                       <span>{feature}</span>
                     </li>
                   ))}
@@ -219,37 +216,6 @@ function Metric({ label, value }: { label: string; value: string }) {
         {label}
       </p>
       <p className="mt-1 text-lg font-bold capitalize">{value}</p>
-    </div>
-  );
-}
-
-function Banner({
-  icon: Icon,
-  title,
-  body,
-  tone,
-}: {
-  icon: typeof AlertTriangle;
-  title: string;
-  body: string;
-  tone: "danger" | "neutral" | "warning";
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border-l-4 p-4 flex gap-3 items-start mb-0",
-        tone === "danger"
-          ? "border-danger bg-danger/8 text-red-200"
-          : tone === "warning"
-            ? "border-amber-500 bg-amber-500/8 text-amber-200"
-            : "border-border bg-muted",
-      )}
-    >
-      <Icon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-      <div>
-        <p className="font-bold">{title}</p>
-        <p className="mt-1 text-sm">{body}</p>
-      </div>
     </div>
   );
 }

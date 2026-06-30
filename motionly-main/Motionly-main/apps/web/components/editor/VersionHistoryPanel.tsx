@@ -2,8 +2,11 @@
 
 import React, { useEffect, useState } from "react";
 import { History, Loader2, RotateCcw, Save } from "lucide-react";
+import { Button } from "@/components/button";
+import { Modal } from "@/components/brutal-ui";
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import type { EditPlanRecordSummary, PlanSnapshotSummary } from "@motionly/shared";
 
 interface VersionHistoryPanelProps {
@@ -27,6 +30,11 @@ export function VersionHistoryPanel({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [pendingRestore, setPendingRestore] =
+    useState<PlanSnapshotSummary | null>(null);
+  const restoreModalRef = useFocusTrap(Boolean(pendingRestore), () =>
+    setPendingRestore(null),
+  );
 
   useEffect(() => {
     let canceled = false;
@@ -79,7 +87,7 @@ export function VersionHistoryPanel({
   }
 
   async function restore(snapshot: PlanSnapshotSummary) {
-    if (!window.confirm(`Restore "${snapshot.name}"? Current unsaved plan changes will be replaced.`)) return;
+    setPendingRestore(null);
     setBusy(true);
     try {
       const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
@@ -161,7 +169,7 @@ export function VersionHistoryPanel({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void restore(snapshot)}
+                  onClick={() => setPendingRestore(snapshot)}
                   className="flex h-8 items-center gap-1 rounded border-2 border-foreground px-3 text-xs font-bold hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] dark:hover:shadow-[1px_1px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:transform-none disabled:shadow-none bg-surface text-foreground transition-all duration-[100ms] whitespace-nowrap"
                 >
                   <RotateCcw className="size-3" strokeWidth={2} />
@@ -191,6 +199,40 @@ export function VersionHistoryPanel({
           {message}
         </p>
       ) : null}
+      <Modal
+        open={Boolean(pendingRestore)}
+        title="Restore version"
+        description={
+          pendingRestore
+            ? `${pendingRestore.name} will replace the current edit plan.`
+            : undefined
+        }
+        onClose={() => setPendingRestore(null)}
+        contentRef={restoreModalRef}
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setPendingRestore(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              disabled={!pendingRestore || busy}
+              onClick={() => pendingRestore && void restore(pendingRestore)}
+            >
+              Restore
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm font-bold text-muted-foreground">
+          Current unsaved plan changes will be replaced.
+        </p>
+      </Modal>
     </div>
   );
 }

@@ -4,106 +4,115 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Design Tokens — Dark (default) ──────────────────────────────────────── */
+/* ── Design Tokens -- Dark (default) ─────────────────────────────────────── */
 :root {
-  --background: 240 6% 10%;
-  --foreground: 0 0% 100%;
-  --surface: 240 6% 14%;
-  --surface-elevated: 240 6% 18%;
-  --border: 0 0% 100%;
-  --border-strong: 0 0% 100%;
-  --primary: 48 100% 55%;             /* Neon Yellow #FFE31A */
-  --primary-foreground: 0 0% 0%;      /* Pure Black */
-  --muted: 240 6% 16%;
-  --muted-foreground: 240 5% 70%;
-  --focus: 48 100% 55%;
-  --shadow-color: 0 0% 0%;
-  --accent: 262 80% 65%;              /* Neon Purple */
-  --accent-foreground: 0 0% 100%;
+  --ink: 192 78% 4%;
+  --background: 190 66% 6%;
+  --foreground: 172 32% 92%;
+  --surface: 184 45% 10%;
+  --surface-elevated: 181 42% 14%;
+  --surface-soft: 171 54% 88%;
+  --border: 172 32% 92%;
+  --border-strong: 172 32% 92%;
+  --primary: 174 98% 46%;
+  --primary-foreground: 192 78% 4%;
+  --muted: 185 35% 18%;
+  --muted-foreground: 173 19% 70%;
+  --focus: 174 98% 46%;
+  --shadow-color: 192 78% 4%;
+  --accent: 160 95% 72%;
+  --accent-foreground: 192 78% 4%;
 
   /* Semantic */
-  --danger: 350 80% 60%;              /* Neon Coral */
+  --danger: 352 80% 58%;
   --danger-foreground: 0 0% 100%;
-  --warning: 38 92% 52%;
-  --success: 142 70% 45%;
-  --info: 217 90% 65%;
+  --warning: 38 91% 55%;
+  --success: 151 70% 42%;
+  --info: 188 86% 52%;
 }
 
 /* ── Light Theme ─────────────────────────────────────────────────────────── */
 :root[data-theme="light"] {
-  --background: 45 30% 98%;          /* Warm Cream */
-  --foreground: 0 0% 0%;
-  --surface: 0 0% 100%;
-  --surface-elevated: 45 20% 95%;
-  --border: 0 0% 0%;                 /* Pure Black */
-  --border-strong: 0 0% 0%;
-  --primary: 48 100% 55%;             /* Neon Yellow */
-  --primary-foreground: 0 0% 0%;
-  --muted: 45 15% 92%;
-  --muted-foreground: 240 10% 30%;
-  --focus: 48 100% 50%;
-  --shadow-color: 0 0% 0%;
-  --accent: 262 80% 55%;              /* Neon Purple */
-  --accent-foreground: 0 0% 100%;
+  --ink: 192 78% 4%;
+  --background: 173 42% 90%;
+  --foreground: 192 78% 4%;
+  --surface: 176 41% 97%;
+  --surface-elevated: 168 54% 88%;
+  --surface-soft: 171 54% 88%;
+  --border: 192 78% 4%;
+  --border-strong: 192 78% 4%;
+  --primary: 174 98% 44%;
+  --primary-foreground: 192 78% 4%;
+  --muted: 174 34% 84%;
+  --muted-foreground: 189 31% 24%;
+  --focus: 174 98% 38%;
+  --shadow-color: 192 78% 4%;
+  --accent: 160 88% 65%;
+  --accent-foreground: 192 78% 4%;
 
-  --danger: 350 80% 50%;
+  --danger: 352 76% 49%;
   --danger-foreground: 0 0% 100%;
-  --warning: 38 92% 45%;
-  --success: 142 76% 36%;
-  --info: 217 91% 53%;
+  --warning: 38 91% 48%;
+  --success: 151 70% 34%;
+  --info: 188 86% 40%;
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --background: 45 30% 98%;
-    --foreground: 0 0% 0%;
-    --surface: 0 0% 100%;
-    --surface-elevated: 45 20% 95%;
-    --border: 0 0% 0%;
-    --border-strong: 0 0% 0%;
-    --primary: 48 100% 55%;
-    --primary-foreground: 0 0% 0%;
-    --muted: 45 15% 92%;
-    --muted-foreground: 240 10% 30%;
-    --focus: 48 100% 50%;
-    --shadow-color: 0 0% 0%;
-    --accent: 262 80% 55%;
-    --accent-foreground: 0 0% 100%;
+    --ink: 192 78% 4%;
+    --background: 173 42% 90%;
+    --foreground: 192 78% 4%;
+    --surface: 176 41% 97%;
+    --surface-elevated: 168 54% 88%;
+    --surface-soft: 171 54% 88%;
+    --border: 192 78% 4%;
+    --border-strong: 192 78% 4%;
+    --primary: 174 98% 44%;
+    --primary-foreground: 192 78% 4%;
+    --muted: 174 34% 84%;
+    --muted-foreground: 189 31% 24%;
+    --focus: 174 98% 38%;
+    --shadow-color: 192 78% 4%;
+    --accent: 160 88% 65%;
+    --accent-foreground: 192 78% 4%;
 
-    --danger: 350 80% 50%;
+    --danger: 352 76% 49%;
     --danger-foreground: 0 0% 100%;
-    --warning: 38 92% 45%;
-    --success: 142 76% 36%;
-    --info: 217 91% 53%;
+    --warning: 38 91% 48%;
+    --success: 151 70% 34%;
+    --info: 188 86% 40%;
   }
 }
 
 :root[data-theme="dark"] {
-  --background: 240 6% 10%;
-  --foreground: 0 0% 100%;
-  --surface: 240 6% 14%;
-  --surface-elevated: 240 6% 18%;
-  --border: 0 0% 100%;
-  --border-strong: 0 0% 100%;
-  --primary: 48 100% 55%;
-  --primary-foreground: 0 0% 0%;
-  --muted: 240 6% 16%;
-  --muted-foreground: 240 5% 70%;
-  --focus: 48 100% 55%;
-  --shadow-color: 0 0% 0%;
-  --accent: 262 80% 65%;
-  --accent-foreground: 0 0% 100%;
+  --ink: 192 78% 4%;
+  --background: 190 66% 6%;
+  --foreground: 172 32% 92%;
+  --surface: 184 45% 10%;
+  --surface-elevated: 181 42% 14%;
+  --surface-soft: 171 54% 88%;
+  --border: 172 32% 92%;
+  --border-strong: 172 32% 92%;
+  --primary: 174 98% 46%;
+  --primary-foreground: 192 78% 4%;
+  --muted: 185 35% 18%;
+  --muted-foreground: 173 19% 70%;
+  --focus: 174 98% 46%;
+  --shadow-color: 192 78% 4%;
+  --accent: 160 95% 72%;
+  --accent-foreground: 192 78% 4%;
 
-  --danger: 350 80% 60%;
+  --danger: 352 80% 58%;
   --danger-foreground: 0 0% 100%;
-  --warning: 38 92% 52%;
-  --success: 142 70% 45%;
-  --info: 217 90% 65%;
+  --warning: 38 91% 55%;
+  --success: 151 70% 42%;
+  --info: 188 86% 52%;
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after {
   box-sizing: border-box;
+  letter-spacing: 0 !important;
 }
 
 img, video, canvas, svg {
@@ -118,7 +127,11 @@ html {
 body {
   min-height: 100vh;
   overflow-x: hidden;
-  background: hsl(var(--background));
+  background:
+    linear-gradient(90deg, hsl(var(--border) / 0.055) 1px, transparent 1px),
+    linear-gradient(hsl(var(--border) / 0.055) 1px, transparent 1px),
+    hsl(var(--background));
+  background-size: 18px 18px;
   color: hsl(var(--foreground));
   font-family: "Inter", system-ui, -apple-system, sans-serif;
   font-feature-settings: "cv11", "ss01";
@@ -215,8 +228,8 @@ a {
     position: relative;
     background: hsl(var(--surface));
     border: 2px solid hsl(var(--border));
-    border-radius: 12px;
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    border-radius: 4px;
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
     transition: all 120ms ease;
   }
 
@@ -224,27 +237,27 @@ a {
     position: relative;
     background: hsl(var(--surface));
     border: 2px solid hsl(var(--border));
-    border-radius: 12px;
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    border-radius: 4px;
+    box-shadow: 7px 7px 0px 0px hsl(var(--border-strong));
     transition: all 120ms ease;
   }
 
   .card-elevated:hover {
     transform: translate(-2px, -2px);
-    box-shadow: 6px 6px 0px 0px hsl(var(--border));
+    box-shadow: 9px 9px 0px 0px hsl(var(--border-strong));
   }
 
   /* ── Glass Surfaces ─────────────────────────────────────────────────────── */
   .glass {
     background: hsl(var(--surface));
     border: 2px solid hsl(var(--border));
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
   }
 
   .glass-strong {
     background: hsl(var(--surface-elevated));
     border: 2px solid hsl(var(--border));
-    box-shadow: 6px 6px 0px 0px hsl(var(--border));
+    box-shadow: 7px 7px 0px 0px hsl(var(--border-strong));
   }
 
   .glass-surface {
@@ -268,8 +281,8 @@ a {
     position: relative;
     background: hsl(var(--surface));
     border: 2px solid hsl(var(--border));
-    border-radius: 12px;
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    border-radius: 4px;
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
   }
 
   .gradient-border::before {
@@ -286,16 +299,17 @@ a {
     padding: 0 1.125rem;
     font-size: 0.875rem;
     font-weight: 700;
-    border-radius: 8px;
+    border-radius: 4px;
     border: 2px solid hsl(var(--border));
     cursor: pointer;
     white-space: nowrap;
+    box-shadow: 3px 3px 0px 0px hsl(var(--border-strong));
     transition: all 100ms ease;
   }
 
   .btn:hover {
     transform: translate(-2px, -2px);
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
   }
   .btn:active {
     transform: translate(0px, 0px);
@@ -315,7 +329,7 @@ a {
   }
 
   .btn-primary:hover:not(:disabled) {
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
   }
 
   .btn-secondary {
@@ -326,7 +340,7 @@ a {
 
   .btn-secondary:hover:not(:disabled) {
     background: hsl(var(--surface-elevated));
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
   }
 
   .btn-ghost {
@@ -348,7 +362,7 @@ a {
   }
 
   .btn-danger:hover:not(:disabled) {
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
   }
 
   /* Legacy pixel-button — maps to new btn so old code still works */
@@ -361,18 +375,18 @@ a {
     padding: 0 0.875rem;
     font-size: 0.8125rem;
     font-weight: 700;
-    border-radius: 6px;
+    border-radius: 4px;
     border: 2px solid hsl(var(--border));
     background: hsl(var(--surface));
     color: hsl(var(--foreground));
     cursor: pointer;
     white-space: nowrap;
     transition: all 100ms ease;
-    box-shadow: 2px 2px 0px 0px hsl(var(--border));
+    box-shadow: 2px 2px 0px 0px hsl(var(--border-strong));
   }
   .pixel-button:hover:not(:disabled) {
     transform: translate(-1px, -1px);
-    box-shadow: 3px 3px 0px 0px hsl(var(--border));
+    box-shadow: 3px 3px 0px 0px hsl(var(--border-strong));
   }
   .pixel-button:active:not(:disabled) {
     transform: translate(0px, 0px);
@@ -392,7 +406,7 @@ a {
     padding: 0 1rem;
     background: hsl(var(--surface-elevated));
     border: 2px solid hsl(var(--border));
-    border-radius: 6px;
+    border-radius: 4px;
     color: hsl(var(--foreground));
     font-size: 0.875rem;
     transition: all 120ms ease;
@@ -409,7 +423,7 @@ a {
   .input-base:focus {
     outline: none;
     border-color: hsl(var(--primary));
-    box-shadow: 3px 3px 0px 0px hsl(var(--border));
+    box-shadow: 3px 3px 0px 0px hsl(var(--border-strong));
     background: hsl(var(--surface));
   }
 
@@ -420,7 +434,7 @@ a {
     padding: 0 0.875rem;
     background: hsl(var(--surface-elevated));
     border: 2px solid hsl(var(--border));
-    border-radius: 6px;
+    border-radius: 4px;
     color: hsl(var(--foreground));
     font-size: 0.875rem;
     transition: all 120ms ease;
@@ -434,7 +448,7 @@ a {
   .pixel-input:focus {
     outline: none;
     border-color: hsl(var(--primary));
-    box-shadow: 3px 3px 0px 0px hsl(var(--border));
+    box-shadow: 3px 3px 0px 0px hsl(var(--border-strong));
     background: hsl(var(--surface));
   }
 
@@ -491,7 +505,14 @@ a {
 
   .progress-fill {
     height: 100%;
-    background: hsl(var(--primary));
+    background:
+      repeating-linear-gradient(
+        90deg,
+        hsl(var(--primary)) 0,
+        hsl(var(--primary)) 8px,
+        hsl(var(--accent)) 8px,
+        hsl(var(--accent)) 12px
+      );
     border-right: 2px solid hsl(var(--border));
     transition: width 600ms cubic-bezier(0.16, 1, 0.3, 1);
   }
@@ -507,7 +528,14 @@ a {
 
   .pixel-progress-fill {
     height: 100%;
-    background: hsl(var(--primary));
+    background:
+      repeating-linear-gradient(
+        90deg,
+        hsl(var(--primary)) 0,
+        hsl(var(--primary)) 8px,
+        hsl(var(--accent)) 8px,
+        hsl(var(--accent)) 12px
+      );
     border-right: 2px solid hsl(var(--border));
     transition: width 600ms cubic-bezier(0.16, 1, 0.3, 1);
   }
@@ -529,7 +557,7 @@ a {
   /* ── Panel Sections ─────────────────────────────────────────────────────── */
   .panel-section {
     border: 2px solid hsl(var(--border));
-    border-radius: 8px;
+    border-radius: 4px;
     background: hsl(var(--surface));
     overflow: hidden;
   }
@@ -539,8 +567,8 @@ a {
     position: relative;
     background: hsl(var(--surface));
     border: 2px solid hsl(var(--border));
-    border-radius: 12px;
-    box-shadow: 4px 4px 0px 0px hsl(var(--border));
+    border-radius: 4px;
+    box-shadow: 5px 5px 0px 0px hsl(var(--border-strong));
     transition: all 120ms ease;
   }
 
@@ -548,8 +576,8 @@ a {
     position: relative;
     background: hsl(var(--surface));
     border: 2px solid hsl(var(--border));
-    border-radius: 12px;
-    box-shadow: 6px 6px 0px 0px hsl(var(--border));
+    border-radius: 4px;
+    box-shadow: 7px 7px 0px 0px hsl(var(--border-strong));
   }
 
   /* Legacy pixel-corners — now just a no-op (rounded by default) */
@@ -558,16 +586,9 @@ a {
     content: none;
   }
 
-  /* Legacy pixel-glow — maps to glow effect */
+  /* Legacy pixel-glow -- intentionally hard-edged in the teal system */
   .pixel-glow::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    background: radial-gradient(circle at top left, hsl(var(--primary) / 0.12), transparent 40%),
-                radial-gradient(circle at bottom right, hsl(var(--accent) / 0.08), transparent 40%);
-    opacity: 0.9;
+    content: none;
   }
 
   /* Legacy pixel-ornament — removed */
@@ -576,16 +597,16 @@ a {
   /* ── Grid Patterns (kept but softened) ──────────────────────────────────── */
   .pixel-grid {
     background-image:
-      linear-gradient(hsl(var(--border) / 0.15) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--border) / 0.15) 1px, transparent 1px);
-    background-size: 24px 24px;
+      linear-gradient(hsl(var(--border) / 0.22) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.22) 1px, transparent 1px);
+    background-size: 16px 16px;
   }
 
   .pixel-grid-fine {
     background-image:
-      linear-gradient(hsl(var(--border) / 0.1) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--border) / 0.1) 1px, transparent 1px);
-    background-size: 12px 12px;
+      linear-gradient(hsl(var(--border) / 0.14) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.14) 1px, transparent 1px);
+    background-size: 8px 8px;
   }
 
   /* ── Dividers ───────────────────────────────────────────────────────────── */
@@ -596,11 +617,11 @@ a {
 
   /* ── Shadow Utilities ───────────────────────────────────────────────────── */
   .shadow-soft {
-    box-shadow: 0 2px 8px hsl(var(--shadow-color) / 0.25);
+    box-shadow: 3px 3px 0 hsl(var(--border-strong));
   }
 
   .shadow-glow {
-    box-shadow: 0 0 24px hsl(var(--primary) / 0.25), 0 0 8px hsl(var(--primary) / 0.15);
+    box-shadow: 5px 5px 0 hsl(var(--border-strong));
   }
 
   /* ── Focus Ring ─────────────────────────────────────────────────────────── */
@@ -622,26 +643,26 @@ a {
     background: hsl(var(--muted));
     border: 1px solid hsl(var(--border));
     height: 6px;
-    border-radius: 999px;
+    border-radius: 0;
   }
 
   input[type="range"].pixel-range::-moz-range-track {
     background: hsl(var(--muted));
     border: 1px solid hsl(var(--border));
     height: 6px;
-    border-radius: 999px;
+    border-radius: 0;
   }
 
   input[type="range"].pixel-range::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
     margin-top: -6px;
-    background: linear-gradient(135deg, hsl(var(--primary)), hsl(252 85% 72%));
-    border: 2px solid hsl(var(--surface));
+    background: hsl(var(--primary));
+    border: 2px solid hsl(var(--border));
     width: 18px;
     height: 18px;
-    border-radius: 50%;
-    box-shadow: 0 0 8px hsl(var(--primary) / 0.3);
+    border-radius: 2px;
+    box-shadow: 2px 2px 0 hsl(var(--border-strong));
     transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
@@ -650,12 +671,12 @@ a {
   }
 
   input[type="range"].pixel-range::-moz-range-thumb {
-    background: linear-gradient(135deg, hsl(var(--primary)), hsl(252 85% 72%));
-    border: 2px solid hsl(var(--surface));
+    background: hsl(var(--primary));
+    border: 2px solid hsl(var(--border));
     width: 18px;
     height: 18px;
-    border-radius: 50%;
-    box-shadow: 0 0 8px hsl(var(--primary) / 0.3);
+    border-radius: 2px;
+    box-shadow: 2px 2px 0 hsl(var(--border-strong));
     transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
@@ -730,6 +751,6 @@ a {
   }
 
   .pixel-panel, .pixel-panel-strong {
-    border-radius: 10px;
+    border-radius: 4px;
   }
 }

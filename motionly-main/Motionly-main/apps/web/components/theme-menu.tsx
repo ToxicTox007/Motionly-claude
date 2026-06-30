@@ -43,7 +43,7 @@ export function ThemeMenu({
         aria-label={open ? "Close menu" : "Open menu"}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="rounded-lg bg-surface-elevated border border-border hover:border-primary/40 transition-all min-h-[40px] min-w-[40px] flex items-center justify-center text-foreground"
+        className="flex min-h-11 min-w-11 items-center justify-center rounded border-2 border-foreground bg-surface-elevated text-foreground shadow-brutal-sm transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-surface hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none"
       >
         {open ? (
           <X className="size-[18px]" strokeWidth={1.5} />
@@ -58,7 +58,7 @@ export function ThemeMenu({
           <button
             type="button"
             aria-label="Close menu overlay"
-            className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm cursor-default"
+            className="fixed inset-0 z-40 cursor-default bg-background/75"
             onClick={() => setOpen(false)}
           />
 
@@ -68,31 +68,31 @@ export function ThemeMenu({
             role="dialog"
             aria-modal="true"
             aria-label="Navigation menu"
-            className="fixed inset-y-0 right-0 z-50 w-[min(20rem,88vw)] bg-surface/95 backdrop-blur-2xl border-l border-border shadow-xl flex flex-col overflow-y-auto animate-slide-in-right"
+            className="fixed inset-y-0 right-0 z-50 flex w-[min(21rem,88vw)] animate-slide-in-right flex-col overflow-y-auto border-l-4 border-foreground bg-surface shadow-brutal-lg"
           >
             {/* Panel header */}
-            <div className="flex items-center justify-between px-4 py-4 border-b border-border shrink-0">
-              <p className="text-sm font-semibold text-muted-foreground tracking-wide">
+            <div className="flex shrink-0 items-center justify-between border-b-4 border-foreground bg-background px-4 py-4">
+              <p className="text-sm font-black uppercase text-foreground">
                 Menu
               </p>
               <button
                 type="button"
                 aria-label="Close menu"
                 onClick={() => setOpen(false)}
-                className="size-8 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                className="flex size-9 items-center justify-center rounded border-2 border-foreground bg-surface text-foreground shadow-brutal-sm transition-colors hover:bg-surface-elevated focus-visible:outline-none"
               >
                 <X className="size-[18px]" strokeWidth={1.5} />
               </button>
             </div>
 
             {/* Nav items */}
-            <nav className="flex-1 p-3 space-y-0.5">
+            <nav className="flex-1 space-y-2 p-3">
               {items?.map((item) =>
                 item.href ? (
                   <a
                     key={item.label}
                     href={item.href}
-                    className="rounded-lg hover:bg-muted transition-colors px-3 py-2.5 flex items-center gap-3 font-medium text-sm text-foreground"
+                    className="flex min-h-11 items-center gap-3 rounded border-2 border-transparent px-3 py-2.5 text-sm font-black uppercase text-foreground transition-colors hover:border-foreground hover:bg-background hover:shadow-brutal-sm"
                     onClick={() => setOpen(false)}
                   >
                     {item.label}
@@ -101,7 +101,7 @@ export function ThemeMenu({
                   <button
                     key={item.label}
                     type="button"
-                    className="w-full rounded-lg hover:bg-muted transition-colors px-3 py-2.5 flex items-center gap-3 font-medium text-sm text-foreground text-left"
+                    className="flex min-h-11 w-full items-center gap-3 rounded border-2 border-transparent px-3 py-2.5 text-left text-sm font-black uppercase text-foreground transition-colors hover:border-foreground hover:bg-background hover:shadow-brutal-sm"
                     onClick={() => {
                       item.onClick?.();
                       setOpen(false);
@@ -114,11 +114,11 @@ export function ThemeMenu({
             </nav>
 
             {/* Theme toggle pill at bottom */}
-            <div className="p-4 border-t border-border shrink-0">
-              <p className="text-xs font-medium text-muted-foreground mb-2 px-1">
+            <div className="shrink-0 border-t-4 border-foreground bg-background p-4">
+              <p className="mb-2 px-1 font-mono text-xs font-black uppercase text-muted-foreground">
                 Appearance
               </p>
-              <div className="flex items-center gap-1 rounded-xl bg-muted/50 p-1">
+              <div className="flex items-center gap-1 rounded border-2 border-foreground bg-surface p-1 shadow-brutal-sm">
                 {/* Light option */}
                 <button
                   type="button"
@@ -126,9 +126,9 @@ export function ThemeMenu({
                   aria-pressed={theme === "light"}
                   onClick={() => applyTheme("light")}
                   className={cn(
-                    "flex-1 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-[120ms]",
+                    "flex min-h-10 flex-1 items-center justify-center gap-2 rounded px-3 py-2 text-sm font-black uppercase transition-all duration-[120ms]",
                     theme === "light"
-                      ? "bg-primary/15 text-primary"
+                      ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
@@ -143,9 +143,9 @@ export function ThemeMenu({
                   aria-pressed={theme === "dark"}
                   onClick={() => applyTheme("dark")}
                   className={cn(
-                    "flex-1 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-[120ms]",
+                    "flex min-h-10 flex-1 items-center justify-center gap-2 rounded px-3 py-2 text-sm font-black uppercase transition-all duration-[120ms]",
                     theme === "dark"
-                      ? "bg-primary/15 text-primary"
+                      ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >

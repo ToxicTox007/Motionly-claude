@@ -22,8 +22,8 @@ export default function GlobalError({
           minHeight: "100vh",
           display: "grid",
           placeItems: "center",
-          background: "hsl(240 12% 7%)",
-          color: "hsl(220 20% 96%)",
+          background: "hsl(190 66% 6%)",
+          color: "hsl(172 32% 92%)",
           fontFamily: "monospace",
           WebkitFontSmoothing: "antialiased",
           padding: "1rem",
@@ -35,11 +35,11 @@ export default function GlobalError({
             width: "100%",
             maxWidth: "440px",
             textAlign: "center",
-            border: "4px solid white",
-            background: "black",
+            border: "4px solid hsl(172 32% 92%)",
+            background: "hsl(184 45% 10%)",
             padding: "2.5rem 2rem",
-            boxShadow: "8px 8px 0px #fff",
-            borderRadius: "8px",
+            boxShadow: "8px 8px 0px hsl(172 32% 92%)",
+            borderRadius: "4px",
           }}
         >
           {/* Error icon */}
@@ -48,20 +48,20 @@ export default function GlobalError({
               width: "72px",
               height: "72px",
               borderRadius: "4px",
-              background: "hsl(346 84% 60% / 0.15)",
-              border: "2px solid hsl(346 84% 60%)",
+              background: "hsl(352 80% 58%)",
+              border: "2px solid hsl(172 32% 92%)",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               margin: "0 auto 1.5rem",
-              boxShadow: "4px 4px 0px #fff",
+              boxShadow: "4px 4px 0px hsl(172 32% 92%)",
             }}
           >
             <AlertTriangle
               style={{
                 width: "32px",
                 height: "32px",
-                color: "hsl(346 84% 65%)",
+                color: "white",
                 strokeWidth: 2,
               }}
             />
@@ -72,15 +72,15 @@ export default function GlobalError({
             style={{
               fontSize: "10px",
               fontWeight: 900,
-              letterSpacing: "0.15em",
+              letterSpacing: 0,
               textTransform: "uppercase",
-              color: "black",
-              background: "white",
+              color: "hsl(192 78% 4%)",
+              background: "hsl(174 98% 46%)",
               padding: "0.25rem 0.5rem",
               borderRadius: "2px",
               display: "inline-block",
               marginBottom: "1rem",
-              border: "2px solid white",
+              border: "2px solid hsl(172 32% 92%)",
             }}
           >
             System error
@@ -91,10 +91,10 @@ export default function GlobalError({
               fontSize: "1.75rem",
               fontWeight: 900,
               lineHeight: 1.1,
-              letterSpacing: "-0.03em",
+              letterSpacing: 0,
               textTransform: "uppercase",
               margin: "0 0 1rem",
-              color: "white",
+              color: "hsl(172 32% 92%)",
             }}
           >
             Something went off track.
@@ -104,7 +104,7 @@ export default function GlobalError({
             style={{
               fontSize: "0.875rem",
               lineHeight: 1.6,
-              color: "hsl(220 12% 70%)",
+              color: "hsl(173 19% 70%)",
               margin: "0 0 2rem",
             }}
           >
@@ -130,13 +130,13 @@ export default function GlobalError({
                 height: "44px",
                 padding: "0 1.25rem",
                 borderRadius: "4px",
-                background: "hsl(252 85% 65%)",
-                color: "white",
+                background: "hsl(174 98% 46%)",
+                color: "hsl(192 78% 4%)",
                 fontSize: "0.875rem",
                 fontWeight: 900,
                 textDecoration: "none",
-                border: "2px solid white",
-                boxShadow: "3px 3px 0px #fff",
+                border: "2px solid hsl(172 32% 92%)",
+                boxShadow: "3px 3px 0px hsl(172 32% 92%)",
                 transition: "transform 100ms ease",
               }}
             >
@@ -153,13 +153,13 @@ export default function GlobalError({
                   height: "44px",
                   padding: "0 1.125rem",
                   borderRadius: "4px",
-                  background: "white",
-                  color: "black",
+                  background: "hsl(176 41% 97%)",
+                  color: "hsl(192 78% 4%)",
                   fontSize: "0.875rem",
                   fontWeight: 900,
                   border: "2px solid black",
                   cursor: "pointer",
-                  boxShadow: "3px 3px 0px #fff",
+                  boxShadow: "3px 3px 0px hsl(172 32% 92%)",
                   transition: "transform 100ms ease",
                 }}
               >
@@ -174,7 +174,7 @@ export default function GlobalError({
               style={{
                 marginTop: "2rem",
                 fontSize: "10px",
-                color: "hsl(220 12% 50%)",
+                color: "hsl(173 19% 70%)",
                 fontFamily: "monospace",
               }}
             >

@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import React, { useState, Suspense } from "react";
 import { useFormStatus } from "react-dom";
 import { useSearchParams } from "next/navigation";
-import { Button } from "@/components/button";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { Alert, Input } from "@/components/brutal-ui";
+import { PixelIcon } from "@/components/pixel-icons";
+import { Loader2 } from "lucide-react";
 import { env } from "@/lib/env";
 import { login, loginWithGoogle } from "../actions";
 
@@ -15,12 +17,12 @@ function SubmitButton() {
     <button
       type="submit"
       disabled={pending}
-      className="mt-6 w-full inline-flex items-center justify-center gap-2 h-11 rounded-md bg-primary text-primary-foreground text-sm font-bold border-2 border-foreground transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none"
+      className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded border-2 border-foreground bg-primary text-sm font-black uppercase text-primary-foreground shadow-brutal transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none disabled:shadow-none focus:outline-none"
     >
       {pending ? (
         <>
           <Loader2 className="size-4 animate-spin" />
-          Logging in…
+          Logging in...
         </>
       ) : (
         "Log in"
@@ -82,11 +84,11 @@ function LoginFormContent() {
       noValidate
     >
       {/* Logo */}
-      <Link href="/" className="mb-8 inline-flex items-center gap-2.5 group">
-        <div className="flex size-8 items-center justify-center rounded border-2 border-foreground bg-primary shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
-          <span className="text-sm font-black text-primary-foreground">M</span>
+      <Link href="/" className="group mb-8 inline-flex items-center gap-2.5">
+        <div className="flex size-9 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal-sm">
+          <Image src="/icon.svg" alt="Motionly" width={28} height={28} className="size-7" priority />
         </div>
-        <span className="font-black uppercase tracking-tight text-base text-foreground">Motionly</span>
+        <span className="text-base font-black uppercase text-foreground">Motionly</span>
       </Link>
 
       <p className="text-xs font-black uppercase tracking-wider text-muted-foreground font-mono">
@@ -98,18 +100,14 @@ function LoginFormContent() {
 
       {/* Notices & Errors */}
       {noticeParam === "check_email" && (
-        <div className="mt-5 flex gap-3 rounded border-2 border-foreground bg-surface p-3.5 text-sm shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-          <span className="text-lg leading-none">✉️</span>
-          <span className="font-bold text-foreground">
-            Check your email to confirm the account, then log in.
-          </span>
-        </div>
+        <Alert tone="info" className="mt-5">
+          Check your email to confirm the account, then log in.
+        </Alert>
       )}
       {errorMessage && (
-        <div className="mt-5 flex items-start gap-2.5 rounded border-2 border-foreground bg-danger p-3.5 text-sm text-danger-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          <span className="font-bold">{errorMessage}</span>
-        </div>
+        <Alert tone="danger" className="mt-5">
+          {errorMessage}
+        </Alert>
       )}
 
       <input type="hidden" name="next" value={nextParam} />
@@ -122,7 +120,7 @@ function LoginFormContent() {
         >
           Email
         </label>
-        <input
+        <Input
           id="email"
           name="email"
           type="email"
@@ -135,7 +133,7 @@ function LoginFormContent() {
           onBlur={() => setEmailError(validateEmail(email))}
           aria-describedby={emailError ? "email-error" : undefined}
           aria-invalid={Boolean(emailError)}
-          className={`flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-base font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground ${emailError ? "border-danger" : ""}`}
+          className={emailError ? "border-danger" : ""}
         />
         {emailError && (
           <p id="email-error" className="text-xs font-bold text-danger">
@@ -152,7 +150,7 @@ function LoginFormContent() {
         >
           Password
         </label>
-        <input
+        <Input
           id="password"
           name="password"
           type="password"
@@ -165,7 +163,7 @@ function LoginFormContent() {
           onBlur={() => setPasswordError(validatePassword(password))}
           aria-describedby={passwordError ? "password-error" : undefined}
           aria-invalid={Boolean(passwordError)}
-          className={`flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-base font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground ${passwordError ? "border-danger" : ""}`}
+          className={passwordError ? "border-danger" : ""}
         />
         {passwordError && (
           <p id="password-error" className="text-xs font-bold text-danger">
@@ -180,7 +178,7 @@ function LoginFormContent() {
         <button
           formAction={loginWithGoogle}
           formNoValidate
-          className="mt-3 w-full inline-flex items-center justify-center gap-2.5 h-11 rounded-md bg-surface border-2 border-foreground text-sm font-bold text-foreground transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none focus:outline-none"
+          className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2.5 rounded border-2 border-foreground bg-surface text-sm font-black uppercase text-foreground shadow-brutal-sm transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none focus:outline-none"
         >
           {/* Google icon */}
           <svg className="size-4" viewBox="0 0 24 24" aria-hidden="true">
@@ -195,7 +193,7 @@ function LoginFormContent() {
 
       <p className="mt-5 text-center text-sm text-muted-foreground font-mono">
         Need an account?{" "}
-        <Link href="/signup" className="font-bold text-foreground hover:underline">
+        <Link href="/signup" className="inline-flex min-h-10 items-center font-bold text-foreground hover:underline">
           Sign up
         </Link>
       </p>
@@ -211,10 +209,10 @@ export default function LoginPage() {
   return (
     <main className="min-h-screen grid lg:grid-cols-2">
       {/* Left decorative panel */}
-      <div className="relative hidden lg:flex flex-col items-center justify-center overflow-hidden bg-surface border-r-4 border-foreground">
+      <div className="relative hidden flex-col items-center justify-center overflow-hidden border-r-4 border-foreground bg-surface lg:flex">
         <div className="relative text-center px-12">
-          <div className="inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary mb-6 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-            <span className="text-2xl font-black text-primary-foreground">M</span>
+          <div className="mb-6 inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal">
+            <Image src="/icon.svg" alt="" width={46} height={46} className="size-12" />
           </div>
           <h2 className="text-3xl font-black uppercase tracking-tight text-foreground">Make polished reels.</h2>
           <p className="mt-3 text-muted-foreground max-w-xs font-mono text-xs">
@@ -232,7 +230,7 @@ export default function LoginPage() {
               {["AI Timeline", "Captions", "B-roll", "Music", "Export"].map((item, i) => (
                 <div key={item} className={`h-7 rounded border-2 border-foreground flex items-center px-2.5 ${i === 0 ? "bg-primary text-primary-foreground shadow-[1px_1px_0px_#000]" : "bg-surface"}`}>
                   <span className={`text-[9px] font-bold ${i === 0 ? "text-primary-foreground" : "text-muted-foreground"}`}>{item}</span>
-                  {i === 0 && <div className="ml-auto size-1.5 rounded-full bg-foreground animate-pulse" />}
+                  {i === 0 && <PixelIcon name="play" className="ml-auto size-3" />}
                 </div>
               ))}
             </div>

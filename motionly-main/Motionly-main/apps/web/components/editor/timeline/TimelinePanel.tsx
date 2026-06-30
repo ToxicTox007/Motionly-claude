@@ -22,10 +22,14 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/button";
+import { Modal, Tooltip } from "@/components/brutal-ui";
+import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 import { useToast } from "@/components/toast";
 import { formatMs, outputMsToSourceMs, rulerTicks } from "@/lib/timeline";
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useTimeline } from "./useTimeline";
 import { usePlaybackSync } from "./usePlaybackSync";
 import { useEditorHistory, type HistoryEntry } from "../history-context";
@@ -64,9 +68,9 @@ interface TimelinePanelProps {
 
 type ReorderDirection = -1 | 1;
 
-const TRACK_HEIGHT = 48;
-const RULER_HEIGHT = 30;
-const LABEL_WIDTH = 64;
+const TRACK_HEIGHT = 56;
+const RULER_HEIGHT = 36;
+const LABEL_WIDTH = 112;
 const MIN_CLIP_MS = 300;
 const NUDGE_MS = 500;
 const REORDER_THRESHOLD_MS = 120;
@@ -110,6 +114,15 @@ export function TimelinePanel({
     useEditorHistory();
 
   const [snapMarkerMs, setSnapMarkerMs] = useState<number | null>(null);
+  const [dragPreview, setDragPreview] = useState<{
+    clipId: string;
+    startMs: number;
+    endMs: number;
+  } | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const deleteModalRef = useFocusTrap(deleteConfirmOpen, () =>
+    setDeleteConfirmOpen(false),
+  );
   const [visibleRange, setVisibleRange] = useState<{
     startMs: number;
     endMs: number;
@@ -817,9 +830,14 @@ export function TimelinePanel({
     setMessage("Cannot split this clip yet.");
   }
 
+  function requestDeleteSelectedClip() {
+    if (!selectedClip) return;
+    setDeleteConfirmOpen(true);
+  }
+
   function deleteSelectedClip() {
     if (!selectedClip) return;
-    if (!window.confirm(`Delete ${selectedClip.label}?`)) return;
+    setDeleteConfirmOpen(false);
     if (
       selectedClip.sourceRef.kind === "music" &&
       selectedClip.sourceRef.regionId
@@ -1090,19 +1108,19 @@ export function TimelinePanel({
     : "Select a clip";
 
   return (
-    <div className="flex h-full min-h-0 select-none flex-col bg-[hsl(var(--surface))]">
+    <div className="flex h-full min-h-0 select-none flex-col bg-surface">
       <h2 id="timeline-heading" className="sr-only">
         Timeline
       </h2>
-      <div className="pixel-grid-fine flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-2 sm:px-3">
+      <div className="pixel-grid-fine flex min-h-14 shrink-0 items-center gap-2 border-b-2 border-foreground bg-background px-2 sm:px-3">
         <span
-          className="font-mono text-xs text-muted-foreground tabular-nums"
+          className="rounded border-2 border-foreground bg-surface px-2 py-1 font-mono text-xs font-black text-primary tabular-nums shadow-brutal-sm"
           aria-live="polite"
         >
           {formatMs(playheadMs)} <span className="opacity-40">/</span>{" "}
           {formatMs(totalDurationMs)}
         </span>
-        <span className="hidden truncate text-[10px] font-bold text-muted-foreground sm:block">
+        <span className="hidden truncate text-[11px] font-black uppercase text-muted-foreground sm:block">
           {saving
             ? "Saving timeline..."
             : (message ?? currentLabel ?? selectedCopy)}
@@ -1131,7 +1149,7 @@ export function TimelinePanel({
           >
             <Redo2 className="size-3" />
           </TimelineButton>
-          <span className="mx-1 h-4 w-px bg-border" />
+          <span className="mx-1 h-8 w-0.5 bg-foreground" />
           <TimelineButton
             onClick={splitSelectedClip}
             title={
@@ -1143,7 +1161,7 @@ export function TimelinePanel({
             <Scissors className="size-3" />
           </TimelineButton>
           <TimelineButton
-            onClick={deleteSelectedClip}
+            onClick={requestDeleteSelectedClip}
             title={selectedClip ? "Delete selected clip" : "Select a clip"}
             ariaLabel="Delete selected clip"
             disabled={!selectedClip || saving}
@@ -1166,7 +1184,7 @@ export function TimelinePanel({
           >
             <ArrowRight className="size-3" />
           </TimelineButton>
-          <span className="mx-1 h-4 w-px bg-border" />
+          <span className="mx-1 h-8 w-0.5 bg-foreground" />
           <TimelineButton
             onClick={zoomOut}
             title="Zoom out"
@@ -1189,7 +1207,7 @@ export function TimelinePanel({
             <ZoomIn className="size-3" />
           </TimelineButton>
           {zoomLevel !== 1 && (
-            <span className="ml-1 text-[9px] font-bold text-primary tabular-nums">
+            <span className="ml-1 rounded border-2 border-foreground bg-primary px-1.5 py-1 font-mono text-[9px] font-black text-primary-foreground tabular-nums">
               {zoomLevel.toFixed(1)}x
             </span>
           )}
@@ -1197,7 +1215,7 @@ export function TimelinePanel({
       </div>
       {selectedClip ? (
         <form
-          className="flex flex-wrap items-end gap-2 border-b border-border bg-muted/35 p-2"
+          className="flex flex-wrap items-end gap-2 border-b-2 border-foreground bg-surface-elevated p-2"
           onSubmit={(event) => {
             event.preventDefault();
             const form = new FormData(event.currentTarget);
@@ -1207,7 +1225,10 @@ export function TimelinePanel({
             );
           }}
         >
-          <label className="text-sm font-bold text-muted-foreground">
+          <span className="self-center rounded border-2 border-foreground bg-background px-2 py-1 font-mono text-[10px] font-black uppercase text-primary shadow-brutal-sm">
+            Selected
+          </span>
+          <label className="text-sm font-black uppercase text-muted-foreground">
             Start ms
             <input
               name="start_ms"
@@ -1216,7 +1237,7 @@ export function TimelinePanel({
               className="pixel-input ml-2 min-h-11 w-28 px-2"
             />
           </label>
-          <label className="text-sm font-bold text-muted-foreground">
+          <label className="text-sm font-black uppercase text-muted-foreground">
             End ms
             <input
               name="end_ms"
@@ -1225,7 +1246,7 @@ export function TimelinePanel({
               className="pixel-input ml-2 min-h-11 w-28 px-2"
             />
           </label>
-          <span className="text-sm text-muted-foreground">
+          <span className="rounded border-2 border-foreground bg-background px-2 py-2 font-mono text-xs font-black uppercase text-muted-foreground">
             Duration {formatMs(selectedClip.endMs - selectedClip.startMs)}
           </span>
           <ButtonLike type="submit" disabled={saving}>
@@ -1233,6 +1254,17 @@ export function TimelinePanel({
           </ButtonLike>
         </form>
       ) : null}
+
+      <TimelineMinimap
+        tracks={tracks}
+        totalDurationMs={totalDurationMs}
+        playheadMs={playheadMs}
+        pct={pct}
+        onSeek={(ms) => {
+          seekTo(ms);
+          setPlayheadMs(ms);
+        }}
+      />
 
       <MobileTimelineView
         tracks={tracks}
@@ -1248,17 +1280,21 @@ export function TimelinePanel({
 
       <div className="hidden min-h-0 flex-1 overflow-hidden md:flex">
         <div
-          className="flex flex-shrink-0 flex-col border-r border-border bg-[hsl(var(--surface))]"
+          className="flex flex-shrink-0 flex-col border-r-2 border-foreground bg-surface"
           style={{ width: LABEL_WIDTH }}
         >
-          <div style={{ height: RULER_HEIGHT }} />
+          <div className="border-b-2 border-foreground bg-background" style={{ height: RULER_HEIGHT }} />
           {tracks.map((track) => (
             <div
               key={track.kind}
-              className="flex items-center justify-end pr-2"
+              className={cn(
+                "flex items-center justify-between gap-2 border-b border-foreground/40 px-2",
+                trackToneClass(track.kind),
+              )}
               style={{ height: TRACK_HEIGHT }}
             >
-              <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/70">
+              <PixelIcon name={trackIconName(track.kind)} className="size-4" />
+              <span className="truncate font-mono text-[10px] font-black uppercase">
                 {track.label}
               </span>
             </div>
@@ -1296,10 +1332,10 @@ export function TimelinePanel({
                 role="list"
                 aria-label={`${track.label} timeline track`}
                 className={cn(
-                  "relative border-b border-border/60",
+                  "relative border-b border-foreground/50",
                   trackIdx % 2 === 0
-                    ? "bg-[hsl(var(--background))]"
-                    : "bg-[hsl(var(--surface))]",
+                    ? "bg-background"
+                    : "bg-surface-elevated/60",
                 )}
                 style={{ height: TRACK_HEIGHT }}
               >
@@ -1344,6 +1380,7 @@ export function TimelinePanel({
                       }
                       getSnappedMs={getSnappedMs}
                       setSnapMarkerMs={setSnapMarkerMs}
+                      setDragPreview={setDragPreview}
                     />
                   ) : null,
                 )}
@@ -1352,10 +1389,28 @@ export function TimelinePanel({
 
             {snapMarkerMs !== null && (
               <div
-                className="pointer-events-none absolute top-0 bottom-0 z-30 w-px border-l-2 border-dashed border-primary"
+                className="pointer-events-none absolute bottom-0 top-0 z-30 border-l-4 border-dashed border-primary"
                 style={{ left: pct(snapMarkerMs) }}
-              />
+              >
+                <span className="absolute left-2 top-1 rounded border-2 border-foreground bg-primary px-1.5 py-0.5 font-mono text-[9px] font-black uppercase text-primary-foreground shadow-brutal-sm">
+                  Snap {formatMs(snapMarkerMs)}
+                </span>
+              </div>
             )}
+
+            {dragPreview ? (
+              <div
+                className="pointer-events-none absolute z-40 rounded border-2 border-foreground bg-primary/35 shadow-brutal-sm"
+                style={{
+                  left: pct(dragPreview.startMs),
+                  top: RULER_HEIGHT,
+                  height: tracks.length * TRACK_HEIGHT,
+                  width: `max(3rem, ${pct(
+                    Math.max(dragPreview.endMs - dragPreview.startMs, 250),
+                  )})`,
+                }}
+              />
+            ) : null}
 
             <Playhead
               pct={pct(playheadMs)}
@@ -1364,6 +1419,41 @@ export function TimelinePanel({
           </div>
         </div>
       </div>
+      <Modal
+        open={deleteConfirmOpen}
+        title="Delete clip"
+        description={
+          selectedClip
+            ? `${selectedClip.label} will be removed from this timeline track.`
+            : "Select a clip to delete."
+        }
+        onClose={() => setDeleteConfirmOpen(false)}
+        contentRef={deleteModalRef}
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setDeleteConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              disabled={!selectedClip || saving}
+              onClick={deleteSelectedClip}
+            >
+              Delete clip
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm font-bold text-muted-foreground">
+          This uses the existing timeline save endpoint and can be restored
+          through timeline history when the server save succeeds.
+        </p>
+      </Modal>
     </div>
   );
 }
@@ -1397,6 +1487,78 @@ function captionSegmentIndex(clip: TimelineClip, segments: CaptionSegment[]) {
   }
   return clip.sourceRef.index ?? -1;
 }
+
+function trackIconName(kind: string): PixelIconName {
+  if (kind === "captions") return "captions";
+  if (kind === "broll") return "broll";
+  if (kind === "audio" || kind === "music") return "music";
+  return "play";
+}
+
+function trackToneClass(kind: string) {
+  if (kind === "captions") return "bg-accent text-accent-foreground";
+  if (kind === "broll") return "bg-info text-ink";
+  if (kind === "audio" || kind === "music") return "bg-success text-white";
+  return "bg-primary text-primary-foreground";
+}
+
+const TimelineMinimap = React.memo(function TimelineMinimap({
+  tracks,
+  totalDurationMs,
+  playheadMs,
+  pct,
+  onSeek,
+}: {
+  tracks: TimelineState["tracks"];
+  totalDurationMs: number;
+  playheadMs: number;
+  pct: (ms: number) => string;
+  onSeek: (ms: number) => void;
+}) {
+  const clips = tracks.flatMap((track) =>
+    track.clips.map((clip) => ({ clip, trackKind: track.kind })),
+  );
+
+  return (
+    <button
+      type="button"
+      aria-label="Timeline overview. Click to seek."
+      className="relative hidden h-10 shrink-0 border-b-2 border-foreground bg-background text-left md:block"
+      onPointerDown={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        const nextMs = Math.round(
+          ((event.clientX - rect.left) / Math.max(rect.width, 1)) *
+            totalDurationMs,
+        );
+        onSeek(Math.max(0, Math.min(totalDurationMs, nextMs)));
+      }}
+    >
+      <span className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded border-2 border-foreground bg-surface px-2 py-0.5 font-mono text-[9px] font-black uppercase text-muted-foreground">
+        Map
+      </span>
+      <div className="absolute inset-y-2 left-[4.5rem] right-3 border-2 border-foreground bg-muted">
+        {clips.map(({ clip }, index) => (
+          <span
+            key={`${clip.id}-${index}`}
+            className={cn(
+              "absolute top-0 h-full border-r border-foreground/40 opacity-80",
+              clip.colorClass,
+              clip.disabled && "opacity-20",
+            )}
+            style={{
+              left: pct(clip.startMs),
+              width: `max(2px, ${pct(Math.max(clip.endMs - clip.startMs, 250))})`,
+            }}
+          />
+        ))}
+        <span
+          className="absolute bottom-[-4px] top-[-4px] z-20 w-1 bg-danger"
+          style={{ left: pct(playheadMs), transform: "translateX(-50%)" }}
+        />
+      </div>
+    </button>
+  );
+});
 
 const MobileTimelineView = React.memo(
   function MobileTimelineView({
@@ -1457,8 +1619,14 @@ const MobileTimelineView = React.memo(
                 className="relative border-b border-border/60"
                 style={{ height: 60 }}
               >
-                <div className="absolute left-2 top-1/2 z-20 -translate-y-1/2 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-white select-none">
-                  {track.label}
+                <div
+                  className={cn(
+                    "sticky left-2 top-1/2 z-20 inline-flex -translate-y-1/2 items-center gap-1 rounded border-2 border-foreground px-1.5 py-0.5 text-[9px] font-black uppercase shadow-brutal-sm select-none",
+                    trackToneClass(track.kind),
+                  )}
+                >
+                  <PixelIcon name={trackIconName(track.kind)} className="size-3" />
+                  <span>{track.label}</span>
                 </div>
                 <div className="relative h-full w-full">
                   {track.clips.length === 0 ? (
@@ -1475,12 +1643,12 @@ const MobileTimelineView = React.memo(
                         title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}`}
                         onClick={() => onClipSelect(clip.id)}
                         className={cn(
-                          "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden border border-white/20 px-2 text-left text-[11px] font-bold leading-tight text-white shadow-[2px_2px_0_rgba(0,0,0,0.18)]",
+                          "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden border-2 border-foreground px-2 text-left text-[11px] font-black leading-tight text-white shadow-brutal-sm",
                           clip.colorClass,
                           clip.disabled && "opacity-35",
                           clip.id === selectedClipId
-                            ? "ring-2 ring-white"
-                            : "ring-1 ring-white/10",
+                            ? "ring-2 ring-primary"
+                            : "ring-0",
                         )}
                         style={{
                           left: pct(clip.startMs),
@@ -1525,6 +1693,9 @@ interface ClipBlockProps {
   reorderDisabled: boolean;
   getSnappedMs: (targetMs: number, ignoreClipId?: string) => number;
   setSnapMarkerMs: (ms: number | null) => void;
+  setDragPreview: (
+    preview: { clipId: string; startMs: number; endMs: number } | null,
+  ) => void;
 }
 
 function DroppableTrack({
@@ -1623,6 +1794,7 @@ const ClipBlock = React.memo(
     reorderDisabled,
     getSnappedMs,
     setSnapMarkerMs,
+    setDragPreview,
   }: ClipBlockProps) {
     const widthMs = Math.max(clip.endMs - clip.startMs, 0);
     const { setNodeRef: setDropRef, isOver } = useDroppable({
@@ -1640,6 +1812,18 @@ const ClipBlock = React.memo(
       const handlePointerMove = (moveEvent: PointerEvent) => {
         const nextMs = msFromPointer(moveEvent.clientX);
         const snapped = getSnappedMs(nextMs, clip.id);
+        const previewMs = Math.abs(snapped - nextMs) <= 150 ? snapped : nextMs;
+        setDragPreview({
+          clipId: clip.id,
+          startMs:
+            side === "left"
+              ? Math.min(previewMs, clip.endMs - MIN_CLIP_MS)
+              : clip.startMs,
+          endMs:
+            side === "right"
+              ? Math.max(previewMs, clip.startMs + MIN_CLIP_MS)
+              : clip.endMs,
+        });
         if (Math.abs(snapped - nextMs) <= 150) {
           setSnapMarkerMs(snapped);
         } else {
@@ -1651,6 +1835,7 @@ const ClipBlock = React.memo(
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
         setSnapMarkerMs(null);
+        setDragPreview(null);
 
         const nextMs = msFromPointer(nextEvent.clientX);
         const finalMs = getSnappedMs(nextMs, clip.id);
@@ -1671,6 +1856,12 @@ const ClipBlock = React.memo(
         const deltaMs = msFromPointer(moveEvent.clientX) - startPointerMs;
         const nextMs = startClipMs + deltaMs;
         const snapped = getSnappedMs(nextMs, clip.id);
+        const previewStart = Math.abs(snapped - nextMs) <= 150 ? snapped : nextMs;
+        setDragPreview({
+          clipId: clip.id,
+          startMs: previewStart,
+          endMs: previewStart + (clip.endMs - clip.startMs),
+        });
         if (Math.abs(snapped - nextMs) <= 150) {
           setSnapMarkerMs(snapped);
         } else {
@@ -1682,6 +1873,7 @@ const ClipBlock = React.memo(
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
         setSnapMarkerMs(null);
+        setDragPreview(null);
 
         const deltaMs = msFromPointer(nextEvent.clientX) - startPointerMs;
         if (Math.abs(deltaMs) < 80) return;
@@ -1741,20 +1933,20 @@ const ClipBlock = React.memo(
         aria-pressed={selected}
         aria-label={`${clip.trackKind} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}, duration ${formatMs(widthMs)}.`}
         className={cn(
-          "group absolute bottom-1 top-1 cursor-pointer overflow-hidden border border-white/20",
-          "flex items-center px-2 text-[10px] font-bold leading-none text-white/90",
-          "shadow-[2px_2px_0_rgba(0,0,0,0.2)] ring-inset transition-all duration-100",
+          "group absolute bottom-1 top-1 cursor-pointer overflow-hidden rounded border-2 border-foreground",
+          "flex items-center gap-2 px-2 text-[10px] font-black leading-none text-white",
+          "shadow-brutal-sm ring-inset transition-all duration-100",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-black",
           clip.colorClass,
           clip.disabled && "opacity-30",
           selected
-            ? "ring-2 ring-white shadow-[0_0_0_1px_white,4px_4px_0_rgba(0,0,0,0.22)]"
-            : "ring-1 ring-white/10 hover:-translate-y-0.5 hover:brightness-110",
+            ? "z-30 ring-2 ring-primary shadow-brutal"
+            : "ring-0 hover:-translate-y-0.5 hover:brightness-110",
           isOver && "z-20 ring-2 ring-primary brightness-125",
         )}
         style={{
           left: pct(clip.startMs),
-          width: pct(widthMs),
+          width: `max(3.75rem, ${pct(widthMs)})`,
         }}
         onPointerDown={startMove}
         onKeyDown={onKeyDown}
@@ -1772,12 +1964,17 @@ const ClipBlock = React.memo(
       >
         <TrimHandle
           side="left"
+          selected={selected}
           disabled={trimDisabled}
           onPointerDown={(event) => startTrim("left", event)}
         />
-        <span className="flex-1 truncate">{clip.label}</span>
+        <span className="min-w-0 flex-1 truncate">{clip.label}</span>
+        <span className="hidden shrink-0 rounded border border-foreground bg-black/40 px-1 font-mono text-[9px] sm:inline">
+          {formatMs(widthMs)}
+        </span>
         <TrimHandle
           side="right"
+          selected={selected}
           disabled={trimDisabled}
           onPointerDown={(event) => startTrim("right", event)}
         />
@@ -1800,10 +1997,12 @@ const ClipBlock = React.memo(
 
 function TrimHandle({
   side,
+  selected,
   disabled,
   onPointerDown,
 }: {
   side: "left" | "right";
+  selected: boolean;
   disabled: boolean;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
 }) {
@@ -1813,14 +2012,17 @@ function TrimHandle({
         "absolute bottom-0 top-0 z-20 flex w-5 items-center justify-center transition",
         disabled
           ? "cursor-not-allowed opacity-0 pointer-events-none"
-          : "cursor-ew-resize opacity-60 sm:opacity-0 hover:opacity-100 group-hover:opacity-80 active:opacity-100",
+          : cn(
+              "cursor-ew-resize opacity-70 hover:opacity-100 group-hover:opacity-100 active:opacity-100",
+              selected ? "opacity-100" : "sm:opacity-0",
+            ),
         side === "left" ? "left-0 -translate-x-2" : "right-0 translate-x-2",
       )}
       title={disabled ? "Edit in Audio" : "Trim clip"}
       onPointerDown={onPointerDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="w-1.5 h-6 bg-white border border-foreground/30 shadow-sm" />
+      <div className="h-7 w-2 border-2 border-foreground bg-white shadow-brutal-sm" />
     </div>
   );
 }
@@ -1837,9 +2039,9 @@ const Playhead = React.memo(function Playhead({
       className="pointer-events-none absolute top-0 z-20 flex flex-col items-center"
       style={{ left: pct, transform: "translateX(-50%)" }}
     >
-      <div className="h-2 w-2 rotate-45 bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.8)]" />
+      <div className="h-3 w-3 rotate-45 border-2 border-foreground bg-danger" />
       <div
-        className="w-px bg-red-500/80 shadow-[0_0_3px_rgba(239,68,68,0.5)]"
+        className="w-1 bg-danger"
         style={{ height: totalHeight - 8 }}
       />
     </div>
@@ -1855,22 +2057,40 @@ const TimelineRuler = React.memo(function TimelineRuler({
   pct: (ms: number) => string;
   onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
 }) {
+  const minorTicks = ticks.flatMap((tick, index) => {
+    const next = ticks[index + 1];
+    if (!next) return [];
+    const gap = next.ms - tick.ms;
+    return [
+      tick.ms + gap * 0.25,
+      tick.ms + gap * 0.5,
+      tick.ms + gap * 0.75,
+    ];
+  });
+
   return (
     <div
-      className="pixel-grid-fine relative cursor-pointer bg-[hsl(var(--background))]"
+      className="pixel-grid-fine relative cursor-pointer border-b-2 border-foreground bg-background"
       style={{ height: RULER_HEIGHT }}
       onPointerDown={onPointerDown}
     >
+      {minorTicks.map((ms) => (
+        <div
+          key={`minor-${ms}`}
+          className="absolute bottom-0 h-2 w-px bg-foreground/50"
+          style={{ left: pct(ms), transform: "translateX(-50%)" }}
+        />
+      ))}
       {ticks.map((tick) => (
         <div
           key={tick.ms}
           className="absolute top-0 flex flex-col items-center"
           style={{ left: pct(tick.ms), transform: "translateX(-50%)" }}
         >
-          <span className="pt-1 font-mono text-[8px] leading-none text-muted-foreground/50">
+          <span className="bg-surface px-1 pt-1 font-mono text-[9px] font-black leading-none text-primary">
             {tick.label}
           </span>
-          <div className="mt-0.5 h-2 w-px bg-border" />
+          <div className="mt-0.5 h-4 w-0.5 bg-foreground" />
         </div>
       ))}
     </div>
@@ -1891,15 +2111,17 @@ function TimelineButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
-      title={title}
-      aria-label={ariaLabel}
-      disabled={disabled}
-      className="flex min-h-11 min-w-11 shrink-0 items-center justify-center border border-transparent text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-transparent disabled:hover:bg-transparent"
-    >
-      {children}
-    </button>
+    <Tooltip label={title}>
+      <button
+        onClick={onClick}
+        title={title}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border-2 border-foreground bg-surface text-muted-foreground shadow-brutal-sm transition hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-surface-elevated hover:text-foreground hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:bg-surface disabled:hover:shadow-brutal-sm"
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }
 

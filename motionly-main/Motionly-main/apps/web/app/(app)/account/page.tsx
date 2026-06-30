@@ -1,6 +1,7 @@
-import { AlertTriangle, Briefcase, CheckCircle2, KeyRound, Mail, UserRound } from "lucide-react";
+import { Briefcase, KeyRound, Mail, UserRound } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
+import { Alert } from "@/components/brutal-ui";
 import { createClient } from "@/lib/supabase/server";
 import { logout } from "../../(auth)/actions";
 import { updatePassword, updateProfile } from "./actions";
@@ -61,8 +62,8 @@ export default async function AccountPage({
     <AppShell title="Account">
       <div className="space-y-6">
         {/* Profile header */}
-        <section className="card-elevated rounded-2xl p-6 flex flex-col sm:flex-row gap-6 items-start">
-          <div className="flex size-14 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 items-center justify-center text-white text-xl font-black shrink-0">
+        <section className="card-elevated p-6 flex flex-col sm:flex-row gap-6 items-start">
+          <div className="flex size-14 shrink-0 items-center justify-center rounded border-2 border-foreground bg-primary text-xl font-black text-primary-foreground shadow-brutal-sm">
             {(fullName || "C").charAt(0).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
@@ -82,16 +83,10 @@ export default async function AccountPage({
         </section>
 
         {notice ? (
-          <div className="rounded-lg border-l-4 border-emerald-500 bg-emerald-500/8 p-4 flex gap-3 mb-4 text-emerald-300">
-            <CheckCircle2 className="size-5 shrink-0 mt-0.5" aria-hidden="true" />
-            <p className="text-sm font-bold">{notice}</p>
-          </div>
+          <Alert tone="success">{notice}</Alert>
         ) : null}
         {error ? (
-          <div className="rounded-lg border-l-4 border-danger bg-danger/8 p-4 flex gap-3 mb-4 text-red-300">
-            <AlertTriangle className="size-5 shrink-0 mt-0.5" aria-hidden="true" />
-            <p className="text-sm font-bold">{error}</p>
-          </div>
+          <Alert tone="danger">{error}</Alert>
         ) : null}
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">

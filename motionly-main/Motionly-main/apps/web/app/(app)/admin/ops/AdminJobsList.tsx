@@ -59,7 +59,7 @@ export function AdminJobsList({ jobs, onRetry, onCancel }: AdminJobsListProps) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by job ID, queue, or kind..."
-            className="w-full bg-background border-2 border-border px-3 py-2 pl-9 text-sm focus:outline-none focus:border-primary pixel-corners"
+            className="min-h-11 w-full rounded border-2 border-foreground bg-background px-3 py-2 pl-9 text-sm font-bold focus:border-primary focus:outline-none focus:shadow-brutal-sm"
           />
         </div>
         <div className="relative">
@@ -69,7 +69,7 @@ export function AdminJobsList({ jobs, onRetry, onCancel }: AdminJobsListProps) {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="appearance-none bg-background border-2 border-border px-8 py-2 text-sm focus:outline-none focus:border-primary pixel-corners pr-10"
+            className="min-h-11 appearance-none rounded border-2 border-foreground bg-background px-8 py-2 pr-10 text-sm font-bold focus:border-primary focus:outline-none focus:shadow-brutal-sm"
           >
             <option value="all">All statuses</option>
             {statuses.map((status) => (
@@ -88,7 +88,7 @@ export function AdminJobsList({ jobs, onRetry, onCancel }: AdminJobsListProps) {
         {filteredJobs.slice(0, 50).map((job) => (
           <div
             key={job.id}
-            className="pixel-panel flex flex-wrap items-center justify-between gap-3 p-4 bg-surface hover:brightness-105 transition-all"
+            className="pixel-panel flex flex-wrap items-center justify-between gap-3 bg-surface p-4 transition-all hover:-translate-x-0.5 hover:-translate-y-0.5"
           >
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{job.id}</p>
@@ -97,11 +97,11 @@ export function AdminJobsList({ jobs, onRetry, onCancel }: AdminJobsListProps) {
                 | {job.kind} |{" "}
                 <span
                   className={cn(
-                    "px-1.5 py-0.5 rounded text-[10px] font-black uppercase",
-                    ["failed", "dead_letter"].includes(job.status) && "bg-red-500/15 text-red-600 border border-red-500/20",
-                    ["queued"].includes(job.status) && "bg-blue-500/15 text-blue-600 border border-blue-500/20",
-                    ["running"].includes(job.status) && "bg-amber-500/15 text-amber-600 border border-amber-500/20",
-                    ["succeeded"].includes(job.status) && "bg-green-500/15 text-green-600 border border-green-500/20",
+                    "rounded border-2 border-foreground px-1.5 py-0.5 text-[10px] font-black uppercase",
+                    ["failed", "dead_letter"].includes(job.status) && "bg-danger text-white",
+                    ["queued"].includes(job.status) && "bg-info text-ink",
+                    ["running"].includes(job.status) && "bg-warning text-ink",
+                    ["succeeded"].includes(job.status) && "bg-success text-white",
                   )}
                 >
                   {job.status}

@@ -145,12 +145,16 @@ export async function getBillingStatus(): Promise<BillingStatusSummary> {
     return fallbackBillingStatus;
   }
 
-  const response = await fetch(`${env.apiBaseUrl}/billing/status`, {
-    headers: context.headers,
-    cache: "no-store",
-  });
-  if (!response.ok) {
+  try {
+    const response = await fetch(`${env.apiBaseUrl}/billing/status`, {
+      headers: context.headers,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return fallbackBillingStatus;
+    }
+    return (await response.json()) as BillingStatusSummary;
+  } catch {
     return fallbackBillingStatus;
   }
-  return (await response.json()) as BillingStatusSummary;
 }

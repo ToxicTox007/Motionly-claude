@@ -1,5 +1,6 @@
-import { Check } from "lucide-react";
 import { Button, ButtonLink } from "@/components/button";
+import { Alert, Badge, Card } from "@/components/brutal-ui";
+import { PixelIcon } from "@/components/pixel-icons";
 import { startCheckout } from "@/app/(app)/billing/actions";
 import { fallbackBillingStatus } from "@/lib/billing";
 import { env } from "@/lib/env";
@@ -20,53 +21,57 @@ export default async function PricingPage({
       : null;
 
   return (
-    <main className="container-content min-h-screen py-16">
-      {/* Page header — centered */}
-      <div className="text-center mb-12">
-        <span className="badge badge-primary mb-4 inline-flex">Pricing</span>
-        <h1 className="text-5xl font-black tracking-tight sm:text-6xl mt-4">
-          Plans for consistent creators.
+    <main className="container-content min-h-screen py-12 sm:py-16">
+      <div className="mb-10 text-center">
+        <Badge variant="primary">Pricing</Badge>
+        <h1 className="mt-4 text-5xl font-black uppercase sm:text-6xl">
+          Plans for reel production.
         </h1>
-        <p className="mt-4 max-w-2xl mx-auto text-muted-foreground">
+        <p className="mx-auto mt-4 max-w-2xl text-base font-bold text-muted-foreground">
           Start watermarked, upgrade when B-roll, higher limits, priority queueing, or team
           workflows become part of your reel pipeline.
         </p>
       </div>
 
-      {/* Plan cards grid */}
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4 items-start">
+      {!env.billingEnabled ? (
+        <Alert tone="warning" title="Billing checkout is offline" className="mb-8">
+          Plan cartridges are visible for comparison, but checkout buttons stay
+          disabled until billing keys are configured.
+        </Alert>
+      ) : null}
+
+      <div className="grid items-start gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {fallbackBillingStatus.plans.map((plan) => {
           const isFeatured = plan.key === featuredKey;
           return (
-            <section
+            <Card
               key={plan.key}
               className={cn(
-                "card rounded-2xl p-6 flex flex-col relative",
-                isFeatured && "border-primary/50 bg-primary/5 shadow-glow",
+                "relative flex min-h-[28rem] flex-col p-5",
+                isFeatured && "bg-primary text-primary-foreground shadow-brutal-lg",
               )}
             >
               {isFeatured ? (
-                <span className="badge badge-primary absolute -top-3 right-4">
-                  Most Popular
-                </span>
+                <Badge variant="accent" className="absolute -top-3 right-4">
+                  Popular
+                </Badge>
               ) : null}
 
-              <h2 className="text-xl font-bold">{plan.name}</h2>
-              <p className="text-5xl font-black mt-3">{formatPrice(plan.price_cents)}</p>
-              <p className="text-sm text-muted-foreground">per month</p>
+              <h2 className="text-xl font-black uppercase">{plan.name}</h2>
+              <p className="mt-3 text-5xl font-black">
+                {formatPrice(plan.price_cents)}
+              </p>
+              <p className={cn("text-sm font-bold", isFeatured ? "text-ink" : "text-muted-foreground")}>
+                per month
+              </p>
 
-              {/* Divider */}
-              <div className="h-px bg-border my-5" />
+              <div className="my-5 h-1 bg-foreground" />
 
               <ul className="space-y-3 text-sm flex-1">
                 {plan.features.map((feature) => (
-                  <li key={feature} className="flex gap-2">
-                    <Check
-                      className="mt-0.5 size-4 text-primary shrink-0"
-                      strokeWidth={1.5}
-                      aria-hidden="true"
-                    />
-                    {feature}
+                  <li key={feature} className="flex gap-2 font-bold">
+                    <PixelIcon name="success" className="mt-0.5 size-4 shrink-0" />
+                    <span>{feature}</span>
                   </li>
                 ))}
               </ul>
@@ -89,7 +94,7 @@ export default async function PricingPage({
                   </Button>
                 )}
               </div>
-            </section>
+            </Card>
           );
         })}
       </div>

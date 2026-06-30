@@ -8,14 +8,7 @@ import React, {
   useCallback,
 } from "react";
 import { cn } from "@/lib/utils";
-import {
-  X,
-  CheckCircle2,
-  AlertTriangle,
-  Info,
-  Loader2,
-  XCircle,
-} from "lucide-react";
+import { PixelIcon } from "@/components/pixel-icons";
 
 export type ToastVariant = "success" | "error" | "warning" | "info" | "loading";
 
@@ -81,7 +74,7 @@ export function ToastContainer({
     <div
       aria-live="polite"
       aria-relevant="additions"
-      className="fixed bottom-4 right-4 z-[200] flex flex-col gap-2 items-end pointer-events-none"
+      className="fixed bottom-3 right-3 z-[200] flex w-[calc(100vw-1.5rem)] max-w-[420px] flex-col items-end gap-2 pointer-events-none sm:bottom-4 sm:right-4"
     >
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
@@ -109,34 +102,14 @@ function ToastItem({
   }, [duration, onDismiss]);
 
   const icons: Record<ToastVariant, React.ReactNode> = {
-    success: (
-      <CheckCircle2
-        className="size-[18px] text-green-400 shrink-0 mt-px"
-        strokeWidth={1.5}
-      />
-    ),
-    error: (
-      <XCircle
-        className="size-[18px] text-red-400 shrink-0 mt-px"
-        strokeWidth={1.5}
-      />
-    ),
-    warning: (
-      <AlertTriangle
-        className="size-[18px] text-amber-400 shrink-0 mt-px"
-        strokeWidth={1.5}
-      />
-    ),
-    info: (
-      <Info
-        className="size-[18px] text-violet-400 shrink-0 mt-px"
-        strokeWidth={1.5}
-      />
-    ),
+    success: <PixelIcon name="success" className="mt-px size-5 text-success" />,
+    error: <PixelIcon name="warning" className="mt-px size-5 text-danger" />,
+    warning: <PixelIcon name="warning" className="mt-px size-5 text-warning" />,
+    info: <PixelIcon name="info" className="mt-px size-5 text-info" />,
     loading: (
-      <Loader2
-        className="size-[18px] animate-spin text-primary shrink-0 mt-px"
-        strokeWidth={1.5}
+      <span
+        className="mt-1 size-4 animate-spin border-2 border-foreground border-t-primary"
+        aria-hidden="true"
       />
     ),
   };
@@ -145,11 +118,11 @@ function ToastItem({
     <div
       role={variant === "error" || variant === "warning" ? "alert" : "status"}
       className={cn(
-        "pointer-events-auto min-w-[300px] max-w-[420px] bg-surface text-foreground border-2 border-foreground border-l-[6px] shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] flex gap-3 p-4 items-start animate-slide-in-up rounded-md",
-        variant === "success" && "border-l-green-500",
-        variant === "error" && "border-l-red-500",
-        variant === "warning" && "border-l-amber-500",
-        (variant === "info" || variant === "loading") && "border-l-accent",
+        "pointer-events-auto flex w-full min-w-0 max-w-[420px] animate-slide-in-up items-start gap-3 rounded border-2 border-foreground border-l-[10px] bg-surface p-4 text-foreground shadow-brutal",
+        variant === "success" && "border-l-success",
+        variant === "error" && "border-l-danger",
+        variant === "warning" && "border-l-warning",
+        (variant === "info" || variant === "loading") && "border-l-primary",
       )}
     >
       {/* Icon */}
@@ -170,10 +143,10 @@ function ToastItem({
       {/* Dismiss */}
       <button
         onClick={onDismiss}
-        className="shrink-0 size-6 border-2 border-foreground rounded bg-surface flex items-center justify-center text-foreground hover:bg-surface-elevated transition-colors shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
+        className="flex size-7 shrink-0 items-center justify-center rounded border-2 border-foreground bg-surface text-foreground shadow-brutal-sm transition-colors hover:bg-surface-elevated active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
         aria-label="Dismiss toast"
       >
-        <X className="size-3" strokeWidth={2} />
+        <PixelIcon name="x" className="size-3.5" />
       </button>
     </div>
   );

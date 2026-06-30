@@ -1,41 +1,36 @@
-import {
-  CreditCard,
-  FolderKanban,
-  LayoutDashboard,
-  PlusCircle,
-  Settings,
-} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { Progress } from "@/components/brutal-ui";
+import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 import { ThemeMenu } from "@/components/theme-menu";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import type { BillingStatusSummary } from "@motionly/shared";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/projects/new", label: "New Video", icon: PlusCircle },
-  { href: "/projects", label: "Projects", icon: FolderKanban },
-];
+  { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { href: "/projects/new", label: "New Video", icon: "new" },
+  { href: "/projects", label: "Projects", icon: "project" },
+] satisfies Array<{ href: string; label: string; icon: PixelIconName }>;
 
 const settingsItems = [
-  { href: "/billing", label: "Billing", icon: CreditCard },
-  { href: "/account", label: "Settings", icon: Settings },
-];
+  { href: "/billing", label: "Billing", icon: "billing" },
+  { href: "/account", label: "Settings", icon: "settings" },
+] satisfies Array<{ href: string; label: string; icon: PixelIconName }>;
 
 export async function AppShell({ children, title }: { children: React.ReactNode; title: string }) {
   const shell = await loadShellState();
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-background text-foreground lg:flex lg:h-screen lg:overflow-hidden">
       {/* Sidebar */}
-      <aside className="bg-background border-r-4 border-foreground flex border-b lg:h-screen lg:w-60 lg:shrink-0 lg:flex-col lg:border-b-0">
+      <aside className="border-r-4 border-foreground bg-surface flex border-b lg:h-screen lg:w-64 lg:shrink-0 lg:flex-col lg:border-b-0">
         {/* Logo */}
-        <div className="flex h-16 shrink-0 items-center justify-between border-b-2 border-foreground px-4">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b-4 border-foreground bg-background px-4">
           <div className="flex items-center gap-3">
-            <div className="flex size-8 items-center justify-center overflow-hidden rounded border-2 border-foreground bg-primary shrink-0 shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
-              <Image src="/icon.svg" alt="Motionly" width={24} height={24} className="size-6 invert dark:invert-0" priority />
+            <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded border-2 border-foreground bg-primary shadow-brutal-sm">
+              <Image src="/icon.svg" alt="Motionly" width={28} height={28} className="size-7" priority />
             </div>
-            <span className="text-lg font-black uppercase tracking-tight text-foreground">Motionly</span>
+            <span className="text-lg font-black uppercase text-foreground">Motionly</span>
           </div>
           <ThemeMenu
             items={[
@@ -50,7 +45,7 @@ export async function AppShell({ children, title }: { children: React.ReactNode;
 
         {/* Nav */}
         <div className="hidden min-w-0 flex-1 px-3 py-4 lg:flex lg:flex-col lg:overflow-y-auto">
-          <p className="text-[10px] font-black uppercase tracking-widest text-foreground px-3 mb-2 font-mono">
+          <p className="mb-2 px-3 font-mono text-[10px] font-black uppercase text-primary">
             Workspace
           </p>
           <nav className="flex gap-1 lg:block lg:space-y-1">
@@ -59,7 +54,7 @@ export async function AppShell({ children, title }: { children: React.ReactNode;
             ))}
           </nav>
 
-          <p className="text-[10px] font-black uppercase tracking-widest text-foreground px-3 mt-6 mb-2 font-mono">
+          <p className="mb-2 mt-6 px-3 font-mono text-[10px] font-black uppercase text-primary">
             Settings
           </p>
           <nav className="flex gap-1 lg:block lg:space-y-1">
@@ -69,7 +64,7 @@ export async function AppShell({ children, title }: { children: React.ReactNode;
           </nav>
 
           {/* Usage bar */}
-          <div className="mx-0 mt-auto pt-6 border-t-2 border-foreground/20">
+          <div className="mx-0 mt-auto border-t-2 border-foreground pt-6">
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs font-mono font-bold text-foreground">
                 {shell.rendersUsed}/{shell.rendersLimit} renders
@@ -78,19 +73,14 @@ export async function AppShell({ children, title }: { children: React.ReactNode;
                 {shell.percentUsed}%
               </p>
             </div>
-            <div className="progress-bar mt-1">
-              <div
-                className="progress-fill"
-                style={{ width: `${shell.percentUsed}%` }}
-              />
-            </div>
+            <Progress value={shell.percentUsed} className="mt-2" />
           </div>
         </div>
 
         {/* User block */}
-        <div className="hidden border-t-2 border-foreground p-4 lg:block">
+        <div className="hidden border-t-4 border-foreground bg-background p-4 lg:block">
           <div className="flex items-center gap-3">
-            <div className="rounded border-2 border-foreground size-8 bg-primary flex items-center justify-center text-primary-foreground text-xs font-black shrink-0 shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded border-2 border-foreground bg-primary text-xs font-black text-primary-foreground shadow-brutal-sm">
               {shell.creatorName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0">
@@ -103,10 +93,10 @@ export async function AppShell({ children, title }: { children: React.ReactNode;
 
       <main className="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-hidden">
         {/* Header */}
-        <header className="bg-surface border-b-4 border-foreground min-h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8">
-          <h1 className="text-xl font-black uppercase tracking-tight">{title}</h1>
+        <header className="flex min-h-16 items-center justify-between border-b-4 border-foreground bg-surface px-4 sm:px-6 lg:px-8">
+          <h1 className="min-w-0 truncate text-xl font-black uppercase">{title}</h1>
           <div className="flex items-center gap-3">
-            <span className="badge badge-primary">
+            <span className="badge badge-primary shadow-brutal-sm">
               {shell.rendersUsed}/{shell.rendersLimit} renders
             </span>
           </div>
@@ -161,19 +151,19 @@ async function loadShellState() {
 
 function SidebarItem({
   href,
-  icon: Icon,
+  icon,
   label,
 }: {
   href: string;
-  icon: any;
+  icon: PixelIconName;
   label: string;
 }) {
   return (
     <Link
       href={href}
-      className="flex items-center gap-3 px-3 py-2 text-sm font-bold rounded-md border-2 border-transparent text-muted-foreground hover:bg-surface hover:text-foreground hover:border-foreground hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] transition-all"
+      className="flex min-h-11 items-center gap-3 rounded border-2 border-transparent px-3 py-2 text-sm font-black uppercase text-muted-foreground transition-all hover:border-foreground hover:bg-background hover:text-foreground hover:shadow-brutal-sm"
     >
-      <Icon className="size-4 shrink-0" strokeWidth={2} />
+      <PixelIcon name={icon} className="size-4 shrink-0" />
       {label}
     </Link>
   );

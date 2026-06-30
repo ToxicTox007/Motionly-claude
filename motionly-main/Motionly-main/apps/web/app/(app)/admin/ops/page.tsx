@@ -115,8 +115,8 @@ export default async function LaunchOpsPage() {
             Send feedback
           </ButtonLink>
         </div>
-        <div className="pixel-panel overflow-hidden">
-          <table className="w-full text-left text-sm">
+        <div className="pixel-panel overflow-x-auto">
+          <table className="min-w-[760px] w-full text-left text-sm">
             <thead className="bg-muted text-xs uppercase text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">Queue</th>
@@ -338,11 +338,11 @@ function MetricCard({
 }) {
   return (
     <div className="pixel-panel p-4">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
+      <div className="flex items-center gap-2 text-xs font-black uppercase text-primary">
         <Icon className="size-4" />
         {label}
       </div>
-      <p className="mt-3 text-2xl font-bold">{value}</p>
+      <p className="mt-3 break-words text-2xl font-black">{value}</p>
     </div>
   );
 }
