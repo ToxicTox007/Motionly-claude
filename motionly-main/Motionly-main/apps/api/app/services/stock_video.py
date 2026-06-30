@@ -1,8 +1,11 @@
 import hashlib
 import json
+import logging
 import math
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
@@ -11,9 +14,19 @@ from uuid import NAMESPACE_URL, uuid5
 import httpx
 
 from app.api.errors import ApiError
-from app.schemas.broll import StockOrientation, StockProviderKey
+from app.schemas.broll import (
+    BrollConfidenceLabel,
+    StockAssetEnrichmentStatus,
+    StockOrientation,
+    StockProviderKey,
+)
 from app.schemas.plans import BrollRequest, EditPlan
 from app.services.storage import StorageSigner
+
+EMBEDDING_DOWNLOAD_TIMEOUT_SECONDS = 6.0
+EMBEDDING_DOWNLOAD_MAX_ATTEMPTS = 2
+COMPATIBLE_CLIP_MODEL_VERSION = "compatible-hash-clip-v1"
+logger = logging.getLogger(__name__)
 
 
 def ensure_owned_stock_asset(
@@ -102,6 +115,10 @@ class StockVideoCandidate:
     duration_ms: int
     relevance_rank: int
     raw_metadata: dict[str, object]
+    provider_url: str | None = None
+    source_url: str | None = None
+    license_metadata: dict[str, object] | None = None
+    attribution_metadata: dict[str, object] | None = None
 
     @property
     def orientation(self) -> StockOrientation:
@@ -160,6 +177,10 @@ class FixtureStockVideoProvider:
                         dimensions=32,
                     ),
                 },
+                provider_url=f"https://assets.motionly.local/providers/fixture/{slug}-{index}",
+                source_url=f"https://assets.motionly.local/broll/{slug}-{index}.mp4",
+                license_metadata={"license": "fixture_internal_demo"},
+                attribution_metadata={"provider": "fixture"},
             )
             for index in range(3)
         ]
@@ -215,7 +236,15 @@ class PexelsStockVideoProvider:
                     height=int(selected.get("height") or item.get("height") or 0),
                     duration_ms=int(float(item.get("duration") or 0) * 1000),
                     relevance_rank=index + 1,
-                    raw_metadata={"pexels_id": item.get("id"), "url": item.get("url")},
+                    provider_url=str(item.get("url") or ""),
+                    source_url=selected.get("link"),
+                    license_metadata={"license": "pexels_license"},
+                    attribution_metadata={"user": item.get("user"), "url": item.get("url")},
+                    raw_metadata={
+                        "pexels_id": item.get("id"),
+                        "url": item.get("url"),
+                        "video_pictures": item.get("video_pictures"),
+                    },
                 )
             )
         return candidates
@@ -263,10 +292,166 @@ class PixabayStockVideoProvider:
                     height=int(selected.get("height") or 0),
                     duration_ms=int(float(item.get("duration") or 0) * 1000),
                     relevance_rank=index + 1,
-                    raw_metadata={"pixabay_id": item.get("id"), "tags": item.get("tags")},
+                    provider_url=(
+                        f"https://pixabay.com/videos/id-{item['id']}/" if item.get("id") else None
+                    ),
+                    source_url=selected.get("url"),
+                    license_metadata={"license": "pixabay_license"},
+                    attribution_metadata={"user": item.get("user"), "tags": item.get("tags")},
+                    raw_metadata={
+                        "pixabay_id": item.get("id"),
+                        "tags": item.get("tags"),
+                        "page_url": item.get("pageURL"),
+                    },
                 )
             )
         return candidates
+
+
+@dataclass(frozen=True)
+class CandidateScoreDetails:
+    total: float
+    confidence_label: BrollConfidenceLabel
+    semantic_score: float
+    embedding_score: float
+    lexical_score: float
+    orientation_score: float
+    duration_score: float
+    diversity_score: float
+    provider_license_score: float
+    shot_type_score: float
+    reasons: list[str]
+
+
+class CompatibleClipEmbeddingProvider:
+    def __init__(self, *, model_name: str = "openai/clip-vit-base-patch32") -> None:
+        self.model_name = model_name
+        self._loaded: dict[str, object] | None = None
+        self._fallback = HashClipEmbeddingProvider(model_name=COMPATIBLE_CLIP_MODEL_VERSION)
+
+    @property
+    def model_version(self) -> str:
+        if self._loaded is None:
+            return self._fallback.model_version
+        return self.model_name
+
+    def embed_text(self, text: str) -> list[float]:
+        if not text.strip():
+            return []
+        try:
+            models = self._load()
+        except Exception:
+            return self._fallback.embed_text(text)
+        torch = models["torch"]
+        device = models["device"]
+        processor = models["processor"]
+        model = models["model"]
+        inputs = processor(text=[text], return_tensors="pt", padding=True).to(device)
+        with torch.no_grad():
+            embedding = model.get_text_features(**inputs)
+        embedding = embedding / embedding.norm(dim=-1, keepdim=True)
+        return [round(float(value), 6) for value in embedding[0].detach().cpu().tolist()]
+
+    def embed_image(self, *, image_bytes: bytes, source_hint: str | None = None) -> list[float]:
+        if not image_bytes and not source_hint:
+            return []
+        try:
+            models = self._load()
+        except Exception:
+            return self._fallback.embed_image(image_bytes=image_bytes, source_hint=source_hint)
+        Image = models["Image"]
+        torch = models["torch"]
+        device = models["device"]
+        processor = models["processor"]
+        model = models["model"]
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        inputs = processor(images=image, return_tensors="pt").to(device)
+        with torch.no_grad():
+            embedding = model.get_image_features(**inputs)
+        embedding = embedding / embedding.norm(dim=-1, keepdim=True)
+        return [round(float(value), 6) for value in embedding[0].detach().cpu().tolist()]
+
+    def _load(self) -> dict[str, object]:
+        if self._loaded is not None:
+            return self._loaded
+        import torch
+        from PIL import Image
+        from transformers import CLIPModel, CLIPProcessor
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        processor = CLIPProcessor.from_pretrained(self.model_name, local_files_only=True)
+        model = CLIPModel.from_pretrained(self.model_name, local_files_only=True).to(device)
+        self._loaded = {
+            "Image": Image,
+            "torch": torch,
+            "device": device,
+            "processor": processor,
+            "model": model,
+        }
+        return self._loaded
+
+
+class HashClipEmbeddingProvider:
+    def __init__(self, *, model_name: str = COMPATIBLE_CLIP_MODEL_VERSION) -> None:
+        self.model_version = model_name
+
+    def embed_text(self, text: str) -> list[float]:
+        return _hash_embedding(text, dimensions=32)
+
+    def embed_image(self, *, image_bytes: bytes, source_hint: str | None = None) -> list[float]:
+        seed = image_bytes.hex()[:256] if image_bytes else (source_hint or "stock-asset")
+        return _hash_embedding(seed, dimensions=32)
+
+
+def stock_embedding_provider(*, model_name: str = "openai/clip-vit-base-patch32"):
+    return CompatibleClipEmbeddingProvider(model_name=model_name)
+
+
+def build_stock_asset_embedding_cache_key(
+    *,
+    provider: StockProviderKey,
+    provider_asset_id: str,
+    embedding_model_version: str,
+) -> str:
+    return hashlib.sha256(
+        f"{provider.value}:{provider_asset_id}:{embedding_model_version}".encode()
+    ).hexdigest()
+
+
+def build_stock_asset_raw_metadata(
+    *,
+    candidate: StockVideoCandidate,
+    query: str,
+    semantic_query: str,
+    target_shot_type: str | None,
+) -> dict[str, object]:
+    metadata = {
+        **candidate.raw_metadata,
+        "query": query,
+        "semantic_query": semantic_query,
+        "target_shot_type": target_shot_type,
+        "provider_url": candidate.provider_url,
+        "source_url": candidate.source_url or candidate.download_url or candidate.preview_video_url,
+        "thumbnail_url": candidate.thumbnail_url,
+        "license_metadata": candidate.license_metadata or {"license": candidate.license},
+        "attribution_metadata": candidate.attribution_metadata or {},
+        "orientation": candidate.orientation.value,
+        "duration_ms": candidate.duration_ms,
+        "dimensions": {"width": candidate.width, "height": candidate.height},
+        "enrichment_status": (
+            StockAssetEnrichmentStatus.PENDING.value
+            if candidate.provider in {StockProviderKey.PEXELS, StockProviderKey.PIXABAY}
+            else StockAssetEnrichmentStatus.SKIPPED.value
+        ),
+        "enrichment_failure_reason": None,
+    }
+    if "embedding" in candidate.raw_metadata:
+        metadata["embedding"] = candidate.raw_metadata["embedding"]
+        metadata["embedding_model_version"] = candidate.raw_metadata.get(
+            "embedding_model_version", COMPATIBLE_CLIP_MODEL_VERSION
+        )
+        metadata["enrichment_status"] = StockAssetEnrichmentStatus.COMPLETED.value
+    return metadata
 
 
 def build_broll_cache_key(
@@ -320,37 +505,87 @@ def score_candidate(
     semantic_embedding: list[float] | None = None,
     target_shot_type: str | None = None,
     used_shot_types: set[str] | None = None,
+    adjacent_embeddings: list[list[float]] | None = None,
 ) -> float:
+    return score_candidate_details(
+        candidate=candidate,
+        slot_duration_ms=slot_duration_ms,
+        duplicate_provider_asset_ids=duplicate_provider_asset_ids,
+        semantic_query=semantic_query,
+        semantic_embedding=semantic_embedding,
+        target_shot_type=target_shot_type,
+        used_shot_types=used_shot_types,
+        adjacent_embeddings=adjacent_embeddings,
+    ).total
+
+
+def score_candidate_details(
+    *,
+    candidate: StockVideoCandidate,
+    slot_duration_ms: int,
+    duplicate_provider_asset_ids: set[str],
+    semantic_query: str | None = None,
+    semantic_embedding: list[float] | None = None,
+    target_shot_type: str | None = None,
+    used_shot_types: set[str] | None = None,
+    adjacent_embeddings: list[list[float]] | None = None,
+) -> CandidateScoreDetails:
     shot_type = candidate_shot_type(candidate)
-    portrait_score = 0.24 if candidate.orientation == StockOrientation.PORTRAIT else 0.06
-    resolution_score = 0.18 if candidate.width >= 1080 and candidate.height >= 1920 else 0.06
-    duration_score = 0.14 if candidate.duration_ms >= slot_duration_ms else 0.06
-    rank_score = max(0.0, 0.13 - (candidate.relevance_rank - 1) * 0.028)
-    motion_score = 0.05 if candidate.duration_ms >= 3000 else 0.015
-    semantic_score = 0.18 * semantic_match_score(
+    embedding_score, lexical_score, reasons = semantic_match_breakdown(
         candidate=candidate,
         semantic_query=semantic_query,
         semantic_embedding=semantic_embedding,
     )
-    shot_match_score = 0.08 if target_shot_type and shot_type == target_shot_type else 0.02
-    diversity_bonus = 0.04 if used_shot_types and shot_type not in used_shot_types else 0
-    diversity_penalty = 0.08 if used_shot_types and shot_type in used_shot_types else 0
-    duplicate_penalty = 0.24 if candidate.provider_asset_id in duplicate_provider_asset_ids else 0
-    return max(
-        0,
+    embedding_available = embedding_score > 0
+    semantic_score = embedding_score if embedding_available else lexical_score * 0.45
+    lexical_tiebreaker = lexical_score if embedding_available else lexical_score * 0.1
+    orientation_score = 1.0 if candidate.orientation == StockOrientation.PORTRAIT else 0.35
+    duration_delta = abs(candidate.duration_ms - slot_duration_ms)
+    duration_score = max(0.0, min(1.0, 1 - (duration_delta / max(slot_duration_ms, 1))))
+    shot_type_score = 1.0 if target_shot_type and shot_type == target_shot_type else 0.35
+    diversity_score = diversity_signal(
+        candidate=candidate,
+        used_shot_types=used_shot_types,
+        adjacent_embeddings=adjacent_embeddings,
+    )
+    provider_license_score = provider_license_signal(candidate)
+    relevance_rank_score = max(0.0, 1 - ((candidate.relevance_rank - 1) * 0.14))
+    duplicate_penalty = 0.45 if candidate.provider_asset_id in duplicate_provider_asset_ids else 0.0
+    embedding_penalty = 0.18 if semantic_embedding and not embedding_available else 0.0
+    total = max(
+        0.0,
         min(
-            1,
-            portrait_score
-            + resolution_score
-            + duration_score
-            + rank_score
-            + motion_score
-            + semantic_score
-            + shot_match_score
-            + diversity_bonus
-            - diversity_penalty
+            1.0,
+            (semantic_score * 0.4)
+            + (orientation_score * 0.18)
+            + (duration_score * 0.14)
+            + (lexical_tiebreaker * 0.11)
+            + (diversity_score * 0.09)
+            + (provider_license_score * 0.05)
+            + (shot_type_score * 0.02)
+            + (relevance_rank_score * 0.01)
+            - embedding_penalty
             - duplicate_penalty,
         ),
+    )
+    confidence_label = _candidate_confidence_label(
+        total=total,
+        embedding_score=embedding_score,
+        lexical_score=lexical_score,
+        candidate=candidate,
+    )
+    return CandidateScoreDetails(
+        total=total,
+        confidence_label=confidence_label,
+        semantic_score=semantic_score,
+        embedding_score=embedding_score,
+        lexical_score=lexical_score,
+        orientation_score=orientation_score,
+        duration_score=duration_score,
+        diversity_score=diversity_score,
+        provider_license_score=provider_license_score,
+        shot_type_score=shot_type_score,
+        reasons=reasons,
     )
 
 
@@ -360,13 +595,40 @@ def semantic_match_score(
     semantic_query: str | None = None,
     semantic_embedding: list[float] | None = None,
 ) -> float:
+    embedding_score, lexical_score, _reasons = semantic_match_breakdown(
+        candidate=candidate,
+        semantic_query=semantic_query,
+        semantic_embedding=semantic_embedding,
+    )
+    return max(embedding_score, lexical_score)
+
+
+def semantic_match_breakdown(
+    *,
+    candidate: StockVideoCandidate,
+    semantic_query: str | None = None,
+    semantic_embedding: list[float] | None = None,
+) -> tuple[float, float, list[str]]:
+    reasons: list[str] = []
     embedding_score = 0.0
     raw_embedding = candidate.raw_metadata.get("embedding")
-    if semantic_embedding and isinstance(raw_embedding, list):
-        candidate_embedding = [
-            float(value) for value in raw_embedding if isinstance(value, (int, float))
-        ]
-        embedding_score = _cosine_similarity(semantic_embedding, candidate_embedding)
+    candidate_embedding = (
+        [float(value) for value in raw_embedding if isinstance(value, (int, float))]
+        if isinstance(raw_embedding, list)
+        else []
+    )
+    if semantic_embedding and candidate_embedding:
+        if len(semantic_embedding) != len(candidate_embedding):
+            reasons.append("embedding_dimension_mismatch")
+        else:
+            embedding_score = _cosine_similarity(semantic_embedding, candidate_embedding)
+    elif semantic_embedding and not candidate_embedding:
+        reasons.append(
+            "enrichment_failed"
+            if candidate.raw_metadata.get("enrichment_status")
+            == StockAssetEnrichmentStatus.FAILED.value
+            else "candidate_embedding_missing"
+        )
     lexical_score = _lexical_similarity(
         semantic_query or "",
         " ".join(
@@ -375,11 +637,67 @@ def semantic_match_score(
                 candidate.title,
                 candidate.raw_metadata.get("query"),
                 candidate.raw_metadata.get("tags"),
+                candidate.raw_metadata.get("semantic_query"),
             )
             if value
         ),
     )
-    return max(embedding_score, lexical_score)
+    if embedding_score == 0 and lexical_score > 0:
+        reasons.append("lexical_fallback")
+    return embedding_score, lexical_score, reasons
+
+
+def provider_license_signal(candidate: StockVideoCandidate) -> float:
+    base = 0.8 if candidate.provider in {StockProviderKey.PEXELS, StockProviderKey.PIXABAY} else 0.6
+    if candidate.license and "license" in candidate.license.lower():
+        base += 0.1
+    if candidate.source_url or candidate.provider_url:
+        base += 0.1
+    return max(0.0, min(1.0, base))
+
+
+def diversity_signal(
+    *,
+    candidate: StockVideoCandidate,
+    used_shot_types: set[str] | None,
+    adjacent_embeddings: list[list[float]] | None,
+) -> float:
+    shot_type = candidate_shot_type(candidate)
+    if adjacent_embeddings and isinstance(candidate.raw_metadata.get("embedding"), list):
+        candidate_embedding = [
+            float(value)
+            for value in candidate.raw_metadata["embedding"]
+            if isinstance(value, (int, float))
+        ]
+        similarities = [
+            _cosine_similarity(candidate_embedding, embedding)
+            for embedding in adjacent_embeddings
+            if embedding
+        ]
+        if similarities:
+            return max(0.0, 1 - max(similarities))
+    if not used_shot_types:
+        return 0.7
+    return 0.9 if shot_type not in used_shot_types else 0.2
+
+
+def _candidate_confidence_label(
+    *,
+    total: float,
+    embedding_score: float,
+    lexical_score: float,
+    candidate: StockVideoCandidate,
+) -> BrollConfidenceLabel:
+    status = candidate.raw_metadata.get("enrichment_status")
+    if embedding_score <= 0 and status == StockAssetEnrichmentStatus.FAILED.value:
+        return BrollConfidenceLabel.ENRICHMENT_FAILED
+    if embedding_score <= 0 and lexical_score > 0:
+        return BrollConfidenceLabel.LEXICAL_FALLBACK
+    if total >= 0.78:
+        return BrollConfidenceLabel.HIGH
+    if total >= 0.58:
+        return BrollConfidenceLabel.MEDIUM
+    return BrollConfidenceLabel.LOW
 
 
 def candidate_shot_type(candidate: StockVideoCandidate) -> str:
@@ -395,6 +713,194 @@ def stable_asset_id(provider: StockProviderKey, provider_asset_id: str) -> str:
 
 def latency_ms_since(started: float) -> int:
     return round((time.perf_counter() - started) * 1000)
+
+
+def ensure_candidate_semantic_embedding(
+    *,
+    candidate: StockVideoCandidate,
+    semantic_query: str,
+    clip_model_name: str = "openai/clip-vit-base-patch32",
+) -> StockVideoCandidate:
+    if isinstance(candidate.raw_metadata.get("embedding"), list):
+        return candidate
+    provider = stock_embedding_provider(model_name=clip_model_name)
+    metadata = {
+        **candidate.raw_metadata,
+        "embedding": provider.embed_text(semantic_query),
+        "embedding_model_version": provider.model_version,
+        "enrichment_status": StockAssetEnrichmentStatus.COMPLETED.value,
+    }
+    return StockVideoCandidate(
+        provider=candidate.provider,
+        provider_asset_id=candidate.provider_asset_id,
+        title=candidate.title,
+        thumbnail_url=candidate.thumbnail_url,
+        preview_video_url=candidate.preview_video_url,
+        download_url=candidate.download_url,
+        license=candidate.license,
+        width=candidate.width,
+        height=candidate.height,
+        duration_ms=candidate.duration_ms,
+        relevance_rank=candidate.relevance_rank,
+        provider_url=candidate.provider_url,
+        source_url=candidate.source_url,
+        license_metadata=candidate.license_metadata,
+        attribution_metadata=candidate.attribution_metadata,
+        raw_metadata=metadata,
+    )
+
+
+def enrich_stock_asset(
+    *,
+    asset,
+    repository,
+    clip_model_name: str,
+    timeout_seconds: float = EMBEDDING_DOWNLOAD_TIMEOUT_SECONDS,
+    max_attempts: int = EMBEDDING_DOWNLOAD_MAX_ATTEMPTS,
+):
+    current_cache_key = build_stock_asset_embedding_cache_key(
+        provider=asset.provider,
+        provider_asset_id=asset.provider_asset_id,
+        embedding_model_version=clip_model_name,
+    )
+    existing_cache_key = asset.raw_metadata.get("embedding_cache_key")
+    if (
+        asset.raw_metadata.get("enrichment_status") == StockAssetEnrichmentStatus.COMPLETED.value
+        and existing_cache_key == current_cache_key
+        and isinstance(asset.raw_metadata.get("embedding"), list)
+    ):
+        logger.info(
+            "stock_asset_enrichment_cache_hit",
+            extra={
+                "provider": asset.provider.value,
+                "provider_asset_id": asset.provider_asset_id,
+                "status": StockAssetEnrichmentStatus.COMPLETED.value,
+                "cache_hit": True,
+                "embedding_model_version": clip_model_name,
+            },
+        )
+        repository.update_asset_metadata(
+            asset=asset,
+            raw_metadata={"enrichment_cache_hit": True},
+        )
+        return asset
+    if asset.provider not in {StockProviderKey.PEXELS, StockProviderKey.PIXABAY}:
+        return repository.update_asset_metadata(
+            asset=asset,
+            raw_metadata={
+                "enrichment_status": StockAssetEnrichmentStatus.SKIPPED.value,
+                "enrichment_failure_reason": None,
+                "embedding_cache_key": current_cache_key,
+            },
+        )
+    thumbnail_url = str(
+        asset.raw_metadata.get("thumbnail_url")
+        or asset.thumbnail_url
+        or asset.raw_metadata.get("source_url")
+        or ""
+    ).strip()
+    if not thumbnail_url.startswith(("http://", "https://")):
+        return repository.update_asset_metadata(
+            asset=asset,
+            raw_metadata={
+                "enrichment_status": StockAssetEnrichmentStatus.FAILED.value,
+                "enrichment_failure_reason": "thumbnail_url_missing",
+                "embedding_cache_key": current_cache_key,
+                "enrichment_attempted_at": datetime.now(UTC).isoformat(),
+            },
+        )
+    repository.update_asset_metadata(
+        asset=asset,
+        raw_metadata={
+            "enrichment_status": StockAssetEnrichmentStatus.PROCESSING.value,
+            "enrichment_failure_reason": None,
+            "embedding_cache_key": current_cache_key,
+            "enrichment_attempted_at": datetime.now(UTC).isoformat(),
+            "enrichment_cache_hit": False,
+        },
+    )
+    provider = stock_embedding_provider(model_name=clip_model_name)
+    started = time.perf_counter()
+    last_reason = "embedding_unavailable"
+    for attempt in range(1, max(1, max_attempts) + 1):
+        try:
+            response = httpx.get(
+                thumbnail_url,
+                timeout=timeout_seconds,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+            embedding = provider.embed_image(
+                image_bytes=response.content,
+                source_hint=thumbnail_url,
+            )
+            if not embedding:
+                last_reason = "embedding_empty"
+                continue
+            enriched = repository.update_asset_metadata(
+                asset=asset,
+                raw_metadata={
+                    "embedding": embedding,
+                    "embedding_model_version": provider.model_version,
+                    "enrichment_status": StockAssetEnrichmentStatus.COMPLETED.value,
+                    "enrichment_failure_reason": None,
+                    "enrichment_completed_at": datetime.now(UTC).isoformat(),
+                    "enrichment_attempts": attempt,
+                    "enrichment_duration_ms": latency_ms_since(started),
+                },
+            )
+            logger.info(
+                "stock_asset_enrichment_completed",
+                extra={
+                    "provider": asset.provider.value,
+                    "provider_asset_id": asset.provider_asset_id,
+                    "status": StockAssetEnrichmentStatus.COMPLETED.value,
+                    "cache_hit": False,
+                    "embedding_model_version": provider.model_version,
+                    "failure_reason": None,
+                    "duration_ms": enriched.raw_metadata.get("enrichment_duration_ms"),
+                },
+            )
+            return enriched
+        except httpx.TimeoutException:
+            last_reason = "thumbnail_download_timeout"
+        except httpx.HTTPStatusError:
+            last_reason = "thumbnail_download_failed"
+        except Exception:
+            last_reason = "embedding_generation_failed"
+    failed = repository.update_asset_metadata(
+        asset=asset,
+        raw_metadata={
+            "enrichment_status": StockAssetEnrichmentStatus.FAILED.value,
+            "enrichment_failure_reason": last_reason,
+            "enrichment_attempts": max(1, max_attempts),
+            "enrichment_duration_ms": latency_ms_since(started),
+        },
+    )
+    logger.warning(
+        "stock_asset_enrichment_failed",
+        extra={
+            "provider": asset.provider.value,
+            "provider_asset_id": asset.provider_asset_id,
+            "status": StockAssetEnrichmentStatus.FAILED.value,
+            "cache_hit": False,
+            "embedding_model_version": clip_model_name,
+            "failure_reason": last_reason,
+            "duration_ms": failed.raw_metadata.get("enrichment_duration_ms"),
+        },
+    )
+    return failed
+
+
+def query_embedding(
+    *,
+    semantic_query: str,
+    clip_model_name: str = "openai/clip-vit-base-patch32",
+) -> list[float]:
+    if not semantic_query.strip():
+        return []
+    provider = stock_embedding_provider(model_name=clip_model_name)
+    return provider.embed_text(semantic_query)
 
 
 def _slug(value: str) -> str:

@@ -9,7 +9,7 @@ export function PixelCard({ className, children, ...props }: PixelCardProps) {
   return (
     <div
       className={cn(
-        "pixel-panel pixel-corners p-5 transition duration-80ms steps(4, end) hover:-translate-y-0.5 hover:shadow-[12px_12px_0_hsl(var(--shadow-color)/0.08)]",
+        "rounded-lg bg-surface border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] transition-all p-5",
         className,
       )}
       {...props}
@@ -29,7 +29,7 @@ export function Label({
   return (
     <label
       className={cn(
-        "mb-2 block text-sm font-bold text-muted-foreground",
+        "text-xs font-black text-foreground uppercase tracking-wider mb-1.5 block",
         className,
       )}
       {...props}
@@ -45,7 +45,7 @@ export function PixelInput({ className, ...props }: PixelInputProps) {
   return (
     <input
       className={cn(
-        "pixel-input flex min-h-11 w-full px-4 py-2 text-base transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary/40 focus:outline-none sm:text-sm",
+        "flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-base font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground",
         className,
       )}
       {...props}
@@ -61,7 +61,7 @@ export function PixelTextarea({ className, ...props }: PixelTextareaProps) {
   return (
     <textarea
       className={cn(
-        "pixel-input flex min-h-28 w-full resize-y px-4 py-3 text-base transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary/40 focus:outline-none sm:text-sm",
+        "flex min-h-[7rem] w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-3 text-base font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground",
         className,
       )}
       {...props}
@@ -101,28 +101,28 @@ export function PixelSelect({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
-          "pixel-input flex min-h-11 w-full appearance-none px-4 py-2 pr-10 text-base transition-all hover:border-primary/40 focus:outline-none sm:text-sm",
+          "flex min-h-11 w-full appearance-none rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 pr-10 text-base font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground",
           className,
         )}
         {...props}
       >
         {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
+          <option key={opt.value} value={opt.value} className="bg-surface text-foreground">
             {opt.label}
           </option>
         ))}
       </select>
       <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center">
         <svg
-          className="h-4 w-4 text-muted-foreground"
+          className="h-4 w-4 text-foreground"
           fill="none"
           stroke="currentColor"
+          strokeWidth={2}
           viewBox="0 0 24 24"
         >
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
-            strokeWidth="2"
             d="M19 9l-7 7-7-7"
           />
         </svg>
@@ -145,15 +145,12 @@ export function PixelButton({
   return (
     <button
       className={cn(
-        "pixel-button inline-flex min-h-10 items-center justify-center px-4 py-2 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-x-0 disabled:hover:translate-y-0 focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2",
-        variant === "primary" &&
-          "bg-primary text-primary-foreground hover:brightness-105",
-        variant === "secondary" &&
-          "bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
-        variant === "danger" &&
-          "bg-danger text-white border-danger-strong hover:bg-danger/90",
+        "rounded-md font-bold transition-all duration-[100ms] inline-flex min-h-10 items-center justify-center gap-2 px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none border-2 border-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:transform-none disabled:shadow-none",
+        variant === "primary" && "bg-primary text-primary-foreground",
+        variant === "secondary" && "bg-surface text-foreground",
+        variant === "danger" && "bg-danger text-danger-foreground",
         variant === "ghost" &&
-          "border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted hover:text-foreground",
+          "border-transparent bg-transparent text-muted-foreground hover:border-foreground hover:bg-surface-elevated hover:text-foreground",
         className,
       )}
       {...props}
@@ -173,13 +170,12 @@ export function PixelBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center border border-border px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider select-none",
-        variant === "primary" && "border-primary/40 bg-primary/10 text-primary",
-        variant === "secondary" &&
-          "border-border bg-muted/60 text-muted-foreground",
-        variant === "success" && "border-success/40 bg-success/10 text-success",
-        variant === "danger" && "border-danger/40 bg-danger/10 text-danger",
-        variant === "warning" && "border-warning/40 bg-warning/10 text-warning",
+        "rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground inline-flex items-center gap-1 select-none",
+        variant === "primary" && "bg-primary text-primary-foreground",
+        variant === "secondary" && "bg-muted text-muted-foreground",
+        variant === "success" && "bg-green-500 text-white",
+        variant === "danger" && "bg-danger text-white",
+        variant === "warning" && "bg-amber-400 text-black",
         className,
       )}
       {...props}
@@ -203,15 +199,15 @@ export function InspectorField({
   ...props
 }: InspectorFieldProps) {
   return (
-    <div className={cn("space-y-1.5", className)} {...props}>
+    <div className={cn("space-y-2", className)} {...props}>
       {label && (
-        <Label htmlFor={htmlFor} className="mb-1">
+        <Label htmlFor={htmlFor} className="mb-0">
           {label}
         </Label>
       )}
       {children}
       {helperText && (
-        <p className="text-[11px] text-muted-foreground font-medium leading-relaxed">
+        <p className="text-[11px] font-mono text-muted-foreground leading-relaxed">
           {helperText}
         </p>
       )}
@@ -228,7 +224,7 @@ export function LoadingPixelSkeleton({
   return (
     <div
       className={cn(
-        "pixel-skeleton h-4 w-full bg-muted border border-border/30",
+        "skeleton h-6 border-2 border-foreground rounded-md w-full",
         className,
       )}
       {...props}
@@ -252,25 +248,25 @@ export function PanelSection({
   return (
     <details
       className={cn(
-        "group border border-border bg-surface/55 transition-all duration-75",
+        "group rounded-lg border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] overflow-hidden",
         className,
       )}
       open={defaultOpen}
       {...props}
     >
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-3 text-sm font-black text-foreground hover:bg-muted/40 transition-colors focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-0 select-none [&::-webkit-details-marker]:hidden">
+      <summary className="flex items-center justify-between px-4 py-3 font-bold text-sm cursor-pointer select-none hover:bg-surface-elevated list-none [&::-webkit-details-marker]:hidden text-foreground focus:outline-none border-b-2 border-transparent group-open:border-foreground transition-colors">
         <span>{title}</span>
         <svg
-          className="size-4 text-muted-foreground transition-transform duration-75 group-open:rotate-90"
+          className="size-4 text-foreground transition-transform duration-[120ms] group-open:rotate-90"
           fill="none"
           stroke="currentColor"
-          strokeWidth="2.5"
+          strokeWidth={2}
           viewBox="0 0 24 24"
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
       </summary>
-      <div className="border-t border-border p-3">{children}</div>
+      <div className="p-4 bg-surface">{children}</div>
     </details>
   );
 }
@@ -322,7 +318,7 @@ export function Slider({
         <Label htmlFor={id} className="mb-0">
           {label}
         </Label>
-        <span className="border border-border bg-surface px-2 py-1 text-xs font-bold text-foreground">
+        <span className="rounded border-2 border-foreground px-2 py-0.5 text-xs font-bold font-mono bg-surface text-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
           {value}
           {suffix}
         </span>
@@ -341,7 +337,7 @@ export function Slider({
         aria-valuetext={`${value} ${suffix}`}
         onChange={(e) => onChange(parseInt(e.target.value))}
         onKeyDown={onKeyDown}
-        className="pixel-range min-h-11 w-full focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2"
+        className="pixel-range h-2 w-full rounded-full focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2"
       />
     </div>
   );

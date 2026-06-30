@@ -10,7 +10,7 @@ import React, {
 import { cn } from "@/lib/utils";
 import {
   X,
-  CheckCircle,
+  CheckCircle2,
   AlertTriangle,
   Info,
   Loader2,
@@ -55,7 +55,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     const newToast: Toast = {
       ...options,
       id,
-      duration: options.duration ?? (options.variant === "loading" ? 0 : 5000),
+      duration: options.duration ?? (options.variant === "loading" ? 0 : 4500),
     };
 
     setToasts((prev) => [...prev, newToast]);
@@ -70,7 +70,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ToastContainer({
+export function ToastContainer({
   toasts,
   dismiss,
 }: {
@@ -81,7 +81,7 @@ function ToastContainer({
     <div
       aria-live="polite"
       aria-relevant="additions"
-      className="fixed bottom-4 right-4 z-50 flex w-full max-w-sm flex-col gap-3 px-4 sm:bottom-6 sm:right-6 sm:px-0"
+      className="fixed bottom-4 right-4 z-[200] flex flex-col gap-2 items-end pointer-events-none"
     >
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
@@ -108,45 +108,72 @@ function ToastItem({
     }
   }, [duration, onDismiss]);
 
-  const icons = {
-    success: <CheckCircle className="size-5 text-success" />,
-    error: <XCircle className="size-5 text-danger" />,
-    warning: <AlertTriangle className="size-5 text-warning" />,
-    info: <Info className="size-5 text-info" />,
-    loading: <Loader2 className="size-5 animate-spin text-primary" />,
+  const icons: Record<ToastVariant, React.ReactNode> = {
+    success: (
+      <CheckCircle2
+        className="size-[18px] text-green-400 shrink-0 mt-px"
+        strokeWidth={1.5}
+      />
+    ),
+    error: (
+      <XCircle
+        className="size-[18px] text-red-400 shrink-0 mt-px"
+        strokeWidth={1.5}
+      />
+    ),
+    warning: (
+      <AlertTriangle
+        className="size-[18px] text-amber-400 shrink-0 mt-px"
+        strokeWidth={1.5}
+      />
+    ),
+    info: (
+      <Info
+        className="size-[18px] text-violet-400 shrink-0 mt-px"
+        strokeWidth={1.5}
+      />
+    ),
+    loading: (
+      <Loader2
+        className="size-[18px] animate-spin text-primary shrink-0 mt-px"
+        strokeWidth={1.5}
+      />
+    ),
   };
 
   return (
     <div
       role={variant === "error" || variant === "warning" ? "alert" : "status"}
       className={cn(
-        "pixel-panel pixel-corners flex w-full gap-3 p-4 shadow-lg border-2 bg-surface",
-        variant === "success" && "border-success/60",
-        variant === "error" && "border-danger/60",
-        variant === "warning" && "border-warning/60",
-        variant === "info" && "border-info/60",
-        variant === "loading" && "border-primary/60",
+        "pointer-events-auto min-w-[300px] max-w-[420px] bg-surface text-foreground border-2 border-foreground border-l-[6px] shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] flex gap-3 p-4 items-start animate-slide-in-up rounded-md",
+        variant === "success" && "border-l-green-500",
+        variant === "error" && "border-l-red-500",
+        variant === "warning" && "border-l-amber-500",
+        (variant === "info" || variant === "loading") && "border-l-accent",
       )}
     >
-      <div className="flex size-6 shrink-0 items-center justify-center">
-        {icons[variant]}
-      </div>
+      {/* Icon */}
+      <div className="shrink-0">{icons[variant]}</div>
+
+      {/* Content */}
       <div className="flex-1 min-w-0">
-        <h3 className="text-sm font-black text-foreground uppercase tracking-wide leading-tight">
+        <h3 className="text-sm font-bold text-foreground leading-tight">
           {title}
         </h3>
         {description && (
-          <p className="mt-1 text-xs font-bold text-muted-foreground leading-relaxed">
+          <p className="mt-1.5 text-xs font-medium text-muted-foreground leading-relaxed">
             {description}
           </p>
         )}
       </div>
+
+      {/* Dismiss */}
       <button
         onClick={onDismiss}
-        className="flex size-6 shrink-0 items-center justify-center border border-border bg-muted/30 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        className="shrink-0 size-6 border-2 border-foreground rounded bg-surface flex items-center justify-center text-foreground hover:bg-surface-elevated transition-colors shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
         aria-label="Dismiss toast"
       >
-        <X className="size-3.5" />
+        <X className="size-3" strokeWidth={2} />
       </button>
     </div>
   );

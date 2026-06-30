@@ -7,12 +7,13 @@ import {
   RotateCcw,
   UploadCloud,
   X,
+  XCircle,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/button";
 import { buildApiHeaders } from "@/lib/client-api";
-import { env } from "@/lib/env";
+import { env, resolveProxiedUrl } from "@/lib/env";
 import { cn } from "@/lib/utils";
 import { useToast } from "./toast";
 
@@ -284,7 +285,7 @@ export function UploadPanel({
       setMessage("Uploading source video...");
 
       await uploadToSignedUrl(
-        initPayload.signed_upload_url,
+        resolveProxiedUrl(initPayload.signed_upload_url) || initPayload.signed_upload_url,
         file,
         initPayload.upload_headers,
         controller.signal,
@@ -392,15 +393,23 @@ export function UploadPanel({
 
   return (
     <section className="grid gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)]">
+      {/* ── Drop zone ── */}
       <div
         className={cn(
-          "pixel-panel-strong pixel-corners flex min-h-80 flex-col items-center justify-center border-dashed p-6 text-center",
+          "border-2 border-dashed border-foreground bg-surface rounded-md hover:bg-surface-elevated transition-colors text-center p-10 cursor-pointer flex flex-col items-center justify-center gap-4 min-h-[280px]",
           "focus-within:ring-2 focus-within:ring-primary",
           isWorking && "opacity-80",
         )}
-        onDragOver={(event) => event.preventDefault()}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.currentTarget.classList.add("border-primary", "bg-primary/10");
+        }}
+        onDragLeave={(event) => {
+          event.currentTarget.classList.remove("border-primary", "bg-primary/10");
+        }}
         onDrop={(event) => {
           event.preventDefault();
+          event.currentTarget.classList.remove("border-primary", "bg-primary/10");
           selectFile(event.dataTransfer.files.item(0));
         }}
       >
@@ -411,43 +420,108 @@ export function UploadPanel({
           className="sr-only"
           onChange={(event) => selectFile(event.target.files?.item(0) ?? null)}
         />
-        <div className="relative">
-          <span className="absolute -right-3 -top-3 size-2 bg-primary shadow-[10px_10px_0_hsl(var(--primary)/0.25)]" />
-          <UploadCloud className="size-12 text-primary" aria-hidden="true" />
-        </div>
-        <h2 className="mt-4 text-xl font-bold">
-          {hasExistingSource ? "Replace source video" : "Upload source video"}
-        </h2>
-        <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-          {hasExistingSource
-            ? "Choose a new MP4, MOV, or WebM file. It will become the active source after preprocessing finishes."
-            : "Drag in an MP4, MOV, or WebM file. Preprocessing verifies duration, resolution, audio, and thumbnail."}
-        </p>
-        <div className="mt-5 flex flex-wrap justify-center gap-3">
-          <Button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            disabled={isWorking}
-          >
-            {hasExistingSource ? "Choose replacement" : "Choose video"}
-          </Button>
-          {file ? (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => selectFile(null)}
-              disabled={isWorking}
-            >
-              <X className="mr-2 size-4" aria-hidden="true" />
-              Clear
-            </Button>
-          ) : null}
-        </div>
+
+        {/* Phase: complete */}
+        {phase === "complete" && (
+          <div className="border-2 border-foreground bg-card p-6 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] flex flex-col items-center gap-3 w-full max-w-sm">
+            <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto mb-4">
+              <CheckCircle2 className="size-7" aria-hidden="true" />
+            </div>
+            <h2 className="text-lg font-black uppercase text-foreground">Upload complete</h2>
+            <p className="text-sm text-muted-foreground">Your video was uploaded and validated successfully.</p>
+          </div>
+        )}
+
+        {/* Phase: failed */}
+        {phase === "failed" && (
+          <div className="border-2 border-foreground bg-card p-6 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] flex flex-col items-center gap-3 w-full max-w-sm">
+            <div className="size-14 rounded-md border-2 border-foreground bg-danger text-white shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto">
+              <XCircle className="size-7" aria-hidden="true" />
+            </div>
+            <h2 className="text-lg font-black uppercase text-foreground">Upload failed</h2>
+            <p className="text-sm text-muted-foreground">Something went wrong. Review the details and retry.</p>
+          </div>
+        )}
+
+        {/* Phase: uploading */}
+        {phase === "uploading" && (
+          <div className="flex w-full max-w-xs flex-col gap-3">
+            <p className="text-lg font-black uppercase text-foreground">{message ?? "Uploading…"}</p>
+            <div className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden" aria-label="Upload progress">
+              <div
+                className="bg-primary h-full transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-sm font-mono font-bold text-primary">{progress}%</p>
+          </div>
+        )}
+
+        {/* Phase: processing */}
+        {phase === "processing" && (
+          <div className="flex flex-col items-center gap-3 bg-card border-2 border-foreground p-6 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] w-full max-w-sm">
+            <div className="flex gap-1">
+              <span className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce" style={{ animationDelay: "0ms" }} />
+              <span className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce" style={{ animationDelay: "150ms" }} />
+              <span className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce" style={{ animationDelay: "300ms" }} />
+            </div>
+            <p className="text-lg font-black uppercase text-foreground">Processing…</p>
+            <p className="text-sm font-mono text-muted-foreground">{message ?? "Running server media validation…"}</p>
+          </div>
+        )}
+
+        {/* Phase: idle / preflight / canceled */}
+        {(phase === "idle" || phase === "preflight" || phase === "canceled") && (
+          <>
+            <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto mb-4">
+              <UploadCloud className="size-7 text-primary-foreground" aria-hidden="true" />
+            </div>
+            <div>
+              <h2 className="text-lg font-black uppercase text-foreground">
+                {hasExistingSource ? "Replace source video" : "Upload source video"}
+              </h2>
+              <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                {hasExistingSource
+                  ? "Choose a new MP4, MOV, or WebM file. It will become the active source after preprocessing finishes."
+                  : "Drag in an MP4, MOV, or WebM file. Preprocessing verifies duration, resolution, audio, and thumbnail."}
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {["MP4", "MOV", "WebM"].map((fmt) => (
+                <span key={fmt} className="rounded-md border-2 border-foreground bg-muted px-3 py-1 text-xs font-mono font-bold text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+                  {fmt}
+                </span>
+              ))}
+            </div>
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                disabled={isWorking}
+                className="inline-flex h-10 items-center justify-center bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-4 text-sm font-bold uppercase tracking-wider disabled:opacity-50"
+              >
+                {hasExistingSource ? "Choose replacement" : "Choose video"}
+              </button>
+              {file ? (
+                <button
+                  type="button"
+                  onClick={() => selectFile(null)}
+                  disabled={isWorking}
+                  className="inline-flex h-10 items-center justify-center bg-background text-foreground border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-4 text-sm font-bold uppercase tracking-wider disabled:opacity-50"
+                >
+                  <X className="mr-2 size-4" aria-hidden="true" strokeWidth={2.5} />
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          </>
+        )}
       </div>
 
-      <aside className="pixel-panel pixel-corners p-5">
+      {/* ── Preflight aside ── */}
+      <aside className="border-2 border-foreground bg-surface rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-5">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-bold uppercase text-muted-foreground">
+          <h3 className="text-sm font-black uppercase text-foreground font-mono">
             New File Preflight
           </h3>
           <StatusBadge
@@ -460,7 +534,12 @@ export function UploadPanel({
         </div>
         {preflight ? (
           <div className="mt-5 space-y-4">
-            <MetadataRow label="Filename" value={preflight.filename} />
+            {/* File info card */}
+            <div className="bg-card border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] p-4 flex items-start gap-3 mb-4">
+              <div className="min-w-0 flex-1">
+                <MetadataRow label="Filename" value={preflight.filename} />
+              </div>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <MetadataRow
                 label="Size"
@@ -505,55 +584,59 @@ export function UploadPanel({
               />
             </div>
             {isCheckingMedia ? (
-              <div className="flex items-center gap-2 border border-border bg-muted p-3 text-sm font-semibold text-muted-foreground">
+              <div className="flex items-center gap-2 border-2 border-foreground bg-muted p-3 text-sm font-mono font-bold text-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                 Checking browser metadata...
               </div>
             ) : null}
-            {preflight.warnings.length ? (
+            {/* Blocking errors */}
+            {preflight.blockingWarnings.map((warning) => (
               <div
-                className={cn(
-                  "border p-3 text-sm shadow-soft",
-                  preflight.blockingWarnings.length
-                    ? "border-red-200 bg-red-50 text-red-800"
-                    : "border-amber-200 bg-amber-50 text-amber-900",
-                )}
+                key={warning}
+                className="border-2 border-foreground bg-danger/10 px-3 py-2.5 text-sm text-danger rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex gap-2 items-start mb-2 font-mono font-bold"
               >
-                <div className="flex items-center gap-2 font-semibold">
-                  <AlertTriangle className="size-4" aria-hidden="true" />
-                  {preflight.blockingWarnings.length
-                    ? "Fix before upload"
-                    : "Preflight notes"}
-                </div>
-                <ul className="mt-2 list-inside list-disc space-y-1">
-                  {preflight.warnings.map((warning) => (
-                    <li key={warning}>{warning}</li>
-                  ))}
-                </ul>
+                <AlertTriangle className="size-4 mt-0.5 shrink-0 text-danger" aria-hidden="true" />
+                <span>{warning}</span>
               </div>
-            ) : !isCheckingMedia ? (
-              <div className="flex items-center gap-2 border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-900 shadow-soft">
-                <CheckCircle2 className="size-4" aria-hidden="true" />
-                Browser preflight passed. Upload will run server validation for
-                codec, audio, frame rate, decode, and render readiness.
+            ))}
+            {/* Non-blocking warnings */}
+            {preflight.warnings
+              .filter((w) => !preflight.blockingWarnings.includes(w))
+              .map((warning) => (
+                <div
+                  key={warning}
+                  className="border-2 border-foreground bg-amber-500/10 px-3 py-2.5 text-sm text-amber-600 dark:text-amber-400 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex gap-2 items-start mb-2 font-mono font-bold"
+                >
+                  <AlertTriangle className="size-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+                  <span>{warning}</span>
+                </div>
+              ))}
+            {!preflight.warnings.length && !isCheckingMedia ? (
+              <div className="flex items-center gap-2 border-2 border-foreground bg-emerald-500/10 px-3 py-2.5 text-sm font-mono font-bold text-emerald-600 dark:text-emerald-400 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+                <CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                <span>
+                  Browser preflight passed. Upload will run server validation for
+                  codec, audio, frame rate, decode, and render readiness.
+                </span>
               </div>
             ) : null}
             <div>
-              <div className="pixel-progress h-2" aria-label="Upload progress">
+              <div className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden" aria-label="Upload progress">
                 <div
-                  className="pixel-progress-fill h-full transition-all"
+                  className="bg-primary h-full transition-all"
                   style={{ width: `${progress}%` }}
                 />
               </div>
               {progress > 0 ? (
-                <p className="mt-1 text-xs text-muted-foreground">
+                <p className="mt-1 text-sm font-mono font-bold text-primary">
                   {progress}%
                 </p>
               ) : null}
             </div>
             <div className="flex flex-wrap gap-3">
-              <Button
+              <button
                 type="button"
+                className="w-full h-11 bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] font-bold uppercase tracking-wider disabled:opacity-50 mt-4 inline-flex items-center justify-center"
                 onClick={startUpload}
                 disabled={
                   hasBlockingPreflightIssue || isCheckingMedia || isWorking
@@ -561,7 +644,7 @@ export function UploadPanel({
               >
                 {isWorking ? (
                   <Loader2
-                    className="mr-2 size-4 animate-spin"
+                    className="mr-2 size-4 animate-spin text-primary-foreground"
                     aria-hidden="true"
                   />
                 ) : null}
@@ -570,42 +653,42 @@ export function UploadPanel({
                   : phase === "processing"
                     ? "Processing"
                     : uploadButtonLabel}
-              </Button>
+              </button>
               {phase === "uploading" ? (
-                <Button
+                <button
                   type="button"
-                  variant="secondary"
                   onClick={cancelUpload}
+                  className="bg-background text-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] h-11 px-4 font-bold uppercase tracking-wider w-full text-center"
                 >
                   Cancel
-                </Button>
+                </button>
               ) : null}
               {phase === "failed" || phase === "canceled" ? (
-                <Button
+                <button
                   type="button"
-                  variant="secondary"
                   onClick={startUpload}
                   disabled={hasBlockingPreflightIssue || isCheckingMedia}
+                  className="bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] h-11 px-4 font-bold uppercase tracking-wider w-full flex items-center justify-center disabled:opacity-50"
                 >
                   <RotateCcw className="mr-2 size-4" aria-hidden="true" />
                   Retry
-                </Button>
+                </button>
               ) : null}
             </div>
             {videoId ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs font-mono text-muted-foreground mt-2">
                 Registered upload {videoId.slice(0, 8)}.
               </p>
             ) : null}
             {message ? (
               <p
                 className={cn(
-                  "border p-3 text-sm shadow-soft",
+                  "border-2 border-foreground p-3 text-sm rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] font-mono font-bold mt-2",
                   phase === "failed"
-                    ? "border-red-200 bg-red-50 text-red-800"
+                    ? "bg-danger/10 text-danger"
                     : phase === "complete"
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-                      : "border-border bg-muted text-muted-foreground",
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      : "bg-muted text-muted-foreground",
                 )}
               >
                 {message}
@@ -613,7 +696,7 @@ export function UploadPanel({
             ) : null}
           </div>
         ) : (
-          <p className="mt-5 text-sm leading-6 text-muted-foreground">
+          <p className="mt-5 text-sm font-mono leading-6 text-muted-foreground">
             No file selected. Choose a source video to run upload preflight.
           </p>
         )}
@@ -647,18 +730,18 @@ function StatusBadge({
             : phase;
   const tone =
     label === "blocked" || phase === "failed"
-      ? "bg-red-50 text-red-700"
+      ? "bg-danger text-white"
       : label === "ready" || phase === "complete"
-        ? "bg-emerald-50 text-emerald-700"
+        ? "bg-emerald-500 text-white"
         : label === "warnings"
-          ? "bg-amber-50 text-amber-700"
+          ? "bg-amber-500 text-black"
           : phase === "uploading" || phase === "processing" || isCheckingMedia
-            ? "bg-primary/10 text-primary"
+            ? "bg-primary text-primary-foreground"
             : "bg-muted text-muted-foreground";
   return (
     <span
       className={cn(
-        "rounded-full px-2.5 py-1 text-xs font-semibold capitalize",
+        "px-2.5 py-0.5 font-bold font-mono border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] text-xs capitalize inline-flex items-center",
         tone,
       )}
     >
@@ -669,11 +752,11 @@ function StatusBadge({
 
 function MetadataRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0">
-      <p className="text-xs font-medium uppercase text-muted-foreground">
+    <div className="min-w-0 border-2 border-foreground bg-muted p-2 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
         {label}
       </p>
-      <p className="mt-1 break-words text-sm font-semibold">{value}</p>
+      <p className="mt-0.5 break-all text-xs font-mono font-bold text-foreground">{value}</p>
     </div>
   );
 }

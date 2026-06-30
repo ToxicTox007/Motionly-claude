@@ -157,6 +157,19 @@ class Settings(BaseSettings):
     remotion_enabled: bool = Field(default=False, alias="REMOTION_ENABLED")
     publish_sync_completion: bool = Field(default=False, alias="PUBLISH_SYNC_COMPLETION")
     publish_oauth_state_secret: str | None = Field(default=None, alias="PUBLISH_OAUTH_STATE_SECRET")
+    publish_token_refresh_buffer_seconds: int = Field(
+        default=300,
+        alias="PUBLISH_TOKEN_REFRESH_BUFFER_SECONDS",
+    )
+    publish_retry_backoff_seconds: int = Field(
+        default=60,
+        alias="PUBLISH_RETRY_BACKOFF_SECONDS",
+    )
+    publish_retry_backoff_cap_seconds: int = Field(
+        default=900,
+        alias="PUBLISH_RETRY_BACKOFF_CAP_SECONDS",
+    )
+    publish_retry_max_attempts: int = Field(default=3, alias="PUBLISH_RETRY_MAX_ATTEMPTS")
     tiktok_client_key: str | None = Field(default=None, alias="TIKTOK_CLIENT_KEY")
     tiktok_client_secret: str | None = Field(default=None, alias="TIKTOK_CLIENT_SECRET")
     meta_app_id: str | None = Field(default=None, alias="META_APP_ID")
@@ -275,4 +288,8 @@ def get_settings() -> Settings:
         secret_file = os.getenv(f"{name}_FILE")
         if secret_file and not os.getenv(name):
             os.environ[name] = Path(secret_file).read_text(encoding="utf-8").strip()
-    return Settings()
+    
+    env_file = os.getenv("SETTINGS_ENV_FILE", ".env")
+    if env_file == "none":
+        return Settings(_env_file=None)
+    return Settings(_env_file=env_file)

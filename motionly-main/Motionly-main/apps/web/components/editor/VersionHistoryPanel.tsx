@@ -79,7 +79,7 @@ export function VersionHistoryPanel({
   }
 
   async function restore(snapshot: PlanSnapshotSummary) {
-    if (!window.confirm(`Restore “${snapshot.name}”? Current unsaved plan changes will be replaced.`)) return;
+    if (!window.confirm(`Restore "${snapshot.name}"? Current unsaved plan changes will be replaced.`)) return;
     setBusy(true);
     try {
       const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
@@ -102,34 +102,95 @@ export function VersionHistoryPanel({
     }
   }
 
+  const isErrorMessage = message && /could not|failed/i.test(message);
+
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-black">Version history</h2>
-        <p className="text-sm text-muted-foreground">Save named, restorable copies of the complete edit manifest.</p>
+        <h2 className="text-lg font-black uppercase tracking-tight">Version history</h2>
+        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+          Save named, restorable copies of the complete edit manifest.
+        </p>
       </div>
-      <div className="flex gap-2">
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Client review" className="pixel-input min-h-11 min-w-0 flex-1 px-3" />
-        <button type="button" disabled={busy || !activePlan} onClick={() => void saveSnapshot()} className="pixel-button flex min-h-11 items-center gap-2 bg-primary px-3 text-sm font-bold text-primary-foreground">
-          {busy ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}Save
+
+      {/* Save input row */}
+      <div className="flex gap-2.5">
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="e.g. Client review"
+          className="min-h-[40px] min-w-0 flex-1 px-3 py-2 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] transition-all"
+        />
+        <button
+          type="button"
+          disabled={busy || !activePlan}
+          onClick={() => void saveSnapshot()}
+          className="inline-flex items-center justify-center gap-2 h-10 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-bold hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none px-4 focus:outline-none transition-all duration-[100ms]"
+        >
+          {busy ? (
+            <Loader2 className="size-4 animate-spin" strokeWidth={2} />
+          ) : (
+            <Save className="size-4" strokeWidth={2} />
+          )}
+          <span>Save</span>
         </button>
       </div>
+
+      {/* Snapshot list */}
       <div className="space-y-2">
-        {snapshots.map((snapshot) => (
-          <div key={snapshot.id} className="border border-border bg-muted/30 p-3">
-            <div className="flex items-start gap-2">
-              <History className="mt-0.5 size-4 text-primary" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-bold">{snapshot.name}</p>
-                <p className="text-[10px] text-muted-foreground">Plan v{snapshot.source_plan_version} · {new Date(snapshot.created_at).toLocaleString()}</p>
+        {snapshots.length > 0 ? (
+          <>
+            <p className="text-[10px] font-black uppercase tracking-wider text-foreground font-mono mt-4 mb-2 px-1">
+              Saved versions
+            </p>
+            {snapshots.map((snapshot) => (
+              <div
+                key={snapshot.id}
+                className="card rounded border-2 border-foreground p-3 flex items-center justify-between gap-3 bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <History className="size-4 shrink-0 text-primary" strokeWidth={2} />
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-foreground">{snapshot.name}</p>
+                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                      Plan v{snapshot.source_plan_version} ·{" "}
+                      {new Date(snapshot.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void restore(snapshot)}
+                  className="flex h-8 items-center gap-1 rounded border-2 border-foreground px-3 text-xs font-bold hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] dark:hover:shadow-[1px_1px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:transform-none disabled:shadow-none bg-surface text-foreground transition-all duration-[100ms] whitespace-nowrap"
+                >
+                  <RotateCcw className="size-3" strokeWidth={2} />
+                  <span>Restore</span>
+                </button>
               </div>
-              <button type="button" disabled={busy} onClick={() => void restore(snapshot)} className="pixel-button flex min-h-9 items-center gap-1 px-2 text-xs font-bold"><RotateCcw className="size-3" />Restore</button>
-            </div>
-          </div>
-        ))}
-        {!snapshots.length ? <p className="border border-dashed border-border p-4 text-center text-sm text-muted-foreground">No named versions yet.</p> : null}
+            ))}
+          </>
+        ) : (
+          <p className="rounded border-2 border-dashed border-foreground p-5 text-center text-xs font-mono font-bold text-muted-foreground leading-relaxed">
+            No named versions yet.
+          </p>
+        )}
       </div>
-      {message ? <p className="text-xs font-bold text-muted-foreground" aria-live="polite">{message}</p> : null}
+
+      {/* Status / error */}
+      {message ? (
+        <p
+          role={isErrorMessage ? "alert" : "status"}
+          aria-live="polite"
+          className={
+            isErrorMessage
+              ? "rounded border-2 border-danger bg-danger/10 p-3.5 text-xs font-bold text-danger shadow-[2px_2px_0px_#000]"
+              : "rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000]"
+          }
+        >
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }

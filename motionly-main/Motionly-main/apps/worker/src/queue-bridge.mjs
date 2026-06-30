@@ -120,6 +120,35 @@ async function markStuckDeadLetter(connection, payload) {
   return transitioned;
 }
 
+async function recoverStuck(connection, payload) {
+  const cutoff = Date.now() - Math.max(1, Number(payload.timeout_seconds || 1)) * 1000;
+  const backoffSeconds = Math.max(1, Number(payload.backoff_seconds || 30));
+  const transitioned = [];
+  for (const queueName of queueNames) {
+    const queue = queueFor(queueName, connection);
+    const active = await queue.getJobs(["active"], 0, 499, true);
+    for (const job of active) {
+      const startedAt = Number(job.processedOn || job.timestamp || Date.now());
+      if (startedAt > cutoff) continue;
+      const attemptsMade = Number(job.attemptsMade || 0);
+      const maxAttempts = Number(job.opts?.attempts || job.data.max_attempts || 3);
+      const exhausted = attemptsMade + 1 >= maxAttempts;
+      const status = exhausted ? "dead_letter" : "queued";
+      await job.updateData({
+        ...job.data,
+        status,
+        enqueued_at: new Date(Date.now() + backoffSeconds * 1000).toISOString(),
+        error_code: "stuck_timeout",
+        error_message: exhausted
+          ? "Worker job exceeded the stuck timeout and hit the retry limit."
+          : "Worker job exceeded the stuck timeout and was requeued.",
+      });
+      transitioned.push(normalizeJobRecord(job, status === "dead_letter" ? "failed" : "waiting"));
+    }
+  }
+  return transitioned;
+}
+
 async function execute(command, connection, payload) {
   return command === "enqueue"
     ? enqueue(connection, payload)
@@ -129,6 +158,8 @@ async function execute(command, connection, payload) {
         ? retry(connection, payload)
       : command === "cancel"
         ? cancel(connection, payload)
+        : command === "recover-stuck"
+          ? recoverStuck(connection, payload)
         : markStuckDeadLetter(connection, payload);
 }
 
@@ -159,8 +190,8 @@ async function serve(connection) {
 
 async function main() {
   const command = process.argv[2];
-  if (!["enqueue", "jobs", "retry", "cancel", "mark-stuck-dead-letter", "serve"].includes(command)) {
-    throw new Error("Usage: queue-bridge.mjs [enqueue|jobs|retry|cancel|mark-stuck-dead-letter|serve]");
+  if (!["enqueue", "jobs", "retry", "cancel", "mark-stuck-dead-letter", "recover-stuck", "serve"].includes(command)) {
+    throw new Error("Usage: queue-bridge.mjs [enqueue|jobs|retry|cancel|mark-stuck-dead-letter|recover-stuck|serve]");
   }
   const connection = bullConnection();
   try {

@@ -10,6 +10,18 @@ const nextConfig: NextConfig = {
       allowedOrigins: ["localhost:3000", "127.0.0.1:3000", "*.app.github.dev"],
     },
   },
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: "http://localhost:8000/:path*",
+      },
+      {
+        source: "/supabase/:path*",
+        destination: "http://127.0.0.1:54321/:path*",
+      },
+    ];
+  },
 };
 
 export default withSentryConfig(nextConfig, {

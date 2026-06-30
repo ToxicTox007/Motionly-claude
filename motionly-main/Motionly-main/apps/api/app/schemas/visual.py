@@ -167,7 +167,19 @@ class VisualAnalyzeResponse(BaseModel):
     cached: bool = False
 
 
+class MattePreviewResponse(BaseModel):
+    status: Literal["available", "pending", "failed", "skipped", "approximate"] = "skipped"
+    reason: str | None = None
+    preview_url: str | None = None
+    bucket: str | None = None
+    path: str | None = None
+    cache_key: str | None = None
+    model: str | None = None
+    source: Literal["segmentation_matte", "approximate_preview", "none"] = "none"
+
+
 class VisualStatusResponse(BaseModel):
     status: Literal["processing", "ready", "unavailable"]
     manifest: VideoManifestResponse | None = None
     message: str
+    matte_preview: MattePreviewResponse = Field(default_factory=MattePreviewResponse)

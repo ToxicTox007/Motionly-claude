@@ -13,12 +13,15 @@ from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.uploads import UploadStatus, VideoMetadata
 from app.schemas.visual import (
     CameraMotion,
+    MatteStatus,
     SceneType,
+    SegmentationMatte,
     VisualAnalyzeRequest,
     VisualManifestStatus,
 )
 from app.services.local_storage import LocalObjectStorage
 from app.services.queue import QueueRegistry, VisualQueue
+from app.services.storage import StorageSigner
 from app.services.visual_intelligence import FixtureVisualIntelligenceProvider
 
 
@@ -225,6 +228,7 @@ def test_visual_status_is_processing_then_ready(tmp_path) -> None:
     processing = asyncio.run(
         get_visual_status(
             project_id=context.project_id,
+            request=context.request,
             actor=context.actor,
             repository=context.visual_repository,
         )
@@ -240,12 +244,52 @@ def test_visual_status_is_processing_then_ready(tmp_path) -> None:
     ready = asyncio.run(
         get_visual_status(
             project_id=context.project_id,
+            request=context.request,
             actor=context.actor,
             repository=context.visual_repository,
         )
     )
     assert ready.status == "ready"
     assert ready.manifest and ready.manifest.manifest
+    assert ready.matte_preview.status in {"skipped", "approximate"}
+
+
+def test_visual_status_returns_signed_matte_preview_when_available(tmp_path) -> None:
+    context = _make_visual_context(tmp_path)
+    upload = _seed_upload(context, status=UploadStatus.READY)
+    context.visual_repository.create_matte(
+        workspace_id=context.workspace_id,
+        project_id=context.project_id,
+        uploaded_video_id=upload.id,
+        status=MatteStatus.COMPLETED,
+        cache_key="matte-cache",
+        source_file_hash="hash",
+        segmentation_settings={"enabled": True},
+        model_version="matte-v1",
+        matte=SegmentationMatte(
+            bucket="raw-uploads",
+            path="workspaces/matte-preview.mp4",
+            fps=30,
+            width=320,
+            height=180,
+            frame_count=30,
+            cache_key="matte-cache",
+        ),
+    )
+
+    status = asyncio.run(
+        get_visual_status(
+            project_id=context.project_id,
+            request=context.request,
+            actor=context.actor,
+            repository=context.visual_repository,
+        )
+    )
+
+    assert status.matte_preview.status == "available"
+    assert status.matte_preview.preview_url.endswith(
+        "/_local/storage/raw-uploads/workspaces/matte-preview.mp4"
+    )
 
 
 def _make_visual_context(tmp_path) -> SimpleNamespace:
@@ -271,6 +315,7 @@ def _make_visual_context(tmp_path) -> SimpleNamespace:
                 queue_registry=registry,
                 visual_repository=visual_repository,
                 visual_intelligence_provider=FixtureVisualIntelligenceProvider(),
+                storage_signer=StorageSigner(base_url="https://api.motionly.test"),
             )
         )
     )

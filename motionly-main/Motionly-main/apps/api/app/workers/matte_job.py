@@ -69,6 +69,9 @@ def _serve() -> None:
         request: dict[str, object] = {}
         try:
             request = json.loads(line)
+            if request.get("control") == "ping":
+                print(json.dumps({"id": request.get("id"), "result": {"ok": True}}), flush=True)
+                continue
             response = {
                 "id": request.get("id"),
                 "result": execute(dict(request.get("payload") or {})),

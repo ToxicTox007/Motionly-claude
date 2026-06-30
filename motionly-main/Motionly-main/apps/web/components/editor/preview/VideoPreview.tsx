@@ -15,6 +15,12 @@ import type {
   TranscriptWord,
   VisualPresetKey,
 } from "@motionly/shared";
+import {
+  DEFAULT_RENDER_FPS,
+  frameToMilliseconds,
+  millisecondsToNearestFrame,
+  normalizeRenderFps,
+} from "@motionly/shared";
 import { ManualElementsOverlay } from "./ManualElementsOverlay";
 import { WebGLVideoCanvas } from "./WebGLVideoCanvas";
 
@@ -50,6 +56,19 @@ export interface PreviewLookState {
   selectedSourceClipStartMs?: number | null;
   selectedSourceClipEndMs?: number | null;
   zoomMoments?: Array<{ timestamp_ms: number; intensity: number }> | null;
+  backgroundRemoval?: {
+    enabled: boolean;
+    featherPx: number;
+  } | null;
+  mattePreview?: {
+    status: "available" | "pending" | "failed" | "skipped" | "approximate";
+    reason?: string | null;
+    previewUrl?: string | null;
+    bucket?: string | null;
+    path?: string | null;
+    cacheKey?: string | null;
+    source?: "segmentation_matte" | "approximate_preview" | "none";
+  } | null;
   reducedMotion: boolean;
 }
 
@@ -67,6 +86,7 @@ interface VideoPreviewProps {
   thumbnailUrl: string | null;
   sourceWidth?: number | null;
   sourceHeight?: number | null;
+  sourceFps?: number | null;
   playheadMs: number;
   captionSegments: CaptionSegment[];
   captionStyle: CaptionStyle | null;
@@ -88,6 +108,7 @@ export function VideoPreview({
   thumbnailUrl,
   sourceWidth,
   sourceHeight,
+  sourceFps,
   playheadMs,
   captionSegments,
   captionStyle,
@@ -119,9 +140,14 @@ export function VideoPreview({
   const frameWidth = sourceWidth || activeIntrinsicSize?.width || 16;
   const frameHeight = sourceHeight || activeIntrinsicSize?.height || 9;
   const previewAspectRatio = getPreviewAspectRatio(previewExport?.outputAspect, frameWidth, frameHeight);
+  const canonicalPreviewFps = normalizeRenderFps(sourceFps ?? DEFAULT_RENDER_FPS);
+  const canonicalPlayheadMs = frameToMilliseconds(
+    millisecondsToNearestFrame(playheadMs, canonicalPreviewFps),
+    canonicalPreviewFps,
+  );
   const previewMotion = getPreviewMotionState({
     look: previewLook,
-    playheadMs,
+    playheadMs: canonicalPlayheadMs,
     totalDurationMs,
     captionSegments,
   });
@@ -224,33 +250,48 @@ export function VideoPreview({
         >
           {/* Video element */}
           {sourceUrl ? (
-            <video
-              ref={videoRef}
-              src={sourceUrl}
-              poster={thumbnailUrl ?? undefined}
-              className="absolute inset-0 h-full w-full transition-[filter,transform] duration-150"
-              style={{
-                filter: videoFilter,
-                objectFit,
-                objectPosition,
-                transform: videoTransform,
-                transformOrigin: previewMotion.transformOrigin,
-              }}
-              onLoadedMetadata={(event) => {
-                const video = event.currentTarget;
-                if (video.videoWidth && video.videoHeight) {
-                  setIntrinsicSize({
-                    sourceUrl,
-                    width: video.videoWidth,
-                    height: video.videoHeight,
-                  });
-                }
-              }}
-              playsInline
-              preload="metadata"
-              crossOrigin="anonymous"
-              aria-label="Source video preview"
-            />
+            <>
+              <video
+                ref={videoRef}
+                src={sourceUrl}
+                poster={thumbnailUrl ?? undefined}
+                className="absolute inset-0 h-full w-full transition-[filter,transform] duration-150"
+                style={{
+                  filter: videoFilter,
+                  objectFit,
+                  objectPosition,
+                  transform: videoTransform,
+                  transformOrigin: previewMotion.transformOrigin,
+                  opacity: previewLook?.mattePreview?.status === "available" ? 0 : 1,
+                }}
+                onLoadedMetadata={(event) => {
+                  const video = event.currentTarget;
+                  if (video.videoWidth && video.videoHeight) {
+                    setIntrinsicSize({
+                      sourceUrl,
+                      width: video.videoWidth,
+                      height: video.videoHeight,
+                    });
+                  }
+                }}
+                playsInline
+                preload="metadata"
+                crossOrigin="anonymous"
+                aria-label="Source video preview"
+              />
+              {previewLook?.backgroundRemoval?.enabled &&
+              previewLook.mattePreview?.status === "available" &&
+              previewLook.mattePreview.previewUrl ? (
+                <MattePreviewCanvas
+                  videoRef={videoRef}
+                  matteSrc={previewLook.mattePreview.previewUrl}
+                  objectFit={objectFit}
+                  objectPosition={objectPosition}
+                  transform={videoTransform}
+                  transformOrigin={previewMotion.transformOrigin}
+                />
+              ) : null}
+            </>
           ) : (
             /* Empty state when no source yet */
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-900">
@@ -300,13 +341,13 @@ export function VideoPreview({
             <CaptionOverlay
               segments={captionSegments}
               style={captionStyle}
-              playheadMs={playheadMs}
+              playheadMs={canonicalPlayheadMs}
             />
           )}
 
           <ManualElementsOverlay
             elements={manualElements}
-            playheadMs={playheadMs}
+            playheadMs={canonicalPlayheadMs}
             selectedId={selectedElementId}
             onSelect={onElementSelect}
           />
@@ -379,6 +420,98 @@ export function VideoPreview({
         <span className="sr-only">Duration </span>{formatMs(totalDurationMs)}
       </p>
     </div>
+  );
+}
+
+function MattePreviewCanvas({
+  videoRef,
+  matteSrc,
+  objectFit,
+  objectPosition,
+  transform,
+  transformOrigin,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  matteSrc: string;
+  objectFit: React.CSSProperties["objectFit"];
+  objectPosition: React.CSSProperties["objectPosition"];
+  transform: React.CSSProperties["transform"];
+  transformOrigin: React.CSSProperties["transformOrigin"];
+}) {
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const matteVideoRef = React.useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const sourceVideo = videoRef.current;
+    const matteVideo = matteVideoRef.current;
+    const canvas = canvasRef.current;
+    if (!sourceVideo || !matteVideo || !canvas) return;
+
+    let rafId = 0;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const syncMatte = () => {
+      if (Math.abs(matteVideo.currentTime - sourceVideo.currentTime) > 0.05) {
+        matteVideo.currentTime = sourceVideo.currentTime;
+      }
+      matteVideo.playbackRate = sourceVideo.playbackRate || 1;
+      if (sourceVideo.paused && !matteVideo.paused) {
+        matteVideo.pause();
+      } else if (!sourceVideo.paused && matteVideo.paused) {
+        void matteVideo.play().catch(() => {});
+      }
+    };
+
+    const draw = () => {
+      syncMatte();
+      if (
+        sourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+        matteVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
+        const width = sourceVideo.videoWidth || canvas.width;
+        const height = sourceVideo.videoHeight || canvas.height;
+        if (width > 0 && height > 0 && (canvas.width !== width || canvas.height !== height)) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(sourceVideo, 0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = "destination-in";
+        ctx.drawImage(matteVideo, 0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = "source-over";
+      }
+      rafId = window.requestAnimationFrame(draw);
+    };
+
+    const events = ["play", "pause", "seeked", "timeupdate", "ratechange"] as const;
+    events.forEach((eventName) => sourceVideo.addEventListener(eventName, syncMatte));
+    rafId = window.requestAnimationFrame(draw);
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      events.forEach((eventName) => sourceVideo.removeEventListener(eventName, syncMatte));
+    };
+  }, [matteSrc, videoRef]);
+
+  return (
+    <>
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        style={{ objectFit, objectPosition, transform, transformOrigin }}
+        aria-label="Real matte preview"
+      />
+      <video
+        ref={matteVideoRef}
+        src={matteSrc}
+        className="hidden"
+        playsInline
+        muted
+        preload="metadata"
+        crossOrigin="anonymous"
+      />
+    </>
   );
 }
 
@@ -808,6 +941,15 @@ function PreviewSyncBadges({
 }) {
   const badges = [
     look ? `Look ${look.intensity}%` : null,
+    look?.backgroundRemoval?.enabled
+      ? look.mattePreview?.status === "available"
+        ? "Real matte preview"
+        : look.mattePreview?.status === "approximate" || look.mattePreview?.status === "pending"
+          ? "Approximate subject preview"
+          : look.mattePreview?.status === "failed"
+            ? "Matte preview failed"
+            : "Matte preview skipped"
+      : null,
     broll ? `B-roll ${broll.density ?? "auto"} (${broll.slotsCount})` : null,
     audio ? `${audio.includeMusic ? "Music" : "No music"} ${audio.musicVolume}%` : null,
     exportState ? `Crop ${exportState.cropZoom}%` : null,

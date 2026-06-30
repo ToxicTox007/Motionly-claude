@@ -1,5 +1,6 @@
 import type { components as ApiComponents } from "./generated/api";
 export * from "./generated/api";
+export * from "./timeline";
 
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type WorkspaceMemberStatus = "active" | "invited" | "disabled";
@@ -183,6 +184,7 @@ export interface UploadedVideoSummary {
   durationMs?: number | null;
   width?: number | null;
   height?: number | null;
+  fps?: number | null;
   thumbnailPath?: string | null;
   warnings: string[];
   updatedAt: string;
@@ -306,6 +308,16 @@ export interface VisualAnalysisStatusSummary {
   status: "processing" | "ready" | "unavailable";
   manifest?: VideoManifestSummary | null;
   message: string;
+  matte_preview?: {
+    status: "available" | "pending" | "failed" | "skipped" | "approximate";
+    reason?: string | null;
+    preview_url?: string | null;
+    bucket?: string | null;
+    path?: string | null;
+    cache_key?: string | null;
+    model?: string | null;
+    source?: "segmentation_matte" | "approximate_preview" | "none";
+  };
 }
 
 export interface CaptionStyle {

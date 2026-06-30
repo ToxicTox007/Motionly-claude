@@ -8,6 +8,12 @@ from pydantic import ValidationError
 from app.core.config import get_settings
 
 
+@pytest.fixture(autouse=True)
+def ignore_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SETTINGS_ENV_FILE", "none")
+    get_settings.cache_clear()
+
+
 @pytest.mark.parametrize("app_env", ["production", "staging", "preview", "test", "prodution", ""])
 def test_skip_api_auth_fails_closed_outside_exact_local_envs(
     monkeypatch: pytest.MonkeyPatch,

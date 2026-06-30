@@ -457,6 +457,8 @@ export function AIStep({
               ? "Starting background transcription."
               : "Transcript ready.";
 
+  const isErrorMessage = message && /failed|could not|try/i.test(message);
+
   return (
     <div className="space-y-6" aria-live="polite">
       <div className="space-y-2">
@@ -466,15 +468,29 @@ export function AIStep({
         </p>
       </div>
 
-      <div className="pixel-panel flex items-start gap-3 p-3 text-sm" data-testid="visual-analysis-status">
-        {visualStatus.status === "processing" ? <Loader2 className="mt-0.5 size-4 animate-spin" /> : visualStatus.status === "ready" ? <CheckCircle2 className="mt-0.5 size-4 text-success" /> : <AlertCircle className="mt-0.5 size-4 text-warning" />}
+      {/* Visual analysis status */}
+      <div
+        className="card rounded-xl flex items-start gap-3 p-4 text-sm"
+        data-testid="visual-analysis-status"
+      >
+        {visualStatus.status === "processing" ? (
+          <Loader2 className="mt-0.5 size-4 animate-spin text-primary" strokeWidth={1.5} />
+        ) : visualStatus.status === "ready" ? (
+          <CheckCircle2 className="mt-0.5 size-4 text-success" strokeWidth={1.5} />
+        ) : (
+          <AlertCircle className="mt-0.5 size-4 text-warning" strokeWidth={1.5} />
+        )}
         <div>
-          <div className="flex items-center gap-2 font-bold"><Eye className="size-4" />Visual analysis: {visualStatus.status}</div>
+          <div className="flex items-center gap-2 font-bold">
+            <Eye className="size-4" strokeWidth={1.5} />
+            Visual analysis: {visualStatus.status}
+          </div>
           <p className="mt-1 text-muted-foreground">{visualStatus.message}</p>
         </div>
       </div>
 
-      <div className="pixel-panel pixel-corners space-y-6 p-4">
+      {/* Settings card */}
+      <div className="card rounded-xl p-5 space-y-4">
         <div className="space-y-2">
           <Label>Edit Style</Label>
           <Select
@@ -531,8 +547,12 @@ export function AIStep({
         </div>
       </div>
 
+      {/* Transcript status */}
       {!hasTranscript ? (
-        <div className="space-y-3 border border-border bg-muted/40 p-4" role={transcript?.status === "failed" ? "alert" : "status"}>
+        <div
+          className="card rounded-lg space-y-3 p-4 border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+          role={transcript?.status === "failed" ? "alert" : "status"}
+        >
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-sm font-bold capitalize">
@@ -541,27 +561,47 @@ export function AIStep({
               <p className="mt-1 text-xs text-muted-foreground">{transcriptMessage}</p>
             </div>
             {transcript?.status === "failed" ? (
-              <AlertCircle className="mt-0.5 size-4 text-destructive" />
+              <AlertCircle className="mt-0.5 size-4 text-danger" strokeWidth={2} />
             ) : (
               <Loader2
                 className={
-                  transcript?.status === "ready" ? "size-4 text-primary" : "size-4 animate-spin text-primary"
+                  transcript?.status === "ready"
+                    ? "size-4 text-primary"
+                    : "size-4 animate-spin text-primary"
                 }
+                strokeWidth={2}
               />
             )}
           </div>
-          <div className="h-2 overflow-hidden bg-background" role="progressbar" aria-label="Transcription progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(5, Math.min(transcriptProgress, 100))}>
+
+          {/* Progress bar */}
+          <div
+            className="progress-bar h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
+            role="progressbar"
+            aria-label="Transcription progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.max(5, Math.min(transcriptProgress, 100))}
+          >
             <div
-              className="h-full bg-primary transition-all"
+              className="progress-fill"
               style={{ width: `${Math.max(5, Math.min(transcriptProgress, 100))}%` }}
             />
           </div>
-          <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground">
+
+          <div className="flex items-center justify-between text-[11px] font-bold font-mono text-muted-foreground">
             <span>{Math.max(5, Math.min(transcriptProgress, 100))}% complete</span>
             <div className="flex items-center gap-2">
               {!transcript ? (
-                <Button onClick={() => requestTranscript(false)} disabled={transcriptLoading} aria-busy={transcriptLoading} className="min-h-11 px-3">
-                  {transcriptLoading ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+                <Button
+                  onClick={() => requestTranscript(false)}
+                  disabled={transcriptLoading}
+                  aria-busy={transcriptLoading}
+                  className="min-h-11 px-3"
+                >
+                  {transcriptLoading ? (
+                    <Loader2 className="mr-2 size-4 animate-spin" strokeWidth={2} />
+                  ) : null}
                   Start
                 </Button>
               ) : null}
@@ -572,9 +612,9 @@ export function AIStep({
                   className="h-8 px-3"
                 >
                   {transcriptLoading ? (
-                    <Loader2 className="mr-2 size-4 animate-spin" />
+                    <Loader2 className="mr-2 size-4 animate-spin" strokeWidth={2} />
                   ) : (
-                    <RefreshCw className="mr-2 size-4" />
+                    <RefreshCw className="mr-2 size-4" strokeWidth={2} />
                   )}
                   Retry
                 </Button>
@@ -584,31 +624,36 @@ export function AIStep({
         </div>
       ) : null}
 
-      <Button 
-        onClick={generatePlan} 
+      {/* Generate button */}
+      <button
+        onClick={generatePlan}
         disabled={loading || !hasTranscript}
         aria-busy={loading}
         aria-describedby={message ? "ai-edit-message" : undefined}
-        className="h-14 w-full bg-primary text-primary-foreground group"
+        className="w-full h-12 rounded-md bg-primary text-primary-foreground font-black text-sm border-2 border-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all flex items-center justify-center gap-2"
       >
         {loading ? (
-          <Loader2 className="mr-2 size-5 animate-spin" />
+          <Loader2 className="size-5 animate-spin text-primary-foreground" strokeWidth={2} />
         ) : (
-          <Sparkles className="mr-2 size-5 group-hover:rotate-12 transition-transform" />
+          <Sparkles className="size-5" strokeWidth={2} />
         )}
-        <span className="text-base font-bold">{loading ? "Generating, please wait" : "Generate AI Edit"}</span>
-      </Button>
+        <span>
+          {loading ? "Generating, please wait…" : "Generate AI Edit"}
+        </span>
+      </button>
 
-      <div className="space-y-3 border border-border bg-muted/35 p-4">
+      {/* Version history */}
+      <div className="card rounded-lg p-4 space-y-3 border-2 border-foreground bg-surface shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-black">Version History</p>
+            <p className="text-sm font-black uppercase">Version History</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Save named timeline versions and restore any edit without creating a separate review step.
             </p>
           </div>
-          <History className="size-4 text-muted-foreground" />
+          <History className="size-4 text-foreground" strokeWidth={2} />
         </div>
+
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input
             aria-label="Snapshot name"
@@ -624,20 +669,25 @@ export function AIStep({
             disabled={!activePlan || snapshotLoading}
             className="min-h-11 gap-2 whitespace-nowrap"
           >
-            {snapshotLoading ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            {snapshotLoading ? (
+              <Loader2 className="size-4 animate-spin" strokeWidth={2} />
+            ) : (
+              <Save className="size-4" strokeWidth={2} />
+            )}
             Save
           </Button>
         </div>
+
         {snapshots.length ? (
           <div className="space-y-2">
             {snapshots.slice(0, 5).map((snapshot) => (
               <div
                 key={snapshot.id}
-                className="flex items-center justify-between gap-3 border border-border bg-surface px-3 py-2"
+                className="card rounded border-2 border-foreground flex items-center justify-between gap-3 px-3 py-2 bg-surface shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
               >
                 <div className="min-w-0">
                   <p className="truncate text-xs font-black">{snapshot.name}</p>
-                  <p className="text-[10px] font-bold text-muted-foreground">
+                  <p className="text-[10px] font-bold text-muted-foreground font-mono">
                     Timeline v{snapshot.source_plan_version} · {snapshot.summary.cut_count} cuts
                   </p>
                 </div>
@@ -646,7 +696,7 @@ export function AIStep({
                   variant="ghost"
                   onClick={() => restoreSnapshot(snapshot.id)}
                   disabled={snapshotLoading}
-                  className="min-h-10 px-3 text-xs"
+                  className="pixel-button text-xs h-8 px-3"
                 >
                   Restore
                 </Button>
@@ -654,14 +704,23 @@ export function AIStep({
             ))}
           </div>
         ) : (
-          <p className="border border-border bg-background p-3 text-xs font-bold text-muted-foreground">
+          <p className="rounded border-2 border-dashed border-foreground p-3 text-xs font-bold text-muted-foreground text-center font-mono">
             No saved snapshots yet.
           </p>
         )}
       </div>
-      
+
+      {/* Status / error message */}
       {message ? (
-        <p id="ai-edit-message" role={/failed|could not|try/i.test(message) ? "alert" : "status"} className="border border-border bg-muted p-3 text-sm font-bold text-muted-foreground">
+        <p
+          id="ai-edit-message"
+          role={isErrorMessage ? "alert" : "status"}
+          className={
+            isErrorMessage
+              ? "rounded border-2 border-danger bg-danger/10 p-4 text-sm text-danger shadow-[2px_2px_0px_#000]"
+              : "rounded border-2 border-foreground bg-muted p-3 text-sm font-bold text-foreground font-mono shadow-[2px_2px_0px_#000]"
+          }
+        >
           {message}
         </p>
       ) : null}

@@ -70,9 +70,17 @@ if (process.env.NODE_ENV === "production" && !isProductionBuild) {
   }
 }
 
-const supabaseUrl = parsedEnv.NEXT_PUBLIC_SUPABASE_URL ?? parsedEnv.SUPABASE_URL;
+const isClient = typeof window !== "undefined";
+
+const supabaseUrl = isClient
+  ? "/supabase"
+  : (parsedEnv.NEXT_PUBLIC_SUPABASE_URL ?? parsedEnv.SUPABASE_URL);
+
 const supabaseAnonKey = parsedEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? parsedEnv.SUPABASE_ANON_KEY;
-const apiBaseUrl = parsedEnv.NEXT_PUBLIC_API_BASE_URL ?? parsedEnv.NEXT_PUBLIC_API_URL;
+
+const apiBaseUrl = isClient
+  ? "/api"
+  : (parsedEnv.NEXT_PUBLIC_API_BASE_URL ?? parsedEnv.NEXT_PUBLIC_API_URL);
 
 if (!apiBaseUrl) {
   throw new Error("NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL is required.");
@@ -95,3 +103,26 @@ export const isSupabaseConfigured = Boolean(
   (rawEnv.NEXT_PUBLIC_SUPABASE_URL ?? rawEnv.SUPABASE_URL) &&
     (rawEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? rawEnv.SUPABASE_ANON_KEY),
 );
+
+export function resolveProxiedUrl(url: string | null | undefined): string | null | undefined {
+  if (!url) return url;
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.port === "54321" &&
+      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "supabase")
+    ) {
+      return `/supabase${parsed.pathname}${parsed.search}`;
+    }
+    if (
+      parsed.port === "8000" &&
+      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "api")
+    ) {
+      return `/api${parsed.pathname}${parsed.search}`;
+    }
+  } catch {
+    // Relative or invalid URL
+  }
+  return url;
+}
+

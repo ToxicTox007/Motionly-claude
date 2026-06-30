@@ -1204,6 +1204,7 @@ async def cancel_render(
     render_job_id: UUID,
     actor: ActorDep,
     repository: RenderRepositoryDep,
+    render_queue: RenderQueueDep,
 ) -> RenderJobResponse:
     job = repository.get_render_job(
         project_id=project_id,
@@ -1216,11 +1217,26 @@ async def cancel_render(
         RenderJobStatus.CANCELED,
     }:
         raise ApiError(409, "render_not_cancelable", "This render can no longer be canceled.")
+    try:
+        render_queue.cancel(
+            RenderQueue.job_id_for_render(
+                render_job_id=job.id,
+                project_id=project_id,
+                workspace_id=actor.workspace_id,
+            )
+        )
+    except Exception:
+        # Best effort: queued jobs are removed from the queue when possible, and running jobs
+        # still observe the persisted canceled status.
+        pass
     job = repository.transition_job(
         job=job,
         status=RenderJobStatus.CANCELED,
         progress_pct=job.progress_pct,
         message="Render canceled.",
+        event_type="cancelled",
+        error_code="render_cancelled",
+        error_message="Render canceled.",
     )
     return job.to_response(repository.events_for_job(job.id))
 

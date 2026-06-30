@@ -12,6 +12,7 @@ from app.schemas.publishing import (
     PublishConnectionCreateRequest,
     PublishConnectionListResponse,
     PublishConnectionResponse,
+    PublishConnectionStatus,
     PublishCreateRequest,
     PublishJobListResponse,
     PublishJobResponse,
@@ -85,8 +86,13 @@ async def complete_publish_oauth(
         access_token=account.access_token,
         refresh_token=account.refresh_token,
         token_expires_at=account.token_expires_at,
+        refresh_token_expires_at=account.refresh_token_expires_at,
+        scopes=account.scopes,
         external_account_id=account.external_account_id,
         account_name=account.account_name,
+        connection_status=PublishConnectionStatus.ACTIVE,
+        last_refresh_at=None,
+        last_refresh_failure_reason=None,
     )
     return RedirectResponse(
         _append_query(return_url, publish_connected=platform.value), status_code=303
@@ -151,6 +157,17 @@ async def create_publish_job(
     connection = request.app.state.publishing_repository.get_connection(
         connection_id=payload.connection_id, workspace_id=actor.workspace_id
     )
+    active_job = request.app.state.publishing_repository.find_active_job(
+        workspace_id=actor.workspace_id,
+        export_id=payload.export_id,
+        connection_id=connection.id,
+    )
+    if active_job is not None:
+        raise ApiError(
+            409,
+            "publish_job_already_in_progress",
+            "This export is already being published to that account.",
+        )
     record = request.app.state.publishing_repository.create_job(
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -178,6 +195,7 @@ async def create_publish_job(
             storage_signer=request.app.state.storage_signer,
             client=request.app.state.social_publishing_client,
             oauth_client=request.app.state.publish_oauth_client,
+            settings=request.app.state.settings,
             job_id=record.id,
             workspace_id=actor.workspace_id,
         )

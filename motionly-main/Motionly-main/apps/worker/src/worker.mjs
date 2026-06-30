@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Worker } from "bullmq";
 import {
   bullConnection,
@@ -30,48 +31,312 @@ function rendererPath() {
 
 const pythonExecutors = new Map();
 
-function persistentPythonExecutor(name, moduleName, payload) {
+export function pythonExecutorConfig(overrides = {}) {
+  return {
+    requestTimeoutMs: Number(overrides.requestTimeoutMs || env("PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS", "60000")),
+    heartbeatIntervalMs: Number(overrides.heartbeatIntervalMs || env("PYTHON_EXECUTOR_HEARTBEAT_INTERVAL_MS", "15000")),
+    heartbeatTimeoutMs: Number(overrides.heartbeatTimeoutMs || env("PYTHON_EXECUTOR_HEARTBEAT_TIMEOUT_MS", "5000")),
+    restartBackoffMs: Number(overrides.restartBackoffMs || env("PYTHON_EXECUTOR_RESTART_BACKOFF_MS", "1000")),
+    restartBackoffCapMs: Number(overrides.restartBackoffCapMs || env("PYTHON_EXECUTOR_RESTART_BACKOFF_CAP_MS", "30000")),
+    restartWindowMs: Number(overrides.restartWindowMs || env("PYTHON_EXECUTOR_RESTART_WINDOW_MS", "60000")),
+    maxRestartsPerWindow: Number(overrides.maxRestartsPerWindow || env("PYTHON_EXECUTOR_MAX_RESTARTS_PER_WINDOW", "5")),
+    sleep: overrides.sleep || sleep,
+    spawnImpl: overrides.spawnImpl || spawn,
+    now: overrides.now || Date.now,
+    log: overrides.log || ((event) => console.log(JSON.stringify(event))),
+  };
+}
+
+function createSupervisorState(name, moduleName, config) {
+  return {
+    name,
+    moduleName,
+    config,
+    child: null,
+    nextId: 0,
+    pending: new Map(),
+    buffer: "",
+    heartbeatTimer: null,
+    starting: null,
+    restartTimestamps: [],
+    restartCount: 0,
+    lastCrashAt: 0,
+    shuttingDown: false,
+  };
+}
+
+function pythonExecutorError(code, message, extra = {}) {
+  const error = new Error(message);
+  error.code = code;
+  Object.assign(error, extra);
+  return error;
+}
+
+function emitSupervisorEvent(state, event, extra = {}) {
+  state.config.log({
+    event,
+    subprocess: state.name,
+    module: state.moduleName,
+    restart_count: state.restartCount,
+    ...extra,
+  });
+}
+
+async function ensurePythonExecutor(name, moduleName, options = {}) {
   let state = pythonExecutors.get(name);
-  if (!state || state.child.exitCode !== null) {
-    const child = spawn(env("PYTHON_MEDIA_COMMAND", "python"), [
-      "-m", moduleName, "--serve",
-    ], { stdio: ["pipe", "pipe", "pipe"], env: processEnv() });
-    state = { child, nextId: 0, pending: new Map(), buffer: "" };
+  if (!state) {
+    state = createSupervisorState(name, moduleName, pythonExecutorConfig(options));
     pythonExecutors.set(name, state);
-    child.stdout.on("data", (data) => {
-      state.buffer += String(data);
-      let newline;
-      while ((newline = state.buffer.indexOf("\n")) >= 0) {
-        const line = state.buffer.slice(0, newline).trim();
-        state.buffer = state.buffer.slice(newline + 1);
-        if (!line) continue;
-        let response;
-        try { response = JSON.parse(line); }
-        catch { continue; }
-        const pending = state.pending.get(response.id);
-        if (!pending) continue;
-        state.pending.delete(response.id);
-        if (response.error) {
-          const error = new Error(response.error);
-          error.code = response.error_code || "python_worker_error";
-          pending.reject(error);
-        } else pending.resolve(response.result);
-      }
+  }
+  if (state.starting) {
+    await state.starting;
+    return state;
+  }
+  if (state.child && state.child.exitCode === null && !state.child.killed) {
+    return state;
+  }
+  state.starting = startPythonExecutor(state);
+  try {
+    await state.starting;
+    return state;
+  } finally {
+    state.starting = null;
+  }
+}
+
+async function startPythonExecutor(state) {
+  pruneRestartTimestamps(state);
+  if (state.restartTimestamps.length >= state.config.maxRestartsPerWindow) {
+    emitSupervisorEvent(state, "subprocess_restart_limit_exceeded", {
+      restart_window_ms: state.config.restartWindowMs,
     });
-    child.stderr.on("data", (data) => globalThis.process.stderr.write(data));
-    const rejectPending = (error) => {
-      for (const pending of state.pending.values()) pending.reject(error);
-      state.pending.clear();
-      pythonExecutors.delete(name);
-    };
-    child.on("error", rejectPending);
-    child.on("close", (code) => rejectPending(new Error(`${name} exited ${code}`)));
+    throw pythonExecutorError(
+      "subprocess_restart_limit_exceeded",
+      `${state.name} exceeded the subprocess restart limit`,
+    );
+  }
+  const restartDelayMs = computeRestartDelayMs(state);
+  if (restartDelayMs > 0) {
+    emitSupervisorEvent(state, "subprocess_restart_scheduled", {
+      backoff_ms: restartDelayMs,
+    });
+    await state.config.sleep(restartDelayMs);
+  }
+  const child = state.config.spawnImpl(
+    env("PYTHON_MEDIA_COMMAND", "python"),
+    ["-m", state.moduleName, "--serve"],
+    { stdio: ["pipe", "pipe", "pipe"], env: processEnv() },
+  );
+  state.child = child;
+  state.buffer = "";
+  state.shuttingDown = false;
+  attachSupervisorListeners(state);
+  emitSupervisorEvent(state, state.restartCount > 0 ? "subprocess_restarted" : "subprocess_started");
+  state.restartTimestamps.push(state.config.now());
+  state.restartCount += 1;
+  startHeartbeatTimer(state);
+  await sendSupervisorControl(state, "ping");
+}
+
+function pruneRestartTimestamps(state) {
+  const cutoff = state.config.now() - state.config.restartWindowMs;
+  state.restartTimestamps = state.restartTimestamps.filter((timestamp) => timestamp >= cutoff);
+}
+
+function computeRestartDelayMs(state) {
+  if (state.restartCount <= 0) return 0;
+  const exponent = Math.max(0, state.restartCount - 1);
+  return Math.min(
+    state.config.restartBackoffCapMs,
+    state.config.restartBackoffMs * (2 ** exponent),
+  );
+}
+
+function attachSupervisorListeners(state) {
+  const child = state.child;
+  if (!child) return;
+  child.stdout.on("data", (data) => handleSupervisorStdout(state, String(data)));
+  child.stderr.on("data", (data) => {
+    const text = String(data);
+    globalThis.process.stderr.write(text);
+    if (/fatal python error|traceback/i.test(text) && state.pending.size > 0) {
+      handleSupervisorFailure(
+        state,
+        pythonExecutorError("python_stderr_fatal", `${state.name} reported a fatal stderr error`),
+      );
+    }
+  });
+  child.on("error", (error) => {
+    handleSupervisorFailure(
+      state,
+      pythonExecutorError(
+        "subprocess_crashed",
+        error instanceof Error ? error.message : `${state.name} subprocess error`,
+      ),
+    );
+  });
+  child.on("close", (code, signal) => {
+    if (state.shuttingDown) return;
+    handleSupervisorFailure(
+      state,
+      pythonExecutorError(
+        "subprocess_crashed",
+        `${state.name} exited with code ${code ?? "null"}${signal ? ` (${signal})` : ""}`,
+      ),
+    );
+  });
+}
+
+function handleSupervisorStdout(state, chunk) {
+  state.buffer += chunk;
+  let newline;
+  while ((newline = state.buffer.indexOf("\n")) >= 0) {
+    const line = state.buffer.slice(0, newline).trim();
+    state.buffer = state.buffer.slice(newline + 1);
+    if (!line) continue;
+    let response;
+    try {
+      response = JSON.parse(line);
+    } catch {
+      handleSupervisorFailure(
+        state,
+        pythonExecutorError("python_protocol_invalid", `${state.name} returned invalid JSON`),
+      );
+      return;
+    }
+    const pending = state.pending.get(response.id);
+    if (!pending) {
+      continue;
+    }
+    clearTimeout(pending.timer);
+    state.pending.delete(response.id);
+    if (response.error) {
+      const error = pythonExecutorError(
+        response.error_code || "python_worker_error",
+        String(response.error),
+      );
+      pending.reject(error);
+      continue;
+    }
+    pending.resolve(response.result);
+  }
+}
+
+function startHeartbeatTimer(state) {
+  if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+  if (state.config.heartbeatIntervalMs <= 0) return;
+  state.heartbeatTimer = setInterval(() => {
+    if (!state.child || state.pending.size > 0) return;
+    void sendSupervisorControl(state, "ping").catch(() => {});
+  }, state.config.heartbeatIntervalMs);
+}
+
+function stopHeartbeatTimer(state) {
+  if (state.heartbeatTimer) {
+    clearInterval(state.heartbeatTimer);
+    state.heartbeatTimer = null;
+  }
+}
+
+function handleSupervisorFailure(state, error) {
+  stopHeartbeatTimer(state);
+  if (error.code === "subprocess_heartbeat_failed") {
+    emitSupervisorEvent(state, "subprocess_heartbeat_failed", {
+      error_code: error.code,
+    });
+  } else {
+    emitSupervisorEvent(state, "subprocess_crashed", {
+      error_code: error.code || "subprocess_crashed",
+      message: error.message,
+    });
+  }
+  const child = state.child;
+  state.child = null;
+  state.lastCrashAt = state.config.now();
+  for (const pending of state.pending.values()) {
+    clearTimeout(pending.timer);
+    pending.reject(error);
+  }
+  state.pending.clear();
+  if (child && child.exitCode === null && !child.killed) {
+    state.shuttingDown = true;
+    child.kill("SIGTERM");
+  }
+}
+
+function sendSupervisorControl(state, control) {
+  return sendSupervisorRequest(state, null, {
+    timeoutMs: state.config.heartbeatTimeoutMs,
+    control,
+  });
+}
+
+function sendSupervisorRequest(state, payload, { timeoutMs, control = null } = {}) {
+  const child = state.child;
+  if (!child || child.exitCode !== null || child.killed) {
+    throw pythonExecutorError("subprocess_crashed", `${state.name} is not running`);
+  }
+  const stdin = child.stdin;
+  if (!stdin || stdin.destroyed || !stdin.writable) {
+    const error = pythonExecutorError("python_broken_pipe", `${state.name} stdin is unavailable`);
+    handleSupervisorFailure(state, error);
+    throw error;
   }
   const id = ++state.nextId;
   return new Promise((resolveJob, rejectJob) => {
-    state.pending.set(id, { resolve: resolveJob, reject: rejectJob });
-    state.child.stdin.write(`${JSON.stringify({ id, payload })}\n`);
+    const timer = setTimeout(() => {
+      const error = pythonExecutorError(
+        control ? "subprocess_heartbeat_failed" : "python_response_timeout",
+        control
+          ? `${state.name} heartbeat failed`
+          : `${state.name} did not respond before the timeout`,
+      );
+      handleSupervisorFailure(state, error);
+    }, timeoutMs || state.config.requestTimeoutMs);
+    state.pending.set(id, { resolve: resolveJob, reject: rejectJob, timer });
+    const message = JSON.stringify({ id, payload, control }) + "\n";
+    stdin.write(message, (error) => {
+      if (!error) return;
+      const brokenPipe = pythonExecutorError(
+        "python_broken_pipe",
+        `${state.name} write failed`,
+      );
+      handleSupervisorFailure(state, brokenPipe);
+    });
   });
+}
+
+export async function persistentPythonExecutor(name, moduleName, payload, options = {}) {
+  const state = await ensurePythonExecutor(name, moduleName, options);
+  return sendSupervisorRequest(state, payload);
+}
+
+export function closePythonExecutors() {
+  for (const state of pythonExecutors.values()) {
+    stopHeartbeatTimer(state);
+    state.shuttingDown = true;
+    if (state.child && state.child.stdin) state.child.stdin.end();
+    if (state.child && state.child.exitCode === null && !state.child.killed) {
+      state.child.kill("SIGTERM");
+    }
+  }
+  pythonExecutors.clear();
+}
+
+export function resetPythonExecutorsForTest() {
+  closePythonExecutors();
+}
+
+function isSubprocessFailureCode(code) {
+  return new Set([
+    "subprocess_crashed",
+    "subprocess_heartbeat_failed",
+    "python_broken_pipe",
+    "python_protocol_invalid",
+    "python_response_timeout",
+    "subprocess_restart_limit_exceeded",
+    "python_stderr_fatal",
+  ]).has(String(code || ""));
 }
 
 async function runRenderJob(job) {
@@ -270,6 +535,8 @@ function createWorker(queueName, connection) {
 
   worker.on("failed", async (job, error) => {
     const jobData = job?.data || {};
+    const errorCode = error instanceof Error ? error.code || error.name : "worker_error";
+    const retrying = Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
     console.error(
       JSON.stringify({
         event: "job_failed",
@@ -278,18 +545,34 @@ function createWorker(queueName, connection) {
         kind: jobData.kind,
         attempts_made: job?.attemptsMade,
         attempts: job?.opts?.attempts,
-        error_code: error instanceof Error ? error.code || error.name : "worker_error",
+        error_code: errorCode,
         message: error instanceof Error ? error.message : String(error),
       }),
     );
+    if (retrying && isSubprocessFailureCode(errorCode) && jobData.status !== "canceled") {
+      console.error(
+        JSON.stringify({
+          event: "job_requeued_after_subprocess_crash",
+          queue_job_id: job?.id,
+          queue_name: queueName,
+          kind: jobData.kind,
+          error_code: errorCode,
+          next_attempt: Number(job?.attemptsMade || 0) + 1,
+        }),
+      );
+    }
     if (jobData.kind === "render" && jobData.resource_id) {
       try {
-        const retrying = Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
         const { persistRenderFailureDirect } = await import("./remotion.mjs");
+        const failureCode =
+          error instanceof Error && typeof error.code === "string"
+            ? error.code
+            : "render_worker_failed";
         await persistRenderFailureDirect(
           jobData,
           error instanceof Error ? error.message : String(error),
           retrying,
+          failureCode,
         );
       } catch (callbackError) {
         console.error(
@@ -412,7 +695,7 @@ async function main() {
     await Promise.allSettled(workers.map((worker) => worker.close()));
     clearInterval(heartbeatTimer);
     if (maintenanceQueue) await maintenanceQueue.close();
-    for (const state of pythonExecutors.values()) state.child.stdin.end();
+    closePythonExecutors();
     await connection.quit();
     process.exit(0);
   };
@@ -438,7 +721,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+const isMainModule = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

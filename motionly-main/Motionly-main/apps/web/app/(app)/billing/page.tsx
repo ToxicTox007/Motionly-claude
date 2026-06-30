@@ -54,8 +54,10 @@ export default async function BillingPage({
             body={error.replaceAll("_", " ")}
           />
         ) : null}
+
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="pixel-panel pixel-corners p-5">
+          {/* Current plan card */}
+          <div className="card-elevated rounded-2xl p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-bold uppercase text-muted-foreground">
@@ -102,7 +104,8 @@ export default async function BillingPage({
             </div>
           </div>
 
-          <div className="pixel-panel p-5">
+          {/* Usage card */}
+          <div className="card rounded-xl p-5">
             <div className="flex items-center gap-2">
               <Gauge className="size-5 text-primary" aria-hidden="true" />
               <h2 className="text-lg font-bold">Monthly usage</h2>
@@ -113,9 +116,9 @@ export default async function BillingPage({
                 of {status.usage.renders_limit} renders
               </p>
             </div>
-            <div className="pixel-progress mt-4 h-2">
+            <div className="progress-bar mt-4 h-2.5">
               <div
-                className="pixel-progress-fill h-full"
+                className="progress-fill h-full"
                 style={{ width: `${status.usage.percent_used}%` }}
               />
             </div>
@@ -125,6 +128,7 @@ export default async function BillingPage({
           </div>
         </section>
 
+        {/* Plan cards */}
         <section className="grid gap-4 lg:grid-cols-4">
           {status.plans.map((plan) => {
             const isCurrent = plan.key === status.current_plan.key;
@@ -132,34 +136,35 @@ export default async function BillingPage({
               <div
                 key={plan.key}
                 className={cn(
-                  "pixel-panel p-5",
-                  isCurrent ? "border-primary" : "border-border",
+                  "card rounded-xl p-5 flex flex-col",
+                  isCurrent
+                    ? "border-primary/50 bg-primary/5"
+                    : "border-border",
                 )}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="text-lg font-bold flex flex-wrap items-center gap-1.5">
                       {plan.name}
-                      <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 bg-yellow-500/10 text-yellow-700 border border-yellow-500/20 rounded">
+                      <span className="badge badge-warning text-[9px]">
                         Mock Plan
                       </span>
                     </h3>
-                    <p className="mt-2 text-3xl font-black">
+                    <p className="text-4xl font-black mt-2">
                       {formatPrice(plan.price_cents)}
                     </p>
                     <p className="text-sm text-muted-foreground">per month</p>
                   </div>
                   {isCurrent ? (
-                    <span className="border border-border bg-muted px-3 py-1 text-xs font-bold text-muted-foreground">
-                      Current
-                    </span>
+                    <span className="badge">Current</span>
                   ) : null}
                 </div>
-                <ul className="mt-5 space-y-2 text-sm">
+                <ul className="mt-5 space-y-2 text-sm flex-1">
                   {plan.features.map((feature) => (
                     <li key={feature} className="flex gap-2">
                       <Check
                         className="mt-0.5 size-4 shrink-0 text-primary"
+                        strokeWidth={1.5}
                         aria-hidden="true"
                       />
                       <span>{feature}</span>
@@ -188,7 +193,7 @@ export default async function BillingPage({
           })}
         </section>
 
-        <section className="pixel-panel p-5">
+        <section className="card rounded-xl p-5">
           <h2 className="text-lg font-bold">Operations notes</h2>
           <div className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-3">
             <p>Paid upgrades are disabled until Stripe keys are configured.</p>
@@ -209,7 +214,7 @@ export default async function BillingPage({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border border-border bg-surface p-3 shadow-soft">
+    <div className="rounded-lg border border-border bg-surface-elevated p-3">
       <p className="text-xs font-bold uppercase text-muted-foreground">
         {label}
       </p>
@@ -232,12 +237,12 @@ function Banner({
   return (
     <div
       className={cn(
-        "flex gap-3 border p-4 shadow-soft",
+        "rounded-lg border-l-4 p-4 flex gap-3 items-start mb-0",
         tone === "danger"
-          ? "border-red-200 bg-red-50 text-red-900"
+          ? "border-danger bg-danger/8 text-red-200"
           : tone === "warning"
-            ? "border-amber-200 bg-amber-50 text-amber-900"
-            : "border-border bg-muted text-muted-foreground",
+            ? "border-amber-500 bg-amber-500/8 text-amber-200"
+            : "border-border bg-muted",
       )}
     >
       <Icon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />

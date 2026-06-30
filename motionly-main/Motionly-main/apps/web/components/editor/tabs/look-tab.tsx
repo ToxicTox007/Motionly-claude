@@ -255,6 +255,11 @@ export function LookTab({
           )
         : selectedMotionEffects,
       motion: reducedMotion ? motionWithReducedMotion(motion) : motion,
+      backgroundRemoval: {
+        enabled: backgroundRemoval.enabled,
+        featherPx: backgroundRemoval.feather_px,
+      },
+      mattePreview: null,
       selectedSourceClipId:
         selectedTimelineClip?.sourceRef.kind === "cut"
           ? selectedTimelineClip.id
@@ -279,6 +284,8 @@ export function LookTab({
     intensity,
     onPreviewLookUpdated,
     previewPreset,
+    backgroundRemoval.enabled,
+    backgroundRemoval.feather_px,
     reducedMotion,
     selectedMotionEffects,
     selectedTimelineClip,
@@ -531,7 +538,7 @@ export function LookTab({
   return (
     <div className="space-y-3 sm:space-y-4">
       <h2 className="sr-only">Look</h2>
-      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+      <div className="card rounded-lg border-2 border-foreground p-4 sm:p-5 space-y-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] bg-surface">
         <PanelSection title="Color" defaultOpen>
           <div className="space-y-2">
             <Label>Visual Style</Label>
@@ -554,10 +561,10 @@ export function LookTab({
                   onBlur={() => setHoverPreset(null)}
                   onClick={() => setPreset(item.value)}
                   className={cn(
-                    "min-h-11 border px-2 text-left text-xs font-bold transition",
+                    "min-h-11 border-2 px-3 py-2 text-left text-xs font-bold rounded transition-all duration-[100ms]",
                     preset === item.value
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-muted/25 text-muted-foreground hover:border-primary/40",
+                      ? "border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+                      : "border-foreground bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
                   )}
                 >
                   {item.label}
@@ -606,13 +613,13 @@ export function LookTab({
           {texture.light_leak > 0.2 ? (
             <p
               role="alert"
-              className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800"
+              className="mt-2 inline-flex items-center gap-1.5 border-2 border-foreground bg-amber-500/10 px-3 py-2 rounded text-xs font-bold text-amber-500 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] font-mono"
             >
-              <AlertTriangle className="size-3.5 shrink-0" />
+              <AlertTriangle className="size-3.5 shrink-0" strokeWidth={2} />
               Flashing risk: lower Light Leak.
             </p>
           ) : null}
-          <label className="mt-3 flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
+          <label className="mt-3 flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded border-2 border-foreground bg-muted/20 px-3.5 text-xs font-bold text-foreground hover:bg-muted/30 transition-all select-none">
             Anamorphic flare
             <input
               type="checkbox"
@@ -624,7 +631,7 @@ export function LookTab({
                   anamorphic_flare: event.target.checked,
                 }))
               }
-              className="size-6 accent-primary"
+              className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary cursor-pointer"
             />
           </label>
         </PanelSection>
@@ -632,11 +639,11 @@ export function LookTab({
         <PanelSection title="Motion" defaultOpen>
           <div className="mt-3">
             <Label>Motion Effects</Label>
-            <p className="mb-2 text-xs text-muted-foreground">
+            <p className="mb-2.5 text-xs text-muted-foreground leading-relaxed font-mono">
               Reduced Motion removes flashing and aggressive effects
               automatically.
             </p>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 pt-1">
               {motionEffects.map((effect) => {
                 const selected = selectedMotionEffects.includes(effect.value);
                 const disabled =
@@ -652,22 +659,22 @@ export function LookTab({
                       flashing ? "motion-effects-warning" : undefined
                     }
                     className={cn(
-                      "inline-flex min-h-11 items-center gap-1.5 border px-3 py-2 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-55",
+                      "inline-flex min-h-9 items-center gap-1.5 border-2 px-3 py-1 rounded text-xs font-bold font-mono transition-all duration-[100ms] disabled:cursor-not-allowed disabled:opacity-55",
                       selected
-                        ? "border-primary bg-primary/10 text-primary"
+                        ? "border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
                         : disabled
-                          ? "border-border bg-muted/35 text-muted-foreground"
-                          : "border-border hover:border-primary/40 hover:bg-muted",
+                          ? "border-foreground/30 bg-muted/35 text-muted-foreground/60"
+                          : "border-foreground bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
                     )}
                   >
                     {selected ? (
-                      <Check className="size-3.5" aria-hidden="true" />
+                      <Check className="size-3.5" aria-hidden="true" strokeWidth={2} />
                     ) : disabled ? (
-                      <AlertTriangle className="size-3.5" aria-hidden="true" />
+                      <AlertTriangle className="size-3.5" aria-hidden="true" strokeWidth={2} />
                     ) : null}
-                    {effect.label}
-                    <span className="text-[10px] opacity-75">
-                      {disabled ? "Disabled" : selected ? "Selected" : "Off"}
+                    <span>{effect.label}</span>
+                    <span className="text-[10px] opacity-75 font-normal">
+                      ({disabled ? "Disabled" : selected ? "Selected" : "Off"})
                     </span>
                   </button>
                 );
@@ -675,7 +682,7 @@ export function LookTab({
             </div>
             <p
               id="motion-effects-warning"
-              className="mt-2 inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-800"
+              className="mt-2 inline-flex items-center gap-1.5 border-2 border-foreground bg-amber-500/10 px-3 py-2 rounded text-xs font-bold text-amber-500 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] font-mono"
             >
               <AlertTriangle className="size-3.5 shrink-0" />
               Flash/Glitch are risky for sensitive viewers.
@@ -1251,7 +1258,7 @@ export function LookTab({
         </PanelSection>
 
         <PanelSection title="Advanced">
-          <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
+          <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-foreground">
             Subject segmentation
             <input
               type="checkbox"
@@ -1263,16 +1270,16 @@ export function LookTab({
                   enabled: event.target.checked,
                 }))
               }
-              className="size-6 accent-primary"
+              className="size-6 border-2 border-foreground rounded accent-primary cursor-pointer"
             />
           </label>
           {backgroundRemoval.enabled ? (
             <div className="mt-4 space-y-4">
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground font-mono">
                 Uses lightweight MediaPipe subject segmentation after visual
                 analysis completes.
               </p>
-              <p className="border border-border bg-muted/40 p-2 text-[10px] font-bold text-muted-foreground/80 leading-normal">
+              <p className="border-2 border-foreground bg-muted p-2 text-[10px] font-bold text-foreground leading-normal font-mono shadow-[2px_2px_0px_#000]">
                 ⚠️ Preview runs a lightweight browser model. The final
                 server-rendered export utilizes a high-precision neural
                 segmentation model.
@@ -1305,7 +1312,7 @@ export function LookTab({
         </PanelSection>
 
         <PanelSection title="Gradient">
-          <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-muted-foreground">
+          <label className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded border-2 border-foreground bg-muted/20 px-3.5 text-xs font-bold text-foreground hover:bg-muted/30 transition-all select-none">
             Gradient ramp
             <input
               type="checkbox"
@@ -1317,7 +1324,7 @@ export function LookTab({
                   enabled: event.target.checked,
                 }))
               }
-              className="size-6 accent-primary"
+              className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary cursor-pointer"
             />
           </label>
           {gradientRamp.enabled ? (
@@ -1368,31 +1375,31 @@ export function LookTab({
           ) : null}
         </PanelSection>
 
-        <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/25 px-3 text-sm font-bold text-muted-foreground">
+        <label className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded border-2 border-foreground bg-muted/20 px-3.5 text-xs font-bold text-foreground hover:bg-muted/30 transition-all select-none">
           Reset preset defaults on save
           <input
             type="checkbox"
             aria-label="Reset preset defaults on save"
             checked={resetToDefaults}
             onChange={(event) => setResetToDefaults(event.target.checked)}
-            className="size-6 accent-primary"
+            className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary cursor-pointer"
           />
         </label>
       </div>
 
-      <Button
+      <button
         onClick={applyEffects}
         disabled={loading}
         aria-busy={loading}
-        className="h-12 w-full"
+        className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
       >
         {loading ? (
-          <Loader2 className="mr-2 size-4 animate-spin" />
+          <Loader2 className="size-4 animate-spin text-primary-foreground" strokeWidth={2} />
         ) : (
-          <Palette className="mr-2 size-4" />
+          <Palette className="size-4 text-primary-foreground" strokeWidth={2} />
         )}
-        {loading ? "Applying, please wait" : "Apply Look"}
-      </Button>
+        <span>{loading ? "Applying, please wait" : "Apply Look"}</span>
+      </button>
       {message ? (
         <p
           role={
@@ -1402,7 +1409,7 @@ export function LookTab({
               : "status"
           }
           aria-live="polite"
-          className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground"
+          className="rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
         >
           {message}
         </p>

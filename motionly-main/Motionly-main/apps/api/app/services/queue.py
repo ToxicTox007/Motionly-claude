@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -9,6 +10,8 @@ from pathlib import Path
 from uuid import UUID
 
 from app.services.tracing import current_trace_id
+
+logger = logging.getLogger(__name__)
 
 
 class QueueJobStatus(StrEnum):
@@ -207,6 +210,33 @@ class QueueRegistry:
             moved.append(dead)
         return moved
 
+    def recover_stuck_jobs(
+        self,
+        *,
+        timeout_seconds: int,
+        backoff_seconds: int = 30,
+    ) -> list[EnqueuedJob]:
+        cutoff = datetime.now(UTC) - timedelta(seconds=max(1, timeout_seconds))
+        recovered = []
+        for job in list(self.jobs.values()):
+            if job.status != QueueJobStatus.RUNNING or job.enqueued_at > cutoff:
+                continue
+            recovered.append(
+                self.fail(
+                    job.id,
+                    error_code="stuck_timeout",
+                    error_message="Worker job exceeded the stuck timeout and was requeued.",
+                    backoff_seconds=backoff_seconds,
+                )
+            )
+            logger.warning(
+                "stuck_job_failed"
+                if recovered[-1].status == QueueJobStatus.DEAD_LETTER
+                else "stuck_job_recovered",
+                extra={"job_id": job.id, "kind": job.kind, "queue_name": job.queue_name},
+            )
+        return recovered
+
     def snapshots(self) -> list[QueueSnapshot]:
         queue_names = sorted({job.queue_name for job in self.jobs.values()})
         now = datetime.now(UTC)
@@ -362,6 +392,31 @@ class BullMQQueueRegistry:
         if not isinstance(records, list):
             return []
         return [self._job_from_bridge(record) for record in records]
+
+    def recover_stuck_jobs(
+        self,
+        *,
+        timeout_seconds: int,
+        backoff_seconds: int = 30,
+    ) -> list[EnqueuedJob]:
+        records = self._bridge(
+            "recover-stuck",
+            {
+                "timeout_seconds": max(1, timeout_seconds),
+                "backoff_seconds": max(1, backoff_seconds),
+            },
+        )
+        if not isinstance(records, list):
+            return []
+        jobs = [self._job_from_bridge(record) for record in records]
+        for job in jobs:
+            logger.warning(
+                "stuck_job_failed"
+                if job.status == QueueJobStatus.DEAD_LETTER
+                else "stuck_job_recovered",
+                extra={"job_id": job.id, "kind": job.kind, "queue_name": job.queue_name},
+            )
+        return jobs
 
     def snapshots(self) -> list[QueueSnapshot]:
         queue_names = sorted({job.queue_name for job in self.jobs.values()})
@@ -523,6 +578,12 @@ class BaseQueue:
     def _job_id(self, *parts: object) -> str:
         return "--".join(str(part) for part in parts if part is not None)
 
+    def retry(self, job_id: str) -> EnqueuedJob:
+        return self.registry.retry(job_id)
+
+    def cancel(self, job_id: str) -> EnqueuedJob:
+        return self.registry.cancel(job_id)
+
 
 class PreprocessQueue(BaseQueue):
     queue_name = "upload_preprocess"
@@ -663,9 +724,52 @@ class BrollQueue(BaseQueue):
         )
 
 
+class StockAssetEnrichmentQueue(BaseQueue):
+    queue_name = "stock_asset_enrichment"
+    kind = "stock_asset_enrichment"
+
+    def enqueue_asset_enrichment(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        asset_id: UUID,
+        job_payload: str = "{}",
+    ) -> EnqueuedJob:
+        return self._enqueue(
+            job_id=":".join(
+                str(part) for part in ("stock-asset-enrichment", project_id, asset_id, workspace_id)
+            ),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            resource_id=asset_id,
+            render_engine=job_payload,
+        )
+
+
 class RenderQueue(BaseQueue):
     queue_name = "render"
     kind = "render"
+
+    @staticmethod
+    def job_id_for_render(
+        *,
+        render_job_id: UUID,
+        project_id: UUID,
+        workspace_id: UUID,
+        priority: int = 0,
+    ) -> str:
+        return ":".join(
+            str(part)
+            for part in (
+                "render",
+                project_id,
+                render_job_id,
+                workspace_id,
+                f"p{priority}" if priority else None,
+            )
+            if part is not None
+        )
 
     def enqueue_render(
         self,
@@ -678,16 +782,11 @@ class RenderQueue(BaseQueue):
         compute_tier: str = "cpu",
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=":".join(
-                str(part)
-                for part in (
-                    "render",
-                    project_id,
-                    render_job_id,
-                    workspace_id,
-                    f"p{priority}" if priority else None,
-                )
-                if part is not None
+            job_id=self.job_id_for_render(
+                render_job_id=render_job_id,
+                project_id=project_id,
+                workspace_id=workspace_id,
+                priority=priority,
             ),
             priority=priority,
             workspace_id=workspace_id,

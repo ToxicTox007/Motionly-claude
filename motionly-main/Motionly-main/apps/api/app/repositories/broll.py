@@ -8,8 +8,10 @@ from app.api.errors import ApiError
 from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.broll import (
     BROLL_SCHEMA_VERSION,
+    BrollConfidenceLabel,
     BrollSlotResponse,
     BrollSlotStatus,
+    StockAssetEnrichmentStatus,
     StockOrientation,
     StockProviderKey,
     StockVideoAssetResponse,
@@ -37,7 +39,17 @@ class StockAssetRecord:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_response(self) -> StockVideoAssetResponse:
-        return StockVideoAssetResponse(**self.__dict__)
+        return StockVideoAssetResponse(
+            **self.__dict__,
+            confidence_label=_confidence_label_from_metadata(self.raw_metadata),
+            enrichment_status=_enrichment_status_from_metadata(self.raw_metadata),
+            enrichment_failure_reason=_string_metadata(
+                self.raw_metadata, "enrichment_failure_reason"
+            ),
+            embedding_model_version=_string_metadata(
+                self.raw_metadata, "embedding_model_version"
+            ),
+        )
 
 
 @dataclass
@@ -79,6 +91,7 @@ class BrollSlotRecord:
         )
         return BrollSlotResponse(
             **self.__dict__,
+            confidence_label=_confidence_label_from_metadata(self.metadata),
             selected_asset=selected,
             candidates=candidates,
         )
@@ -131,10 +144,34 @@ class InMemoryBrollRepository:
         )
         if existing:
             existing.score = float(values["score"])
-            existing.raw_metadata = values.get("raw_metadata", {})  # type: ignore[assignment]
+            existing.title = str(values["title"])
+            existing.thumbnail_url = values.get("thumbnail_url")  # type: ignore[assignment]
+            existing.preview_video_url = values.get("preview_video_url")  # type: ignore[assignment]
+            existing.download_url = values.get("download_url")  # type: ignore[assignment]
+            existing.license = str(values["license"])
+            existing.width = int(values["width"])
+            existing.height = int(values["height"])
+            existing.duration_ms = int(values["duration_ms"])
+            existing.orientation = values["orientation"]  # type: ignore[assignment]
+            existing.raw_metadata = {
+                **existing.raw_metadata,
+                **(values.get("raw_metadata", {}) or {}),  # type: ignore[arg-type]
+            }
             return existing
         asset = StockAssetRecord(id=uuid4(), **values)
         self.assets[asset.id] = asset
+        return asset
+
+    def update_asset_metadata(
+        self,
+        *,
+        asset: StockAssetRecord,
+        raw_metadata: dict[str, object],
+        score: float | None = None,
+    ) -> StockAssetRecord:
+        asset.raw_metadata = {**asset.raw_metadata, **raw_metadata}
+        if score is not None:
+            asset.score = float(score)
         return asset
 
     def create_slot_set(
@@ -217,8 +254,10 @@ class InMemoryBrollRepository:
     ) -> StockAssetRecord:
         asset.download_url = download_url
         asset.preview_video_url = download_url
-        asset.raw_metadata = {**asset.raw_metadata, "status": "ready"}
-        return asset
+        return self.update_asset_metadata(
+            asset=asset,
+            raw_metadata={"status": "ready"},
+        )
 
     def mark_stock_asset_owned(
         self,
@@ -230,13 +269,14 @@ class InMemoryBrollRepository:
     ) -> StockAssetRecord:
         asset.download_url = download_url
         asset.preview_video_url = download_url
-        asset.raw_metadata = {
-            **asset.raw_metadata,
-            "owned_copy": True,
-            "storage_bucket": bucket,
-            "storage_path": path,
-        }
-        return asset
+        return self.update_asset_metadata(
+            asset=asset,
+            raw_metadata={
+                "owned_copy": True,
+                "storage_bucket": bucket,
+                "storage_path": path,
+            },
+        )
 
     def delete_library_asset(self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID) -> None:
         asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
@@ -482,6 +522,28 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         self._raise_for_supabase(response)
         return self._asset_from_row(response.json()[0])
 
+    def update_asset_metadata(
+        self,
+        *,
+        asset: StockAssetRecord,
+        raw_metadata: dict[str, object],
+        score: float | None = None,
+    ) -> StockAssetRecord:
+        payload: dict[str, object] = {
+            "raw_metadata": {**asset.raw_metadata, **raw_metadata},
+        }
+        if score is not None:
+            payload["score"] = score
+        response = httpx.patch(
+            f"{self.rest_url}/stock_assets",
+            headers=self.headers,
+            params={"id": f"eq.{asset.id}", "select": "*"},
+            json=payload,
+            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
     def mark_stock_asset_owned(
         self,
         *,
@@ -676,3 +738,32 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         if response.status_code < 400:
             return
         raise ApiError(502, "supabase_request_failed", "B-roll data could not be saved.")
+
+
+def _string_metadata(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    return str(value) if isinstance(value, str) and value.strip() else None
+
+
+def _confidence_label_from_metadata(
+    metadata: dict[str, object]
+) -> BrollConfidenceLabel | None:
+    value = _string_metadata(metadata, "confidence_label")
+    if value is None:
+        return None
+    try:
+        return BrollConfidenceLabel(value)
+    except ValueError:
+        return None
+
+
+def _enrichment_status_from_metadata(
+    metadata: dict[str, object]
+) -> StockAssetEnrichmentStatus | None:
+    value = _string_metadata(metadata, "enrichment_status")
+    if value is None:
+        return None
+    try:
+        return StockAssetEnrichmentStatus(value)
+    except ValueError:
+        return None

@@ -287,16 +287,40 @@ export function EditorClient(props: EditorClientProps) {
     const base =
       previewLook ?? previewLookFromEffectsConfig(localEffectsConfig);
     if (!base) return null;
-    if (!selectedTimelineClip || selectedTimelineClip.sourceRef.kind !== "cut")
-      return base;
-    if (base.selectedSourceClipId) return base;
-    return {
+    const mattePreview = visualStatus.matte_preview;
+    const withMatte = {
       ...base,
+      backgroundRemoval: {
+        enabled: Boolean(localEffectsConfig?.background_removal.enabled),
+        featherPx: localEffectsConfig?.background_removal.feather_px ?? 18,
+      },
+      mattePreview: localEffectsConfig?.background_removal.enabled
+        ? {
+            status: mattePreview?.status ?? "approximate",
+            reason: mattePreview?.reason ?? "matte_pending",
+            previewUrl: mattePreview?.preview_url ?? null,
+            bucket: mattePreview?.bucket ?? null,
+            path: mattePreview?.path ?? null,
+            cacheKey: mattePreview?.cache_key ?? null,
+            source: mattePreview?.source ?? "approximate_preview",
+          }
+        : {
+            status: "skipped" as const,
+            reason: "matte_not_requested",
+            previewUrl: null,
+            source: "none" as const,
+          },
+    };
+    if (!selectedTimelineClip || selectedTimelineClip.sourceRef.kind !== "cut")
+      return withMatte;
+    if (withMatte.selectedSourceClipId) return withMatte;
+    return {
+      ...withMatte,
       selectedSourceClipId: selectedTimelineClip.id,
       selectedSourceClipStartMs: selectedTimelineClip.startMs,
       selectedSourceClipEndMs: selectedTimelineClip.endMs,
     };
-  }, [localEffectsConfig, previewLook, selectedTimelineClip]);
+  }, [localEffectsConfig, previewLook, selectedTimelineClip, visualStatus.matte_preview]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- server refresh can replace transcript props while local polling owns interim state
@@ -1330,6 +1354,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               thumbnailUrl={uploadAssetUrls.thumbnail_url}
               sourceWidth={upload.width}
               sourceHeight={upload.height}
+              sourceFps={upload.fps}
               playheadMs={playheadMs}
               captionSegments={
                 activePlan?.plan.timeline?.captions?.length
@@ -1788,6 +1813,11 @@ function previewLookFromEffectsConfig(
     },
     motionEffects: config.motion_effects,
     motion: config.motion,
+    backgroundRemoval: {
+      enabled: config.background_removal.enabled,
+      featherPx: config.background_removal.feather_px,
+    },
+    mattePreview: null,
     selectedSourceClipId: null,
     reducedMotion: false,
   };

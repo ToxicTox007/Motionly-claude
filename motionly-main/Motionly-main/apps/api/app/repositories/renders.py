@@ -371,6 +371,32 @@ class InMemoryRenderRepository:
         )
 
     def create_export(self, **values: object) -> ExportRecord:
+        if values.get("restored_from_export_id") is None:
+            existing = next(
+                (
+                    export
+                    for export in self.exports.values()
+                    if export.render_job_id == values["render_job_id"]
+                    and export.project_id == values["project_id"]
+                    and export.workspace_id == values["workspace_id"]
+                    and export.restored_from_export_id is None
+                ),
+                None,
+            )
+            if existing is not None:
+                existing.storage_bucket = values["storage_bucket"]
+                existing.storage_path = values["storage_path"]
+                existing.format = values["format"]
+                existing.width = values["width"]
+                existing.height = values["height"]
+                existing.fps = values["fps"]
+                existing.duration_ms = values.get("duration_ms")
+                existing.file_size_bytes = values.get("file_size_bytes")
+                existing.settings_summary = values.get(
+                    "settings_summary",
+                    existing.settings_summary,
+                )
+                return existing
         version = (
             len(
                 [
@@ -549,6 +575,53 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         return updated
 
     def create_export(self, **values: object) -> ExportRecord:
+        if values.get("restored_from_export_id") is None:
+            existing = next(
+                (
+                    export
+                    for export in self.list_exports(
+                        project_id=values["project_id"],
+                        workspace_id=values["workspace_id"],
+                    )
+                    if export.render_job_id == values["render_job_id"]
+                    and export.restored_from_export_id is None
+                ),
+                None,
+            )
+            if existing is not None:
+                payload = self._json_safe(
+                    {
+                        "storage_bucket": values["storage_bucket"],
+                        "storage_path": values["storage_path"],
+                        "format": values["format"],
+                        "width": values["width"],
+                        "height": values["height"],
+                        "fps": values["fps"],
+                        "duration_ms": values.get("duration_ms"),
+                        "file_size_bytes": values.get("file_size_bytes"),
+                        "settings_summary": values.get(
+                            "settings_summary",
+                            existing.settings_summary,
+                        ),
+                    }
+                )
+                response = httpx.patch(
+                    f"{self.rest_url}/exports",
+                    headers=self.headers,
+                    params={"id": f"eq.{existing.id}"},
+                    json=payload,
+                    timeout=10,
+                )
+                if self._is_missing_column_error(response):
+                    response = httpx.patch(
+                        f"{self.rest_url}/exports",
+                        headers=self.headers,
+                        params={"id": f"eq.{existing.id}"},
+                        json=self._compat_export_payload(payload),
+                        timeout=10,
+                    )
+                self._raise_for_supabase(response)
+                return self._export_from_row(response.json()[0])
         existing = self.list_exports(
             project_id=values["project_id"],
             workspace_id=values["workspace_id"],

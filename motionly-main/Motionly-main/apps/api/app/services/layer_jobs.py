@@ -14,6 +14,7 @@ from app.repositories.regeneration import InMemoryRegenerationRepository
 from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.broll import (
     BROLL_SCHEMA_VERSION,
+    BrollConfidenceLabel,
     BrollGenerateRequest,
     BrollSlotStatus,
     StockOrientation,
@@ -50,14 +51,18 @@ from app.services.regeneration import (
     settings_summary,
 )
 from app.services.stock_video import (
+    StockVideoCandidate,
     StockVideoProvider,
     build_broll_cache_key,
+    build_stock_asset_raw_metadata,
     candidate_shot_type,
     desired_requests,
+    enrich_stock_asset,
     ensure_owned_stock_asset,
     keyword_query,
     latency_ms_since,
-    score_candidate,
+    query_embedding,
+    score_candidate_details,
     semantic_match_score,
 )
 from app.services.storage import StorageSigner
@@ -152,9 +157,19 @@ def execute_broll_generation(
 
     used_provider_asset_ids: set[str] = set()
     used_shot_types: set[str] = set()
+    adjacent_embeddings: list[list[float]] = []
+    clip_model_name = getattr(settings, "visual_clip_model", "openai/clip-vit-base-patch32")
     slots: list[dict[str, object]] = []
     for broll_request in requests:
         query = keyword_query(broll_request, plan.style.value)
+        slot_embedding = (
+            broll_request.semantic_embedding
+            if broll_request.semantic_embedding
+            else query_embedding(
+                semantic_query=broll_request.semantic_query or query,
+                clip_model_name=clip_model_name,
+            )
+        )
         slot_duration_ms = broll_request.end_ms - broll_request.start_ms
         ranked_assets = []
         errors: list[str] = []
@@ -170,14 +185,15 @@ def execute_broll_generation(
                 errors.append(exc.code)
                 continue
             for candidate in candidates:
-                score = score_candidate(
+                score_details = score_candidate_details(
                     candidate=candidate,
                     slot_duration_ms=slot_duration_ms,
                     duplicate_provider_asset_ids=used_provider_asset_ids,
                     semantic_query=broll_request.semantic_query or query,
-                    semantic_embedding=broll_request.semantic_embedding,
+                    semantic_embedding=slot_embedding,
                     target_shot_type=broll_request.shot_type,
                     used_shot_types=used_shot_types,
+                    adjacent_embeddings=adjacent_embeddings,
                 )
                 if candidate.duration_ms < 1500:
                     continue
@@ -195,28 +211,90 @@ def execute_broll_generation(
                     height=candidate.height,
                     duration_ms=candidate.duration_ms,
                     orientation=candidate.orientation,
-                    score=score,
+                    score=score_details.total,
                     raw_metadata={
-                        **candidate.raw_metadata,
-                        "query": query,
-                        "semantic_query": broll_request.semantic_query or query,
-                        "target_shot_type": broll_request.shot_type,
+                        **build_stock_asset_raw_metadata(
+                            candidate=candidate,
+                            query=query,
+                            semantic_query=broll_request.semantic_query or query,
+                            target_shot_type=broll_request.shot_type,
+                        ),
                         "latency_ms": latency_ms_since(started),
+                        "confidence_label": score_details.confidence_label.value,
+                        "score_breakdown": {
+                            "semantic": round(score_details.semantic_score, 4),
+                            "embedding": round(score_details.embedding_score, 4),
+                            "lexical": round(score_details.lexical_score, 4),
+                            "orientation": round(score_details.orientation_score, 4),
+                            "duration": round(score_details.duration_score, 4),
+                            "diversity": round(score_details.diversity_score, 4),
+                            "provider_license": round(score_details.provider_license_score, 4),
+                        },
                     },
                 )
-                ranked_assets.append((score, asset, candidate))
+                asset = enrich_stock_asset(
+                    asset=asset,
+                    repository=repository,
+                    clip_model_name=clip_model_name,
+                )
+                candidate = StockVideoCandidate(
+                    provider=candidate.provider,
+                    provider_asset_id=candidate.provider_asset_id,
+                    title=candidate.title,
+                    thumbnail_url=candidate.thumbnail_url,
+                    preview_video_url=candidate.preview_video_url,
+                    download_url=candidate.download_url,
+                    license=candidate.license,
+                    width=candidate.width,
+                    height=candidate.height,
+                    duration_ms=candidate.duration_ms,
+                    relevance_rank=candidate.relevance_rank,
+                    provider_url=candidate.provider_url,
+                    source_url=candidate.source_url,
+                    license_metadata=candidate.license_metadata,
+                    attribution_metadata=candidate.attribution_metadata,
+                    raw_metadata=asset.raw_metadata,
+                )
+                score_details = score_candidate_details(
+                    candidate=candidate,
+                    slot_duration_ms=slot_duration_ms,
+                    duplicate_provider_asset_ids=used_provider_asset_ids,
+                    semantic_query=broll_request.semantic_query or query,
+                    semantic_embedding=slot_embedding,
+                    target_shot_type=broll_request.shot_type,
+                    used_shot_types=used_shot_types,
+                    adjacent_embeddings=adjacent_embeddings,
+                )
+                asset = repository.update_asset_metadata(
+                    asset=asset,
+                    score=score_details.total,
+                    raw_metadata={
+                        "confidence_label": score_details.confidence_label.value,
+                        "score_breakdown": {
+                            "semantic": round(score_details.semantic_score, 4),
+                            "embedding": round(score_details.embedding_score, 4),
+                            "lexical": round(score_details.lexical_score, 4),
+                            "orientation": round(score_details.orientation_score, 4),
+                            "duration": round(score_details.duration_score, 4),
+                            "diversity": round(score_details.diversity_score, 4),
+                            "provider_license": round(score_details.provider_license_score, 4),
+                        },
+                    },
+                )
+                ranked_assets.append((score_details.total, asset, candidate, score_details))
             if ranked_assets:
                 break
 
         ranked_assets.sort(key=lambda item: item[0], reverse=True)
         selected = ranked_assets[0][1] if ranked_assets else None
         selected_candidate = ranked_assets[0][2] if ranked_assets else None
+        selected_score = ranked_assets[0][3] if ranked_assets else None
         selected_shot_type = candidate_shot_type(selected_candidate) if selected_candidate else None
         selected_semantic_score = (
             semantic_match_score(
                 candidate=selected_candidate,
                 semantic_query=broll_request.semantic_query or query,
-                semantic_embedding=broll_request.semantic_embedding,
+                semantic_embedding=slot_embedding,
             )
             if selected_candidate
             else None
@@ -229,6 +307,15 @@ def execute_broll_generation(
                 storage_signer=storage_signer,
             )
             used_provider_asset_ids.add(selected.provider_asset_id)
+            selected_embedding = selected.raw_metadata.get("embedding")
+            if isinstance(selected_embedding, list):
+                adjacent_embeddings.append(
+                    [
+                        float(value)
+                        for value in selected_embedding
+                        if isinstance(value, (int, float))
+                    ]
+                )
         if selected_shot_type:
             used_shot_types.add(selected_shot_type)
         status = BrollSlotStatus.READY if selected else BrollSlotStatus.FAILED
@@ -247,7 +334,9 @@ def execute_broll_generation(
                 ),
                 "priority": broll_request.priority,
                 "selected_asset_id": selected.id if selected else None,
-                "candidate_asset_ids": [asset.id for _, asset, _candidate in ranked_assets[:5]],
+                "candidate_asset_ids": [
+                    asset.id for _, asset, _candidate, _details in ranked_assets[:5]
+                ],
                 "crossfade_ms": 260,
                 "provider": selected.provider if selected else providers[0].provider_key,
                 "score": ranked_assets[0][0] if ranked_assets else 0,
@@ -263,7 +352,22 @@ def execute_broll_generation(
                     selected_semantic_score=selected_semantic_score,
                     provider_errors=errors,
                     visual_manifest=visual_manifest,
-                ),
+                )
+                | {
+                    "confidence_label": (
+                        selected_score.confidence_label.value
+                        if selected_score
+                        else BrollConfidenceLabel.LOW.value
+                    ),
+                    "ranking_mode": (
+                        "embedding"
+                        if selected_score and selected_score.embedding_score > 0
+                        else "lexical_fallback"
+                    ),
+                    "validation_errors": (
+                        selected_score.reasons if selected_score else ["no_candidate"]
+                    ),
+                },
             }
         )
 

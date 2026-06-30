@@ -1,4 +1,3 @@
-import time
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -27,7 +26,6 @@ from app.schemas.broll import (
     BrollRegionUpdateRequest,
     BrollRegionUpdateResponse,
     BrollSearchResponse,
-    BrollSlotStatus,
     BrollSwapRequest,
     BrollSwapResponse,
     StockOrientation,
@@ -41,27 +39,26 @@ from app.schemas.broll import (
 from app.services.ai_feedback import record_ai_feedback
 from app.services.broll_intelligence import (
     apply_stage4_broll_rules,
-    broll_slot_metadata,
     latest_visual_manifest_for_broll,
     visual_manifest_cache_signature,
 )
-from app.services.local_storage import LocalObjectStorage
-from app.services.queue import BrollQueue
 from app.services.layer_job_enqueue import (
     build_queued_layer_response_fields,
     prepare_heavy_job_enqueue,
     serialize_layer_job_payload,
 )
+from app.services.local_storage import LocalObjectStorage
+from app.services.queue import BrollQueue
 from app.services.stock_video import (
+    StockVideoCandidate,
     StockVideoProvider,
     build_broll_cache_key,
-    candidate_shot_type,
+    build_stock_asset_raw_metadata,
     desired_requests,
+    enrich_stock_asset,
     ensure_owned_stock_asset,
-    keyword_query,
-    latency_ms_since,
-    score_candidate,
-    semantic_match_score,
+    query_embedding,
+    score_candidate_details,
 )
 from app.services.storage import StorageSigner
 
@@ -454,11 +451,17 @@ async def update_broll_region(
 async def search_broll_candidates(
     project_id: UUID,
     slot_id: UUID,
+    request: Request,
     actor: ActorDep,
     repository: BrollRepositoryDep,
     providers: StockProvidersDep,
     query: Annotated[str | None, Query(max_length=160)] = None,
 ) -> BrollSearchResponse:
+    clip_model_name = getattr(
+        request.app.state.settings,
+        "visual_clip_model",
+        "openai/clip-vit-base-patch32",
+    )
     slot = repository.get_slot(
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -481,13 +484,17 @@ async def search_broll_candidates(
     semantic_embedding = (
         [float(value) for value in raw_embedding if isinstance(value, (int, float))]
         if isinstance(raw_embedding, list)
-        else []
+        else query_embedding(
+            semantic_query=search_query,
+            clip_model_name=clip_model_name,
+        )
     )
     target_shot_type = (
         str(metadata.get("shot_type")).strip().lower() if metadata.get("shot_type") else None
     )
     duplicate_provider_asset_ids: set[str] = set()
     used_shot_types: set[str] = set()
+    adjacent_embeddings: list[list[float]] = []
     for asset_id in slot.candidate_asset_ids:
         try:
             asset = repository.get_asset(
@@ -499,6 +506,15 @@ async def search_broll_candidates(
             raw_shot_type = asset.raw_metadata.get("shot_type")
             if isinstance(raw_shot_type, str) and raw_shot_type.strip():
                 used_shot_types.add(raw_shot_type.strip().lower())
+            raw_asset_embedding = asset.raw_metadata.get("embedding")
+            if isinstance(raw_asset_embedding, list):
+                adjacent_embeddings.append(
+                    [
+                        float(value)
+                        for value in raw_asset_embedding
+                        if isinstance(value, (int, float))
+                    ]
+                )
         except ApiError:
             continue
     candidates = []
@@ -515,47 +531,26 @@ async def search_broll_candidates(
         if candidates:
             break
     scored_candidates = [
-        (
-            score_candidate(
-                candidate=candidate,
-                slot_duration_ms=slot.end_ms - slot.start_ms,
-                duplicate_provider_asset_ids=duplicate_provider_asset_ids,
-                semantic_query=search_query,
-                semantic_embedding=semantic_embedding,
-                target_shot_type=target_shot_type,
-                used_shot_types=used_shot_types,
-            ),
-            candidate,
+        _persist_and_score_search_candidate(
+            candidate=candidate,
+            search_query=search_query,
+            semantic_embedding=semantic_embedding,
+            target_shot_type=target_shot_type,
+            slot=slot,
+            repository=repository,
+            actor=actor,
+            project_id=project_id,
+            duplicate_provider_asset_ids=duplicate_provider_asset_ids,
+            used_shot_types=used_shot_types,
+            adjacent_embeddings=adjacent_embeddings,
+            clip_model_name=clip_model_name,
         )
         for candidate in candidates
         if candidate.duration_ms >= 1500
     ]
+    scored_candidates = [item for item in scored_candidates if item is not None]
     scored_candidates.sort(key=lambda item: item[0], reverse=True)
-    assets = [
-        repository.upsert_asset(
-            workspace_id=actor.workspace_id,
-            project_id=project_id,
-            provider=candidate.provider,
-            provider_asset_id=candidate.provider_asset_id,
-            title=candidate.title,
-            thumbnail_url=candidate.thumbnail_url,
-            preview_video_url=candidate.preview_video_url,
-            download_url=candidate.download_url,
-            license=candidate.license,
-            width=candidate.width,
-            height=candidate.height,
-            duration_ms=candidate.duration_ms,
-            orientation=candidate.orientation,
-            score=score,
-            raw_metadata={
-                **candidate.raw_metadata,
-                "query": search_query,
-                "semantic_query": search_query,
-                "target_shot_type": target_shot_type,
-            },
-        )
-        for score, candidate in scored_candidates[:10]
-    ]
+    assets = [asset for _score, asset in scored_candidates[:10]]
     updated = repository.add_slot_candidates(
         slot=slot,
         asset_ids=[asset.id for asset in assets],
@@ -565,3 +560,105 @@ async def search_broll_candidates(
         candidates=[asset.to_response() for asset in assets],
         query=search_query,
     )
+
+
+def _persist_and_score_search_candidate(
+    *,
+    candidate: StockVideoCandidate,
+    search_query: str,
+    semantic_embedding: list[float],
+    target_shot_type: str | None,
+    slot,
+    repository,
+    actor,
+    project_id: UUID,
+    duplicate_provider_asset_ids: set[str],
+    used_shot_types: set[str],
+    adjacent_embeddings: list[list[float]],
+    clip_model_name: str,
+):
+    score_details = score_candidate_details(
+        candidate=candidate,
+        slot_duration_ms=slot.end_ms - slot.start_ms,
+        duplicate_provider_asset_ids=duplicate_provider_asset_ids,
+        semantic_query=search_query,
+        semantic_embedding=semantic_embedding,
+        target_shot_type=target_shot_type,
+        used_shot_types=used_shot_types,
+        adjacent_embeddings=adjacent_embeddings,
+    )
+    asset = repository.upsert_asset(
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        provider=candidate.provider,
+        provider_asset_id=candidate.provider_asset_id,
+        title=candidate.title,
+        thumbnail_url=candidate.thumbnail_url,
+        preview_video_url=candidate.preview_video_url,
+        download_url=candidate.download_url,
+        license=candidate.license,
+        width=candidate.width,
+        height=candidate.height,
+        duration_ms=candidate.duration_ms,
+        orientation=candidate.orientation,
+        score=score_details.total,
+        raw_metadata={
+            **build_stock_asset_raw_metadata(
+                candidate=candidate,
+                query=search_query,
+                semantic_query=search_query,
+                target_shot_type=target_shot_type,
+            ),
+            "confidence_label": score_details.confidence_label.value,
+        },
+    )
+    asset = enrich_stock_asset(
+        asset=asset,
+        repository=repository,
+        clip_model_name=clip_model_name,
+    )
+    rescored_candidate = StockVideoCandidate(
+        provider=candidate.provider,
+        provider_asset_id=candidate.provider_asset_id,
+        title=candidate.title,
+        thumbnail_url=candidate.thumbnail_url,
+        preview_video_url=candidate.preview_video_url,
+        download_url=candidate.download_url,
+        license=candidate.license,
+        width=candidate.width,
+        height=candidate.height,
+        duration_ms=candidate.duration_ms,
+        relevance_rank=candidate.relevance_rank,
+        provider_url=candidate.provider_url,
+        source_url=candidate.source_url,
+        license_metadata=candidate.license_metadata,
+        attribution_metadata=candidate.attribution_metadata,
+        raw_metadata=asset.raw_metadata,
+    )
+    rescored = score_candidate_details(
+        candidate=rescored_candidate,
+        slot_duration_ms=slot.end_ms - slot.start_ms,
+        duplicate_provider_asset_ids=duplicate_provider_asset_ids,
+        semantic_query=search_query,
+        semantic_embedding=semantic_embedding,
+        target_shot_type=target_shot_type,
+        used_shot_types=used_shot_types,
+        adjacent_embeddings=adjacent_embeddings,
+    )
+    asset = repository.update_asset_metadata(
+        asset=asset,
+        score=rescored.total,
+        raw_metadata={
+            "confidence_label": rescored.confidence_label.value,
+            "score_breakdown": {
+                "semantic": round(rescored.semantic_score, 4),
+                "embedding": round(rescored.embedding_score, 4),
+                "lexical": round(rescored.lexical_score, 4),
+                "orientation": round(rescored.orientation_score, 4),
+                "duration": round(rescored.duration_score, 4),
+                "diversity": round(rescored.diversity_score, 4),
+                "provider_license": round(rescored.provider_license_score, 4),
+            },
+        },
+    )
+    return rescored.total, asset

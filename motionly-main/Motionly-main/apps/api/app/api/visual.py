@@ -13,11 +13,13 @@ from app.api.errors import ApiError
 from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.uploads import UploadStatus
 from app.schemas.visual import (
+    MattePreviewResponse,
     VideoManifestResponse,
     VisualAnalyzeRequest,
     VisualAnalyzeResponse,
     VisualStatusResponse,
 )
+from app.services.matte_jobs import matte_availability
 from app.services.queue import VisualQueue
 from app.services.visual_jobs import queue_visual_analysis_for_upload, visual_provider_identity
 
@@ -31,6 +33,7 @@ VisualQueueDep = Annotated[VisualQueue, Depends(get_visual_queue)]
 @router.get("/status", response_model=VisualStatusResponse)
 async def get_visual_status(
     project_id: UUID,
+    request: Request,
     actor: ActorDep,
     repository: VisualRepositoryDep,
 ) -> VisualStatusResponse:
@@ -40,23 +43,35 @@ async def get_visual_status(
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
+    matte_record = repository.latest_matte_for_upload(
+        uploaded_video_id=upload.id,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    matte_preview = _matte_preview_response(
+        request=request,
+        availability=matte_availability(matte_record),
+    )
     if record is None or record.status.value == "failed":
         return VisualStatusResponse(
             status="unavailable",
             manifest=record.to_response() if record else None,
             message=(record.error_message if record else None)
             or "Visual context is unavailable; editing will continue using transcript and audio.",
+            matte_preview=matte_preview,
         )
     if record.status.value == "ready":
         return VisualStatusResponse(
             status="ready",
             manifest=record.to_response(),
             message="Visual context is ready and will inform the AI edit.",
+            matte_preview=matte_preview,
         )
     return VisualStatusResponse(
         status="processing",
         manifest=record.to_response(),
         message="Visual context is processing; editing can continue with transcript and audio.",
+        matte_preview=matte_preview,
     )
 
 
@@ -109,3 +124,45 @@ async def get_visual_manifest(
             "Run visual analysis before requesting the video manifest.",
         )
     return record.to_response()
+
+
+def _matte_preview_response(
+    *,
+    request: Request,
+    availability: dict[str, object],
+) -> MattePreviewResponse:
+    status = str(availability.get("status") or "skipped")
+    reason = availability.get("reason")
+    matte = availability.get("matte")
+    if status == "available" and hasattr(matte, "bucket") and hasattr(matte, "path"):
+        storage_signer = getattr(request.app.state, "storage_signer", None)
+        signed_url = (
+            storage_signer.create_signed_download(
+                bucket=matte.bucket,
+                path=matte.path,
+                expires_in_seconds=300,
+            ).url
+            if storage_signer is not None
+            else None
+        )
+        return MattePreviewResponse(
+            status="available",
+            reason=None,
+            preview_url=signed_url,
+            bucket=matte.bucket,
+            path=matte.path,
+            cache_key=getattr(matte, "cache_key", None),
+            model=matte.model,
+            source="segmentation_matte",
+        )
+    if status == "pending":
+        return MattePreviewResponse(
+            status="approximate",
+            reason=str(reason or "matte_pending"),
+            source="approximate_preview",
+        )
+    return MattePreviewResponse(
+        status=status if status in {"failed", "skipped"} else "skipped",
+        reason=str(reason) if reason else None,
+        source="none",
+    )

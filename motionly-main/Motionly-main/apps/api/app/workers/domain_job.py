@@ -39,6 +39,10 @@ def _serve() -> None:
         request: dict[str, object] = {}
         try:
             request = json.loads(line)
+            if request.get("control") == "ping":
+                response = {"id": request.get("id"), "result": {"ok": True}}
+                print(json.dumps(response, default=str), flush=True)
+                continue
             result = _execute(dict(request.get("payload") or {}))
             response = {"id": request.get("id"), "result": result}
         except Exception as exc:

@@ -8,6 +8,7 @@ import httpx
 from app.api.errors import ApiError
 from app.schemas.publishing import (
     PublishConnectionResponse,
+    PublishConnectionStatus,
     PublishJobResponse,
     PublishPlatform,
     PublishStatus,
@@ -26,6 +27,11 @@ class PublishConnectionRecord:
     created_at: datetime
     refresh_token: str | None = None
     token_expires_at: datetime | None = None
+    refresh_token_expires_at: datetime | None = None
+    scopes: list[str] | None = None
+    connection_status: PublishConnectionStatus = PublishConnectionStatus.ACTIVE
+    last_refresh_at: datetime | None = None
+    last_refresh_failure_reason: str | None = None
 
     def to_response(self) -> PublishConnectionResponse:
         return PublishConnectionResponse(
@@ -34,6 +40,12 @@ class PublishConnectionRecord:
             platform=self.platform,
             external_account_id=self.external_account_id,
             account_name=self.account_name,
+            connection_status=self.connection_status,
+            access_token_expires_at=self.token_expires_at,
+            refresh_token_expires_at=self.refresh_token_expires_at,
+            scopes=list(self.scopes or []),
+            last_refresh_at=self.last_refresh_at,
+            last_refresh_failure_reason=self.last_refresh_failure_reason,
             created_at=self.created_at,
         )
 
@@ -52,7 +64,16 @@ class PublishJobRecord:
     privacy: str
     external_post_id: str | None
     external_url: str | None
+    provider_operation_id: str | None
     error_message: str | None
+    error_code: str | None
+    error_category: str | None
+    user_message: str | None
+    retryable: bool | None
+    reconnect_required: bool
+    retry_after_seconds: int | None
+    retry_count: int
+    duplicate_publish_risk: bool
     created_at: datetime
     updated_at: datetime
 
@@ -94,6 +115,13 @@ class InMemoryPublishingRepository:
             reverse=True,
         )
 
+    def list_all_connections(self) -> list[PublishConnectionRecord]:
+        return sorted(
+            self.connections.values(),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+
     def get_connection(self, *, connection_id: UUID, workspace_id: UUID) -> PublishConnectionRecord:
         record = self.connections.get(connection_id)
         if not record:
@@ -117,10 +145,29 @@ class InMemoryPublishingRepository:
         access_token: str,
         refresh_token: str | None,
         token_expires_at: datetime | None,
+        refresh_token_expires_at: datetime | None = None,
+        scopes: list[str] | None = None,
+        connection_status: PublishConnectionStatus | None = None,
+        last_refresh_at: datetime | None = None,
+        last_refresh_failure_reason: str | None = None,
     ) -> PublishConnectionRecord:
         connection.access_token = access_token
         connection.refresh_token = refresh_token
         connection.token_expires_at = token_expires_at
+        connection.refresh_token_expires_at = refresh_token_expires_at
+        if scopes is not None:
+            connection.scopes = list(scopes)
+        if connection_status is not None:
+            connection.connection_status = connection_status
+        connection.last_refresh_at = last_refresh_at
+        connection.last_refresh_failure_reason = last_refresh_failure_reason
+        return connection
+
+    def update_connection(
+        self, *, connection: PublishConnectionRecord, **values: object
+    ) -> PublishConnectionRecord:
+        for key, value in values.items():
+            setattr(connection, key, value)
         return connection
 
     def create_job(self, **values: object) -> PublishJobRecord:
@@ -131,7 +178,16 @@ class InMemoryPublishingRepository:
             updated_at=now,
             external_post_id=None,
             external_url=None,
+            provider_operation_id=None,
             error_message=None,
+            error_code=None,
+            error_category=None,
+            user_message=None,
+            retryable=None,
+            reconnect_required=False,
+            retry_after_seconds=None,
+            retry_count=0,
+            duplicate_publish_risk=False,
             **values,
         )
         self.jobs[record.id] = record
@@ -161,6 +217,33 @@ class InMemoryPublishingRepository:
             setattr(job, key, value)
         job.updated_at = datetime.now(UTC)
         return job
+
+    def find_active_job(
+        self,
+        *,
+        workspace_id: UUID,
+        export_id: UUID,
+        connection_id: UUID,
+    ) -> PublishJobRecord | None:
+        active_statuses = {
+            PublishStatus.QUEUED,
+            PublishStatus.REFRESHING_TOKEN,
+            PublishStatus.PUBLISHING,
+            PublishStatus.UPLOADING,
+            PublishStatus.PROCESSING,
+            PublishStatus.RETRY_SCHEDULED,
+        }
+        matches = [
+            item
+            for item in self.jobs.values()
+            if item.workspace_id == workspace_id
+            and item.export_id == export_id
+            and item.connection_id == connection_id
+            and item.status in active_statuses
+        ]
+        if not matches:
+            return None
+        return sorted(matches, key=lambda item: item.created_at, reverse=True)[0]
 
 
 class SupabasePublishingRepository(InMemoryPublishingRepository):
@@ -205,6 +288,14 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
                 "select": "*",
                 "order": "created_at.desc",
             },
+        )
+        return [self._connection(row) for row in rows]
+
+    def list_all_connections(self) -> list[PublishConnectionRecord]:
+        rows = self._request(
+            "GET",
+            "/publish_connections",
+            params={"select": "*", "order": "created_at.desc"},
         )
         return [self._connection(row) for row in rows]
 
@@ -267,6 +358,39 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
         )
         return self._job(rows[0])
 
+    def find_active_job(
+        self,
+        *,
+        workspace_id: UUID,
+        export_id: UUID,
+        connection_id: UUID,
+    ) -> PublishJobRecord | None:
+        active_values = ",".join(
+            status.value
+            for status in (
+                PublishStatus.QUEUED,
+                PublishStatus.REFRESHING_TOKEN,
+                PublishStatus.PUBLISHING,
+                PublishStatus.UPLOADING,
+                PublishStatus.PROCESSING,
+                PublishStatus.RETRY_SCHEDULED,
+            )
+        )
+        rows = self._request(
+            "GET",
+            "/publish_jobs",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "export_id": f"eq.{export_id}",
+                "connection_id": f"eq.{connection_id}",
+                "status": f"in.({active_values})",
+                "select": "*",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        return self._job(rows[0]) if rows else None
+
     def update_connection_tokens(
         self,
         *,
@@ -274,6 +398,11 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
         access_token: str,
         refresh_token: str | None,
         token_expires_at: datetime | None,
+        refresh_token_expires_at: datetime | None = None,
+        scopes: list[str] | None = None,
+        connection_status: PublishConnectionStatus | None = None,
+        last_refresh_at: datetime | None = None,
+        last_refresh_failure_reason: str | None = None,
     ) -> PublishConnectionRecord:
         rows = self._request(
             "PATCH",
@@ -285,9 +414,25 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
                         "access_token": access_token,
                         "refresh_token": refresh_token,
                         "token_expires_at": token_expires_at,
+                        "refresh_token_expires_at": refresh_token_expires_at,
+                        "scopes": scopes,
+                        "connection_status": connection_status,
+                        "last_refresh_at": last_refresh_at,
+                        "last_refresh_failure_reason": last_refresh_failure_reason,
                     }
                 )
             ),
+        )
+        return self._connection(rows[0])
+
+    def update_connection(
+        self, *, connection: PublishConnectionRecord, **values: object
+    ) -> PublishConnectionRecord:
+        rows = self._request(
+            "PATCH",
+            "/publish_connections",
+            params={"id": f"eq.{connection.id}"},
+            json=self._json(self._encrypt_tokens(values)),
         )
         return self._connection(rows[0])
 
@@ -341,6 +486,8 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
                 if isinstance(value, UUID)
                 else value.isoformat()
                 if isinstance(value, datetime)
+                else list(value)
+                if isinstance(value, (tuple, list))
                 else value
             )
             for key, value in values.items()
@@ -363,6 +510,23 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
                 if row.get("token_expires_at")
                 else None
             ),
+            refresh_token_expires_at=(
+                datetime.fromisoformat(str(row["refresh_token_expires_at"]).replace("Z", "+00:00"))
+                if row.get("refresh_token_expires_at")
+                else None
+            ),
+            scopes=[str(item) for item in (row.get("scopes") or [])],
+            connection_status=PublishConnectionStatus(
+                str(row.get("connection_status") or PublishConnectionStatus.ACTIVE.value)
+            ),
+            last_refresh_at=(
+                datetime.fromisoformat(str(row["last_refresh_at"]).replace("Z", "+00:00"))
+                if row.get("last_refresh_at")
+                else None
+            ),
+            last_refresh_failure_reason=str(row["last_refresh_failure_reason"])
+            if row.get("last_refresh_failure_reason")
+            else None,
         )
 
     def _encrypt_tokens(self, values: dict[str, object]) -> dict[str, object]:
@@ -392,7 +556,22 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
             privacy=str(row["privacy"]),
             external_post_id=str(row["external_post_id"]) if row.get("external_post_id") else None,
             external_url=str(row["external_url"]) if row.get("external_url") else None,
+            provider_operation_id=(
+                str(row["provider_operation_id"]) if row.get("provider_operation_id") else None
+            ),
             error_message=str(row["error_message"]) if row.get("error_message") else None,
+            error_code=str(row["error_code"]) if row.get("error_code") else None,
+            error_category=str(row["error_category"]) if row.get("error_category") else None,
+            user_message=str(row["user_message"]) if row.get("user_message") else None,
+            retryable=bool(row["retryable"]) if row.get("retryable") is not None else None,
+            reconnect_required=bool(row.get("reconnect_required") or False),
+            retry_after_seconds=(
+                int(row["retry_after_seconds"])
+                if row.get("retry_after_seconds") is not None
+                else None
+            ),
+            retry_count=int(row.get("retry_count") or 0),
+            duplicate_publish_risk=bool(row.get("duplicate_publish_risk") or False),
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),
         )

@@ -1,4 +1,4 @@
-import { AlertTriangle, Briefcase, KeyRound, Mail, UserRound } from "lucide-react";
+import { AlertTriangle, Briefcase, CheckCircle2, KeyRound, Mail, UserRound } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
 import { createClient } from "@/lib/supabase/server";
@@ -60,50 +60,50 @@ export default async function AccountPage({
   return (
     <AppShell title="Account">
       <div className="space-y-6">
-        <section className="pixel-panel pixel-corners flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-black uppercase tracking-widest text-primary">
-              Profile
-            </p>
-            <h2 className="mt-2 text-3xl font-black tracking-tight">
-              Account settings
-            </h2>
+        {/* Profile header */}
+        <section className="card-elevated rounded-2xl p-6 flex flex-col sm:flex-row gap-6 items-start">
+          <div className="flex size-14 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 items-center justify-center text-white text-xl font-black shrink-0">
+            {(fullName || "C").charAt(0).toUpperCase()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="badge badge-primary mb-3 inline-flex">Profile</span>
+            <h2 className="text-4xl font-black tracking-tight">Account settings</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Manage your creator identity, workspace access, and password.
             </p>
           </div>
-          <div className="flex items-center gap-3 border border-border bg-muted p-3">
-            <div className="flex size-10 items-center justify-center border border-border bg-surface">
-              <UserRound className="size-5 text-primary" aria-hidden="true" />
-            </div>
-            <div className="min-w-0">
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="min-w-0 text-right">
               <p className="truncate text-sm font-black">{fullName || "Creator"}</p>
               <p className="truncate text-xs text-muted-foreground">{email}</p>
             </div>
+            <span className="badge badge-accent capitalize">{workspaceRole}</span>
           </div>
         </section>
 
         {notice ? (
-          <div className="border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">
-            {notice}
+          <div className="rounded-lg border-l-4 border-emerald-500 bg-emerald-500/8 p-4 flex gap-3 mb-4 text-emerald-300">
+            <CheckCircle2 className="size-5 shrink-0 mt-0.5" aria-hidden="true" />
+            <p className="text-sm font-bold">{notice}</p>
           </div>
         ) : null}
         {error ? (
-          <div className="flex gap-2 border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-700">
-            <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
-            {error}
+          <div className="rounded-lg border-l-4 border-danger bg-danger/8 p-4 flex gap-3 mb-4 text-red-300">
+            <AlertTriangle className="size-5 shrink-0 mt-0.5" aria-hidden="true" />
+            <p className="text-sm font-bold">{error}</p>
           </div>
         ) : null}
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <form action={updateProfile} className="pixel-panel space-y-5 p-5">
+          {/* Public profile form */}
+          <form action={updateProfile} className="card rounded-xl p-6 space-y-5">
             <div className="flex items-center gap-2">
               <UserRound className="size-5 text-primary" aria-hidden="true" />
               <h3 className="text-lg font-black">Public profile</h3>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <label>
-                <span className="mb-2 block text-xs font-black uppercase tracking-widest text-muted-foreground">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">
                   Full name
                 </span>
                 <input
@@ -114,7 +114,7 @@ export default async function AccountPage({
                 />
               </label>
               <label>
-                <span className="mb-2 block text-xs font-black uppercase tracking-widest text-muted-foreground">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">
                   Role
                 </span>
                 <input
@@ -127,7 +127,7 @@ export default async function AccountPage({
               </label>
             </div>
             <label className="block">
-              <span className="mb-2 block text-xs font-black uppercase tracking-widest text-muted-foreground">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">
                 Company or channel
               </span>
               <input
@@ -143,7 +143,8 @@ export default async function AccountPage({
           </form>
 
           <aside className="space-y-5">
-            <div className="pixel-panel space-y-4 p-5">
+            {/* Workspace sidebar card */}
+            <div className="card rounded-xl p-5 space-y-4">
               <div className="flex items-center gap-2">
                 <Briefcase className="size-5 text-primary" aria-hidden="true" />
                 <h3 className="text-lg font-black">Workspace</h3>
@@ -153,7 +154,8 @@ export default async function AccountPage({
               <Fact label="Email" value={email} icon={Mail} />
             </div>
 
-            <form action={logout} className="pixel-panel p-5">
+            {/* Logout form */}
+            <form action={logout} className="card rounded-xl p-5">
               <h3 className="text-lg font-black">Session</h3>
               <p className="mt-2 text-sm text-muted-foreground">
                 Log out on this browser before switching accounts.
@@ -165,14 +167,15 @@ export default async function AccountPage({
           </aside>
         </div>
 
-        <form action={updatePassword} className="pixel-panel max-w-2xl space-y-5 p-5">
+        {/* Password form */}
+        <form action={updatePassword} className="card rounded-xl p-6 space-y-5 max-w-2xl">
           <div className="flex items-center gap-2">
             <KeyRound className="size-5 text-primary" aria-hidden="true" />
             <h3 className="text-lg font-black">Password</h3>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <label>
-              <span className="mb-2 block text-xs font-black uppercase tracking-widest text-muted-foreground">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">
                 New password
               </span>
               <input
@@ -183,7 +186,7 @@ export default async function AccountPage({
               />
             </label>
             <label>
-              <span className="mb-2 block text-xs font-black uppercase tracking-widest text-muted-foreground">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">
                 Confirm password
               </span>
               <input
@@ -213,12 +216,12 @@ function Fact({
   icon?: typeof Mail;
 }) {
   return (
-    <div className="border border-border bg-surface p-3">
-      <p className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-muted-foreground">
+    <div className="rounded-lg border border-border bg-muted p-3">
+      <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
         {Icon ? <Icon className="size-3.5" aria-hidden="true" /> : null}
         {label}
       </p>
-      <p className="mt-1 truncate text-sm font-bold">{value || "Not set"}</p>
+      <p className="text-sm font-semibold mt-1 truncate">{value || "Not set"}</p>
     </div>
   );
 }

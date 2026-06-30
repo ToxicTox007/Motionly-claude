@@ -30,6 +30,22 @@ class StockOrientation(StrEnum):
     SQUARE = "square"
 
 
+class StockAssetEnrichmentStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class BrollConfidenceLabel(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    LEXICAL_FALLBACK = "lexical_fallback"
+    ENRICHMENT_FAILED = "enrichment_failed"
+
+
 class StockVideoAssetResponse(BaseModel):
     id: UUID
     workspace_id: UUID
@@ -46,6 +62,10 @@ class StockVideoAssetResponse(BaseModel):
     duration_ms: int = Field(ge=0)
     orientation: StockOrientation
     score: float = Field(ge=0, le=1)
+    confidence_label: BrollConfidenceLabel | None = None
+    enrichment_status: StockAssetEnrichmentStatus | None = None
+    enrichment_failure_reason: str | None = None
+    embedding_model_version: str | None = None
     raw_metadata: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
 
@@ -69,6 +89,7 @@ class BrollSlotResponse(BaseModel):
     crossfade_ms: int = Field(ge=0, le=800)
     provider: StockProviderKey
     score: float = Field(ge=0, le=1)
+    confidence_label: BrollConfidenceLabel | None = None
     error_code: str | None = None
     error_message: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)

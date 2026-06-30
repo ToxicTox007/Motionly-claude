@@ -10,6 +10,7 @@ from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.api.renders import (
     _select_render_engine,
+    cancel_render,
     create_bulk_render,
     get_export_download_url,
     renderer_feature_compatibility,
@@ -63,7 +64,8 @@ from app.schemas.uploads import UploadStatus
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
 from app.services.ffmpeg_render import FFmpegCaptionRenderer
-from app.services.queue import RenderQueue
+from app.services.local_storage import LocalObjectStorage
+from app.services.queue import QueueRegistry, RenderQueue
 from app.services.render_jobs import complete_render_job
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
@@ -986,6 +988,172 @@ def test_render_completion_passes_effects_config_to_ffmpeg(
     assert seen_effects[0]["preset"] == "champagne_gold"
     assert seen_effects[0]["gradient_ramp"]["enabled"] is True
     assert "effects_config=champagne_gold:motion=1:gradient=1" in job.logs
+
+
+def test_render_preflight_fails_when_source_video_is_missing(tmp_path) -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    request = make_request(complete_locally=False)
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+    queued_job = repository.get_render_job(
+        project_id=project_id,
+        render_job_id=response.job_id,
+        workspace_id=workspace_id,
+    )
+
+    job = complete_render_job(
+        job=queued_job,
+        repository=repository,
+        export_bucket="exports",
+        storage_root=str(tmp_path),
+        supabase_url=None,
+        service_role_key=None,
+        execute_ffmpeg=True,
+    )
+
+    assert job.status == RenderJobStatus.FAILED
+    assert job.error_code == "missing_source_video"
+    assert (
+        [event.event_type for event in repository.events_for_job(job.id)][-1]
+        == "preflight_failed"
+    )
+
+
+def test_render_preflight_catches_invalid_ass_before_render(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    request = make_request(complete_locally=False)
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+    upload = repository.get_active_upload(project_id=project_id, workspace_id=workspace_id)
+    LocalObjectStorage(root=tmp_path).write_object(
+        bucket=upload.storage_bucket,
+        path=upload.storage_path,
+        content=b"source",
+    )
+    queued_job = repository.get_render_job(
+        project_id=project_id,
+        render_job_id=response.job_id,
+        workspace_id=workspace_id,
+    )
+    queued_job.manifest["caption_ass"] = "bad ass"
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=1, stderr="bad ass", stdout="")
+
+    monkeypatch.setattr("app.services.render_jobs.subprocess.run", fake_run)
+
+    job = complete_render_job(
+        job=queued_job,
+        repository=repository,
+        export_bucket="exports",
+        storage_root=str(tmp_path),
+        supabase_url=None,
+        service_role_key=None,
+        execute_ffmpeg=True,
+    )
+
+    assert job.status == RenderJobStatus.FAILED
+    assert job.error_code == "invalid_captions"
+
+
+def test_cancel_render_marks_job_canceled_and_removes_queue_entry() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    registry = QueueRegistry()
+    render_queue = RenderQueue(registry)
+    request = make_request(complete_locally=False)
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=render_queue,
+        )
+    )
+
+    canceled = asyncio.run(
+        cancel_render(
+            project_id=project_id,
+            render_job_id=response.job_id,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            render_queue=render_queue,
+        )
+    )
+
+    assert canceled.status == RenderJobStatus.CANCELED
+    queue_job_id = RenderQueue.job_id_for_render(
+        render_job_id=response.job_id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    assert (
+        queue_job_id not in registry.jobs
+        or registry.jobs[queue_job_id].status.value == "canceled"
+    )
+
+
+def test_create_export_is_idempotent_for_same_render_job() -> None:
+    repository, project_id, workspace_id, _user_id = make_render_repository()
+    render_job_id = uuid4()
+
+    first = repository.create_export(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        render_job_id=render_job_id,
+        storage_bucket="exports",
+        storage_path="exports/render.mp4",
+        format="mp4",
+        width=720,
+        height=1280,
+        fps=30,
+        duration_ms=1000,
+        file_size_bytes=10,
+        settings_summary={},
+    )
+    second = repository.create_export(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        render_job_id=render_job_id,
+        storage_bucket="exports",
+        storage_path="exports/render.mp4",
+        format="mp4",
+        width=720,
+        height=1280,
+        fps=30,
+        duration_ms=1000,
+        file_size_bytes=10,
+        settings_summary={},
+    )
+
+    assert first.id == second.id
+    assert len(repository.list_exports(project_id=project_id, workspace_id=workspace_id)) == 1
 
 
 def test_supabase_render_job_hydrates_from_live_schema_compat_logs() -> None:

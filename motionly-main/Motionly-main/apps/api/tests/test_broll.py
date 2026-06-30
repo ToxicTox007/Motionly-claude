@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 
 from app.api.broll import (
@@ -24,9 +25,13 @@ from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.billing import BillingPlanKey, SubscriptionStatus
 from app.schemas.broll import (
+    BrollConfidenceLabel,
     BrollGenerateRequest,
     BrollRegionUpdateRequest,
     BrollSwapRequest,
+    StockAssetEnrichmentStatus,
+    StockOrientation,
+    StockProviderKey,
     UserBrollUploadInitRequest,
 )
 from app.schemas.captions import LanguageHint
@@ -41,11 +46,25 @@ from app.schemas.visual import (
     VideoManifest,
 )
 from app.services.broll_intelligence import apply_stage4_broll_rules
-from app.services.queue import BrollQueue, QueueRegistry
-from app.services.stock_video import FixtureStockVideoProvider, score_candidate, StockVideoProvider
+from app.services.queue import BrollQueue, QueueRegistry, StockAssetEnrichmentQueue
+from app.services.stock_video import (
+    FixtureStockVideoProvider,
+    StockVideoCandidate,
+    StockVideoProvider,
+    build_stock_asset_embedding_cache_key,
+    build_stock_asset_raw_metadata,
+    enrich_stock_asset,
+    query_embedding,
+    score_candidate,
+    score_candidate_details,
+)
 from app.services.storage import StorageSigner
 from app.services.transcription_provider import FixtureTranscriptionProvider
-from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, seed_active_plan
+from tests.worker_job_test_helpers import (
+    build_queue_request_state,
+    run_enqueued_job,
+    seed_active_plan,
+)
 
 
 def make_broll_repository() -> tuple[InMemoryBrollRepository, UUID, UUID, UUID]:
@@ -395,6 +414,7 @@ def test_search_broll_candidates_adds_provider_results_to_slot() -> None:
         search_broll_candidates(
             project_id=project_id,
             slot_id=slot.id,
+            request=_request(),
             actor=actor,
             repository=repository,
             providers=[FixtureStockVideoProvider()],
@@ -476,6 +496,8 @@ def test_generate_broll_allows_local_qa_when_billing_is_disabled() -> None:
 
     assert response.status == "ready"
     assert response.slots
+    assert response.slots[0].selected_asset
+    assert response.slots[0].selected_asset.confidence_label is not None
 
 
 def test_generate_broll_requires_creator_when_billing_is_enabled() -> None:
@@ -512,7 +534,363 @@ def test_list_broll_rejects_cross_workspace_access() -> None:
     assert exc_info.value.status_code in {403, 404}
 
 
-def _request(*, billing_enabled: bool = True, registry: QueueRegistry | None = None, repository=None, billing_repository=None):
+def test_embedding_similarity_outranks_lexical_only_match() -> None:
+    semantic_embedding = query_embedding(semantic_query="founder using laptop in modern office")
+    semantic_candidate = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="semantic-match",
+        title="workspace team scene",
+        thumbnail_url="https://example.com/semantic.jpg",
+        preview_video_url=None,
+        download_url=None,
+        license="pexels_license",
+        width=1080,
+        height=1920,
+        duration_ms=3200,
+        relevance_rank=2,
+        raw_metadata={"embedding": semantic_embedding, "embedding_model_version": "fixture"},
+    )
+    lexical_only_candidate = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="lexical-match",
+        title="founder using laptop in modern office",
+        thumbnail_url="https://example.com/lexical.jpg",
+        preview_video_url=None,
+        download_url=None,
+        license="pexels_license",
+        width=1080,
+        height=1920,
+        duration_ms=3200,
+        relevance_rank=1,
+        raw_metadata={},
+    )
+
+    semantic_score = score_candidate_details(
+        candidate=semantic_candidate,
+        slot_duration_ms=3000,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="founder using laptop in modern office",
+        semantic_embedding=semantic_embedding,
+    )
+    lexical_score = score_candidate_details(
+        candidate=lexical_only_candidate,
+        slot_duration_ms=3000,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="founder using laptop in modern office",
+        semantic_embedding=semantic_embedding,
+    )
+
+    assert semantic_score.total > lexical_score.total
+    assert lexical_score.confidence_label == BrollConfidenceLabel.LEXICAL_FALLBACK
+
+
+def test_orientation_and_duration_affect_ranking_after_embedding_similarity() -> None:
+    semantic_embedding = query_embedding(semantic_query="watch macro detail")
+    portrait_good = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="portrait-good",
+        title="watch detail",
+        thumbnail_url=None,
+        preview_video_url=None,
+        download_url=None,
+        license="pexels_license",
+        width=1080,
+        height=1920,
+        duration_ms=2800,
+        relevance_rank=1,
+        raw_metadata={"embedding": semantic_embedding},
+    )
+    landscape_good = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="landscape-good",
+        title="watch detail",
+        thumbnail_url=None,
+        preview_video_url=None,
+        download_url=None,
+        license="pexels_license",
+        width=1920,
+        height=1080,
+        duration_ms=2800,
+        relevance_rank=1,
+        raw_metadata={"embedding": semantic_embedding},
+    )
+    portrait_bad_duration = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="portrait-bad-duration",
+        title="watch detail",
+        thumbnail_url=None,
+        preview_video_url=None,
+        download_url=None,
+        license="pexels_license",
+        width=1080,
+        height=1920,
+        duration_ms=1200,
+        relevance_rank=1,
+        raw_metadata={"embedding": semantic_embedding},
+    )
+
+    portrait_score = score_candidate_details(
+        candidate=portrait_good,
+        slot_duration_ms=3000,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="watch macro detail",
+        semantic_embedding=semantic_embedding,
+    )
+    landscape_score = score_candidate_details(
+        candidate=landscape_good,
+        slot_duration_ms=3000,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="watch macro detail",
+        semantic_embedding=semantic_embedding,
+    )
+    bad_duration_score = score_candidate_details(
+        candidate=portrait_bad_duration,
+        slot_duration_ms=3000,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="watch macro detail",
+        semantic_embedding=semantic_embedding,
+    )
+
+    assert portrait_score.total > landscape_score.total
+    assert portrait_score.total > bad_duration_score.total
+
+
+def test_bad_embedding_dimensions_do_not_crash_ranking() -> None:
+    score = score_candidate_details(
+        candidate=StockVideoCandidate(
+            provider=StockProviderKey.PEXELS,
+            provider_asset_id="bad-dims",
+            title="office collaboration",
+            thumbnail_url=None,
+            preview_video_url=None,
+            download_url=None,
+            license="pexels_license",
+            width=1080,
+            height=1920,
+            duration_ms=2800,
+            relevance_rank=1,
+            raw_metadata={"embedding": [0.1, 0.2]},
+        ),
+        slot_duration_ms=3000,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="office collaboration",
+        semantic_embedding=[0.1, 0.2, 0.3],
+    )
+
+    assert score.total >= 0
+    assert "embedding_dimension_mismatch" in score.reasons
+
+
+def test_enrich_stock_asset_downloads_thumbnail_and_caches_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, project_id, workspace_id, _user_id = make_broll_repository()
+    candidate = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="pexels-asset-1",
+        title="office teamwork",
+        thumbnail_url="https://example.com/thumb.jpg",
+        preview_video_url="https://example.com/video.mp4",
+        download_url="https://example.com/video.mp4",
+        license="pexels_license",
+        width=1080,
+        height=1920,
+        duration_ms=3200,
+        relevance_rank=1,
+        provider_url="https://pexels.com/video/1",
+        source_url="https://example.com/video.mp4",
+        license_metadata={"license": "pexels_license"},
+        attribution_metadata={"creator": "Pexels Author"},
+        raw_metadata={},
+    )
+    asset = repository.upsert_asset(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        provider=candidate.provider,
+        provider_asset_id=candidate.provider_asset_id,
+        title=candidate.title,
+        thumbnail_url=candidate.thumbnail_url,
+        preview_video_url=candidate.preview_video_url,
+        download_url=candidate.download_url,
+        license=candidate.license,
+        width=candidate.width,
+        height=candidate.height,
+        duration_ms=candidate.duration_ms,
+        orientation=StockOrientation.PORTRAIT,
+        score=0.5,
+        raw_metadata=build_stock_asset_raw_metadata(
+            candidate=candidate,
+            query="office teamwork",
+            semantic_query="office teamwork",
+            target_shot_type="context_cutaway",
+        ),
+    )
+
+    class _Response:
+        content = b"fake-image"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _Response())
+
+    enriched = enrich_stock_asset(
+        asset=asset,
+        repository=repository,
+        clip_model_name="fixture-clip-model",
+    )
+
+    assert enriched.raw_metadata["license_metadata"] == {"license": "pexels_license"}
+    assert enriched.raw_metadata["attribution_metadata"] == {"creator": "Pexels Author"}
+    assert isinstance(enriched.raw_metadata.get("embedding"), list)
+    assert enriched.raw_metadata["enrichment_status"] == StockAssetEnrichmentStatus.COMPLETED
+    assert enriched.raw_metadata["embedding_cache_key"] == build_stock_asset_embedding_cache_key(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="pexels-asset-1",
+        embedding_model_version="fixture-clip-model",
+    )
+
+    cached = enrich_stock_asset(
+        asset=enriched,
+        repository=repository,
+        clip_model_name="fixture-clip-model",
+    )
+    assert cached.raw_metadata["enrichment_cache_hit"] is True
+    assert len(repository.assets) == 1
+
+
+def test_enrich_stock_asset_failed_download_falls_back_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, project_id, workspace_id, _user_id = make_broll_repository()
+    candidate = StockVideoCandidate(
+        provider=StockProviderKey.PIXABAY,
+        provider_asset_id="pixabay-asset-2",
+        title="city skyline",
+        thumbnail_url="https://example.com/fail.jpg",
+        preview_video_url=None,
+        download_url=None,
+        license="pixabay_license",
+        width=1080,
+        height=1920,
+        duration_ms=3400,
+        relevance_rank=1,
+        raw_metadata={},
+    )
+    asset = repository.upsert_asset(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        provider=candidate.provider,
+        provider_asset_id=candidate.provider_asset_id,
+        title=candidate.title,
+        thumbnail_url=candidate.thumbnail_url,
+        preview_video_url=candidate.preview_video_url,
+        download_url=candidate.download_url,
+        license=candidate.license,
+        width=candidate.width,
+        height=candidate.height,
+        duration_ms=candidate.duration_ms,
+        orientation=StockOrientation.PORTRAIT,
+        score=0.4,
+        raw_metadata=build_stock_asset_raw_metadata(
+            candidate=candidate,
+            query="city skyline",
+            semantic_query="city skyline",
+            target_shot_type="establishing",
+        ),
+    )
+
+    def _raise_timeout(*args, **kwargs):
+        raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr(httpx, "get", _raise_timeout)
+
+    failed = enrich_stock_asset(
+        asset=asset,
+        repository=repository,
+        clip_model_name="fixture-clip-model",
+    )
+
+    assert failed.raw_metadata["enrichment_status"] == StockAssetEnrichmentStatus.FAILED
+    assert failed.raw_metadata["enrichment_failure_reason"] == "thumbnail_download_timeout"
+
+
+def test_stock_asset_enrichment_queue_executes_without_duplicate_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, project_id, workspace_id, _user_id = make_broll_repository()
+    registry = QueueRegistry()
+    request = _request(registry=registry, repository=repository)
+    candidate = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="queued-asset-1",
+        title="product detail",
+        thumbnail_url="https://example.com/thumb.jpg",
+        preview_video_url=None,
+        download_url=None,
+        license="pexels_license",
+        width=1080,
+        height=1920,
+        duration_ms=3600,
+        relevance_rank=1,
+        raw_metadata={},
+    )
+    asset = repository.upsert_asset(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        provider=candidate.provider,
+        provider_asset_id=candidate.provider_asset_id,
+        title=candidate.title,
+        thumbnail_url=candidate.thumbnail_url,
+        preview_video_url=candidate.preview_video_url,
+        download_url=candidate.download_url,
+        license=candidate.license,
+        width=candidate.width,
+        height=candidate.height,
+        duration_ms=candidate.duration_ms,
+        orientation=StockOrientation.PORTRAIT,
+        score=0.4,
+        raw_metadata=build_stock_asset_raw_metadata(
+            candidate=candidate,
+            query="product detail",
+            semantic_query="product detail",
+            target_shot_type="product_detail",
+        ),
+    )
+
+    class _Response:
+        content = b"queued-image"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _Response())
+    queue = StockAssetEnrichmentQueue(registry)
+    job = queue.enqueue_asset_enrichment(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        asset_id=asset.id,
+        job_payload='{"clip_model_name":"fixture-clip-model"}',
+    )
+
+    asyncio.run(run_enqueued_job(job_id=job.id, request=request))
+
+    enriched = repository.get_asset(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        asset_id=asset.id,
+    )
+    assert enriched.raw_metadata["enrichment_status"] == StockAssetEnrichmentStatus.COMPLETED
+    assert len(repository.assets) == 1
+
+
+def _request(
+    *,
+    billing_enabled: bool = True,
+    registry: QueueRegistry | None = None,
+    repository=None,
+    billing_repository=None,
+):
     registry = registry or QueueRegistry()
     return build_queue_request_state(
         registry=registry,
@@ -521,6 +899,7 @@ def _request(*, billing_enabled: bool = True, registry: QueueRegistry | None = N
             app_env="test",
             redis_url=None,
             admin_api_token="worker-secret",
+            visual_clip_model="fixture-clip-model",
         ),
         broll_repository=repository,
         billing_repository=billing_repository,
@@ -540,9 +919,9 @@ def run_generate_broll(
     broll_queue: BrollQueue,
     providers: list[StockVideoProvider],
 ) -> object:
-    from tests.worker_job_test_helpers import run_enqueued_job
     from app.schemas.broll import BrollGenerateResponse
     from app.services.queue import QueueRegistry
+    from tests.worker_job_test_helpers import run_enqueued_job
 
     registry = broll_queue.registry or QueueRegistry()
     broll_queue = BrollQueue(registry=registry)

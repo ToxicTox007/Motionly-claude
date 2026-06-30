@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Sparkles, Download, Save, ChevronLeft } from "lucide-react";
+import { Sparkles, Download, ChevronLeft, Eye, LayoutGrid, SlidersHorizontal, X } from "lucide-react";
 import { ThemeMenu } from "@/components/theme-menu";
 import { cn } from "@/lib/utils";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -74,41 +74,44 @@ export function EditorLayout({
       {/* Mobile/Tablet View (< 1024px) */}
       <div className="lg:hidden flex flex-col flex-1 min-h-0 relative">
         {/* Compact Mobile Toolbar */}
-        <div className="glass-surface border-b border-border flex items-center justify-around p-1.5 shrink-0 z-30 font-bold">
+        <div className="bg-surface border-b-2 border-foreground flex items-center justify-around p-1 shrink-0 z-30 font-bold gap-1">
           <button
             type="button"
             className={cn(
-              "flex flex-1 flex-col items-center justify-center py-2.5 text-2xs font-extrabold uppercase tracking-widest transition-colors",
+              "flex flex-1 flex-col items-center justify-center py-2.5 gap-1 text-[10px] font-black uppercase tracking-widest transition-colors rounded border-2 border-transparent",
               activeSheet === null
-                ? "text-primary bg-primary/10"
-                : "text-muted-foreground hover:bg-muted",
+                ? "text-primary-foreground bg-primary border-foreground"
+                : "text-muted-foreground hover:bg-surface-elevated hover:text-foreground",
             )}
             onClick={() => setActiveSheet(null)}
           >
+            <Eye className="size-4" strokeWidth={2} />
             Preview
           </button>
           <button
             type="button"
             className={cn(
-              "flex flex-1 flex-col items-center justify-center py-2.5 text-2xs font-extrabold uppercase tracking-widest transition-colors border-l border-border",
+              "flex flex-1 flex-col items-center justify-center py-2.5 gap-1 text-[10px] font-black uppercase tracking-widest transition-colors rounded border-2 border-transparent",
               activeSheet === "left"
-                ? "text-primary bg-primary/10"
-                : "text-muted-foreground hover:bg-muted",
+                ? "text-primary-foreground bg-primary border-foreground"
+                : "text-muted-foreground hover:bg-surface-elevated hover:text-foreground",
             )}
             onClick={() => setActiveSheet("left")}
           >
+            <LayoutGrid className="size-4" strokeWidth={2} />
             Elements
           </button>
           <button
             type="button"
             className={cn(
-              "flex flex-1 flex-col items-center justify-center py-2.5 text-2xs font-extrabold uppercase tracking-widest transition-colors border-l border-border",
+              "flex flex-1 flex-col items-center justify-center py-2.5 gap-1 text-[10px] font-black uppercase tracking-widest transition-colors rounded border-2 border-transparent",
               activeSheet === "right"
-                ? "text-primary bg-primary/10"
-                : "text-muted-foreground hover:bg-muted",
+                ? "text-primary-foreground bg-primary border-foreground"
+                : "text-muted-foreground hover:bg-surface-elevated hover:text-foreground",
             )}
             onClick={() => setActiveSheet("right")}
           >
+            <SlidersHorizontal className="size-4" strokeWidth={2} />
             Settings
           </button>
         </div>
@@ -118,14 +121,14 @@ export function EditorLayout({
           <section
             id="editor-preview"
             aria-labelledby="preview-heading"
-            className="pixel-panel-strong h-[min(42dvh,380px)] min-h-[280px] shrink-0 overflow-hidden"
+            className="card overflow-hidden h-[min(42dvh,380px)] min-h-[280px] shrink-0 border-2 border-foreground shadow-[2px_2px_0px_#000]"
           >
             {centerPanel}
           </section>
           <section
             id="editor-timeline"
             aria-labelledby="timeline-heading"
-            className="pixel-panel flex-1 min-h-[220px] overflow-hidden"
+            className="card flex-1 min-h-[220px] overflow-hidden border-2 border-foreground shadow-[2px_2px_0px_#000]"
           >
             {bottomPanel}
           </section>
@@ -137,7 +140,7 @@ export function EditorLayout({
             <button
               type="button"
               aria-label="Close Elements Panel"
-              className="fixed inset-0 top-[8rem] z-40 bg-foreground/35 backdrop-blur-[1px] w-full h-full text-left"
+              className="fixed inset-0 top-[8rem] z-40 bg-background/60 backdrop-blur-sm w-full h-full text-left"
               onClick={() => setActiveSheet(null)}
             />
             <div
@@ -145,18 +148,19 @@ export function EditorLayout({
               role="dialog"
               aria-modal="true"
               aria-label="Element Palette"
-              className="pixel-panel-strong fixed bottom-0 left-0 right-0 top-[8.25rem] z-50 flex flex-col bg-surface shadow-[-4px_0_0_hsl(var(--shadow-color)/0.12)] border-t-2 border-primary border-x-0 border-b-0"
+              className="fixed bottom-0 left-0 right-0 top-[8.25rem] z-50 flex flex-col bg-surface border-t-2 border-x-2 border-foreground rounded-t-xl overflow-hidden shadow-xl"
             >
-              <div className="flex items-center justify-between border-b border-border p-3 shrink-0">
-                <h2 className="text-xs font-black uppercase tracking-wider text-primary">
+              <div className="flex items-center justify-between border-b-2 border-foreground p-4 shrink-0 bg-surface-elevated">
+                <h2 className="text-sm font-black uppercase tracking-tight">
                   Element Palette
                 </h2>
                 <button
                   type="button"
-                  className="pixel-button px-3.5 py-1.5 text-2xs font-black bg-surface text-foreground"
+                  className="size-8 p-0 flex items-center justify-center rounded border-2 border-foreground bg-surface hover:bg-surface-elevated transition-colors"
                   onClick={() => setActiveSheet(null)}
+                  aria-label="Close"
                 >
-                  Close
+                  <X className="size-4 text-foreground" strokeWidth={2} />
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto p-3">{leftPanel}</div>
@@ -169,7 +173,7 @@ export function EditorLayout({
             <button
               type="button"
               aria-label="Close Settings Panel"
-              className="fixed inset-0 top-[8rem] z-40 bg-foreground/35 backdrop-blur-[1px] w-full h-full text-left"
+              className="fixed inset-0 top-[8rem] z-40 bg-background/60 backdrop-blur-sm w-full h-full text-left"
               onClick={() => setActiveSheet(null)}
             />
             <div
@@ -177,18 +181,19 @@ export function EditorLayout({
               role="dialog"
               aria-modal="true"
               aria-label="Editor Settings"
-              className="pixel-panel-strong fixed bottom-0 left-0 right-0 top-[8.25rem] z-50 flex flex-col bg-surface shadow-[-4px_0_0_hsl(var(--shadow-color)/0.12)] border-t-2 border-primary border-x-0 border-b-0"
+              className="fixed bottom-0 left-0 right-0 top-[8.25rem] z-50 flex flex-col bg-surface border-t-2 border-x-2 border-foreground rounded-t-xl overflow-hidden shadow-xl"
             >
-              <div className="flex items-center justify-between border-b border-border p-3 shrink-0">
-                <h2 className="text-xs font-black uppercase tracking-wider text-primary">
+              <div className="flex items-center justify-between border-b-2 border-foreground p-4 shrink-0 bg-surface-elevated">
+                <h2 className="text-sm font-black uppercase tracking-tight">
                   Editor Settings
                 </h2>
                 <button
                   type="button"
-                  className="pixel-button px-3.5 py-1.5 text-2xs font-black bg-surface text-foreground"
+                  className="size-8 p-0 flex items-center justify-center rounded border-2 border-foreground bg-surface hover:bg-surface-elevated transition-colors"
                   onClick={() => setActiveSheet(null)}
+                  aria-label="Close"
                 >
-                  Close
+                  <X className="size-4 text-foreground" strokeWidth={2} />
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto p-3">{rightPanel}</div>
@@ -198,10 +203,10 @@ export function EditorLayout({
       </div>
 
       {/* Desktop Grid Layout (visible >= 1024px) */}
-      <div className="hidden lg:grid min-h-0 max-w-full flex-1 gap-2 p-2 sm:gap-3 sm:p-3 lg:grid-cols-[220px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_210px] lg:overflow-hidden">
+      <div className="hidden lg:grid min-h-0 max-w-full flex-1 gap-2 p-2 sm:gap-3 sm:p-3 lg:grid-cols-[240px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_220px] lg:overflow-hidden">
         <section
           aria-labelledby="media-heading"
-          className="pixel-panel order-2 min-h-[220px] min-w-0 max-w-full overflow-hidden lg:order-1 lg:min-h-0"
+          className="card overflow-hidden rounded-lg border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
         >
           {leftPanel}
         </section>
@@ -209,14 +214,14 @@ export function EditorLayout({
         <section
           id="editor-preview"
           aria-labelledby="preview-heading"
-          className="pixel-panel-strong sticky top-[4.25rem] z-30 order-1 h-[min(48dvh,460px)] min-h-[340px] min-w-0 max-w-full overflow-hidden sm:min-h-[620px] lg:static lg:order-2 lg:h-auto lg:min-h-0"
+          className="card overflow-hidden rounded-lg border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
         >
           {centerPanel}
         </section>
 
         <section
           aria-label="Editor settings"
-          className="pixel-panel order-3 min-h-[360px] min-w-0 max-w-full overflow-hidden lg:order-3 lg:min-h-0"
+          className="card overflow-hidden rounded-lg border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
         >
           {rightPanel}
         </section>
@@ -224,7 +229,7 @@ export function EditorLayout({
         <section
           id="editor-timeline"
           aria-labelledby="timeline-heading"
-          className="pixel-panel order-4 min-h-[260px] min-w-0 max-w-full overflow-hidden lg:col-span-3 lg:min-h-0"
+          className="card overflow-hidden rounded-lg border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] lg:col-span-3"
         >
           {bottomPanel}
         </section>
@@ -253,27 +258,27 @@ function TopToolbar({
   onAiEdit,
 }: TopToolbarProps) {
   return (
-    <div className="glass-surface pixel-grid-fine sticky top-0 z-40 grid max-w-full shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 overflow-x-hidden border-b border-border px-2 py-2 sm:px-3 lg:static lg:flex lg:min-h-12 lg:flex-nowrap">
+    <div className="bg-surface border-b-4 border-foreground sticky top-0 z-40 flex items-center gap-2 px-3 py-2 min-h-[60px] max-w-full overflow-x-hidden">
       <Link
         href="/dashboard"
-        className="pixel-button flex min-h-11 min-w-11 items-center justify-center gap-1 bg-surface px-2 py-1 text-foreground transition hover:bg-primary/10 lg:min-w-0"
+        className="flex items-center gap-1.5 pr-2.5 bg-surface text-foreground border-2 border-foreground rounded px-3 py-1 font-bold text-sm hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms]"
         title="Back to dashboard"
         aria-label="Back to dashboard"
       >
-        <ChevronLeft className="size-4" />
+        <ChevronLeft className="size-4 text-foreground" strokeWidth={2} />
         <Image
           src="/icon.svg"
           alt=""
           width={22}
           height={22}
-          className="hidden size-5 sm:block"
+          className="hidden size-5 sm:block invert dark:invert-0"
         />
-        <span className="hidden text-sm font-bold uppercase tracking-[0.18em] sm:inline">
+        <span className="hidden text-xs font-black uppercase tracking-[0.18em] sm:inline">
           Motionly
         </span>
       </Link>
 
-      <div className="hidden mx-1 h-4 w-px bg-border lg:block" />
+      <div className="hidden lg:block h-6 w-0.5 bg-foreground mx-1" />
 
       <input
         aria-label="Project title"
@@ -283,7 +288,7 @@ function TopToolbar({
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        className="pixel-input min-h-11 min-w-0 truncate bg-transparent px-3 text-base font-semibold text-foreground placeholder:text-muted-foreground sm:max-w-[280px] lg:max-w-[260px]"
+        className="min-h-[36px] min-w-0 truncate bg-surface border-2 border-foreground rounded px-3 py-1 text-sm font-bold text-foreground placeholder:text-muted-foreground sm:max-w-[280px] lg:max-w-[260px] focus:outline-none focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] transition-all"
         placeholder="Untitled project"
       />
 
@@ -306,18 +311,18 @@ function TopToolbar({
         <button
           onClick={onAiEdit}
           aria-label="Open AI Edit settings"
-          className="hidden min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary/10 px-2.5 py-1 text-sm font-bold text-primary transition hover:bg-primary/20 lg:inline-flex"
+          className="hidden lg:inline-flex items-center gap-1.5 h-9 px-3 rounded border-2 border-foreground bg-accent text-accent-foreground text-sm font-bold hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all focus:outline-none"
         >
-          <Sparkles className="size-4" />
+          <Sparkles className="size-4 text-foreground" strokeWidth={2} />
           <span>AI Edit</span>
         </button>
 
         <button
           onClick={onExport}
           aria-label="Open export settings"
-          className="pixel-button hidden min-h-11 min-w-11 items-center justify-center gap-1.5 bg-primary px-3 py-1.5 text-sm font-bold text-primary-foreground transition hover:brightness-105 lg:inline-flex"
+          className="hidden lg:inline-flex h-9 px-4 bg-primary text-primary-foreground border-2 border-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none text-sm font-bold transition-all focus:outline-none"
         >
-          <Download className="size-4" />
+          <Download className="size-4 text-primary-foreground" strokeWidth={2} />
           <span>Export</span>
         </button>
       </div>
@@ -334,23 +339,23 @@ function TopToolbar({
 function SaveBadge({ status }: { status: "saving" | "saved" | "error" }) {
   return (
     <div
-      className="flex items-center gap-1 text-xs text-muted-foreground"
+      className="flex items-center gap-1.5 text-xs font-mono font-bold rounded border-2 border-foreground bg-surface px-2.5 py-1 text-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
       aria-live="polite"
       aria-atomic="true"
     >
       {status === "saving" ? (
         <>
-          <Save className="size-2.5 animate-pulse" />
+          <div className="size-2.5 rounded-full bg-primary animate-ping" />
           <span>Saving…</span>
         </>
       ) : status === "error" ? (
         <>
-          <Save className="size-2.5 text-destructive" />
-          <span className="text-destructive">Error</span>
+          <div className="size-2.5 rounded-full bg-danger border border-foreground" />
+          <span className="text-danger">Error</span>
         </>
       ) : (
         <>
-          <Save className="size-2.5 text-teal-400" />
+          <div className="size-2 rounded-full bg-emerald-400" />
           <span>Saved</span>
         </>
       )}

@@ -297,7 +297,7 @@ export function CaptionsTab({
 
   return (
     <div className="space-y-3 sm:space-y-4" aria-live="polite">
-      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+      <div className="rounded-md border-2 border-foreground shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] p-4 sm:p-5 space-y-4 bg-surface">
         <PanelSection title="Basic" defaultOpen>
           <div className="grid gap-3">
             <div className="space-y-1.5">
@@ -310,6 +310,7 @@ export function CaptionsTab({
                 value={preset}
                 onChange={handlePresetChange}
                 options={presets}
+                className="border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] transition-all font-mono text-xs"
               />
             </div>
 
@@ -323,17 +324,18 @@ export function CaptionsTab({
                 value={outputLanguage}
                 onChange={setOutputLanguage}
                 options={outputLanguages}
+                className="border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] transition-all font-mono text-xs"
               />
             </div>
 
-            <label className="flex min-h-11 items-center justify-between gap-3 border border-border bg-muted/25 px-3 text-sm font-bold text-muted-foreground">
+            <label className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded-md border-2 border-foreground bg-surface px-3.5 text-xs font-bold font-mono text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] select-none">
               Hide filler words
               <input
                 type="checkbox"
                 aria-label="Hide filler words"
                 checked={hideFillerWords}
                 onChange={(event) => setHideFillerWords(event.target.checked)}
-                className="size-6 accent-primary"
+                className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary"
               />
             </label>
           </div>
@@ -453,7 +455,7 @@ export function CaptionsTab({
             id="full-transcript"
             value={transcriptText}
             onChange={(event) => setTranscriptText(event.target.value)}
-            className="min-h-24 px-3 py-2 text-sm"
+            className="min-h-24 px-3 py-2 text-sm focus:outline-none"
             aria-describedby="full-transcript-help"
           />
           <p
@@ -467,26 +469,26 @@ export function CaptionsTab({
             variant="secondary"
             onClick={applyTranscriptText}
             disabled={!segments.length}
-            className="mt-2 min-h-11 w-full"
+            className="mt-3.5 h-11 w-full text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000]"
           >
             Apply Transcript To Segments
           </Button>
         </PanelSection>
 
         <PanelSection title="Segments" defaultOpen>
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2.5 flex items-center justify-between">
             <Label className="mb-0">Segments</Label>
-            <span className="text-[10px] font-bold text-muted-foreground">
+            <span className="text-[10px] font-black uppercase text-foreground bg-surface border-2 border-foreground px-2.5 py-0.5 rounded shadow-[1px_1px_0px_#000] font-mono select-none">
               {segments.length} editable
             </span>
           </div>
           {segments.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground font-mono">
               No caption track yet.
             </p>
           ) : (
-            <div className="space-y-2">
-              <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="space-y-3">
+              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-thin">
                 {segments.map((segment, index) => (
                   <button
                     key={segment.id ?? index}
@@ -496,16 +498,16 @@ export function CaptionsTab({
                     }
                     aria-label={`Caption segment ${index + 1}, ${segment.text}, starts at ${segment.start_ms} milliseconds, ends at ${segment.end_ms} milliseconds`}
                     className={cn(
-                      "min-h-11 w-40 shrink-0 border p-2 text-left text-xs transition",
+                      "min-h-11 w-40 shrink-0 border-2 border-foreground px-3 py-2 text-left text-xs transition-all duration-[100ms] rounded",
                       selectedSegmentIndex === index
-                        ? "border-primary bg-primary/10"
-                        : "border-border bg-muted/40 hover:border-primary/40",
+                        ? "bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+                        : "bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] dark:hover:shadow-[1px_1px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
                     )}
                   >
                     <span className="block truncate font-bold">
                       {segment.text}
                     </span>
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className={cn("text-[10px] mt-0.5 block font-mono", selectedSegmentIndex === index ? "text-primary-foreground/80" : "text-muted-foreground")}>
                       {segment.start_ms} - {segment.end_ms} ms
                     </span>
                   </button>
@@ -513,17 +515,17 @@ export function CaptionsTab({
               </div>
 
               {selectedSegment ? (
-                <div className="space-y-2 border border-border bg-muted/30 p-2.5 sm:p-3">
+                <div className="space-y-3 border-2 border-foreground bg-surface p-4 rounded shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
                   <TextArea
                     aria-label="Selected caption segment text"
                     value={selectedSegment.text}
                     onChange={(event) => updateSelectedText(event.target.value)}
-                    className="min-h-16 px-3 py-2 text-sm"
+                    className="min-h-16 px-3 py-2 text-sm focus:outline-none"
                   />
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <label className="font-bold text-muted-foreground">
-                      Start
-                      <Input
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <label className="font-bold text-foreground">
+                      Start (ms)
+                      <input
                         aria-label="Selected caption start time in milliseconds"
                         type="number"
                         value={selectedSegment.start_ms}
@@ -532,12 +534,12 @@ export function CaptionsTab({
                             start_ms: Number(event.target.value),
                           })
                         }
-                        className="mt-1 min-h-10 px-2 py-1 text-sm"
+                        className="mt-1.5 min-h-[40px] w-full px-3 font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
                       />
                     </label>
-                    <label className="font-bold text-muted-foreground">
-                      End
-                      <Input
+                    <label className="font-bold text-foreground">
+                      End (ms)
+                      <input
                         aria-label="Selected caption end time in milliseconds"
                         type="number"
                         value={selectedSegment.end_ms}
@@ -546,11 +548,11 @@ export function CaptionsTab({
                             end_ms: Number(event.target.value),
                           })
                         }
-                        className="mt-1 min-h-10 px-2 py-1 text-sm"
+                        className="mt-1.5 min-h-[40px] w-full px-3 font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
                       />
                     </label>
                   </div>
-                  <div className="flex gap-2 overflow-x-auto pb-1">
+                  <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none pt-1">
                     {uniqueWords(selectedSegment.text).map((word) => {
                       const selected =
                         selectedSegment.highlight_words?.includes(word);
@@ -560,10 +562,10 @@ export function CaptionsTab({
                           onClick={() => updateHighlight(word)}
                           aria-pressed={selected}
                           className={cn(
-                            "min-h-10 shrink-0 whitespace-nowrap border px-3 py-1.5 text-xs font-bold",
+                            "min-h-[32px] shrink-0 whitespace-nowrap border-2 border-foreground px-3 py-1 text-xs font-bold font-mono rounded transition-all duration-[100ms]",
                             selected
-                              ? "border-primary bg-primary/10 text-primary"
-                              : "border-border",
+                              ? "bg-primary text-primary-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
+                              : "bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] dark:hover:shadow-[1px_1px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
                           )}
                         >
                           {word}
@@ -578,41 +580,41 @@ export function CaptionsTab({
         </PanelSection>
       </div>
 
-      <div className="sticky bottom-2 z-10 grid grid-cols-2 gap-2 bg-background/80 py-1 backdrop-blur">
-        <Button
+      <div className="sticky bottom-0 z-10 grid grid-cols-2 gap-2.5 bg-background/90 py-3.5 border-t-2 border-foreground backdrop-blur-md mt-4">
+        <button
           onClick={updateCaptions}
           disabled={loading}
           aria-busy={loading}
           aria-describedby={message ? "caption-message" : undefined}
-          className="h-11 px-2 text-sm sm:h-12"
+          className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
         >
           {loading ? (
-            <Loader2 className="mr-2 size-4 animate-spin" />
+            <Loader2 className="size-4 animate-spin text-primary-foreground" strokeWidth={2} />
           ) : (
-            <RefreshCw className="mr-2 size-4" />
+            <RefreshCw className="size-4" strokeWidth={2} />
           )}
-          {activeTrack ? "Save Style" : "Generate"}
-        </Button>
-        <Button
+          <span>{activeTrack ? "Save Style" : "Generate"}</span>
+        </button>
+        <button
           onClick={saveSegments}
           disabled={loading || !activeTrack}
           aria-busy={loading}
           aria-describedby={message ? "caption-message" : undefined}
-          className="h-11 px-2 text-sm sm:h-12"
+          className="h-11 px-2 text-xs font-black rounded border-2 border-foreground bg-primary text-primary-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms]"
         >
           {loading ? (
-            <Loader2 className="mr-2 size-4 animate-spin" />
+            <Loader2 className="mr-2 size-4 animate-spin text-primary-foreground" strokeWidth={2} />
           ) : (
-            <Save className="mr-2 size-4" />
+            <Save className="mr-2 size-4" strokeWidth={2} />
           )}
-          Save Text
-        </Button>
+          <span>Save Text</span>
+        </button>
       </div>
       {message ? (
         <p
           id="caption-message"
           role={/failed|could not|try/i.test(message) ? "alert" : "status"}
-          className="border border-border bg-muted p-3 text-sm font-bold text-muted-foreground"
+          className="rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
         >
           {message}
         </p>

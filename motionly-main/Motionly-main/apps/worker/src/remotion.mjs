@@ -16,7 +16,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -28,6 +28,15 @@ import { createClient } from "@supabase/supabase-js";
 
 function env(name, fallback = "") {
   return process.env[name] || fallback;
+}
+
+class StructuredRenderError extends Error {
+  constructor(code, message, { retryable = false } = {}) {
+    super(message);
+    this.name = "StructuredRenderError";
+    this.code = code;
+    this.retryable = retryable;
+  }
 }
 
 /** Renderer base directory. Defaults to the sibling 'renderer' package. */
@@ -77,6 +86,18 @@ async function persistProgressDirect(renderJobId, workspaceId, projectId, payloa
     message: payload.message,
     metadata: payload.metadata || {},
   });
+}
+
+async function loadRenderJobStatusDirect(renderJobId, workspaceId, projectId) {
+  const { data, error } = await supabaseClient()
+    .from("render_jobs")
+    .select("status")
+    .eq("id", renderJobId)
+    .eq("workspace_id", workspaceId)
+    .eq("project_id", projectId)
+    .single();
+  if (error || !data) throw new Error(`Failed to load render job status: ${error?.message || "missing"}`);
+  return String(data.status || "");
 }
 
 async function persistCompleteDirect(renderJobId, workspaceId, projectId, details) {
@@ -144,15 +165,16 @@ async function persistCompleteDirect(renderJobId, workspaceId, projectId, detail
   return { render_job_id: renderJobId, export_id: exportId, status: "complete" };
 }
 
-export async function persistRenderFailureDirect(job, errorMessage, retrying) {
+export async function persistRenderFailureDirect(job, errorMessage, retrying, failureCode = "render_worker_failed") {
   const client = supabaseClient();
-  const status = retrying ? "queued" : "failed";
+  const terminalStatus = failureCode === "render_cancelled" ? "canceled" : "failed";
+  const status = retrying ? "queued" : terminalStatus;
   const { error } = await client
     .from("render_jobs")
     .update({
       status,
       progress_pct: retrying ? 5 : undefined,
-      error_code: retrying ? null : "render_worker_failed",
+      error_code: retrying ? null : failureCode,
       error_message: retrying ? null : errorMessage.slice(0, 500),
     })
     .eq("id", job.resource_id)
@@ -163,11 +185,11 @@ export async function persistRenderFailureDirect(job, errorMessage, retrying) {
     render_job_id: job.resource_id,
     workspace_id: job.workspace_id,
     project_id: job.project_id,
-    event_type: retrying ? "worker_retrying" : "worker_failed",
+    event_type: retrying ? "worker_retrying" : failureCode === "render_cancelled" ? "cancelled" : "failed",
     to_status: status,
     progress_pct: retrying ? 5 : null,
     message: retrying ? "Render worker failed; BullMQ will retry." : errorMessage.slice(0, 500),
-    metadata: {},
+    metadata: { failure_code: failureCode },
   });
 }
 
@@ -252,6 +274,64 @@ function fixtureMediaAllowed() {
     env("MOTIONLY_DEMO_MODE") === "true" ||
     env("ALLOW_FIXTURE_PROVIDERS") === "true"
   );
+}
+
+function renderTimeoutMs() {
+  const seconds = Number(env("RENDER_TIMEOUT_SECONDS", "900"));
+  return Math.max(30_000, Number.isFinite(seconds) ? seconds * 1000 : 900_000);
+}
+
+function validateBrowserExecutable() {
+  const browserPath = env("BROWSER_EXECUTABLE_PATH") || env("PUPPETEER_EXECUTABLE_PATH");
+  if (!browserPath) {
+    throw new StructuredRenderError(
+      "chromium_missing",
+      "Premium render requires a Chromium executable.",
+    );
+  }
+  if (!existsSync(browserPath)) {
+    throw new StructuredRenderError(
+      "chromium_missing",
+      "Configured Chromium executable was not found.",
+    );
+  }
+}
+
+async function validateWritableTempDir(dirPath) {
+  await mkdir(dirPath, { recursive: true });
+  const probePath = join(dirPath, "preflight.tmp");
+  await writeFile(probePath, "ok");
+  await rm(probePath, { force: true });
+}
+
+function validateResolvedProps(props) {
+  if (!props?.sourceVideo?.src) {
+    throw new StructuredRenderError(
+      "missing_source_video",
+      "Render source video is unavailable.",
+    );
+  }
+  if (!props?.exportSettings?.fps || Number(props.exportSettings.fps) <= 0) {
+    throw new StructuredRenderError(
+      "invalid_remotion_props",
+      "Render props are missing a valid FPS.",
+    );
+  }
+  for (const asset of props.assets ?? []) {
+    if (asset.kind === "video" && (!asset.src || (!asset.src.startsWith("http") && !asset.src.startsWith("/")))) {
+      throw new StructuredRenderError(
+        "broll_asset_unavailable",
+        "One or more B-roll assets are unavailable.",
+      );
+    }
+  }
+  const track = props.musicSelection?.track;
+  if (track && !(track.full_track_url || track.preview_url || track.raw_metadata?.audio_url || track.raw_metadata?.download_url)) {
+    throw new StructuredRenderError(
+      "music_asset_unavailable",
+      "Selected music is unavailable for rendering.",
+    );
+  }
 }
 
 /**
@@ -433,7 +513,7 @@ async function applySegmentationAlphaKey({ sourceUrl, matteUrl, featherPx, workD
  * Spawn render-cli.ts and wait for it to exit 0.
  * stdout/stderr are streamed to process.stdout/stderr for service logs.
  */
-function spawnRenderer(propsPath, outputPath) {
+function spawnRenderer(propsPath, outputPath, { renderJobId, workspaceId, projectId, timeoutMs }) {
   return new Promise((resolve, reject) => {
     const rPath = rendererPath();
     const args = [
@@ -473,13 +553,43 @@ function spawnRenderer(propsPath, outputPath) {
     proc.stdout.on("data", (data) => process.stdout.write(data));
     proc.stderr.on("data", (data) => process.stderr.write(data));
 
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      clearInterval(cancelInterval);
+      fn(value);
+    };
+    const timeoutId = setTimeout(() => {
+      proc.kill("SIGTERM");
+      finish(
+        reject,
+        new StructuredRenderError("render_timeout", "Premium render timed out.", { retryable: true }),
+      );
+    }, timeoutMs);
+    const cancelInterval = setInterval(async () => {
+      try {
+        const status = await loadRenderJobStatusDirect(renderJobId, workspaceId, projectId);
+        if (status === "canceled") {
+          proc.kill("SIGTERM");
+          finish(
+            reject,
+            new StructuredRenderError("render_cancelled", "Render was canceled by the user."),
+          );
+        }
+      } catch {
+        // Leave the render running if status polling is transiently unavailable.
+      }
+    }, 1000);
+
     proc.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`render-cli.ts exited with code ${code}`));
+      if (code === 0) finish(resolve);
+      else finish(reject, new StructuredRenderError("retryable_worker_failure", `render-cli.ts exited with code ${code}`, { retryable: true }));
     });
 
     proc.on("error", (err) => {
-      reject(new Error(`Failed to spawn render-cli.ts: ${err.message}`));
+      finish(reject, new StructuredRenderError("retryable_worker_failure", `Failed to spawn render-cli.ts: ${err.message}`, { retryable: true }));
     });
   });
 }
@@ -539,17 +649,20 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
   };
 
   try {
-    await progress(20, "Preparing premium render manifest.", "remotion_prepare");
+    await progress(10, "Running premium render preflight.", "preflight_started");
+    validateBrowserExecutable();
+    await validateWritableTempDir(keyedWorkDir);
     // 1. Fetch the full render job manifest directly from the database.
     const jobRecord = await loadRenderJobDirect(renderJobId, workspaceId, projectId);
     const renderProps = jobRecord.manifest?.render_props;
     if (!renderProps) {
-      throw new Error("render job manifest is missing render_props");
+      throw new StructuredRenderError("invalid_remotion_props", "Render job manifest is missing render props.");
     }
 
     // 2. Resolve all media references to signed / real URLs
-    await progress(30, "Resolving render media assets.", "remotion_assets");
+    await progress(25, "Resolving render media assets.", "render_progress");
     const resolvedProps = await assembleRenderProps(renderProps);
+    validateResolvedProps(resolvedProps);
     const backgroundRemoval = resolvedProps.effectsConfig?.background_removal;
     const segmentationMatte = renderProps.segmentationMatte;
     if (backgroundRemoval?.enabled && segmentationMatte?.src) {
@@ -574,15 +687,20 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
     await writeFile(propsPath, JSON.stringify(resolvedProps, null, 2));
 
     // 4. Spawn render-cli.ts
-    await progress(45, "Rendering premium video composition.", "remotion_rendering");
-    await spawnRenderer(propsPath, outputPath);
+    await progress(45, "Rendering premium video composition.", "rendering_started");
+    await spawnRenderer(propsPath, outputPath, {
+      renderJobId,
+      workspaceId,
+      projectId,
+      timeoutMs: renderTimeoutMs(),
+    });
 
     // 5. Read render metadata
     const meta = await readRenderMeta(outputPath);
     const benchmarkMs = Date.now() - started;
 
     // 6. Upload rendered MP4 to Supabase Storage
-    await progress(88, "Uploading premium export.", "remotion_uploading");
+    await progress(88, "Uploading premium export.", "upload_started");
     await uploadToStorage(outputPath, exportBucket, exportStoragePath);
 
     // 7. Persist completion directly; the API is not part of the media path.

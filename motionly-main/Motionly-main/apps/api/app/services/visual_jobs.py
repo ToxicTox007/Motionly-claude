@@ -1,9 +1,12 @@
+import logging
 from dataclasses import dataclass
 
 from app.repositories.uploads import UploadRecord
 from app.repositories.visual import InMemoryVisualRepository, VideoManifestRecord
 from app.schemas.visual import VisualManifestStatus
 from app.services.queue import EnqueuedJob, VisualQueue
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,10 @@ def queue_visual_analysis_for_upload(
         workspace_id=upload.workspace_id,
     )
     if existing and existing.status == VisualManifestStatus.READY and not force:
+        logger.info(
+            "idempotent_output_reused",
+            extra={"job_kind": "visual_analysis", "status": existing.status.value},
+        )
         return VisualScheduleResult(manifest=existing, job=None, cached=True)
     if (
         existing
@@ -48,12 +55,11 @@ def queue_visual_analysis_for_upload(
         }
         and not force
     ):
-        job = visual_queue.enqueue_visual_analysis(
-            project_id=upload.project_id,
-            workspace_id=upload.workspace_id,
-            video_id=upload.id,
+        logger.info(
+            "duplicate_job_deduped",
+            extra={"job_kind": "visual_analysis", "status": existing.status.value},
         )
-        return VisualScheduleResult(manifest=existing, job=job)
+        return VisualScheduleResult(manifest=existing, job=None, cached=True)
 
     manifest = repository.create_manifest(
         workspace_id=upload.workspace_id,

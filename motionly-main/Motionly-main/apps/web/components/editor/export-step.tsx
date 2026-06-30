@@ -821,16 +821,16 @@ export function ExportStep({
       className="space-y-4"
       aria-labelledby="export-heading"
     >
-      <div className="space-y-2">
-        <h2 id="export-heading" className="text-xl font-black tracking-tight">
+      <div className="space-y-2 border-b-2 border-foreground pb-4">
+        <h2 id="export-heading" className="text-2xl font-black uppercase tracking-tight">
           Export
         </h2>
-        <p className="text-sm text-muted-foreground leading-relaxed">
+        <p className="text-xs text-muted-foreground leading-relaxed font-mono">
           Ready to post? Choose the export frame, then render your MP4.
         </p>
       </div>
 
-      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+      <div className="card rounded-md border-2 border-foreground p-4 sm:p-5 space-y-4 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] bg-surface">
         <ExportStepSection step="1" title="Format" status="completed">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -858,8 +858,8 @@ export function ExportStep({
               />
             </div>
           </div>
-          <div className="mt-3 border-t border-border pt-3">
-            <Label className="mb-2">Bulk Targets</Label>
+          <div className="mt-4 border-t-2 border-foreground/20 pt-4">
+            <Label className="mb-2.5">Bulk Targets</Label>
             <div className="grid gap-2 sm:grid-cols-2">
               {platforms
                 .filter((item) => item.value !== "custom")
@@ -868,7 +868,11 @@ export function ExportStep({
                   return (
                     <label
                       key={item.value}
-                      className="flex min-h-11 cursor-pointer items-center justify-between gap-2 border border-border bg-muted/25 px-3 text-xs font-bold text-muted-foreground"
+                      className={`flex min-h-[44px] cursor-pointer items-center justify-between gap-2 rounded-md border-2 p-3 text-xs font-bold transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
+                        checked
+                          ? "bg-primary border-foreground text-primary-foreground"
+                          : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
+                      }`}
                     >
                       {item.label}
                       <input
@@ -885,7 +889,7 @@ export function ExportStep({
                                 ),
                           );
                         }}
-                        className="size-5 accent-primary"
+                        className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary"
                       />
                     </label>
                   );
@@ -900,33 +904,58 @@ export function ExportStep({
           status={fitMode === "custom" ? "active" : "completed"}
         >
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label className="mb-0">Output Frame</Label>
-              <Select
-                id="output-frame"
-                label="Output Frame"
-                value={outputAspect}
-                onChange={(val) => setOutputAspect(val as OutputAspect)}
-                options={outputAspects}
-              />
-              <p className="text-[10px] font-medium text-muted-foreground">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label className="mb-1">Output Frame</Label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {outputAspects.map((opt) => {
+                  const active = outputAspect === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setOutputAspect(opt.value)}
+                      className={`flex items-center justify-center min-h-[40px] px-3 py-1.5 rounded-md border-2 text-xs font-bold transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
+                        active
+                          ? "bg-primary border-foreground text-primary-foreground"
+                          : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] font-mono text-muted-foreground mt-1">
                 Source: {sourceAspectLabel}
               </p>
             </div>
-            <div className="space-y-1.5">
-              <Label className="mb-0">Crop Mode</Label>
-              <Select
-                id="crop-mode"
-                label="Crop Mode"
-                value={fitMode}
-                onChange={(val) => setFitMode(val as ExportFitMode)}
-                options={fitModes}
-              />
+
+            <div className="space-y-1.5 sm:col-span-2 mt-2">
+              <Label className="mb-1">Crop Mode</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {fitModes.map((opt) => {
+                  const active = fitMode === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setFitMode(opt.value)}
+                      className={`flex items-center justify-center min-h-[40px] px-3 py-1.5 rounded-md border-2 text-xs font-bold transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
+                        active
+                          ? "bg-primary border-foreground text-primary-foreground"
+                          : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
           {fitMode === "custom" ? (
-            <div className="mt-3 space-y-3 border-t border-border pt-3">
+            <div className="mt-3 space-y-3 border-t-2 border-foreground/20 pt-3">
               <Slider label="Crop X" value={cropX} onChange={setCropX} />
               <Slider label="Crop Y" value={cropY} onChange={setCropY} />
               <Slider
@@ -936,11 +965,10 @@ export function ExportStep({
                 max={300}
                 onChange={setCropZoom}
               />
-              <Button
+              <button
                 type="button"
-                variant="secondary"
                 aria-label="Reset crop to centered original size"
-                className="min-h-11 w-full gap-2 text-xs"
+                className="w-full inline-flex items-center justify-center gap-2 h-11 rounded-md border-2 border-foreground bg-surface text-foreground font-bold hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] text-xs uppercase"
                 onClick={() => {
                   setCropX(50);
                   setCropY(50);
@@ -949,26 +977,38 @@ export function ExportStep({
               >
                 <RotateCcw className="size-3.5" />
                 Reset Crop
-              </Button>
+              </button>
             </div>
           ) : null}
         </ExportStepSection>
 
         <ExportStepSection step="3" title="Quality" status="completed">
           <div className="space-y-1.5">
-            <Label className="mb-0">Video Quality</Label>
-            <Select
-              id="video-quality"
-              label="Video Quality"
-              value={resolution}
-              onChange={(val) => setResolution(val as ExportResolution)}
-              options={availableResolutions}
-            />
+            <Label className="mb-1">Video Quality</Label>
+            <div className="flex flex-wrap gap-2">
+              {availableResolutions.map((opt) => {
+                const active = resolution === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setResolution(opt.value)}
+                    className={`flex items-center justify-center px-4 py-1.5 rounded-full border-2 text-xs font-black font-mono transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
+                      active
+                        ? "bg-primary border-foreground text-primary-foreground"
+                        : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </ExportStepSection>
       </div>
 
-      <Button
+      <button
         onClick={primaryRenderAction.onClick}
         disabled={primaryRenderAction.disabled}
         aria-busy={loading || Boolean(isRendering)}
@@ -979,20 +1019,19 @@ export function ExportStep({
               ? "export-missing-captions"
               : undefined
         }
-        className="h-14 w-full bg-primary text-primary-foreground"
+        className="w-full inline-flex items-center justify-center gap-2 h-14 rounded-md bg-primary text-primary-foreground border-2 border-foreground hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none font-black uppercase text-sm"
       >
         {loading || isRendering ? (
-          <Loader2 className="mr-2 size-5 animate-spin" />
+          <Loader2 className="size-5 animate-spin" />
         ) : primaryRenderAction.icon === "retry" ? (
-          <RotateCcw className="mr-2 size-5" />
+          <RotateCcw className="size-5" />
         ) : (
-          <Video className="mr-2 size-5" />
+          <Video className="size-5" />
         )}
-        <span className="text-base font-bold">{primaryRenderAction.label}</span>
-      </Button>
-      <Button
+        <span>{primaryRenderAction.label}</span>
+      </button>
+      <button
         type="button"
-        variant="secondary"
         onClick={startBulkRender}
         disabled={
           loading ||
@@ -1001,19 +1040,19 @@ export function ExportStep({
           bulkPlatforms.length === 0
         }
         aria-busy={loading || Boolean(isRendering)}
-        className="h-12 w-full"
+        className="w-full inline-flex items-center justify-center gap-2 h-12 mt-2 rounded-md bg-surface text-foreground border-2 border-foreground hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none font-black uppercase text-xs"
       >
         {loading || isRendering ? (
-          <Loader2 className="mr-2 size-4 animate-spin" />
+          <Loader2 className="size-4 animate-spin" />
         ) : (
-          <Download className="mr-2 size-4" />
+          <Download className="size-4" />
         )}
         Queue Selected Formats
-      </Button>
+      </button>
 
       {latestJob ? (
         <div
-          className="space-y-3 border border-border bg-muted/40 p-3"
+          className="space-y-3 border-2 border-foreground bg-surface rounded-md p-4 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff]"
           aria-live="polite"
         >
           <div className="flex items-center justify-between gap-3">
@@ -1023,21 +1062,32 @@ export function ExportStep({
                 loading={loading || Boolean(isRendering)}
               />
               <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground font-mono">
                   Render job
                 </p>
-                <p className="truncate text-sm font-bold">
+                <p className="truncate text-sm font-black">
                   {uiStateLabel(renderUiState)}
                 </p>
+                {latestJob.specs ? (
+                  <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 font-mono text-xs text-muted-foreground">
+                    <span>
+                      {latestJob.specs.width}x{latestJob.specs.height}
+                    </span>
+                    <span>•</span>
+                    <span className="uppercase">{latestJob.specs.format}</span>
+                    <span>•</span>
+                    <span>{latestJob.specs.fps}fps</span>
+                  </div>
+                ) : null}
               </div>
             </div>
             {renderUiState === "queued" ||
             renderUiState === "rendering" ||
             renderUiState === "completed" ? (
-              <span className="text-right text-sm font-black">
+              <span className="text-right text-sm font-black text-primary font-mono">
                 {progress}%
                 {etaLabel ? (
-                  <span className="block text-[10px] font-bold text-muted-foreground">
+                  <span className="block text-[10px] font-bold text-muted-foreground font-mono">
                     ETA {etaLabel}
                   </span>
                 ) : null}
@@ -1048,7 +1098,7 @@ export function ExportStep({
           renderUiState === "rendering" ||
           renderUiState === "completed" ? (
             <div
-              className="h-3 overflow-hidden border border-border bg-background"
+              className="progress-bar mt-2 h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
               role="progressbar"
               aria-label={`Render progress: ${uiStateLabel(renderUiState)}`}
               aria-valuemin={0}
@@ -1057,7 +1107,7 @@ export function ExportStep({
               aria-valuetext={`${progress}% ${uiStateLabel(renderUiState)}`}
             >
               <div
-                className="h-full bg-primary transition-all"
+                className="bg-primary h-full transition-all duration-[150ms]"
                 style={{ width: `${progress}%` }}
               />
             </div>
@@ -1065,15 +1115,15 @@ export function ExportStep({
           {renderUiState === "failed" && latestJob.error_message ? (
             <div
               role="alert"
-              className="flex flex-col gap-1.5 border border-danger/45 bg-danger/5 p-3 text-xs font-bold text-danger"
+              className="flex flex-col gap-2 rounded-md border-2 border-foreground bg-danger/10 p-4 text-xs font-bold text-danger"
             >
               <div className="flex gap-2 items-center">
-                <AlertTriangle className="size-4 shrink-0" />
-                <span>Render Failed: {latestJob.error_message}</span>
+                <AlertTriangle className="size-4 shrink-0" strokeWidth={2} />
+                <span className="font-black">Render Failed: {latestJob.error_message}</span>
               </div>
-              <div className="pl-6 font-medium text-muted-foreground leading-relaxed">
+              <div className="pl-6 font-semibold text-muted-foreground leading-relaxed">
                 What you can do next:
-                <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                <ul className="list-disc pl-4 mt-1 space-y-0.5 font-mono">
                   <li>Verify that no timeline clips are missing or empty.</li>
                   <li>Reduce caption formatting or B-roll complexity.</li>
                   <li>
@@ -1086,79 +1136,93 @@ export function ExportStep({
           ) : null}
           <div className="flex gap-2">
             {isRendering ? (
-              <Button
+              <button
                 type="button"
-                variant="secondary"
                 aria-label="Cancel render"
-                className="min-h-11 gap-2 text-xs"
+                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-black uppercase rounded-md border-2 border-foreground bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50"
                 onClick={() => cancelRender(latestJob.id)}
                 disabled={loading}
               >
-                <Square className="size-3.5" />
+                <Square className="size-3.5" strokeWidth={2} />
                 Cancel
-              </Button>
+              </button>
             ) : null}
             {retryableJob ? (
-              <Button
+              <button
                 type="button"
-                variant="secondary"
                 aria-label="Retry failed render"
-                className="min-h-11 gap-2 text-xs"
+                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-black uppercase rounded-md border-2 border-foreground bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50"
                 onClick={() => retryRender(retryableJob.id)}
                 disabled={loading}
               >
-                <RotateCcw className="size-3.5" />
+                <RotateCcw className="size-3.5" strokeWidth={2} />
                 Retry
-              </Button>
+              </button>
             ) : null}
             {canceledJob ? (
-              <Button
+              <button
                 type="button"
-                variant="secondary"
                 aria-label="Start render again"
-                className="min-h-11 gap-2 text-xs"
+                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-black uppercase rounded-md border-2 border-foreground bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50"
                 onClick={startRender}
                 disabled={loading || !captionTrackId}
               >
-                <Video className="size-3.5" />
+                <Video className="size-3.5" strokeWidth={2} />
                 Start again
-              </Button>
+              </button>
             ) : null}
           </div>
         </div>
       ) : null}
 
       {latestExport && (
-        <div className="space-y-4 border-t border-border pt-6">
+        <div className="space-y-4 border-t-2 border-foreground pt-6">
           <Label>Latest Export</Label>
-          <div className="flex items-center justify-between border border-border bg-muted/50 p-4 shadow-soft">
+          <div className="flex items-center justify-between border-2 border-foreground bg-surface p-4 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff]">
             <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center border border-emerald-200 bg-emerald-50 text-emerald-600">
-                <CheckCircle2 className="size-5" />
+              <div className="flex size-10 items-center justify-center rounded-md border-2 border-foreground bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="size-5" strokeWidth={2} />
               </div>
               <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground font-mono">
                   v{latestExport.version}
                 </p>
-                <p className="text-sm font-bold truncate max-w-[120px]">
+                <p className="text-sm font-black text-foreground">
                   Ready to post
                 </p>
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 font-mono text-xs text-muted-foreground">
+                  <span>{latestExport.width}x{latestExport.height}</span>
+                  <span>•</span>
+                  <span>{latestExport.format.toUpperCase()}</span>
+                  {latestExport.duration_ms ? (
+                    <>
+                      <span>•</span>
+                      <span>{formatDuration(latestExport.duration_ms)}</span>
+                    </>
+                  ) : null}
+                  {latestExport.file_size_bytes ? (
+                    <>
+                      <span>•</span>
+                      <span>{(latestExport.file_size_bytes / (1024 * 1024)).toFixed(1)}MB</span>
+                    </>
+                  ) : null}
+                </div>
               </div>
             </div>
-            <Button
-              variant="secondary"
+            <button
+              type="button"
               aria-label="Download latest export"
-              className="min-h-11 gap-2 px-4 text-xs font-bold"
+              className="inline-flex min-h-11 items-center justify-center gap-2 px-4 text-xs font-black uppercase border-2 border-foreground bg-surface text-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none"
               onClick={() => downloadExport(latestExport.id)}
               disabled={loading}
             >
-              <Download className="size-3.5" />
+              <Download className="size-3.5" strokeWidth={2} />
               Download
-            </Button>
+            </button>
           </div>
         </div>
       )}
-      <section className="space-y-3 border-t border-border pt-5">
+      <section className="space-y-3 border-t-2 border-foreground pt-5">
         <div>
           <Label>Direct publish</Label>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -1173,22 +1237,22 @@ export function ExportStep({
             onChange={(event) =>
               setConnectPlatform(event.target.value as PublishPlatform)
             }
-            className="min-h-11 border border-border bg-background px-3 text-xs font-bold"
+            className="flex min-h-11 w-full appearance-none rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 pr-10 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none text-foreground"
           >
-            <option value="tiktok">TikTok</option>
-            <option value="instagram">Instagram</option>
-            <option value="youtube">YouTube</option>
+            <option value="tiktok" className="bg-surface text-foreground">TikTok</option>
+            <option value="instagram" className="bg-surface text-foreground">Instagram</option>
+            <option value="youtube" className="bg-surface text-foreground">YouTube</option>
           </select>
         </div>
-        <Button
+        <button
           type="button"
-          className="min-h-11 w-full"
           disabled={loading}
           onClick={connectPublishingOAuth}
+          className="min-h-11 w-full inline-flex items-center justify-center gap-2 rounded-md bg-primary text-primary-foreground border-2 border-foreground hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] focus:outline-none text-xs font-black uppercase"
         >
           Connect {socialLabel(connectPlatform)} with OAuth
-        </Button>
-        <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+        </button>
+        <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground font-mono">
           Developer fallback
         </p>
         <div className="grid gap-2 sm:grid-cols-2">
@@ -1197,14 +1261,14 @@ export function ExportStep({
             placeholder="Account name"
             value={connectAccountName}
             onChange={(event) => setConnectAccountName(event.target.value)}
-            className="min-h-11 border border-border bg-background px-3 text-xs"
+            className="flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] focus:outline-none text-foreground"
           />
           <input
             aria-label="Platform account ID"
             placeholder="Platform account ID"
             value={connectAccountId}
             onChange={(event) => setConnectAccountId(event.target.value)}
-            className="min-h-11 border border-border bg-background px-3 text-xs"
+            className="flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] focus:outline-none text-foreground"
           />
         </div>
         <input
@@ -1214,12 +1278,11 @@ export function ExportStep({
           placeholder="Platform access token (stored server-side)"
           value={connectToken}
           onChange={(event) => setConnectToken(event.target.value)}
-          className="min-h-11 w-full border border-border bg-background px-3 text-xs"
+          className="flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] focus:outline-none text-foreground"
         />
-        <Button
+        <button
           type="button"
-          variant="secondary"
-          className="min-h-11 w-full"
+          className="min-h-11 w-full inline-flex items-center justify-center gap-2 rounded-md bg-surface text-foreground border-2 border-foreground hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none font-black uppercase text-xs"
           disabled={
             loading ||
             connectToken.length < 8 ||
@@ -1229,16 +1292,16 @@ export function ExportStep({
           onClick={connectPublishingAccount}
         >
           Connect account
-        </Button>
+        </button>
         {connections.length > 0 ? (
-          <div className="space-y-2 border-t border-border pt-3">
+          <div className="space-y-2 border-t-2 border-foreground/20 pt-3">
             <textarea
               aria-label="Post caption"
               placeholder="Post caption"
               value={publishCaption}
               onChange={(event) => setPublishCaption(event.target.value)}
               maxLength={2200}
-              className="min-h-20 w-full resize-y border border-border bg-background p-3 text-xs"
+              className="flex min-h-20 w-full resize-y rounded-md border-2 border-foreground bg-surface-elevated p-3 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none text-foreground"
             />
             {connections.map((connection) => {
               const job = publishJobs.find(
@@ -1247,17 +1310,23 @@ export function ExportStep({
               return (
                 <div
                   key={connection.id}
-                  className="flex items-center justify-between gap-2 border border-border bg-muted/30 p-3"
+                  className="flex items-center justify-between gap-2 border-2 border-foreground bg-surface p-3 rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-black">
+                    <p className="truncate text-xs font-black text-foreground">
                       {socialLabel(connection.platform)} ·{" "}
                       {connection.account_name}
                     </p>
-                    <p className="text-[10px] font-bold text-muted-foreground">
-                      {job ? publishStatusLabel(job.status) : "Ready"}
-                      {job?.error_message ? ` · ${job.error_message}` : ""}
-                    </p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="rounded px-2 py-0.5 font-bold font-mono text-[9px] uppercase border-2 border-foreground bg-primary text-primary-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+                        {job ? publishStatusLabel(job.status) : "Connected"}
+                      </span>
+                      {job?.error_message ? (
+                        <span className="text-[10px] font-mono text-danger truncate max-w-[150px]">
+                          {job.error_message}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     {job?.external_url ? (
@@ -1265,15 +1334,14 @@ export function ExportStep({
                         href={job.external_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex min-h-11 items-center border border-border px-3 text-xs font-bold"
+                        className="inline-flex min-h-10 items-center justify-center border-2 border-foreground px-3 text-xs font-bold rounded-md bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms]"
                       >
                         View
                       </a>
                     ) : null}
-                    <Button
+                    <button
                       type="button"
-                      variant="secondary"
-                      className="min-h-11 gap-1 px-3 text-xs"
+                      className="inline-flex min-h-10 items-center justify-center gap-1 px-3 text-xs font-bold border-2 border-foreground rounded-md bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none"
                       disabled={
                         loading ||
                         !latestExport ||
@@ -1282,19 +1350,18 @@ export function ExportStep({
                       }
                       onClick={() => publishExport(connection)}
                     >
-                      <Send className="size-3.5" />
+                      <Send className="size-3.5" strokeWidth={2} />
                       Publish
-                    </Button>
-                    <Button
+                    </button>
+                    <button
                       type="button"
-                      variant="secondary"
                       aria-label={`Disconnect ${connection.account_name}`}
-                      className="min-h-11 px-3"
+                      className="inline-flex min-h-10 items-center justify-center px-3 border-2 border-foreground rounded-md bg-danger text-danger-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none"
                       disabled={loading}
                       onClick={() => disconnectPublishingAccount(connection.id)}
                     >
-                      <Trash2 className="size-3.5" />
-                    </Button>
+                      <Trash2 className="size-3.5" strokeWidth={2} />
+                    </button>
                   </div>
                 </div>
               );
@@ -1306,10 +1373,13 @@ export function ExportStep({
         <p
           id="export-missing-captions"
           role="alert"
-          className="border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-700"
+          className="rounded-md border-2 border-foreground bg-amber-500/10 p-3.5 text-xs font-bold text-amber-700 dark:text-amber-300 flex items-start gap-2.5 mt-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]"
         >
-          Generate captions before export. Open the Text tab and generate or
-          save captions, then start render again.
+          <AlertTriangle className="size-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" strokeWidth={2} />
+          <span>
+            Generate captions before export. Open the Text tab and generate or
+            save captions, then start render again.
+          </span>
         </p>
       ) : null}
       {message ? (
@@ -1322,7 +1392,7 @@ export function ExportStep({
               : "status"
           }
           aria-live="polite"
-          className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground"
+          className="rounded-md border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-muted-foreground mt-4 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] font-mono"
         >
           {message}
         </p>
@@ -1343,23 +1413,29 @@ function ExportStepSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border border-border bg-surface/55">
-      <div className="flex min-h-11 items-center gap-3 border-b border-border px-3">
-        <span className="flex size-6 shrink-0 items-center justify-center border border-border bg-background text-xs font-black">
+    <section className="border-2 border-foreground bg-surface rounded-md overflow-hidden shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+      <div className="flex min-h-[44px] items-center gap-3 border-b-2 border-foreground px-3.5 bg-secondary/10">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold border-2 border-foreground select-none font-mono">
           {step}
         </span>
-        <h3 className="flex-1 text-sm font-black">{title}</h3>
-        <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-          {status === "completed" ? (
-            <CheckCircle2 className="size-3.5 text-primary" />
-          ) : null}
-          {status === "active" ? (
-            <Video className="size-3.5 text-primary" />
-          ) : null}
-          {status}
-        </span>
+        <h3 className="flex-1 text-sm font-black uppercase tracking-tight text-foreground">{title}</h3>
+        {status === "completed" && (
+          <span className="rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground bg-green-500 text-white shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+            Completed
+          </span>
+        )}
+        {status === "active" && (
+          <span className="rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground bg-primary text-primary-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+            Active
+          </span>
+        )}
+        {status === "idle" && (
+          <span className="rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground bg-muted text-muted-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+            Idle
+          </span>
+        )}
       </div>
-      <div className="p-3">{children}</div>
+      <div className="p-3 bg-surface">{children}</div>
     </section>
   );
 }

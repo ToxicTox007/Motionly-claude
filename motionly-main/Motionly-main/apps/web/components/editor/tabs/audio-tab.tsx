@@ -184,17 +184,17 @@ export function AudioTab({
   return (
     <div className="space-y-3 sm:space-y-4">
       <h2 className="sr-only">Audio</h2>
-      <div className="pixel-panel space-y-3 p-3 sm:pixel-corners sm:p-4">
+      <div className="card rounded-lg border-2 border-foreground p-4 sm:p-5 space-y-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] bg-surface">
         <PanelSection title="Basic" defaultOpen>
-          <div className="flex items-center gap-3 border border-primary/20 bg-primary/5 p-3">
-            <div className="flex size-9 shrink-0 items-center justify-center border border-primary/20 bg-primary/10 text-primary">
-              <Music className="size-5" />
+          <div className="flex items-center gap-3.5 border-2 border-foreground bg-primary/10 rounded p-3.5 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded border-2 border-foreground bg-primary/20 text-foreground">
+              <Music className="size-5 text-foreground" strokeWidth={2} />
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-bold text-primary uppercase tracking-widest">
+              <p className="text-[10px] font-black text-primary uppercase tracking-widest font-mono">
                 Selected Track
               </p>
-              <p className="truncate text-sm font-bold">
+              <p className="truncate text-sm font-bold mt-0.5">
                 {includeMusic
                   ? selectedTrack?.title || "No track selected"
                   : "No music"}
@@ -202,7 +202,7 @@ export function AudioTab({
             </div>
           </div>
 
-          <label className="mt-3 flex min-h-11 cursor-pointer items-center justify-between gap-3 border border-border bg-muted/30 px-3 text-sm font-bold">
+          <label className="mt-3 flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded border-2 border-foreground bg-muted/20 px-3.5 text-xs font-bold select-none">
             Include Music
             <input
               type="checkbox"
@@ -215,7 +215,7 @@ export function AudioTab({
                   trackId: selectedTrackId,
                 });
               }}
-              className="size-6 accent-primary"
+              className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary cursor-pointer"
             />
           </label>
         </PanelSection>
@@ -237,7 +237,7 @@ export function AudioTab({
 
         <PanelSection title="Mood" defaultOpen>
           <Label>Audio Mood</Label>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="flex gap-2 overflow-x-auto pb-1.5 scrollbar-none pt-1">
             {moods.map((label) => {
               const value = label.toLowerCase();
               const selected = mood.toLowerCase().includes(value);
@@ -257,17 +257,16 @@ export function AudioTab({
                   disabled={loading}
                   aria-pressed={selected}
                   className={cn(
-                    "inline-flex min-h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50",
+                    "inline-flex min-h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1 rounded text-xs font-bold font-mono transition-all duration-[100ms] border-2 border-foreground disabled:cursor-not-allowed disabled:opacity-50",
                     selected
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:border-primary/40 hover:bg-muted",
+                      ? "bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+                      : "bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
                   )}
                 >
                   {selected ? (
-                    <Check className="size-3.5" aria-hidden="true" />
+                    <Check className="size-3.5" aria-hidden="true" strokeWidth={2} />
                   ) : null}
                   {label}
-                  {selected ? <span className="sr-only"> selected</span> : null}
                 </button>
               );
             })}
@@ -278,16 +277,16 @@ export function AudioTab({
           <div className="mb-3 flex items-center justify-between">
             <Label className="mb-0">Track Alternatives</Label>
             {tracksLoading ? (
-              <Loader2 className="size-3.5 animate-spin text-primary" />
+              <Loader2 className="size-3.5 animate-spin text-primary" strokeWidth={2} />
             ) : null}
           </div>
           <div className="space-y-2">
             {!includeMusic ? (
-              <p className="border border-dashed border-border p-2 text-xs text-muted-foreground">
+              <p className="border-2 border-dashed border-foreground rounded p-3 text-xs text-muted-foreground text-center font-mono">
                 Turn music on to choose a track.
               </p>
             ) : tracks.length === 0 && !tracksLoading ? (
-              <p className="border border-dashed border-border p-2 text-xs text-muted-foreground">
+              <p className="border-2 border-dashed border-foreground rounded p-3 text-xs text-muted-foreground text-center font-mono">
                 No alternatives available for this mood.
               </p>
             ) : (
@@ -301,24 +300,24 @@ export function AudioTab({
                   disabled={loading || selectedTrackId === track.id}
                   aria-pressed={selectedTrackId === track.id}
                   className={cn(
-                    "flex min-h-11 w-full items-center justify-between gap-3 border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-70",
+                    "flex min-h-11 w-full items-center justify-between gap-3 border-2 border-foreground p-3.5 text-left transition-all duration-[100ms] rounded disabled:cursor-not-allowed disabled:opacity-70",
                     selectedTrackId === track.id
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:border-primary/40 hover:bg-muted",
+                      ? "bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+                      : "bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
                   )}
                 >
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-bold">
                       {track.title}
                     </span>
-                    <span className="block text-[10px] text-muted-foreground">
+                    <span className={cn("block text-[10px] mt-0.5 font-mono", selectedTrackId === track.id ? "text-primary-foreground/80" : "text-muted-foreground")}>
                       {track.mood_tags.join(", ") || track.license}
                     </span>
                   </span>
-                  <span className="text-[10px] font-bold uppercase tracking-widest">
+                  <span className="text-[10px] font-bold uppercase tracking-widest font-mono">
                     {selectedTrackId === track.id ? (
                       <span className="inline-flex items-center gap-1">
-                        <Check className="size-3" /> Selected
+                        <Check className="size-3" strokeWidth={2} /> Selected
                       </span>
                     ) : (
                       "Select"
@@ -331,19 +330,19 @@ export function AudioTab({
         </PanelSection>
       </div>
 
-      <Button
+      <button
         onClick={() => updateAudio()}
         disabled={loading}
         aria-busy={loading}
-        className="h-12 w-full"
+        className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
       >
         {loading ? (
-          <Loader2 className="mr-2 size-4 animate-spin" />
+          <Loader2 className="size-4 animate-spin text-primary-foreground" strokeWidth={2} />
         ) : (
-          <Volume2 className="mr-2 size-4" />
+          <Volume2 className="size-4" strokeWidth={2} />
         )}
-        {loading ? "Saving, please wait" : "Save Audio Mix"}
-      </Button>
+        <span>{loading ? "Saving, please wait" : "Save Audio Mix"}</span>
+      </button>
       {message ? (
         <p
           role={
@@ -353,7 +352,7 @@ export function AudioTab({
               : "status"
           }
           aria-live="polite"
-          className="border border-border bg-muted p-3 text-xs font-bold text-muted-foreground"
+          className="rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
         >
           {message}
         </p>

@@ -14,13 +14,11 @@ export function Button({
   return (
     <button
       className={cn(
-        "pixel-button inline-flex min-h-10 items-center justify-center px-4 text-sm font-semibold transition focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0",
-        variant === "primary" &&
-          "bg-primary text-primary-foreground hover:brightness-105",
-        variant === "secondary" &&
-          "bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
+        "rounded-md min-h-[44px] px-4 text-sm font-bold inline-flex items-center justify-center gap-2 transition-all duration-[100ms] focus:outline-none border-2 border-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_0px_#000] dark:hover:shadow-[4px_4px_0px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none",
+        variant === "primary" && "bg-primary text-primary-foreground",
+        variant === "secondary" && "bg-surface text-foreground",
         variant === "ghost" &&
-          "border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted hover:text-foreground",
+          "border-transparent bg-transparent text-muted-foreground hover:border-foreground hover:bg-surface-elevated hover:text-foreground",
         className,
       )}
       {...props}
@@ -30,8 +28,8 @@ export function Button({
 
 type ButtonLinkProps = LinkProps &
   Omit<AnchorHTMLAttributes<HTMLAnchorElement>, keyof LinkProps> & {
-  variant?: "primary" | "secondary" | "ghost";
-};
+    variant?: "primary" | "secondary" | "ghost";
+  };
 
 export function ButtonLink({
   className,
@@ -41,13 +39,11 @@ export function ButtonLink({
   return (
     <Link
       className={cn(
-        "pixel-button inline-flex min-h-10 items-center justify-center px-4 text-sm font-semibold transition focus:outline-none aria-disabled:cursor-not-allowed aria-disabled:opacity-60",
-        variant === "primary" &&
-          "bg-primary text-primary-foreground hover:brightness-105",
-        variant === "secondary" &&
-          "bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
+        "rounded-md min-h-[44px] px-4 text-sm font-bold inline-flex items-center justify-center gap-2 transition-all duration-[100ms] focus:outline-none border-2 border-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_0px_#000] dark:hover:shadow-[4px_4px_0px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:transform-none aria-disabled:shadow-none",
+        variant === "primary" && "bg-primary text-primary-foreground",
+        variant === "secondary" && "bg-surface text-foreground",
         variant === "ghost" &&
-          "border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted hover:text-foreground",
+          "border-transparent bg-transparent text-muted-foreground hover:border-foreground hover:bg-surface-elevated hover:text-foreground",
         className,
       )}
       {...props}

@@ -212,6 +212,12 @@ jobs:
           done
       - name: Verify worker startup contract
         run: docker run --rm motionly-worker:test node src/worker.mjs --check
+      - name: Verify Chromium smoke render
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-worker:test
+          sh -lc "cd /app/apps/renderer && pnpm render:smoke"
       - name: Verify web startup health
         run: |
           docker run -d --name motionly-web-health -p 13000:3000 motionly-web:test

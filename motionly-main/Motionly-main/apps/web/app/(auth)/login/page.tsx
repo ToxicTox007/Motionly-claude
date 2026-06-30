@@ -1,27 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import React, { useState, use, Suspense } from "react";
+import React, { useState, Suspense } from "react";
 import { useFormStatus } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/button";
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { env } from "@/lib/env";
 import { login, loginWithGoogle } from "../actions";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" className="mt-6 w-full" disabled={pending}>
+    <button
+      type="submit"
+      disabled={pending}
+      className="mt-6 w-full inline-flex items-center justify-center gap-2 h-11 rounded-md bg-primary text-primary-foreground text-sm font-bold border-2 border-foreground transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none"
+    >
       {pending ? (
         <>
-          <Loader2 className="mr-2 size-4 animate-spin" />
-          Logging in...
+          <Loader2 className="size-4 animate-spin" />
+          Logging in…
         </>
       ) : (
         "Log in"
       )}
-    </Button>
+    </button>
   );
 }
 
@@ -33,59 +37,25 @@ function LoginFormContent() {
 
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
-
   const [password, setPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const validateEmail = (val: string) => {
-    if (!val) {
-      return "Email is required.";
-    }
+    if (!val) return "Email is required.";
     const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!regex.test(val)) {
-      return "Please enter a valid email address.";
-    }
+    if (!regex.test(val)) return "Please enter a valid email address.";
     return null;
   };
 
   const validatePassword = (val: string) => {
-    if (!val) {
-      return "Password is required.";
-    }
-    if (val.length < 8) {
-      return "Password must be at least 8 characters.";
-    }
+    if (!val) return "Password is required.";
+    if (val.length < 8) return "Password must be at least 8 characters.";
     return null;
-  };
-
-  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setEmail(val);
-    if (emailError) {
-      setEmailError(validateEmail(val));
-    }
-  };
-
-  const handleEmailBlur = () => {
-    setEmailError(validateEmail(email));
-  };
-
-  const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setPassword(val);
-    if (passwordError) {
-      setPasswordError(validatePassword(val));
-    }
-  };
-
-  const handlePasswordBlur = () => {
-    setPasswordError(validatePassword(password));
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     const isEmailValid = validateEmail(email);
     const isPasswordValid = validatePassword(password);
-
     if (isEmailValid || isPasswordValid) {
       e.preventDefault();
       setEmailError(isEmailValid);
@@ -93,47 +63,63 @@ function LoginFormContent() {
     }
   };
 
+  const errorMessage =
+    errorParam === "email_not_confirmed"
+      ? "Confirm your email address before logging in."
+      : errorParam === "rate_limited"
+        ? "Too many attempts. Please try again shortly."
+        : errorParam === "invalid_credentials"
+          ? "Invalid email or password. Please try again."
+          : errorParam
+            ? "We could not complete that sign-in. Try again."
+            : null;
+
   return (
     <form
       action={login}
       onSubmit={handleSubmit}
-      className="pixel-panel-strong pixel-corners glass-surface w-full max-w-md p-6 sm:p-7"
+      className="w-full max-w-[420px] animate-fade-up"
+      noValidate
     >
-      <Link href="/" className="mb-8 inline-flex items-center gap-2 text-sm font-black">
-        <span className="size-2 bg-primary shadow-[8px_0_0_hsl(var(--primary)/0.25)]" />
-        Motionly
+      {/* Logo */}
+      <Link href="/" className="mb-8 inline-flex items-center gap-2.5 group">
+        <div className="flex size-8 items-center justify-center rounded border-2 border-foreground bg-primary shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+          <span className="text-sm font-black text-primary-foreground">M</span>
+        </div>
+        <span className="font-black uppercase tracking-tight text-base text-foreground">Motionly</span>
       </Link>
-      <p className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Welcome back</p>
-      <h1 className="mt-2 text-3xl font-black">Log in to Motionly</h1>
 
-      {noticeParam === "check_email" ? (
-        <p className="mt-4 border border-border bg-muted px-3 py-2 text-sm text-muted-foreground font-bold">
-          ✉️ Check your email to confirm the account, then log in.
-        </p>
-      ) : null}
+      <p className="text-xs font-black uppercase tracking-wider text-muted-foreground font-mono">
+        Welcome back
+      </p>
+      <h1 className="mt-2 text-3xl font-black uppercase tracking-tight text-foreground">
+        Log in to Motionly
+      </h1>
 
-      {errorParam === "email_not_confirmed" ? (
-        <p className="mt-4 border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger font-bold">
-          ⚠️ Confirm your email address before logging in.
-        </p>
-      ) : errorParam === "rate_limited" ? (
-        <p className="mt-4 border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger font-bold">
-          ⚠️ Too many attempts. Please try again shortly.
-        </p>
-      ) : errorParam === "invalid_credentials" ? (
-        <p className="mt-4 border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger font-bold">
-          ⚠️ Invalid email or password. Please try again.
-        </p>
-      ) : errorParam ? (
-        <p className="mt-4 border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger font-bold">
-          ⚠️ We could not complete that sign-in. Try again.
-        </p>
-      ) : null}
+      {/* Notices & Errors */}
+      {noticeParam === "check_email" && (
+        <div className="mt-5 flex gap-3 rounded border-2 border-foreground bg-surface p-3.5 text-sm shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+          <span className="text-lg leading-none">✉️</span>
+          <span className="font-bold text-foreground">
+            Check your email to confirm the account, then log in.
+          </span>
+        </div>
+      )}
+      {errorMessage && (
+        <div className="mt-5 flex items-start gap-2.5 rounded border-2 border-foreground bg-danger p-3.5 text-sm text-danger-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" strokeWidth={2.5} aria-hidden="true" />
+          <span className="font-bold">{errorMessage}</span>
+        </div>
+      )}
 
       <input type="hidden" name="next" value={nextParam} />
 
-      <div className="mt-6">
-        <label className="block text-sm font-bold uppercase tracking-wider text-muted-foreground/80" htmlFor="email">
+      {/* Email */}
+      <div className="mt-6 space-y-1.5">
+        <label
+          htmlFor="email"
+          className="block text-xs font-black uppercase tracking-wider text-foreground"
+        >
           Email
         </label>
         <input
@@ -142,20 +128,28 @@ function LoginFormContent() {
           type="email"
           required
           value={email}
-          onChange={handleEmailChange}
-          onBlur={handleEmailBlur}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            if (emailError) setEmailError(validateEmail(e.target.value));
+          }}
+          onBlur={() => setEmailError(validateEmail(email))}
           aria-describedby={emailError ? "email-error" : undefined}
-          className="pixel-input mt-2 h-11 w-full px-3 focus:outline-none"
+          aria-invalid={Boolean(emailError)}
+          className={`flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-base font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground ${emailError ? "border-danger" : ""}`}
         />
-        {emailError ? (
-          <p id="email-error" className="text-xs font-bold text-danger mt-1">
+        {emailError && (
+          <p id="email-error" className="text-xs font-bold text-danger">
             {emailError}
           </p>
-        ) : null}
+        )}
       </div>
 
-      <div className="mt-4">
-        <label className="block text-sm font-bold uppercase tracking-wider text-muted-foreground/80" htmlFor="password">
+      {/* Password */}
+      <div className="mt-4 space-y-1.5">
+        <label
+          htmlFor="password"
+          className="block text-xs font-black uppercase tracking-wider text-foreground"
+        >
           Password
         </label>
         <input
@@ -164,29 +158,44 @@ function LoginFormContent() {
           type="password"
           required
           value={password}
-          onChange={handlePasswordChange}
-          onBlur={handlePasswordBlur}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            if (passwordError) setPasswordError(validatePassword(e.target.value));
+          }}
+          onBlur={() => setPasswordError(validatePassword(password))}
           aria-describedby={passwordError ? "password-error" : undefined}
-          className="pixel-input mt-2 h-11 w-full px-3 focus:outline-none"
+          aria-invalid={Boolean(passwordError)}
+          className={`flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-base font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground ${passwordError ? "border-danger" : ""}`}
         />
-        {passwordError ? (
-          <p id="password-error" className="text-xs font-bold text-danger mt-1">
+        {passwordError && (
+          <p id="password-error" className="text-xs font-bold text-danger">
             {passwordError}
           </p>
-        ) : null}
+        )}
       </div>
 
       <SubmitButton />
 
-      {env.googleOAuthEnabled ? (
-        <Button formAction={loginWithGoogle} formNoValidate variant="secondary" className="mt-3 w-full">
+      {env.googleOAuthEnabled && (
+        <button
+          formAction={loginWithGoogle}
+          formNoValidate
+          className="mt-3 w-full inline-flex items-center justify-center gap-2.5 h-11 rounded-md bg-surface border-2 border-foreground text-sm font-bold text-foreground transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none focus:outline-none"
+        >
+          {/* Google icon */}
+          <svg className="size-4" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
           Continue with Google
-        </Button>
-      ) : null}
+        </button>
+      )}
 
-      <p className="mt-4 text-center text-sm text-muted-foreground">
+      <p className="mt-5 text-center text-sm text-muted-foreground font-mono">
         Need an account?{" "}
-        <Link href="/signup" className="font-semibold text-foreground">
+        <Link href="/signup" className="font-bold text-foreground hover:underline">
           Sign up
         </Link>
       </p>
@@ -200,14 +209,49 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-screen place-items-center px-4 py-12 sm:px-6">
-      <Suspense fallback={
-        <div className="pixel-panel flex size-16 items-center justify-center">
-          <Loader2 className="size-8 animate-spin text-primary" />
+    <main className="min-h-screen grid lg:grid-cols-2">
+      {/* Left decorative panel */}
+      <div className="relative hidden lg:flex flex-col items-center justify-center overflow-hidden bg-surface border-r-4 border-foreground">
+        <div className="relative text-center px-12">
+          <div className="inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary mb-6 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+            <span className="text-2xl font-black text-primary-foreground">M</span>
+          </div>
+          <h2 className="text-3xl font-black uppercase tracking-tight text-foreground">Make polished reels.</h2>
+          <p className="mt-3 text-muted-foreground max-w-xs font-mono text-xs">
+            Upload a clip. AI edits it. You post.
+          </p>
+          {/* Fake editor preview */}
+          <div className="mt-10 w-[260px] rounded border-2 border-foreground bg-background overflow-hidden shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] mx-auto text-left">
+            <div className="flex h-8 items-center gap-1.5 border-b-2 border-foreground px-3 bg-surface-elevated">
+              {["bg-red-400", "bg-amber-400", "bg-green-400"].map((c, i) => (
+                <div key={i} className={`size-2 rounded border border-foreground ${c}`} />
+              ))}
+              <span className="ml-auto text-[9px] font-bold text-muted-foreground/60 font-mono">Motionly</span>
+            </div>
+            <div className="p-3 space-y-2">
+              {["AI Timeline", "Captions", "B-roll", "Music", "Export"].map((item, i) => (
+                <div key={item} className={`h-7 rounded border-2 border-foreground flex items-center px-2.5 ${i === 0 ? "bg-primary text-primary-foreground shadow-[1px_1px_0px_#000]" : "bg-surface"}`}>
+                  <span className={`text-[9px] font-bold ${i === 0 ? "text-primary-foreground" : "text-muted-foreground"}`}>{item}</span>
+                  {i === 0 && <div className="ml-auto size-1.5 rounded-full bg-foreground animate-pulse" />}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-      }>
-        <LoginFormContent />
-      </Suspense>
+      </div>
+
+      {/* Right: form */}
+      <div className="flex items-center justify-center px-6 py-16 sm:px-8 bg-background">
+        <Suspense
+          fallback={
+            <div className="flex size-16 items-center justify-center rounded border-2 border-foreground bg-surface shadow-[3px_3px_0px_#000]">
+              <Loader2 className="size-6 animate-spin text-primary" />
+            </div>
+          }
+        >
+          <LoginFormContent />
+        </Suspense>
+      </div>
     </main>
   );
 }

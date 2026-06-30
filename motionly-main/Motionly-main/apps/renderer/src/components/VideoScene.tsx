@@ -7,6 +7,12 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { MotionKeyframe, MotionSettings } from "@motionly/shared";
+import {
+  durationMsToFrameCount,
+  frameToMilliseconds,
+  millisecondsToFrameEnd,
+  millisecondsToFrameStart,
+} from "@motionly/shared";
 import type { CSSProperties } from "react";
 import type { MotionlyRenderProps, TemplateDefinition } from "../types";
 import type { SourceTimelineClip } from "../types";
@@ -80,13 +86,10 @@ function SourceClipAssembly({
   return (
     <>
       {sourceTimelineClips(input).map((clip) => {
-        const from = millisecondsToFrame(clip.output_start_ms, fps);
-        const durationInFrames = Math.max(
-          1,
-          millisecondsToFrame(
-            clip.output_end_ms - clip.output_start_ms,
-            fps,
-          ),
+        const from = millisecondsToFrameStart(clip.output_start_ms, fps);
+        const durationInFrames = durationMsToFrameCount(
+          clip.output_end_ms - clip.output_start_ms,
+          fps,
         );
         return (
           <Sequence key={clip.id} from={from} durationInFrames={durationInFrames}>
@@ -105,13 +108,13 @@ function SourceClipSurface({
 }: VideoSceneProps & { clip: SourceTimelineClip }) {
   const localFrame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
-  const outputFrame = millisecondsToFrame(clip.output_start_ms, fps) + localFrame;
+  const outputFrame = millisecondsToFrameStart(clip.output_start_ms, fps) + localFrame;
   const framing = input.exportSettings.framing;
   const crop = cropWithAutoReframe(
     input,
     framing?.crop ?? { x: 0.5, y: 0.5, zoom: 1 },
     framing?.output_aspect,
-    clip.source_start_ms + (localFrame / fps) * 1000,
+    clip.source_start_ms + frameToMilliseconds(localFrame, fps),
   );
   const framingZoom =
     framing?.fit_mode === "custom" ? Math.max(1, Math.min(3, crop.zoom)) : 1;
@@ -145,17 +148,13 @@ function SourceClipSurface({
   return (
     <OffthreadVideo
       src={input.sourceVideo.src}
-      startFrom={millisecondsToFrame(clip.source_start_ms, fps)}
-      endAt={millisecondsToFrame(clip.source_end_ms, fps)}
+      startFrom={millisecondsToFrameStart(clip.source_start_ms, fps)}
+      endAt={millisecondsToFrameEnd(clip.source_end_ms, fps)}
       muted={Boolean(input.sourceStems?.vocals?.src)}
       playbackRate={sourceMotion.playbackRate}
       style={style}
     />
   );
-}
-
-function millisecondsToFrame(milliseconds: number, fps: number) {
-  return Math.max(0, Math.round((milliseconds / 1000) * fps));
 }
 
 function BrollOverlay({
@@ -168,13 +167,10 @@ function BrollOverlay({
   template: TemplateDefinition;
 }) {
   const { fps } = useVideoConfig();
-  const startFrame = Math.max(
-    0,
-    Math.round(((asset.start_ms ?? 0) / 1000) * fps),
-  );
+  const startFrame = millisecondsToFrameStart(asset.start_ms ?? 0, fps);
   const endFrame = Math.max(
     startFrame + 1,
-    Math.round(((asset.end_ms ?? 0) / 1000) * fps),
+    millisecondsToFrameEnd(asset.end_ms ?? 0, fps),
   );
   const durationInFrames = endFrame - startFrame;
   return (
@@ -202,10 +198,7 @@ function BrollSurface({
 }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const fadeFrames = Math.max(
-    4,
-    Math.round(((asset.crossfade_ms ?? 260) / 1000) * fps),
-  );
+  const fadeFrames = Math.max(4, durationMsToFrameCount(asset.crossfade_ms ?? 260, fps));
   const opacity = interpolate(
     frame,
     [

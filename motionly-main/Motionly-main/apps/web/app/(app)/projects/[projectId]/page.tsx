@@ -15,7 +15,7 @@ import type {
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { EditorClient } from "@/components/editor-client";
-import { env } from "@/lib/env";
+import { env, resolveProxiedUrl } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 
 type ApiContext = {
@@ -42,6 +42,7 @@ type UploadResponse = {
     duration_ms?: number | null;
     width?: number | null;
     height?: number | null;
+    fps?: number | null;
     warnings?: string[];
   };
   thumbnail_path?: string | null;
@@ -129,8 +130,8 @@ export default async function ProjectDetailsPage({
       title={project.title}
       upload={upload}
       uploadAssetUrls={{
-        source_video_url: uploadAssetUrls?.source_video_url ?? null,
-        thumbnail_url: uploadAssetUrls?.thumbnail_url ?? null,
+        source_video_url: resolveProxiedUrl(uploadAssetUrls?.source_video_url) ?? null,
+        thumbnail_url: resolveProxiedUrl(uploadAssetUrls?.thumbnail_url) ?? null,
       }}
       transcript={transcript}
       captionTracks={captionsPayload?.tracks ?? []}
@@ -210,6 +211,7 @@ function toUploadSummary(upload: UploadResponse | null): UploadedVideoSummary | 
     durationMs: upload.metadata?.duration_ms ?? null,
     width: upload.metadata?.width ?? null,
     height: upload.metadata?.height ?? null,
+    fps: upload.metadata?.fps ?? null,
     thumbnailPath: upload.thumbnail_path ?? null,
     warnings: upload.metadata?.warnings ?? [],
     updatedAt: upload.updated_at,

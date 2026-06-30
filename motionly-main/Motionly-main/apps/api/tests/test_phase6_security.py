@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ import pytest
 from app.api.errors import ApiError
 from app.core.middleware import InMemoryRateLimiter, _verified_identity
 from app.repositories.publishing import InMemoryPublishingRepository, SupabasePublishingRepository
-from app.schemas.publishing import PublishPlatform, PublishStatus
+from app.schemas.publishing import PublishConnectionStatus, PublishPlatform, PublishStatus
 from app.services.publishing import (
     OAuthAccount,
     PublishedPost,
@@ -115,6 +116,8 @@ def test_expiring_connection_is_refreshed_before_publish() -> None:
             access_token="fresh-access-token",
             refresh_token="rotated-refresh-token",
             token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+            refresh_token_expires_at=datetime.now(UTC) + timedelta(days=30),
+            scopes=["youtube.upload"],
         )
     )
 
@@ -140,6 +143,243 @@ def test_expiring_connection_is_refreshed_before_publish() -> None:
     )
 
     assert connection.refresh_token == "rotated-refresh-token"
+    assert connection.connection_status == PublishConnectionStatus.ACTIVE
+    assert connection.last_refresh_at is not None
+    assert connection.scopes == ["youtube.upload"]
+
+
+def test_publish_refresh_requires_reconnect_when_refresh_token_missing() -> None:
+    workspace_id, project_id, export_id = uuid4(), uuid4(), uuid4()
+    repository = InMemoryPublishingRepository()
+    connection = repository.create_connection(
+        workspace_id=workspace_id,
+        platform=PublishPlatform.YOUTUBE,
+        access_token="expired-access-token",
+        refresh_token=None,
+        token_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        external_account_id="channel",
+        account_name="Channel",
+    )
+    job = repository.create_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        export_id=export_id,
+        connection_id=connection.id,
+        platform=connection.platform,
+        status=PublishStatus.QUEUED,
+        title="Title",
+        caption="",
+        privacy="private",
+    )
+
+    execute_publish_job(
+        publishing_repository=repository,
+        render_repository=SimpleNamespace(
+            get_export=lambda **_kwargs: SimpleNamespace(
+                storage_bucket="exports", storage_path="video.mp4"
+            )
+        ),
+        storage_signer=SimpleNamespace(
+            create_signed_download=lambda **_kwargs: SimpleNamespace(url="https://signed")
+        ),
+        client=SimpleNamespace(publish=lambda **_kwargs: None),
+        oauth_client=SimpleNamespace(
+            refresh=lambda _connection: (_ for _ in ()).throw(
+                ApiError(
+                    401,
+                    "publish_reauthorization_required",
+                    "YouTube authorization expired. Reconnect the account.",
+                    details={"reconnect_required": True, "error_code": "revoked_token"},
+                )
+            )
+        ),
+        job_id=job.id,
+        workspace_id=workspace_id,
+    )
+
+    updated_connection = repository.get_connection(
+        connection_id=connection.id, workspace_id=workspace_id
+    )
+    updated_job = repository.get_job(job_id=job.id, workspace_id=workspace_id)
+    assert updated_connection.connection_status == PublishConnectionStatus.RECONNECT_REQUIRED
+    assert updated_job.status == PublishStatus.RECONNECT_REQUIRED
+    assert updated_job.reconnect_required is True
+
+
+def test_valid_non_expiring_token_publishes_without_unnecessary_refresh() -> None:
+    workspace_id, project_id, export_id = uuid4(), uuid4(), uuid4()
+    repository = InMemoryPublishingRepository()
+    connection = repository.create_connection(
+        workspace_id=workspace_id,
+        platform=PublishPlatform.YOUTUBE,
+        access_token="valid-access-token",
+        refresh_token="refresh-token",
+        token_expires_at=datetime.now(UTC) + timedelta(hours=2),
+        external_account_id="channel",
+        account_name="Channel",
+    )
+    job = repository.create_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        export_id=export_id,
+        connection_id=connection.id,
+        platform=connection.platform,
+        status=PublishStatus.QUEUED,
+        title="Title",
+        caption="",
+        privacy="private",
+    )
+    refresh_calls = []
+
+    class Client:
+        def publish(self, *, connection, **_kwargs):
+            assert connection.access_token == "valid-access-token"
+            return PublishedPost(external_post_id="post-1")
+
+    execute_publish_job(
+        publishing_repository=repository,
+        render_repository=SimpleNamespace(
+            get_export=lambda **_kwargs: SimpleNamespace(
+                storage_bucket="exports", storage_path="video.mp4"
+            )
+        ),
+        storage_signer=SimpleNamespace(
+            create_signed_download=lambda **_kwargs: SimpleNamespace(url="https://signed")
+        ),
+        client=Client(),
+        oauth_client=SimpleNamespace(
+            refresh=lambda _connection: refresh_calls.append("refresh")
+        ),
+        job_id=job.id,
+        workspace_id=workspace_id,
+    )
+
+    assert refresh_calls == []
+
+
+def test_refresh_failure_is_logged_safely(caplog) -> None:
+    workspace_id, project_id, export_id = uuid4(), uuid4(), uuid4()
+    repository = InMemoryPublishingRepository()
+    connection = repository.create_connection(
+        workspace_id=workspace_id,
+        platform=PublishPlatform.TIKTOK,
+        access_token="top-secret-access-token",
+        refresh_token="top-secret-refresh-token",
+        token_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        external_account_id="creator",
+        account_name="Creator",
+    )
+    job = repository.create_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        export_id=export_id,
+        connection_id=connection.id,
+        platform=connection.platform,
+        status=PublishStatus.QUEUED,
+        title="Title",
+        caption="",
+        privacy="private",
+    )
+    caplog.set_level(logging.WARNING)
+
+    execute_publish_job(
+        publishing_repository=repository,
+        render_repository=SimpleNamespace(
+            get_export=lambda **_kwargs: SimpleNamespace(
+                storage_bucket="exports", storage_path="video.mp4"
+            )
+        ),
+        storage_signer=SimpleNamespace(
+            create_signed_download=lambda **_kwargs: SimpleNamespace(url="https://signed")
+        ),
+        client=SimpleNamespace(publish=lambda **_kwargs: None),
+        oauth_client=SimpleNamespace(
+            refresh=lambda _connection: (_ for _ in ()).throw(
+                ApiError(
+                    401,
+                    "publish_reauthorization_required",
+                    "TikTok authorization expired. Reconnect the account.",
+                    details={"reconnect_required": True, "error_code": "revoked_token"},
+                )
+            )
+        ),
+        job_id=job.id,
+        workspace_id=workspace_id,
+    )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "top-secret-access-token" not in messages
+    assert "top-secret-refresh-token" not in messages
+
+
+def test_publish_retries_once_after_provider_401_and_persists_rotated_tokens() -> None:
+    workspace_id, project_id, export_id = uuid4(), uuid4(), uuid4()
+    repository = InMemoryPublishingRepository()
+    connection = repository.create_connection(
+        workspace_id=workspace_id,
+        platform=PublishPlatform.YOUTUBE,
+        access_token="old-token",
+        refresh_token="refresh-token",
+        token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+        external_account_id="channel",
+        account_name="Channel",
+    )
+    job = repository.create_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        export_id=export_id,
+        connection_id=connection.id,
+        platform=connection.platform,
+        status=PublishStatus.QUEUED,
+        title="Title",
+        caption="",
+        privacy="private",
+    )
+    calls = []
+
+    class Client:
+        def publish(self, *, connection, **_kwargs):
+            calls.append(connection.access_token)
+            if len(calls) == 1:
+                raise ApiError(
+                    401,
+                    "publish_token_expired",
+                    "Publishing authorization expired. Refreshing the connection is required.",
+                    details={"error_code": "publish_token_expired"},
+                )
+            return PublishedPost(external_post_id="post-1")
+
+    execute_publish_job(
+        publishing_repository=repository,
+        render_repository=SimpleNamespace(
+            get_export=lambda **_kwargs: SimpleNamespace(
+                storage_bucket="exports", storage_path="video.mp4"
+            )
+        ),
+        storage_signer=SimpleNamespace(
+            create_signed_download=lambda **_kwargs: SimpleNamespace(url="https://signed")
+        ),
+        client=Client(),
+        oauth_client=SimpleNamespace(
+            refresh=lambda _connection: OAuthAccount(
+                external_account_id="channel",
+                account_name="Channel",
+                access_token="fresh-token",
+                refresh_token="rotated-refresh-token",
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        ),
+        job_id=job.id,
+        workspace_id=workspace_id,
+    )
+
+    updated_connection = repository.get_connection(
+        connection_id=connection.id, workspace_id=workspace_id
+    )
+    updated_job = repository.get_job(job_id=job.id, workspace_id=workspace_id)
+    assert calls == ["old-token", "fresh-token"]
+    assert updated_connection.refresh_token == "rotated-refresh-token"
+    assert updated_job.status == PublishStatus.PUBLISHED
 
 
 def test_youtube_upload_streams_source_into_resumable_session(monkeypatch) -> None:

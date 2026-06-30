@@ -13,9 +13,21 @@ class PublishPlatform(StrEnum):
 
 class PublishStatus(StrEnum):
     QUEUED = "queued"
+    REFRESHING_TOKEN = "refreshing_token"
     PUBLISHING = "publishing"
+    UPLOADING = "uploading"
+    PROCESSING = "processing"
     PUBLISHED = "published"
+    RETRY_SCHEDULED = "retry_scheduled"
+    RECONNECT_REQUIRED = "reconnect_required"
+    DUPLICATE_RISK_NEEDS_REVIEW = "duplicate_risk_needs_review"
     FAILED = "failed"
+    CANCELED = "cancelled"
+
+
+class PublishConnectionStatus(StrEnum):
+    ACTIVE = "active"
+    RECONNECT_REQUIRED = "reconnect_required"
 
 
 class PublishConnectionCreateRequest(BaseModel):
@@ -31,6 +43,12 @@ class PublishConnectionResponse(BaseModel):
     platform: PublishPlatform
     external_account_id: str
     account_name: str
+    connection_status: PublishConnectionStatus
+    access_token_expires_at: datetime | None = None
+    refresh_token_expires_at: datetime | None = None
+    scopes: list[str] = Field(default_factory=list)
+    last_refresh_at: datetime | None = None
+    last_refresh_failure_reason: str | None = None
     created_at: datetime
 
 
@@ -67,7 +85,16 @@ class PublishJobResponse(BaseModel):
     privacy: str
     external_post_id: str | None = None
     external_url: str | None = None
+    provider_operation_id: str | None = None
     error_message: str | None = None
+    error_code: str | None = None
+    error_category: str | None = None
+    user_message: str | None = None
+    retryable: bool | None = None
+    reconnect_required: bool = False
+    retry_after_seconds: int | None = None
+    retry_count: int = 0
+    duplicate_publish_risk: bool = False
     created_at: datetime
     updated_at: datetime
 

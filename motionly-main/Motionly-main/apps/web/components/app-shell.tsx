@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   PlusCircle,
   Settings,
-  UserRound,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -28,13 +27,15 @@ export async function AppShell({ children, title }: { children: React.ReactNode;
   const shell = await loadShellState();
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-background text-foreground lg:flex lg:h-screen lg:overflow-hidden">
-      <aside className="pixel-grid-fine glass-surface flex border-b border-border bg-surface/90 lg:h-screen lg:w-72 lg:shrink-0 lg:flex-col lg:border-b-0 lg:border-r">
-        <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-border px-4 lg:border-b lg:px-6">
+      {/* Sidebar */}
+      <aside className="bg-background border-r-4 border-foreground flex border-b lg:h-screen lg:w-60 lg:shrink-0 lg:flex-col lg:border-b-0">
+        {/* Logo */}
+        <div className="flex h-16 shrink-0 items-center justify-between border-b-2 border-foreground px-4">
           <div className="flex items-center gap-3">
-            <div className="flex size-9 items-center justify-center overflow-hidden border border-border bg-foreground">
-              <Image src="/icon.svg" alt="Motionly" width={36} height={36} className="size-9" priority />
+            <div className="flex size-8 items-center justify-center overflow-hidden rounded border-2 border-foreground bg-primary shrink-0 shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+              <Image src="/icon.svg" alt="Motionly" width={24} height={24} className="size-6 invert dark:invert-0" priority />
             </div>
-            <span className="text-lg font-black tracking-tight text-foreground">Motionly</span>
+            <span className="text-lg font-black uppercase tracking-tight text-foreground">Motionly</span>
           </div>
           <ThemeMenu
             items={[
@@ -47,52 +48,71 @@ export async function AppShell({ children, title }: { children: React.ReactNode;
           />
         </div>
 
-        <div className="hidden min-w-0 flex-1 px-3 py-3 lg:block lg:overflow-y-auto lg:py-6">
-          <nav className="flex gap-2 lg:block lg:space-y-1">
+        {/* Nav */}
+        <div className="hidden min-w-0 flex-1 px-3 py-4 lg:flex lg:flex-col lg:overflow-y-auto">
+          <p className="text-[10px] font-black uppercase tracking-widest text-foreground px-3 mb-2 font-mono">
+            Workspace
+          </p>
+          <nav className="flex gap-1 lg:block lg:space-y-1">
             {navItems.map((item) => (
               <SidebarItem key={item.href} {...item} />
             ))}
           </nav>
 
-          <div className="hidden lg:mt-8 lg:block lg:px-6">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/60">
-              Settings
-            </p>
-          </div>
-          <nav className="flex gap-2 lg:mt-2 lg:block lg:space-y-1">
+          <p className="text-[10px] font-black uppercase tracking-widest text-foreground px-3 mt-6 mb-2 font-mono">
+            Settings
+          </p>
+          <nav className="flex gap-1 lg:block lg:space-y-1">
             {settingsItems.map((item) => (
               <SidebarItem key={item.href} {...item} />
             ))}
           </nav>
+
+          {/* Usage bar */}
+          <div className="mx-0 mt-auto pt-6 border-t-2 border-foreground/20">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-mono font-bold text-foreground">
+                {shell.rendersUsed}/{shell.rendersLimit} renders
+              </p>
+              <p className="text-xs font-mono font-bold text-foreground">
+                {shell.percentUsed}%
+              </p>
+            </div>
+            <div className="progress-bar mt-1">
+              <div
+                className="progress-fill"
+                style={{ width: `${shell.percentUsed}%` }}
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="hidden border-t border-border p-4 lg:block">
-          <div className="flex items-center gap-3 px-2 py-2">
-            <div className="flex size-8 items-center justify-center border border-border bg-muted">
-              <UserRound className="size-4 text-muted-foreground" />
+        {/* User block */}
+        <div className="hidden border-t-2 border-foreground p-4 lg:block">
+          <div className="flex items-center gap-3">
+            <div className="rounded border-2 border-foreground size-8 bg-primary flex items-center justify-center text-primary-foreground text-xs font-black shrink-0 shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+              {shell.creatorName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-bold truncate">{shell.creatorName}</p>
-              <p className="text-xs text-muted-foreground truncate">{shell.planName}</p>
+              <p className="text-sm font-bold truncate leading-tight">{shell.creatorName}</p>
+              <p className="text-xs font-mono font-medium text-muted-foreground truncate">{shell.planName}</p>
             </div>
           </div>
         </div>
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-hidden">
-        <header className="glass-surface pixel-grid-fine flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6 lg:px-8">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-primary">Command center</p>
-            <h1 className="text-lg font-bold text-foreground">{title}</h1>
-          </div>
+        {/* Header */}
+        <header className="bg-surface border-b-4 border-foreground min-h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8">
+          <h1 className="text-xl font-black uppercase tracking-tight">{title}</h1>
           <div className="flex items-center gap-3">
-             <div className="pixel-progress h-2.5 w-28 sm:w-32">
-                <div className="pixel-progress-fill h-full" style={{ width: `${shell.percentUsed}%` }} />
-             </div>
-             <span className="text-xs font-bold text-muted-foreground">{shell.rendersUsed}/{shell.rendersLimit} Renders</span>
+            <span className="badge badge-primary">
+              {shell.rendersUsed}/{shell.rendersLimit} renders
+            </span>
           </div>
         </header>
-        <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:p-8">
+
+        <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:p-8 bg-background">
           <div className="container-dashboard">{children}</div>
         </div>
       </main>
@@ -151,9 +171,9 @@ function SidebarItem({
   return (
     <Link
       href={href}
-      className="pixel-button flex shrink-0 items-center gap-2 bg-transparent px-3 py-2 text-sm font-semibold text-muted-foreground transition-all duration-200 hover:bg-muted hover:text-foreground lg:gap-3 lg:px-4 lg:py-3"
+      className="flex items-center gap-3 px-3 py-2 text-sm font-bold rounded-md border-2 border-transparent text-muted-foreground hover:bg-surface hover:text-foreground hover:border-foreground hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] transition-all"
     >
-      <Icon className="size-5 text-muted-foreground/70" />
+      <Icon className="size-4 shrink-0" strokeWidth={2} />
       {label}
     </Link>
   );

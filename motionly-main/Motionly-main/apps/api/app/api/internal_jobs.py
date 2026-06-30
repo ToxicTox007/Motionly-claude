@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from fastapi import APIRouter, Header, Request
@@ -302,6 +303,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             storage_signer=request.app.state.storage_signer,
             client=request.app.state.social_publishing_client,
             oauth_client=request.app.state.publish_oauth_client,
+            settings=settings,
             job_id=job.resource_id,
             workspace_id=job.workspace_id,
         )
@@ -344,7 +346,6 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         }
 
     if job.kind == "edit_plan":
-        import json
         from uuid import UUID
 
         from app.schemas.captions import TranscriptStatus
@@ -666,6 +667,29 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             user_id=user_id,
             payload=payload,
         )
+
+    if job.kind == "stock_asset_enrichment":
+        from app.services.stock_video import enrich_stock_asset
+
+        params = json.loads(job.render_engine or "{}")
+        clip_model_name = str(
+            params.get("clip_model_name")
+            or getattr(settings, "visual_clip_model", "openai/clip-vit-base-patch32")
+        )
+        asset = request.app.state.broll_repository.get_asset(
+            project_id=job.project_id,
+            workspace_id=job.workspace_id,
+            asset_id=job.resource_id,
+        )
+        asset = enrich_stock_asset(
+            asset=asset,
+            repository=request.app.state.broll_repository,
+            clip_model_name=clip_model_name,
+        )
+        return {
+            "asset_id": str(asset.id),
+            "status": asset.raw_metadata.get("enrichment_status"),
+        }
 
     if job.kind == "music_selection":
         from uuid import UUID
