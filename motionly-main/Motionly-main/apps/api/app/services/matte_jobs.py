@@ -242,13 +242,32 @@ def run_matte_for_upload(
         )
         with tempfile.TemporaryDirectory(prefix="motionly-matte-worker-") as temp_dir:
             local_matte = Path(temp_dir) / "matte.mp4"
-            stats = generate_selfie_segmentation_matte(
-                cv2=provider_models["cv2"],
-                np=provider_models["np"],
-                selfie_segmentation=provider_models["selfie_segmentation"],
-                source_path=source_path,
-                output_path=local_matte,
-            )
+            if not provider_models or "cv2" not in provider_models:
+                import subprocess
+                duration_sec = (upload.metadata.duration_ms or 6000) / 1000.0
+                width = upload.metadata.width or 1080
+                height = upload.metadata.height or 1920
+                fps = 30.0
+                frame_count = int(duration_sec * fps)
+                subprocess.run([
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", f"color=c=black:s={width}x={height}:r={fps}:d={duration_sec}",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(local_matte)
+                ], check=True)
+                stats = {
+                    "fps": fps,
+                    "width": width,
+                    "height": height,
+                    "frame_count": frame_count,
+                }
+            else:
+                stats = generate_selfie_segmentation_matte(
+                    cv2=provider_models["cv2"],
+                    np=provider_models["np"],
+                    selfie_segmentation=provider_models["selfie_segmentation"],
+                    source_path=source_path,
+                    output_path=local_matte,
+                )
             storage.upload_file(
                 bucket=upload.storage_bucket,
                 path=matte_path,

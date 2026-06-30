@@ -1,0 +1,20 @@
+{
+  "name": "@motionly/shared",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json --noEmit",
+    "contracts:generate": "cd ../../apps/api && python scripts/generate_openapi_contract.py",
+    "contracts:check": "cd ../../apps/api && python scripts/generate_openapi_contract.py --check"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

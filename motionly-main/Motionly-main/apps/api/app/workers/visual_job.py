@@ -32,11 +32,16 @@ def _runner():
         supabase_url=str(settings.supabase_url),
         service_role_key=settings.supabase_service_role_key,
     )
-    provider = LocalMLVisualIntelligenceProvider(
-        clip_model=settings.visual_clip_model,
-        blip_model=settings.visual_blip_model,
-        yolo_model=settings.visual_yolo_model,
-    )
+    visual_provider_key = settings.visual_intelligence_provider.strip().lower()
+    if visual_provider_key == "fixture":
+        from app.services.visual_intelligence import FixtureVisualIntelligenceProvider
+        provider = FixtureVisualIntelligenceProvider()
+    else:
+        provider = LocalMLVisualIntelligenceProvider(
+            clip_model=settings.visual_clip_model,
+            blip_model=settings.visual_blip_model,
+            yolo_model=settings.visual_yolo_model,
+        )
     from app.services.visual_intelligence import run_visual_analysis_for_upload
 
     def execute(payload: dict[str, object]) -> dict[str, object]:

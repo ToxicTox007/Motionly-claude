@@ -51,6 +51,10 @@ def test_upload_to_export_ffmpeg_golden_media(tmp_path: Path) -> None:
                     "crop": {"x": 0.5, "y": 0.5, "zoom": 1},
                 }
             },
+            "render_props": {
+                "sourceVideo": {"src": "dummy"},
+                "exportSettings": {"fps": 10},
+            },
         },
         keep_segments=[CutSegment(start_ms=2000, end_ms=3000, reason="blue payoff")],
         specs=RenderSpecs(width=160, height=90, fps=10),

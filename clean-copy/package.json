@@ -1,0 +1,29 @@
+{
+  "name": "motionly",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "format": "prettier --check .",
+    "contracts:generate": "pnpm --filter @motionly/shared contracts:generate",
+    "contracts:check": "pnpm --filter @motionly/shared contracts:check"
+  },
+  "devDependencies": {
+    "pg": "^8.21.0",
+    "prettier": "^3.4.2",
+    "supabase": "^2.104.0",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "@opentelemetry/core@<2.8.0": "2.8.0",
+      "postcss@<8.5.10": "8.5.10",
+      "ws@>=8.0.0 <8.21.0": "8.21.0"
+    }
+  }
+}

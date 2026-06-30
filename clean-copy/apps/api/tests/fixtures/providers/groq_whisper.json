@@ -1,0 +1,8 @@
+{
+  "language": "english",
+  "confidence": 0.96,
+  "words": [
+    {"word": "Build", "start": 0.1, "end": 0.42, "confidence": 0.97},
+    {"word": "better", "start": 0.45, "end": 0.88, "confidence": 0.95}
+  ]
+}

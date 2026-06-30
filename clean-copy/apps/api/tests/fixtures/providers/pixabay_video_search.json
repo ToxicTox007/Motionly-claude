@@ -1,0 +1,9 @@
+{
+  "hits": [{
+    "id": 67890,
+    "tags": "founder, office",
+    "duration": 5,
+    "picture_id": "987654",
+    "videos": {"large": {"width": 1080, "height": 1920, "url": "https://cdn.pixabay.com/video-67890.mp4"}}
+  }]
+}

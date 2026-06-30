@@ -33,11 +33,16 @@ def _runner():
         supabase_url=str(settings.supabase_url),
         service_role_key=settings.supabase_service_role_key,
     )
-    provider = LocalMLVisualIntelligenceProvider(
-        clip_model=settings.visual_clip_model,
-        blip_model=settings.visual_blip_model,
-        yolo_model=settings.visual_yolo_model,
-    )
+    visual_provider_key = settings.visual_intelligence_provider.strip().lower()
+    if visual_provider_key == "fixture":
+        provider_models = {}
+    else:
+        provider = LocalMLVisualIntelligenceProvider(
+            clip_model=settings.visual_clip_model,
+            blip_model=settings.visual_blip_model,
+            yolo_model=settings.visual_yolo_model,
+        )
+        provider_models = provider._load_models()
 
     def execute(payload: dict[str, object]) -> dict[str, object]:
         record = run_matte_for_upload(
@@ -49,7 +54,7 @@ def _runner():
             media_work_dir=settings.media_work_dir,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
-            provider_models=provider._load_models(),
+            provider_models=provider_models,
         )
         return {
             "matte_id": str(record.id),

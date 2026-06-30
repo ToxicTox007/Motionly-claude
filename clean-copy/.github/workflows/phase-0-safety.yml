@@ -1,0 +1,352 @@
+name: Production readiness
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-readiness-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: 9.15.4
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.12"
+  SUPABASE_CLI_VERSION: 2.104.0
+
+jobs:
+  quality-and-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check './apps/api[dev]'
+      - name: Verify generated FastAPI contract
+        run: pnpm contracts:check
+      - name: Lint and typecheck
+        run: |
+          pnpm lint
+          pnpm typecheck
+          cd apps/api
+          python -m ruff check app tests scripts
+      - name: Run unit and recorded-provider contracts
+        run: |
+          pnpm test
+          cd apps/api
+          APP_ENV=test python -m pytest -q
+      - name: Enforce forward-only migrations
+        run: bash scripts/check_forward_migrations.sh origin/main
+
+  empty-database-and-repositories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check './apps/api[dev]'
+      - name: Apply all migrations to an empty database
+        run: |
+          supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
+          supabase db reset --local
+      - name: Verify schema and role/workspace RLS
+        run: supabase test db
+      - name: Exercise repositories against Supabase Auth and REST
+        run: |
+          eval "$(supabase status -o env)"
+          export SUPABASE_URL="$API_URL"
+          export SUPABASE_ANON_KEY="$ANON_KEY"
+          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+          export SUPABASE_JWT_SECRET="$JWT_SECRET"
+          cd apps/api
+          RUN_SUPABASE_CONTRACTS=1 APP_ENV=test python -m pytest -q tests/integration/test_supabase_repository_contracts.py
+
+  media-goldens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Chromium and FFmpeg renderer
+        run: docker build --file apps/worker/Dockerfile --tag motionly-renderer-test .
+      - name: Verify Remotion upload-to-export timeline cuts
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-renderer-test
+          sh -lc "cd /app/apps/renderer && pnpm test:encoded"
+      - name: Verify effect, caption, transition, and framing goldens
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-renderer-test
+          sh -lc "cd /app/apps/renderer && pnpm test:golden"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Verify FFmpeg golden and 512 MiB streaming ceiling
+        working-directory: apps/api
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --disable-pip-version-check '.[dev]'
+          APP_ENV=test python -m pytest -q tests/test_golden_media_pipeline.py tests/test_phase8_integrity.py::test_512_mib_upload_is_streamed_with_bounded_python_memory
+
+  redis-contracts:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify Redis retry, failure, and idempotency
+        env:
+          RUN_REDIS_CONTRACTS: "true"
+          REDIS_URL: redis://127.0.0.1:6379/15
+        run: pnpm --filter @motionly/worker test
+
+  browser-creator-journey:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Install browser-test dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check './apps/api[dev]'
+          pnpm --filter @motionly/web exec playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Start clean creator-journey services
+        run: |
+          supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
+          supabase db reset --local
+      - name: Run auth, upload/reload, edit, render, billing, and publish E2E
+        run: |
+          eval "$(supabase status -o env)"
+          export SUPABASE_URL="$API_URL"
+          export SUPABASE_ANON_KEY="$ANON_KEY"
+          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
+          export SUPABASE_JWT_SECRET="$JWT_SECRET"
+          cd apps/web
+          pnpm test:e2e
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production containers
+        run: |
+          docker build --file apps/api/Dockerfile --tag motionly-api:test .
+          docker build --file apps/worker/Dockerfile --tag motionly-worker:test .
+          docker build --file apps/web/Dockerfile --tag motionly-web:test .
+      - name: Verify API startup health
+        run: |
+          docker run -d --name motionly-api-health -p 18000:8000 -e APP_ENV=test motionly-api:test
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:18000/health/live && break
+            if [ "$attempt" = 30 ]; then docker logs motionly-api-health; exit 1; fi
+            sleep 2
+          done
+      - name: Verify worker startup contract
+        run: docker run --rm motionly-worker:test node src/worker.mjs --check
+      - name: Verify Chromium smoke render
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-worker:test
+          sh -lc "cd /app/apps/renderer && pnpm render:smoke"
+      - name: Verify web startup health
+        run: |
+          docker run -d --name motionly-web-health -p 13000:3000 motionly-web:test
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:13000/login && break
+            if [ "$attempt" = 30 ]; then docker logs motionly-web-health; exit 1; fi
+            sleep 2
+          done
+
+  secret-and-dependency-scans:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan repository secrets without exposing findings
+        run: >-
+          docker run --rm
+          --volume "$PWD:/repo"
+          zricethezav/gitleaks:v8.24.2
+          detect --source=/repo --no-git --redact --exit-code=1
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm audit --prod --audit-level low
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Scan Python dependencies
+        working-directory: apps/api
+        run: |
+          python -m pip install --disable-pip-version-check pip-audit .
+          python -m pip_audit .
+
+  phase-10-prelaunch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Install pre-launch gate dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check './apps/api[dev]'
+      - name: Verify documented launch evidence
+        run: node scripts/verify_prelaunch_evidence.mjs
+      - name: Run Phase 10 pre-launch contracts
+        working-directory: apps/api
+        run: APP_ENV=test python -m pytest -q tests/test_phase10_prelaunch.py tests/test_billing.py
+      - name: Verify backup and restore drill
+        run: |
+          supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
+          supabase db reset --local
+          eval "$(supabase status -o env)"
+          psql "$DB_URL" --command "drop database if exists motionly_restore;"
+          psql "$DB_URL" --command "create database motionly_restore;"
+          bash scripts/verify_backup_restore.sh "$DB_URL" "postgresql://postgres:postgres@127.0.0.1:54322/motionly_restore"
+
+  staging-canary:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - quality-and-contracts
+      - empty-database-and-repositories
+      - media-goldens
+      - redis-contracts
+      - browser-creator-journey
+      - containers
+      - secret-and-dependency-scans
+      - phase-10-prelaunch
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+      STAGING_DEPLOY_HOOK: ${{ secrets.STAGING_DEPLOY_HOOK }}
+      STAGING_HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
+      STAGING_PROVIDER_CONTRACT_URL: ${{ secrets.STAGING_PROVIDER_CONTRACT_URL }}
+      CANARY_PROMOTE_HOOK: ${{ secrets.CANARY_PROMOTE_HOOK }}
+      CANARY_METRICS_URL: ${{ secrets.CANARY_METRICS_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy immutable revision with forward-only migrations
+        run: |
+          : "${DEPLOY_TOKEN:?missing staging deploy token}"
+          : "${STAGING_DEPLOY_HOOK:?missing staging deploy hook}"
+          curl --fail --silent --show-error --request POST \
+            --header "authorization: Bearer $DEPLOY_TOKEN" \
+            --header "content-type: application/json" \
+            --data "{\"revision\":\"$GITHUB_SHA\",\"migration_strategy\":\"forward-only\"}" \
+            "$STAGING_DEPLOY_HOOK"
+      - name: Verify staging and provider sandboxes
+        run: |
+          : "${STAGING_HEALTH_URL:?missing staging health URL}"
+          : "${STAGING_PROVIDER_CONTRACT_URL:?missing provider contract URL}"
+          curl --fail --silent --show-error --retry 20 --retry-delay 6 "$STAGING_HEALTH_URL"
+          curl --fail --silent --show-error --request POST \
+            --header "authorization: Bearer $DEPLOY_TOKEN" \
+            --header "content-type: application/json" \
+            --data "{\"revision\":\"$GITHUB_SHA\",\"mode\":\"sandbox\"}" \
+            "$STAGING_PROVIDER_CONTRACT_URL"
+      - name: Promote and monitor five-percent canary
+        run: |
+          : "${CANARY_PROMOTE_HOOK:?missing canary promotion hook}"
+          : "${CANARY_METRICS_URL:?missing canary metrics URL}"
+          curl --fail --silent --show-error --request POST \
+            --header "authorization: Bearer $DEPLOY_TOKEN" \
+            --header "content-type: application/json" \
+            --data "{\"revision\":\"$GITHUB_SHA\",\"traffic_percent\":5}" \
+            "$CANARY_PROMOTE_HOOK"
+          for attempt in {1..10}; do
+            payload="$(curl --fail --silent --show-error "$CANARY_METRICS_URL?revision=$GITHUB_SHA")"
+            if jq -e '.healthy == true and (.error_rate // 1) < 0.01' <<<"$payload" >/dev/null; then exit 0; fi
+            sleep 30
+          done
+          echo "Canary failed its health gate; keep the schema and ship a forward fix." >&2
+          exit 1

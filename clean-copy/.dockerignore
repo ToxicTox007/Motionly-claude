@@ -1,0 +1,17 @@
+.git
+.github
+.next
+.turbo
+**/.next
+**/.turbo
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.pyc
+.motionly
+apps/api/.motionly
+env.local.txt
+.env
+.env.*
+!**/.env.example

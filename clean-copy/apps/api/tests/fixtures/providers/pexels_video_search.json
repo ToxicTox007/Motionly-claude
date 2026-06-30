@@ -1,0 +1,9 @@
+{
+  "videos": [{
+    "id": 12345,
+    "url": "https://www.pexels.com/video/12345/",
+    "image": "https://images.pexels.com/videos/12345/free-video.jpg",
+    "duration": 6.2,
+    "video_files": [{"width": 1080, "height": 1920, "link": "https://videos.pexels.com/video-12345.mp4"}]
+  }]
+}
