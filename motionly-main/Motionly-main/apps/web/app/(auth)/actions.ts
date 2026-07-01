@@ -44,20 +44,29 @@ export async function login(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   const nextPath = safeRedirectPath(formData.get("next"));
 
-  const supabase = await createClient();
+  let redirectTo: string | null = null;
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
 
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-
-  if (error) {
-    console.error("motionly_login_failed", {
-      code: error.code,
-      status: error.status,
-      message: error.message,
-    });
-    redirect(`/login?error=${authErrorReason(error)}`);
+    if (error) {
+      console.error("motionly_login_failed", {
+        code: error.code,
+        status: error.status,
+        message: error.message,
+      });
+      redirectTo = `/login?error=${authErrorReason(error)}`;
+    } else {
+      redirectTo = nextPath;
+    }
+  } catch (err: any) {
+    console.error("motionly_login_system_error", err);
+    redirectTo = "/login?error=system_error";
   }
 
-  redirect(nextPath);
+  if (redirectTo) {
+    redirect(redirectTo);
+  }
 }
 
 export async function signup(formData: FormData) {
@@ -69,29 +78,38 @@ export async function signup(formData: FormData) {
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
 
-  const supabase = await createClient();
-
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        full_name: fullName,
+  let redirectTo: string | null = null;
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+        },
+        emailRedirectTo: await getAuthCallbackUrl(),
       },
-      emailRedirectTo: await getAuthCallbackUrl(),
-    },
-  });
-
-  if (error) {
-    console.error("motionly_signup_failed", {
-      code: error.code,
-      status: error.status,
-      message: error.message,
     });
-    redirect(`/signup?error=${authErrorReason(error)}`);
+
+    if (error) {
+      console.error("motionly_signup_failed", {
+        code: error.code,
+        status: error.status,
+        message: error.message,
+      });
+      redirectTo = `/signup?error=${authErrorReason(error)}`;
+    } else {
+      redirectTo = data.session ? "/dashboard" : "/login?notice=check_email";
+    }
+  } catch (err: any) {
+    console.error("motionly_signup_system_error", err);
+    redirectTo = "/signup?error=system_error";
   }
 
-  redirect(data.session ? "/dashboard" : "/login?notice=check_email");
+  if (redirectTo) {
+    redirect(redirectTo);
+  }
 }
 
 export async function loginWithGoogle() {
@@ -103,19 +121,30 @@ export async function loginWithGoogle() {
     redirect("/login?error=google_not_configured");
   }
 
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: await getAuthCallbackUrl(),
-    },
-  });
+  let redirectTo: string | null = null;
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: await getAuthCallbackUrl(),
+      },
+    });
 
-  if (error || !data.url) {
-    redirect("/login?error=oauth_failed");
+    if (error || !data.url) {
+      console.error("motionly_oauth_failed", error);
+      redirectTo = "/login?error=oauth_failed";
+    } else {
+      redirectTo = data.url;
+    }
+  } catch (err: any) {
+    console.error("motionly_oauth_system_error", err);
+    redirectTo = "/login?error=system_error";
   }
 
-  redirect(data.url);
+  if (redirectTo) {
+    redirect(redirectTo);
+  }
 }
 
 export async function logout() {
@@ -123,7 +152,17 @@ export async function logout() {
     redirect("/login");
   }
 
-  const supabase = await createClient();
-  await supabase.auth.signOut();
-  redirect("/login");
+  let redirectTo: string | null = null;
+  try {
+    const supabase = await createClient();
+    await supabase.auth.signOut();
+    redirectTo = "/login";
+  } catch (err: any) {
+    console.error("motionly_logout_system_error", err);
+    redirectTo = "/login";
+  }
+
+  if (redirectTo) {
+    redirect(redirectTo);
+  }
 }
