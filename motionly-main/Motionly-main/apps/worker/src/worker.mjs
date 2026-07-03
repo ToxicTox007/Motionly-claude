@@ -33,9 +33,9 @@ const pythonExecutors = new Map();
 
 export function pythonExecutorConfig(overrides = {}) {
   return {
-    requestTimeoutMs: Number(overrides.requestTimeoutMs || env("PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS", "60000")),
+    requestTimeoutMs: Number(overrides.requestTimeoutMs || env("PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS", "900000")),
     heartbeatIntervalMs: Number(overrides.heartbeatIntervalMs || env("PYTHON_EXECUTOR_HEARTBEAT_INTERVAL_MS", "15000")),
-    heartbeatTimeoutMs: Number(overrides.heartbeatTimeoutMs || env("PYTHON_EXECUTOR_HEARTBEAT_TIMEOUT_MS", "5000")),
+    heartbeatTimeoutMs: Number(overrides.heartbeatTimeoutMs || env("PYTHON_EXECUTOR_HEARTBEAT_TIMEOUT_MS", "120000")),
     restartBackoffMs: Number(overrides.restartBackoffMs || env("PYTHON_EXECUTOR_RESTART_BACKOFF_MS", "1000")),
     restartBackoffCapMs: Number(overrides.restartBackoffCapMs || env("PYTHON_EXECUTOR_RESTART_BACKOFF_CAP_MS", "30000")),
     restartWindowMs: Number(overrides.restartWindowMs || env("PYTHON_EXECUTOR_RESTART_WINDOW_MS", "60000")),
@@ -198,10 +198,7 @@ function handleSupervisorStdout(state, chunk) {
     try {
       response = JSON.parse(line);
     } catch {
-      handleSupervisorFailure(
-        state,
-        pythonExecutorError("python_protocol_invalid", `${state.name} returned invalid JSON`),
-      );
+      globalThis.process.stderr.write(`[${state.name} stdout] ${line}\n`);
       return;
     }
     const pending = state.pending.get(response.id);
@@ -402,6 +399,18 @@ async function runRetentionJob() {
   return response.json();
 }
 
+async function runGpuAutoscalingJob() {
+  if (!hasApiConfig()) {
+    throw new Error("maintenance autoscaling requires WORKER_API_BASE_URL and WORKER_API_TOKEN");
+  }
+  const response = await fetch(`${apiBaseUrl()}/internal/operations/gpu-autoscaling/run`, {
+    method: "POST",
+    headers: { "x-motionly-worker-token": workerToken() },
+  });
+  if (!response.ok) throw new Error(`gpu autoscaling endpoint returned HTTP ${response.status}`);
+  return response.json();
+}
+
 async function runBatchJob(job) {
   if (!hasApiConfig()) {
     throw new Error("batch planning requires WORKER_API_BASE_URL and WORKER_API_TOKEN");
@@ -488,6 +497,8 @@ async function runJob(job) {
     result =
       job.data.kind === "retention"
         ? await runRetentionJob()
+        : job.data.kind === "gpu_autoscaling"
+        ? await runGpuAutoscalingJob()
         : job.data.kind === "batch_plan"
         ? await runBatchJob(job)
         : job.data.kind === "render"
@@ -677,6 +688,14 @@ async function main() {
       "daily-retention",
       { kind: "retention", queue_name: "maintenance" },
       { jobId: "daily-retention", repeat: { pattern: env("RETENTION_CRON", "0 3 * * *") } },
+    );
+    await maintenanceQueue.add(
+      "gpu-autoscaling",
+      { kind: "gpu_autoscaling", queue_name: "maintenance" },
+      {
+        jobId: "gpu-autoscaling",
+        repeat: { pattern: env("GPU_AUTOSCALING_CRON", "*/2 * * * *") },
+      },
     );
   }
   const workers = queueNames.map((queueName) => createWorker(queueName, connection));

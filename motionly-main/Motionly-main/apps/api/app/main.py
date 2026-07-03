@@ -60,6 +60,7 @@ from app.services.audio_ml_providers import (
 )
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
+from app.services.lightning_scaling import LightningScalingService
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
 from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.publishing import PublishOAuthClient, SocialPublishingClient
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.launch_feedback = []
     app.state.metrics_registry = MetricsRegistry()
+    app.state.lightning_scaling_service = LightningScalingService(settings)
     app.state.operations_repository = OperationsRepository(
         supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
         service_role_key=settings.supabase_service_role_key,
@@ -174,7 +176,16 @@ def create_app() -> FastAPI:
         else InMemoryPublishingRepository()
     )
     if isinstance(app.state.publishing_repository, SupabasePublishingRepository):
-        app.state.publishing_repository.encrypt_legacy_tokens()
+        try:
+            app.state.publishing_repository.encrypt_legacy_tokens()
+        except ApiError as exc:
+            app.state.launch_feedback.append(
+                {
+                    "severity": "warning",
+                    "code": exc.code,
+                    "message": "Publishing token backfill skipped during startup.",
+                }
+            )
     app.state.plan_repository = (
         SupabasePlanRepository(
             caption_repository=app.state.caption_repository,

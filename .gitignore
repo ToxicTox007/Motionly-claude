@@ -1,0 +1,11 @@
+.vercel
+.env*
+*.env
+*.log
+*.json
+node_modules/
+package-lock.json
+package.json
+check_visual_intelligence.py
+studio_visual_intelligence.py
+start_deployment.py

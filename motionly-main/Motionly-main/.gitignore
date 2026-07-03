@@ -19,3 +19,11 @@ deployment-env/
 .playwright-mcp/
 .motionly/
 .screenshots/
+.vercel
+.env*
+*.env
+*.log
+*.json
+check_visual_intelligence.py
+studio_visual_intelligence.py
+start_deployment.py

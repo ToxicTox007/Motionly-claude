@@ -27,9 +27,7 @@ RUN cd apps/worker && npm install --omit=dev --no-audit --no-fund \
     && pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu124 \
       "torch>=2.5.0,<2.6" "torchaudio>=2.5.0,<2.6" \
-    && pip install --no-cache-dir ".[audio-ml,visual-ml]"
-
-VOLUME ["/var/cache/motionly", "/var/data/motionly"]
+    && pip install --no-cache-dir "/app[audio-ml,visual-ml]"
 
 WORKDIR /app/apps/worker
 CMD ["sh", "-c", "cd /app && python -m app.workers.prefetch_models && cd /app/apps/worker && node src/worker.mjs --loop"]

@@ -35,46 +35,72 @@ class OperationsRepository:
         self.provider_events: list[dict[str, Any]] = []
         self.cost_events: list[dict[str, Any]] = []
 
+    @staticmethod
+    def _is_missing_relation(error: Exception) -> bool:
+        if not isinstance(error, httpx.HTTPStatusError):
+            return False
+        response = error.response
+        if response.status_code != 404:
+            return False
+        try:
+            payload = response.json()
+        except Exception:
+            return False
+        code = str(payload.get("code") or "")
+        message = str(payload.get("message") or "")
+        normalized = message.lower()
+        return code in {"42P01", "PGRST205"} or "relation" in normalized or "schema cache" in normalized
+
     def heartbeat(self, **values: Any) -> WorkerHeartbeat:
         record = WorkerHeartbeat(**values)
         self.heartbeats[record.worker_id] = record
         if self.base_url and self.headers:
-            response = httpx.post(
-                f"{self.base_url}/worker_heartbeats?on_conflict=worker_id",
-                headers={**self.headers, "prefer": "resolution=merge-duplicates,return=minimal"},
-                json={
-                    "worker_id": record.worker_id,
-                    "worker_role": record.worker_role,
-                    "queues": record.queues,
-                    "version": record.version,
-                    "metadata": record.metadata,
-                    "last_seen_at": record.last_seen_at.isoformat(),
-                },
-                timeout=5,
-            )
-            response.raise_for_status()
+            try:
+                response = httpx.post(
+                    f"{self.base_url}/worker_heartbeats?on_conflict=worker_id",
+                    headers={**self.headers, "prefer": "resolution=merge-duplicates,return=minimal"},
+                    json={
+                        "worker_id": record.worker_id,
+                        "worker_role": record.worker_role,
+                        "queues": record.queues,
+                        "version": record.version,
+                        "metadata": record.metadata,
+                        "last_seen_at": record.last_seen_at.isoformat(),
+                    },
+                    timeout=5,
+                )
+                response.raise_for_status()
+            except Exception as exc:
+                if not self._is_missing_relation(exc):
+                    raise
         return record
 
     def latest_heartbeats(self) -> list[WorkerHeartbeat]:
         if self.base_url and self.headers:
-            response = httpx.get(
-                f"{self.base_url}/worker_heartbeats",
-                headers=self.headers,
-                params={"select": "*", "order": "last_seen_at.desc", "limit": "100"},
-                timeout=5,
-            )
-            response.raise_for_status()
-            return [
-                WorkerHeartbeat(
-                    worker_id=row["worker_id"],
-                    worker_role=row["worker_role"],
-                    queues=row.get("queues") or [],
-                    version=row.get("version"),
-                    metadata=row.get("metadata") or {},
-                    last_seen_at=datetime.fromisoformat(row["last_seen_at"].replace("Z", "+00:00")),
+            try:
+                response = httpx.get(
+                    f"{self.base_url}/worker_heartbeats",
+                    headers=self.headers,
+                    params={"select": "*", "order": "last_seen_at.desc", "limit": "100"},
+                    timeout=5,
                 )
-                for row in response.json()
-            ]
+                response.raise_for_status()
+                return [
+                    WorkerHeartbeat(
+                        worker_id=row["worker_id"],
+                        worker_role=row["worker_role"],
+                        queues=row.get("queues") or [],
+                        version=row.get("version"),
+                        metadata=row.get("metadata") or {},
+                        last_seen_at=datetime.fromisoformat(
+                            row["last_seen_at"].replace("Z", "+00:00")
+                        ),
+                    )
+                    for row in response.json()
+                ]
+            except Exception as exc:
+                if not self._is_missing_relation(exc):
+                    raise
         return list(self.heartbeats.values())
 
     def record_provider_slo(self, **values: Any) -> None:

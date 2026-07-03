@@ -22,10 +22,9 @@ COPY apps/worker/src ./apps/worker/src
 
 RUN cd apps/worker && npm install --omit=dev --no-audit --no-fund \
     && pip install --no-cache-dir --upgrade pip \
-    && if [ -n "$API_EXTRAS" ]; then pip install --no-cache-dir ".[${API_EXTRAS}]"; \
-       else pip install --no-cache-dir .; fi
+    && if [ -n "$API_EXTRAS" ]; then pip install --no-cache-dir "/app[${API_EXTRAS}]"; \
+       else pip install --no-cache-dir /app; fi
 
 RUN mkdir -p /var/cache/motionly/huggingface /var/cache/motionly/torch
-VOLUME ["/var/cache/motionly", "/var/data/motionly"]
 WORKDIR /app/apps/worker
 CMD ["sh", "-c", "cd /app && python -m app.workers.prefetch_models && cd /app/apps/worker && node src/worker.mjs --loop"]

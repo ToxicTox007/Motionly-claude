@@ -389,17 +389,19 @@ def run_visual_analysis_for_upload(
         )
         raise
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         repository.transition_manifest(
             record=record,
             status=VisualManifestStatus.FAILED,
             manifest=None,
             error_code="visual_analysis_failed",
-            error_message="Visual analysis failed; planning will continue without visual context.",
+            error_message=f"Visual analysis failed: {type(exc).__name__}: {str(exc)}",
         )
         raise ApiError(
             502,
             "visual_analysis_failed",
-            "Visual analysis failed; planning will continue without visual context.",
+            f"Visual analysis failed: {type(exc).__name__}: {str(exc)}",
         ) from exc
     return repository.transition_manifest(
         record=record,

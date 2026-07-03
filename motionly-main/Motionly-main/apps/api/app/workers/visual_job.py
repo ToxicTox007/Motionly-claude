@@ -66,6 +66,10 @@ def _runner():
 
 
 def _serve() -> None:
+    import sys
+    import app
+    print(f"DEBUG: app.__file__ = {app.__file__}", flush=True)
+    print(f"DEBUG: sys.path = {sys.path}", flush=True)
     execute = _runner()
     for line in sys.stdin:
         request: dict[str, object] = {}

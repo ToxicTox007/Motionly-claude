@@ -85,3 +85,16 @@ async def record_provider_slo(
         success=str(payload.success).lower(),
     )
     return {"status": "recorded"}
+
+
+@router.post("/internal/operations/gpu-autoscaling/run")
+async def run_gpu_autoscaling(
+    request: Request,
+    x_motionly_worker_token: str | None = Header(default=None),
+) -> dict[str, object]:
+    await require_worker_token(request, x_motionly_worker_token)
+    service = getattr(request.app.state, "lightning_scaling_service", None)
+    if service is None:
+        return {"status": "disabled", "reason": "lightning_scaling_service_missing"}
+    snapshots = request.app.state.queue_registry.snapshots()
+    return service.run(snapshots)

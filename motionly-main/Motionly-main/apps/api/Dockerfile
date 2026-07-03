@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl fonts-dejavu-core nodejs npm \
+    && apt-get install -y --no-install-recommends curl ffmpeg fonts-dejavu-core nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -19,6 +19,7 @@ COPY apps/worker/src/queue-bridge.mjs ./apps/worker/src/queue-bridge.mjs
 RUN cd apps/worker && npm install --omit=dev --no-audit --no-fund
 
 RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir lightning-sdk \
     && pip install --no-cache-dir .
 
 EXPOSE 8000
