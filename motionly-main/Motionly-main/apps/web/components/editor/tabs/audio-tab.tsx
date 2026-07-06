@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Label, Slider, PanelSection } from "../ui";
 import { Button } from "../../button";
 import { Check, Loader2, Music, Volume2 } from "lucide-react";
@@ -44,7 +43,6 @@ export function AudioTab({
   onSelectionUpdated,
   onPreviewAudioUpdated,
 }: AudioTabProps) {
-  const router = useRouter();
   const initialMood = useMemo(() => {
     const rawMood = initialSelection?.music_track?.raw_metadata?.mood;
     return typeof rawMood === "string" && rawMood.trim()
@@ -172,7 +170,6 @@ export function AudioTab({
           ? `Selected ${payload.selection.music_track.title}.`
           : "Music disabled for this edit.",
       );
-      router.refresh();
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);

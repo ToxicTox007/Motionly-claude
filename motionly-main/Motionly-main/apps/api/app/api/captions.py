@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.dependencies import (
     Actor,
@@ -51,6 +51,13 @@ ActorDep = Annotated[Actor, Depends(get_actor)]
 CaptionRepositoryDep = Annotated[InMemoryCaptionRepository, Depends(get_caption_repository)]
 TranscriptionProviderDep = Annotated[TranscriptionProvider, Depends(get_transcription_provider)]
 TranscriptionQueueDep = Annotated[TranscriptionQueue, Depends(get_transcription_queue)]
+
+
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
 
 
 @router.post("/transcriptions", response_model=TranscriptionCreateResponse, status_code=202)
@@ -101,7 +108,10 @@ async def get_transcript(
     repository: CaptionRepositoryDep,
 ) -> TranscriptReadResponse:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
-    transcript = repository.latest_transcript(
+    transcript = await _repository_call(
+        repository,
+        "latest_transcript_async",
+        "latest_transcript",
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
@@ -125,13 +135,22 @@ async def generate_captions(
     response: Response,
 ) -> CaptionGenerateResponse:
     transcript = (
-        repository.get_transcript(
+        await _repository_call(
+            repository,
+            "get_transcript_async",
+            "get_transcript",
             transcript_id=payload.transcript_id,
             project_id=project_id,
             workspace_id=actor.workspace_id,
         )
         if payload.transcript_id
-        else repository.latest_transcript(project_id=project_id, workspace_id=actor.workspace_id)
+        else await _repository_call(
+            repository,
+            "latest_transcript_async",
+            "latest_transcript",
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
     )
     if not transcript:
         raise ApiError(404, "transcript_not_found", "Generate a transcript before captions.")
@@ -174,9 +193,17 @@ async def list_captions(
     project_id: UUID,
     actor: ActorDep,
     repository: CaptionRepositoryDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> CaptionListResponse:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
-    tracks = repository.list_caption_tracks(project_id=project_id, workspace_id=actor.workspace_id)
+    tracks = await _repository_call(
+        repository,
+        "list_caption_tracks_async",
+        "list_caption_tracks",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        limit=limit,
+    )
     return CaptionListResponse(
         presets=list_caption_presets(),
         tracks=[track.to_response() for track in tracks],
@@ -193,12 +220,18 @@ async def update_caption_track(
     transcription_queue: TranscriptionQueueDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> CaptionGenerateResponse:
-    track = repository.get_caption_track(
+    track = await _repository_call(
+        repository,
+        "get_caption_track_async",
+        "get_caption_track",
         track_id=track_id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
-    transcript = repository.get_transcript(
+    transcript = await _repository_call(
+        repository,
+        "get_transcript_async",
+        "get_transcript",
         transcript_id=track.transcript_id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -231,7 +264,10 @@ async def update_caption_track(
         output_language=payload.output_language or "original",
         settings=request.app.state.settings if request else None,
     )
-    updated = repository.update_caption_track(
+    updated = await _repository_call(
+        repository,
+        "update_caption_track_async",
+        "update_caption_track",
         track=track,
         preset=preset_key,
         style=style,
@@ -276,12 +312,18 @@ async def update_caption_segments(
     repository: CaptionRepositoryDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> CaptionSegmentsUpdateResponse:
-    track = repository.get_caption_track(
+    track = await _repository_call(
+        repository,
+        "get_caption_track_async",
+        "get_caption_track",
         track_id=track_id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
-    updated = repository.replace_caption_segments(
+    updated = await _repository_call(
+        repository,
+        "replace_caption_segments_async",
+        "replace_caption_segments",
         track=track,
         segments=payload.segments,
     )

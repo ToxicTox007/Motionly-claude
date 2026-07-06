@@ -17,11 +17,19 @@ type QueueJob = {
 
 type AdminJobsListProps = {
   jobs: QueueJob[];
+  totalJobs?: number;
+  limit?: number;
   onRetry: (formData: FormData) => Promise<void>;
   onCancel: (formData: FormData) => Promise<void>;
 };
 
-export function AdminJobsList({ jobs, onRetry, onCancel }: AdminJobsListProps) {
+export function AdminJobsList({
+  jobs,
+  totalJobs = jobs.length,
+  limit = jobs.length,
+  onRetry,
+  onCancel,
+}: AdminJobsListProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
@@ -82,10 +90,13 @@ export function AdminJobsList({ jobs, onRetry, onCancel }: AdminJobsListProps) {
             ▼
           </span>
         </div>
+        <p className="text-xs font-black uppercase tracking-wider text-muted-foreground">
+          Showing {Math.min(jobs.length, limit)} of {totalJobs} latest jobs
+        </p>
       </div>
 
       <div className="grid gap-3">
-        {filteredJobs.slice(0, 50).map((job) => (
+        {filteredJobs.map((job) => (
           <div
             key={job.id}
             className="pixel-panel flex flex-wrap items-center justify-between gap-3 bg-surface p-4 transition-all hover:-translate-x-0.5 hover:-translate-y-0.5"

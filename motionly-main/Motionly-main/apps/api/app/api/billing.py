@@ -39,12 +39,19 @@ BillingRepositoryDep = Annotated[InMemoryBillingRepository, Depends(get_billing_
 StripeClientDep = Annotated[StripeBillingClient, Depends(get_stripe_billing_client)]
 
 
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
 @router.get("/billing/status", response_model=BillingStatusResponse)
 async def get_billing_status(
     actor: ActorDep,
     repository: BillingRepositoryDep,
 ) -> BillingStatusResponse:
-    return build_billing_status(actor.workspace_id, repository)
+    return await build_billing_status_async(actor.workspace_id, repository)
 
 
 @router.post("/billing/checkout", response_model=CheckoutSessionResponse)
@@ -60,7 +67,12 @@ async def create_checkout_session(
     if payload.plan == BillingPlanKey.FREE:
         raise ApiError(422, "checkout_free_plan", "Free plan does not require checkout.")
     price_id = stripe_price_for_plan(request, payload.plan)
-    subscription = repository.get_subscription(workspace_id=actor.workspace_id)
+    subscription = await _repository_call(
+        repository,
+        "get_subscription_async",
+        "get_subscription",
+        workspace_id=actor.workspace_id,
+    )
     success_url = str(payload.success_url or request.app.state.settings.billing_success_url or "")
     cancel_url = str(payload.cancel_url or request.app.state.settings.billing_cancel_url or "")
     if not success_url or not cancel_url:
@@ -90,7 +102,12 @@ async def create_customer_portal_session(
 ) -> CustomerPortalResponse:
     if not request.app.state.settings.billing_enabled:
         raise ApiError(503, "billing_disabled", "Billing is not enabled yet.")
-    subscription = repository.get_subscription(workspace_id=actor.workspace_id)
+    subscription = await _repository_call(
+        repository,
+        "get_subscription_async",
+        "get_subscription",
+        workspace_id=actor.workspace_id,
+    )
     if not subscription.stripe_customer_id:
         raise ApiError(404, "stripe_customer_missing", "Upgrade before opening billing management.")
     return_url = str(request.app.state.settings.billing_portal_return_url or "")
@@ -124,11 +141,26 @@ async def handle_stripe_webhook(
     )
     event_id = str(event["id"])
     event_type = str(event["type"])
-    if repository.has_processed_stripe_event(event_id):
+    if await _repository_call(
+        repository,
+        "has_processed_stripe_event_async",
+        "has_processed_stripe_event",
+        event_id=event_id,
+    ):
         return StripeWebhookResponse(received=True, duplicate=True)
 
-    apply_stripe_event(event=event, repository=repository, settings=request.app.state.settings)
-    repository.record_stripe_event(event_id=event_id, event_type=event_type)
+    await apply_stripe_event_async(
+        event=event,
+        repository=repository,
+        settings=request.app.state.settings,
+    )
+    await _repository_call(
+        repository,
+        "record_stripe_event_async",
+        "record_stripe_event",
+        event_id=event_id,
+        event_type=event_type,
+    )
     return StripeWebhookResponse(received=True)
 
 
@@ -144,6 +176,52 @@ def build_billing_status(
     plan = PLAN_DEFINITIONS[effective_plan_key]
     period_start, period_end = monthly_period()
     renders_used = repository.count_usage(
+        workspace_id=workspace_id,
+        event_type=UsageEventType.RENDER_SUCCEEDED,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    limit = plan.entitlements.monthly_renders
+    remaining = max(0, limit - renders_used)
+    percent = min(100, round((renders_used / limit) * 100)) if limit else 100
+    return BillingStatusResponse(
+        subscription=subscription_to_summary(subscription),
+        current_plan=plan,
+        plans=list(PLAN_DEFINITIONS.values()),
+        usage=UsageSummary(
+            workspace_id=workspace_id,
+            period_start=period_start,
+            period_end=period_end,
+            renders_used=renders_used,
+            renders_limit=limit,
+            remaining_renders=remaining,
+            percent_used=percent,
+        ),
+        can_render=remaining > 0,
+        entitlements=plan.entitlements,
+    )
+
+
+async def build_billing_status_async(
+    workspace_id: UUID,
+    repository: InMemoryBillingRepository,
+) -> BillingStatusResponse:
+    subscription = await _repository_call(
+        repository,
+        "get_subscription_async",
+        "get_subscription",
+        workspace_id=workspace_id,
+    )
+    effective_plan_key = plan_for_subscription_status(
+        plan=subscription.plan,
+        status=subscription.status,
+    )
+    plan = PLAN_DEFINITIONS[effective_plan_key]
+    period_start, period_end = monthly_period()
+    renders_used = await _repository_call(
+        repository,
+        "count_usage_async",
+        "count_usage",
         workspace_id=workspace_id,
         event_type=UsageEventType.RENDER_SUCCEEDED,
         period_start=period_start,
@@ -313,6 +391,102 @@ def apply_stripe_event(
         )
 
 
+async def apply_stripe_event_async(
+    *,
+    event: dict[str, object],
+    repository: InMemoryBillingRepository,
+    settings: object,
+) -> None:
+    event_type = str(event["type"])
+    obj = event_object(event)
+    event_id = str(event["id"])
+    if event_type == "checkout.session.completed":
+        workspace_id = UUID(
+            str(obj.get("client_reference_id") or obj.get("metadata", {}).get("workspace_id"))
+        )
+        metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
+        plan = plan_from_metadata_or_price(metadata, stripe_price_id_from_checkout(obj), settings)
+        await _repository_call(
+            repository,
+            "upsert_subscription_async",
+            "upsert_subscription",
+            workspace_id=workspace_id,
+            plan=plan,
+            status=SubscriptionStatus.ACTIVE,
+            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
+            stripe_subscription_id=obj.get("subscription") and str(obj["subscription"]),
+            stripe_price_id=stripe_price_id_from_checkout(obj),
+        )
+        return
+    if event_type.startswith("customer.subscription."):
+        workspace_id = UUID(str(obj.get("metadata", {}).get("workspace_id")))
+        status = subscription_status(str(obj.get("status", "incomplete")))
+        price_id = stripe_price_id_from_subscription(obj)
+        await _repository_call(
+            repository,
+            "upsert_subscription_async",
+            "upsert_subscription",
+            workspace_id=workspace_id,
+            plan=plan_from_price(price_id, settings),
+            status=status,
+            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
+            stripe_subscription_id=str(obj["id"]),
+            stripe_price_id=price_id,
+            current_period_start=timestamp_to_datetime(obj.get("current_period_start")),
+            current_period_end=timestamp_to_datetime(obj.get("current_period_end")),
+            cancel_at_period_end=bool(obj.get("cancel_at_period_end", False)),
+        )
+        return
+    if event_type == "invoice.payment_failed":
+        workspace_id = await workspace_id_from_stripe_object_async(obj, repository)
+        if workspace_id is None:
+            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
+        existing = await _repository_call(
+            repository,
+            "get_subscription_async",
+            "get_subscription",
+            workspace_id=workspace_id,
+        )
+        await _repository_call(
+            repository,
+            "upsert_subscription_async",
+            "upsert_subscription",
+            workspace_id=workspace_id,
+            plan=existing.plan,
+            status=SubscriptionStatus.PAST_DUE,
+            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
+            stripe_subscription_id=obj.get("subscription") and str(obj["subscription"]),
+            stripe_price_id=existing.stripe_price_id,
+            current_period_start=existing.current_period_start,
+            current_period_end=existing.current_period_end,
+            cancel_at_period_end=existing.cancel_at_period_end,
+        )
+        return
+    if event_type in {"charge.refunded", "charge.refund.updated"}:
+        workspace_id = await workspace_id_from_stripe_object_async(obj, repository)
+        if workspace_id is None:
+            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
+        amount_cents = int(obj.get("amount_refunded") or obj.get("amount") or 0)
+        if amount_cents <= 0:
+            raise ApiError(400, "stripe_refund_invalid", "Stripe refund amount is invalid.")
+        await _repository_call(
+            repository,
+            "record_billing_adjustment_async",
+            "record_billing_adjustment",
+            workspace_id=workspace_id,
+            stripe_event_id=event_id,
+            adjustment_type="refund",
+            amount_cents=-amount_cents,
+            currency=str(obj.get("currency") or "usd"),
+            reason=obj.get("failure_message") and str(obj["failure_message"]),
+            metadata={
+                "stripe_charge_id": obj.get("id"),
+                "stripe_customer_id": obj.get("customer"),
+                "stripe_invoice_id": obj.get("invoice"),
+            },
+        )
+
+
 
 def event_object(event: dict[str, object]) -> dict[str, Any]:
     data = event.get("data")
@@ -348,6 +522,24 @@ def workspace_id_from_stripe_object(
     subscription = obj.get("subscription")
     customer = obj.get("customer")
     return repository.workspace_for_stripe_subscription(
+        stripe_subscription_id=subscription and str(subscription),
+        stripe_customer_id=customer and str(customer),
+    )
+
+
+async def workspace_id_from_stripe_object_async(
+    obj: dict[str, Any],
+    repository: InMemoryBillingRepository,
+) -> UUID | None:
+    metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
+    if metadata.get("workspace_id"):
+        return UUID(str(metadata["workspace_id"]))
+    subscription = obj.get("subscription")
+    customer = obj.get("customer")
+    return await _repository_call(
+        repository,
+        "workspace_for_stripe_subscription_async",
+        "workspace_for_stripe_subscription",
         stripe_subscription_id=subscription and str(subscription),
         stripe_customer_id=customer and str(customer),
     )

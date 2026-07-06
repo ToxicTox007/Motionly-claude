@@ -18,6 +18,15 @@ from app.schemas.effects import (
     MotionSettings,
     VisualPresetKey,
 )
+from app.services.supabase import SupabaseRestClient
+
+EFFECTS_CONFIG_COLUMNS = (
+    "id,workspace_id,project_id,edit_plan_id,version,schema_version,status,preset,lut_intensity,"
+    "texture,motion_effects,motion,background_removal,gradient_ramp,after_effects_presets,"
+    "after_effects_project_url,correction_manifest_url,effect_count_limit_per_30s,"
+    "render_time_impact,preview_before_url,preview_after_url,cache_key,error_code,error_message,"
+    "created_at,updated_at"
+)
 
 
 @dataclass
@@ -216,15 +225,15 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
         plan_repository: InMemoryPlanRepository,
         supabase_url: str,
         service_role_key: str,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__(plan_repository)
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="effects",
+            metrics_registry=metrics_registry,
+        )
 
     def create_config(
         self,
@@ -275,11 +284,69 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
             "preview_after_url": preview_after_url,
             "cache_key": cache_key,
         }
-        response = httpx.post(
-            f"{self.rest_url}/visual_presets",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/visual_presets",
+            params={"select": EFFECTS_CONFIG_COLUMNS},
             json=[payload],
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._config_from_row(response.json()[0])
+
+    async def create_config_async(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        edit_plan_id: UUID | None,
+        status: EffectsStatus,
+        preset: VisualPresetKey,
+        lut_intensity: float,
+        texture: EffectsTextureSettings,
+        motion_effects: list[MotionEffectKey],
+        background_removal: BackgroundRemovalSettings,
+        gradient_ramp: GradientRampSettings,
+        after_effects_presets: list[AfterEffectsPreset],
+        after_effects_project_url: str | None,
+        correction_manifest_url: str | None,
+        effect_count_limit_per_30s: int,
+        render_time_impact: str,
+        preview_before_url: str | None,
+        preview_after_url: str | None,
+        cache_key: str | None,
+        motion: MotionSettings | None = None,
+    ) -> EffectsConfigRecord:
+        version = await self._next_version_async(project_id=project_id, workspace_id=workspace_id)
+        payload = {
+            "workspace_id": str(workspace_id),
+            "project_id": str(project_id),
+            "edit_plan_id": str(edit_plan_id) if edit_plan_id else None,
+            "version": version,
+            "schema_version": EFFECTS_SCHEMA_VERSION,
+            "status": status.value,
+            "preset": preset.value,
+            "lut_intensity": lut_intensity,
+            "texture": texture.model_dump(mode="json"),
+            "motion_effects": [effect.value for effect in motion_effects],
+            "motion": (motion or MotionSettings()).model_dump(mode="json"),
+            "background_removal": background_removal.model_dump(mode="json"),
+            "gradient_ramp": gradient_ramp.model_dump(mode="json"),
+            "after_effects_presets": [
+                preset.model_dump(mode="json") for preset in after_effects_presets
+            ],
+            "after_effects_project_url": after_effects_project_url,
+            "correction_manifest_url": correction_manifest_url,
+            "effect_count_limit_per_30s": effect_count_limit_per_30s,
+            "render_time_impact": render_time_impact,
+            "preview_before_url": preview_before_url,
+            "preview_after_url": preview_after_url,
+            "cache_key": cache_key,
+        }
+        response = await self.client.async_request(
+            "POST",
+            "/visual_presets",
+            params={"select": EFFECTS_CONFIG_COLUMNS},
+            json=[payload],
         )
         self._raise_for_supabase(response)
         return self._config_from_row(response.json()[0])
@@ -291,18 +358,40 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
         workspace_id: UUID,
         cache_key: str,
     ) -> EffectsConfigRecord | None:
-        response = httpx.get(
-            f"{self.rest_url}/visual_presets",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/visual_presets",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
                 "cache_key": f"eq.{cache_key}",
-                "select": "*",
+                "select": EFFECTS_CONFIG_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._config_from_row(rows[0]) if rows else None
+
+    async def find_cached_config_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        cache_key: str,
+    ) -> EffectsConfigRecord | None:
+        response = await self.client.async_request(
+            "GET",
+            "/visual_presets",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "cache_key": f"eq.{cache_key}",
+                "select": EFFECTS_CONFIG_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -314,26 +403,46 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
         project_id: UUID,
         workspace_id: UUID,
     ) -> EffectsConfigRecord | None:
-        response = httpx.get(
-            f"{self.rest_url}/visual_presets",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/visual_presets",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": EFFECTS_CONFIG_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._config_from_row(rows[0]) if rows else None
+
+    async def latest_config_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> EffectsConfigRecord | None:
+        response = await self.client.async_request(
+            "GET",
+            "/visual_presets",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EFFECTS_CONFIG_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
         return self._config_from_row(rows[0]) if rows else None
 
     def _next_version(self, *, project_id: UUID, workspace_id: UUID) -> int:
-        response = httpx.get(
-            f"{self.rest_url}/visual_presets",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/visual_presets",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
@@ -341,7 +450,22 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
                 "order": "version.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return int(rows[0]["version"]) + 1 if rows else 1
+
+    async def _next_version_async(self, *, project_id: UUID, workspace_id: UUID) -> int:
+        response = await self.client.async_request(
+            "GET",
+            "/visual_presets",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": "version",
+                "order": "version.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -349,6 +473,9 @@ class SupabaseEffectsRepository(InMemoryEffectsRepository):
 
     def next_version(self, *, project_id: UUID, workspace_id: UUID) -> int:
         return self._next_version(project_id=project_id, workspace_id=workspace_id)
+
+    async def next_version_async(self, *, project_id: UUID, workspace_id: UUID) -> int:
+        return await self._next_version_async(project_id=project_id, workspace_id=workspace_id)
 
     def _config_from_row(self, row: dict[str, object]) -> EffectsConfigRecord:
         return EffectsConfigRecord(

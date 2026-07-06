@@ -15,7 +15,9 @@ from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.renders import RenderCreateRequest, RenderJobStatus
 from app.schemas.uploads import UploadStatus, VideoMetadata
 from app.services.local_storage import LocalObjectStorage
+from app.services.operations import MetricsRegistry
 from app.services.queue import PreprocessQueue, QueueRegistry, RenderQueue
+from app.services.render_jobs import complete_remotion_render_job
 from tests.test_renders import make_render_repository
 
 
@@ -123,6 +125,7 @@ def test_worker_runs_upload_preprocessing_job(tmp_path, monkeypatch) -> None:
 def test_worker_runs_render_job_to_export() -> None:
     repository, project_id, workspace_id, user_id = make_render_repository()
     registry = QueueRegistry()
+    metrics_registry = MetricsRegistry()
     settings = SimpleNamespace(
         admin_api_token="worker-secret",
         export_storage_bucket="exports",
@@ -139,6 +142,7 @@ def test_worker_runs_render_job_to_export() -> None:
             state=SimpleNamespace(
                 settings=settings,
                 queue_registry=registry,
+                metrics_registry=metrics_registry,
                 render_repository=repository,
             ),
         ),
@@ -172,6 +176,9 @@ def test_worker_runs_render_job_to_export() -> None:
     assert worker_response.status == "succeeded"
     assert job.status == RenderJobStatus.COMPLETE
     assert repository.list_exports(project_id=project_id, workspace_id=workspace_id)
+    summary = metrics_registry.summary()
+    assert summary["render"]["p95_latency_ms"] == 0
+    assert summary["export"]["p95_latency_ms"] == 0
 
 
 def test_worker_progress_callback_updates_render_job() -> None:
@@ -271,3 +278,43 @@ def test_worker_failure_callback_marks_terminal_failure() -> None:
     assert response.status == RenderJobStatus.FAILED
     assert render.error_code == "render_worker_failed"
     assert "render-cli.ts exited with code 1" in render.logs[-1]
+
+
+def test_remotion_completion_records_render_and_export_metrics() -> None:
+    repository, project_id, workspace_id, _user_id = make_render_repository()
+    job = repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=repository.get_active_upload(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        ).id,
+        caption_track_id=repository.latest_caption_track(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        ).id,
+        status=RenderJobStatus.RENDERING,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+        progress_pct=90,
+    )
+    metrics_registry = MetricsRegistry()
+
+    complete_remotion_render_job(
+        job=job,
+        repository=repository,
+        metrics_registry=metrics_registry,
+        export_bucket="exports",
+        export_storage_path=f"workspaces/{workspace_id}/projects/{project_id}/exports/{job.id}.mp4",
+        benchmark_ms=3210,
+        file_size_bytes=2048,
+        width=1080,
+        height=1920,
+        fps=30,
+        duration_ms=6000,
+    )
+
+    summary = metrics_registry.summary()
+    assert summary["render"]["p95_latency_ms"] == 3210
+    assert summary["export"]["p95_latency_ms"] == 3210

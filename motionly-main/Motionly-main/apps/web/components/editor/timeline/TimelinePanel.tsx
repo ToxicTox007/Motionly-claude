@@ -8,7 +8,6 @@ import React, {
   useState,
 } from "react";
 import { useDroppable, useDndContext } from "@dnd-kit/core";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRight,
@@ -101,7 +100,6 @@ export function TimelinePanel({
   onBrollSlotUpdated,
   onMusicSelectionUpdated,
 }: TimelinePanelProps) {
-  const router = useRouter();
   const { toast } = useToast();
   const { totalDurationMs, tracks } = state;
   const timelineClips = activePlan?.plan.timeline?.clips;
@@ -352,7 +350,6 @@ export function TimelinePanel({
             const nextMessage = await action();
             if (historyEntry) pushHistory(historyEntry);
             setMessage(nextMessage);
-            router.refresh();
           } catch (error) {
             console.error(error);
             const errMsg = (error as Error).message;
@@ -372,7 +369,7 @@ export function TimelinePanel({
 
       await requestQueue.current;
     },
-    [pushHistory, router, toast],
+    [pushHistory, toast],
   );
 
   function cloneCuts(cuts: EditPlanCut[]) {
@@ -1582,10 +1579,59 @@ const MobileTimelineView = React.memo(
     const minWidth = Math.max(760, Math.round(totalDurationMs / 60));
     const pct = (ms: number) =>
       `${((ms / Math.max(totalDurationMs, 1)) * 100).toFixed(4)}%`;
+    const scrollRef = React.useRef<HTMLDivElement | null>(null);
+    const [visibleRange, setVisibleRange] = React.useState({
+      startMs: 0,
+      endMs: Math.min(totalDurationMs, 10000),
+    });
+    const isMobileClipVisible = React.useCallback(
+      (clip: TimelineClip) =>
+        clip.id === selectedClipId ||
+        (clip.endMs >= visibleRange.startMs &&
+          clip.startMs <= visibleRange.endMs),
+      [selectedClipId, visibleRange],
+    );
+
+    React.useEffect(() => {
+      const scrollEl = scrollRef.current;
+      if (!scrollEl) return;
+
+      const updateRange = () => {
+        const pxToMs = totalDurationMs / Math.max(minWidth, 1);
+        const startMs = scrollEl.scrollLeft * pxToMs;
+        const endMs = (scrollEl.scrollLeft + scrollEl.clientWidth) * pxToMs;
+        const bufferMs = Math.max(2000, scrollEl.clientWidth * pxToMs * 0.35);
+        setVisibleRange({
+          startMs: Math.max(0, startMs - bufferMs),
+          endMs: Math.min(totalDurationMs, endMs + bufferMs),
+        });
+      };
+
+      updateRange();
+      let frameId: number | null = null;
+      const onScroll = () => {
+        if (frameId !== null) return;
+        frameId = window.requestAnimationFrame(() => {
+          updateRange();
+          frameId = null;
+        });
+      };
+
+      scrollEl.addEventListener("scroll", onScroll);
+      window.addEventListener("resize", onScroll);
+      return () => {
+        if (frameId !== null) window.cancelAnimationFrame(frameId);
+        scrollEl.removeEventListener("scroll", onScroll);
+        window.removeEventListener("resize", onScroll);
+      };
+    }, [minWidth, totalDurationMs]);
 
     return (
       <div className="min-h-0 flex-1 overflow-hidden md:hidden">
-        <div className="h-full overflow-x-auto overflow-y-auto overscroll-x-contain">
+        <div
+          ref={scrollRef}
+          className="h-full overflow-x-auto overflow-y-auto overscroll-x-contain"
+        >
           <div className="relative min-h-full" style={{ minWidth }}>
             <button
               type="button"
@@ -1634,32 +1680,34 @@ const MobileTimelineView = React.memo(
                       Empty
                     </div>
                   ) : (
-                    track.clips.map((clip) => (
-                      <button
-                        key={clip.id}
-                        type="button"
-                        aria-pressed={clip.id === selectedClipId}
-                        aria-label={`${track.label} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}.`}
-                        title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}`}
-                        onClick={() => onClipSelect(clip.id)}
-                        className={cn(
-                          "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden border-2 border-foreground px-2 text-left text-[11px] font-black leading-tight text-white shadow-brutal-sm",
-                          clip.colorClass,
-                          clip.disabled && "opacity-35",
-                          clip.id === selectedClipId
-                            ? "ring-2 ring-primary"
-                            : "ring-0",
-                        )}
-                        style={{
-                          left: pct(clip.startMs),
-                          width: `max(4rem, ${pct(Math.max(clip.endMs - clip.startMs, 250))})`,
-                        }}
-                      >
-                        <span className="truncate whitespace-nowrap">
-                          {clip.label}
-                        </span>
-                      </button>
-                    ))
+                    track.clips.map((clip) =>
+                      isMobileClipVisible(clip) ? (
+                        <button
+                          key={clip.id}
+                          type="button"
+                          aria-pressed={clip.id === selectedClipId}
+                          aria-label={`${track.label} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}.`}
+                          title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}`}
+                          onClick={() => onClipSelect(clip.id)}
+                          className={cn(
+                            "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden border-2 border-foreground px-2 text-left text-[11px] font-black leading-tight text-white shadow-brutal-sm",
+                            clip.colorClass,
+                            clip.disabled && "opacity-35",
+                            clip.id === selectedClipId
+                              ? "ring-2 ring-primary"
+                              : "ring-0",
+                          )}
+                          style={{
+                            left: pct(clip.startMs),
+                            width: `max(4rem, ${pct(Math.max(clip.endMs - clip.startMs, 250))})`,
+                          }}
+                        >
+                          <span className="truncate whitespace-nowrap">
+                            {clip.label}
+                          </span>
+                        </button>
+                      ) : null,
+                    )
                   )}
                 </div>
               </div>

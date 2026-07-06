@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Job } from "bullmq";
+import { pathToFileURL } from "node:url";
 import {
   bullConnection,
   allQueueNames,
@@ -11,6 +12,7 @@ import {
 } from "./queue-common.mjs";
 
 const queueNames = allQueueNames;
+const JOB_SCAN_PAGE_SIZE = 500;
 
 async function readStdinJson() {
   const chunks = [];
@@ -56,22 +58,86 @@ async function enqueue(connection, payload) {
   return normalizeJobRecord(job, state);
 }
 
+async function jobRecord(connection, payload) {
+  const job = await findJob(connection, payload.id, payload.queue_name);
+  if (!job) return null;
+  return normalizeJobRecord(job, await job.getState());
+}
+
 async function jobs(connection) {
   const records = [];
   for (const queueName of queueNames) {
     const queue = queueFor(queueName, connection);
-    const queueJobs = await queue.getJobs(
-      ["waiting", "prioritized", "delayed", "active", "completed", "failed", "paused"],
-      0,
-      499,
-      true,
-    );
+    const queueJobs = await getJobsPaged(queue, [
+      "waiting",
+      "prioritized",
+      "delayed",
+      "active",
+      "completed",
+      "failed",
+      "paused",
+    ]);
     for (const job of queueJobs) {
       const state = await job.getState();
       records.push(normalizeJobRecord(job, state));
     }
   }
   return records.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export async function getJobsPaged(queue, states, { pageSize = JOB_SCAN_PAGE_SIZE } = {}) {
+  const records = [];
+  let start = 0;
+  while (true) {
+    const page = await queue.getJobs(states, start, start + pageSize - 1, true);
+    records.push(...page);
+    if (page.length < pageSize) break;
+    start += pageSize;
+  }
+  return records;
+}
+
+async function snapshots(connection) {
+  const records = [];
+  const now = Date.now();
+  for (const queueName of queueNames) {
+    const queue = queueFor(queueName, connection);
+    const counts = await queue.getJobCounts(
+      "waiting",
+      "prioritized",
+      "delayed",
+      "active",
+      "completed",
+      "failed",
+      "paused",
+    );
+    const waiting = Number(counts.waiting || 0);
+    const prioritized = Number(counts.prioritized || 0);
+    const delayed = Number(counts.delayed || 0);
+    const active = Number(counts.active || 0);
+    const completed = Number(counts.completed || 0);
+    const failed = Number(counts.failed || 0);
+    const canceled = Number(counts.paused || 0);
+    let oldestQueuedSeconds = null;
+    const oldest = await queue.getJobs(["waiting", "prioritized", "delayed"], 0, 0, true);
+    if (oldest.length > 0) {
+      const timestamp = Number(oldest[0].data?.enqueued_at ? Date.parse(oldest[0].data.enqueued_at) : oldest[0].timestamp);
+      if (Number.isFinite(timestamp)) {
+        oldestQueuedSeconds = Math.max(0, Math.round((now - timestamp) / 1000));
+      }
+    }
+    records.push({
+      queue_name: queueName,
+      queued: waiting + prioritized + delayed,
+      running: active,
+      succeeded: completed,
+      failed: 0,
+      dead_letter: failed,
+      canceled,
+      oldest_queued_seconds: oldestQueuedSeconds,
+    });
+  }
+  return records;
 }
 
 async function retry(connection, payload) {
@@ -104,7 +170,7 @@ async function markStuckDeadLetter(connection, payload) {
   const transitioned = [];
   for (const queueName of queueNames) {
     const queue = queueFor(queueName, connection);
-    const active = await queue.getJobs(["active"], 0, 499, true);
+    const active = await getJobsPaged(queue, ["active"]);
     for (const job of active) {
       const startedAt = Number(job.processedOn || job.timestamp || Date.now());
       if (startedAt > cutoff) continue;
@@ -126,7 +192,7 @@ async function recoverStuck(connection, payload) {
   const transitioned = [];
   for (const queueName of queueNames) {
     const queue = queueFor(queueName, connection);
-    const active = await queue.getJobs(["active"], 0, 499, true);
+    const active = await getJobsPaged(queue, ["active"]);
     for (const job of active) {
       const startedAt = Number(job.processedOn || job.timestamp || Date.now());
       if (startedAt > cutoff) continue;
@@ -150,17 +216,14 @@ async function recoverStuck(connection, payload) {
 }
 
 async function execute(command, connection, payload) {
-  return command === "enqueue"
-    ? enqueue(connection, payload)
-    : command === "jobs"
-      ? jobs(connection)
-      : command === "retry"
-        ? retry(connection, payload)
-      : command === "cancel"
-        ? cancel(connection, payload)
-        : command === "recover-stuck"
-          ? recoverStuck(connection, payload)
-        : markStuckDeadLetter(connection, payload);
+  if (command === "enqueue") return enqueue(connection, payload);
+  if (command === "job") return jobRecord(connection, payload);
+  if (command === "jobs") return jobs(connection);
+  if (command === "snapshots") return snapshots(connection);
+  if (command === "retry") return retry(connection, payload);
+  if (command === "cancel") return cancel(connection, payload);
+  if (command === "recover-stuck") return recoverStuck(connection, payload);
+  return markStuckDeadLetter(connection, payload);
 }
 
 async function serve(connection) {
@@ -190,8 +253,8 @@ async function serve(connection) {
 
 async function main() {
   const command = process.argv[2];
-  if (!["enqueue", "jobs", "retry", "cancel", "mark-stuck-dead-letter", "recover-stuck", "serve"].includes(command)) {
-    throw new Error("Usage: queue-bridge.mjs [enqueue|jobs|retry|cancel|mark-stuck-dead-letter|recover-stuck|serve]");
+  if (!["enqueue", "job", "jobs", "snapshots", "retry", "cancel", "mark-stuck-dead-letter", "recover-stuck", "serve"].includes(command)) {
+    throw new Error("Usage: queue-bridge.mjs [enqueue|job|jobs|snapshots|retry|cancel|mark-stuck-dead-letter|recover-stuck|serve]");
   }
   const connection = bullConnection();
   try {
@@ -207,7 +270,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}

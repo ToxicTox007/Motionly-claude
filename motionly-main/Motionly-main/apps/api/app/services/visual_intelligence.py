@@ -1,5 +1,6 @@
 import hashlib
 import math
+import sys
 import tempfile
 from pathlib import Path
 from typing import Protocol
@@ -324,6 +325,12 @@ def run_visual_analysis_for_upload(
     sample_rate_fps: float,
     scene_threshold: float,
 ) -> VideoManifestRecord:
+    print(
+        "VISUAL_DEBUG load_upload "
+        f"workspace_id={workspace_id} project_id={project_id} video_id={video_id}",
+        file=sys.stderr,
+        flush=True,
+    )
     upload = repository.get_upload(
         project_id=project_id,
         video_id=video_id,
@@ -343,6 +350,7 @@ def run_visual_analysis_for_upload(
     if record is not None and record.status == VisualManifestStatus.READY and record.manifest:
         return record
     if record is None:
+        print("VISUAL_DEBUG create_manifest_record", file=sys.stderr, flush=True)
         record = repository.create_manifest(
             workspace_id=workspace_id,
             project_id=project_id,
@@ -353,10 +361,17 @@ def run_visual_analysis_for_upload(
             manifest=None,
         )
     else:
+        print(
+            "VISUAL_DEBUG transition_manifest_processing "
+            f"current_status={record.status.value}",
+            file=sys.stderr,
+            flush=True,
+        )
         record = repository.transition_manifest(
             record=record,
             status=VisualManifestStatus.PROCESSING,
         )
+    print("VISUAL_DEBUG fetch_source_object", file=sys.stderr, flush=True)
     storage = create_object_storage(
         root=media_work_dir,
         supabase_url=supabase_url,
@@ -364,12 +379,14 @@ def run_visual_analysis_for_upload(
     )
     source_path = storage.ensure_object(bucket=upload.storage_bucket, path=upload.storage_path)
     try:
+        print("VISUAL_DEBUG provider_analyze_start", file=sys.stderr, flush=True)
         manifest = provider.analyze(
             source_path=source_path,
             metadata=upload.metadata,
             sample_rate_fps=sample_rate_fps,
             scene_threshold=scene_threshold,
         )
+        print("VISUAL_DEBUG provider_analyze_done", file=sys.stderr, flush=True)
     except CudaOomFailure as exc:
         repository.transition_manifest(
             record=record,
@@ -403,6 +420,7 @@ def run_visual_analysis_for_upload(
             "visual_analysis_failed",
             f"Visual analysis failed: {type(exc).__name__}: {str(exc)}",
         ) from exc
+    print("VISUAL_DEBUG transition_manifest_ready", file=sys.stderr, flush=True)
     return repository.transition_manifest(
         record=record,
         status=VisualManifestStatus.READY,
@@ -547,7 +565,7 @@ def _sample_video_frames(
             samples.append(
                 {
                     "timestamp_ms": round((frame_index / fps) * 1000),
-                    "frame": frame.copy(),
+                    "frame": _resize_frame_for_analysis(cv2=cv2, frame=frame),
                     "scene_change_score": max(0.0, scene_score),
                 }
             )
@@ -557,6 +575,19 @@ def _sample_video_frames(
             break
     capture.release()
     return samples
+
+
+def _resize_frame_for_analysis(*, cv2, frame, max_dimension: int = 640):
+    height, width = frame.shape[:2]
+    largest = max(height, width)
+    if largest <= max_dimension:
+        return frame
+    scale = max_dimension / largest
+    target_size = (
+        max(1, round(width * scale)),
+        max(1, round(height * scale)),
+    )
+    return cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
 
 
 def _clip_embedding(*, torch, device, processor, model, image) -> list[float]:

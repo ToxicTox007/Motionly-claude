@@ -6,10 +6,21 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.uploads import cancel_upload, complete_upload, get_upload_asset_urls, init_upload
+from app.api.uploads import (
+    cancel_upload,
+    complete_upload,
+    get_active_upload,
+    get_upload,
+    get_upload_asset_urls,
+    init_upload,
+)
 from app.core.config import get_settings
 from app.repositories.captions import InMemoryCaptionRepository
-from app.repositories.uploads import InMemoryUploadRepository
+from app.repositories.uploads import (
+    UPLOAD_RESPONSE_COLUMNS,
+    InMemoryUploadRepository,
+    SupabaseUploadRepository,
+)
 from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.uploads import (
     UploadCompleteRequest,
@@ -103,6 +114,312 @@ def test_upload_init_and_complete_queues_processing_job() -> None:
     assert complete_response.video_id == init_response.video_id
     assert complete_response.status == "processing"
     assert complete_response.job_id == f"preprocess--{init_response.video_id}"
+
+
+def test_supabase_upload_initialize_batches_final_path_and_uploading_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = SupabaseUploadRepository(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/projects":
+            return _supabase_response(
+                [{"id": str(project_id), "workspace_id": str(workspace_id), "title": "Launch"}]
+            )
+        if method == "GET" and path == "/uploaded_videos":
+            return _supabase_response([], headers={"content-range": "0-0/0"})
+        if method == "POST" and path == "/uploaded_videos":
+            return _supabase_response([_upload_row(kwargs["json"])])
+        raise AssertionError(f"unexpected Supabase call: {method} {path}")
+
+    monkeypatch.setattr("app.repositories.uploads.SupabaseRestClient.request", fake_request)
+
+    upload = repository.initialize_upload(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        storage_bucket="raw-uploads",
+        storage_extension="mp4",
+        original_filename="launch.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10_000,
+        max_active_uploads=1,
+    )
+
+    assert upload.status == UploadStatus.UPLOADING
+    assert upload.storage_path == (
+        f"workspaces/{workspace_id}/projects/{project_id}/raw/{upload.id}.mp4"
+    )
+    assert [call[:2] for call in calls] == [
+        ("GET", "/projects"),
+        ("GET", "/uploaded_videos"),
+        ("POST", "/uploaded_videos"),
+    ]
+    assert calls[2][2]["params"] == {"select": UPLOAD_RESPONSE_COLUMNS}
+    assert calls[2][2]["json"]["status"] == "uploading"
+    assert calls[2][2]["json"]["storage_path"].endswith(f"{upload.id}.mp4")
+
+
+def test_supabase_upload_complete_batches_processing_transition_and_active_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = SupabaseUploadRepository(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    upload_id = uuid4()
+    calls = []
+    base = {
+        "id": str(upload_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "storage_bucket": "raw-uploads",
+        "storage_path": f"workspaces/{workspace_id}/projects/{project_id}/raw/{upload_id}.mp4",
+        "original_filename": "launch.mp4",
+        "mime_type": "video/mp4",
+        "file_size_bytes": 10_000,
+        "byte_size": 10_000,
+    }
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if method == "GET" and path == "/uploaded_videos":
+            return _supabase_response([_upload_row({**base, "status": "uploading"})])
+        if method == "PATCH" and path == "/uploaded_videos":
+            return _supabase_response([_upload_row({**base, "status": "processing"})])
+        if method == "PATCH" and path == "/projects":
+            return _supabase_response([])
+        raise AssertionError(f"unexpected Supabase call: {method} {path}")
+
+    monkeypatch.setattr("app.repositories.uploads.SupabaseRestClient.request", fake_request)
+
+    upload = repository.complete_upload_for_processing(
+        project_id=project_id,
+        video_id=upload_id,
+        workspace_id=workspace_id,
+        observed_file_size_bytes=10_000,
+    )
+
+    assert upload.status == UploadStatus.PROCESSING
+    assert [call[:2] for call in calls] == [
+        ("GET", "/uploaded_videos"),
+        ("PATCH", "/uploaded_videos"),
+        ("PATCH", "/projects"),
+    ]
+    assert calls[1][2]["json"]["status"] == "processing"
+    assert calls[2][2]["json"]["active_video_id"] == str(upload_id)
+
+
+@pytest.mark.anyio
+async def test_supabase_upload_async_init_and_complete_use_async_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = SupabaseUploadRepository(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    upload_id = uuid4()
+    calls = []
+    base = {
+        "id": str(upload_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "storage_bucket": "raw-uploads",
+        "storage_path": f"workspaces/{workspace_id}/projects/{project_id}/raw/{upload_id}.mp4",
+        "original_filename": "launch.mp4",
+        "mime_type": "video/mp4",
+        "file_size_bytes": 10_000,
+        "byte_size": 10_000,
+    }
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/projects" and method == "GET":
+            return _supabase_response(
+                [{"id": str(project_id), "workspace_id": str(workspace_id), "title": "Launch"}]
+            )
+        if method == "GET" and path == "/uploaded_videos":
+            if kwargs["params"].get("select") == "id":
+                return _supabase_response([], headers={"content-range": "0-0/0"})
+            return _supabase_response([_upload_row({**base, "status": "uploading"})])
+        if method == "POST" and path == "/uploaded_videos":
+            return _supabase_response([_upload_row(kwargs["json"])])
+        if method == "PATCH" and path == "/uploaded_videos":
+            return _supabase_response([_upload_row({**base, "status": "processing"})])
+        if method == "PATCH" and path == "/projects":
+            return _supabase_response([])
+        raise AssertionError(f"unexpected Supabase call: {method} {path}")
+
+    monkeypatch.setattr(
+        "app.repositories.uploads.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    initialized = await repository.initialize_upload_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        storage_bucket="raw-uploads",
+        storage_extension="mp4",
+        original_filename="launch.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10_000,
+        max_active_uploads=1,
+    )
+    completed = await repository.complete_upload_for_processing_async(
+        project_id=project_id,
+        video_id=upload_id,
+        workspace_id=workspace_id,
+        observed_file_size_bytes=10_000,
+    )
+
+    assert initialized.status == UploadStatus.UPLOADING
+    assert completed.status == UploadStatus.PROCESSING
+    assert [call[:2] for call in calls] == [
+        ("GET", "/projects"),
+        ("GET", "/uploaded_videos"),
+        ("POST", "/uploaded_videos"),
+        ("GET", "/uploaded_videos"),
+        ("PATCH", "/uploaded_videos"),
+        ("PATCH", "/projects"),
+    ]
+    assert calls[2][2]["params"] == {"select": UPLOAD_RESPONSE_COLUMNS}
+    assert calls[2][2]["json"]["status"] == "uploading"
+    assert calls[4][2]["json"]["status"] == "processing"
+    assert calls[5][2]["json"]["active_video_id"] == str(upload_id)
+
+
+def test_upload_api_prefers_async_repository_methods() -> None:
+    request, _repository, project_id, workspace_id, user_id = make_context()
+
+    class AsyncUploadRepository(InMemoryUploadRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.async_calls: list[str] = []
+
+        async def initialize_upload_async(self, **kwargs):
+            self.async_calls.append("init")
+            return self.initialize_upload(**kwargs)
+
+        async def complete_upload_for_processing_async(self, **kwargs):
+            self.async_calls.append("complete")
+            return self.complete_upload_for_processing(**kwargs)
+
+        async def get_upload_for_project_async(self, **kwargs):
+            self.async_calls.append("get")
+            return self.get_upload_for_project(**kwargs)
+
+        async def get_active_upload_async(self, **kwargs):
+            self.async_calls.append("active")
+            return self.get_active_upload(**kwargs)
+
+        async def mark_failed_async(self, **kwargs):
+            self.async_calls.append("failed")
+            return self.mark_failed(**kwargs)
+
+    repository = AsyncUploadRepository()
+    repository.seed_project(
+        project_id=uuid4_from_string(project_id),
+        workspace_id=uuid4_from_string(workspace_id),
+    )
+    user = actor(workspace_id, user_id)
+    init_response = asyncio.run(
+        init_upload(
+            project_id=uuid4_from_string(project_id),
+            payload=UploadInitRequest(
+                filename="async.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=10_000,
+            ),
+            request=request,
+            actor=user,
+            repository=repository,
+            storage_signer=FakeStorageSigner(),
+        )
+    )
+    asyncio.run(
+        get_active_upload(
+            project_id=uuid4_from_string(project_id),
+            actor=user,
+            repository=repository,
+        )
+    )
+    asyncio.run(
+        get_upload(
+            project_id=uuid4_from_string(project_id),
+            video_id=init_response.video_id,
+            actor=user,
+            repository=repository,
+        )
+    )
+    with pytest.raises(ApiError):
+        # A created/uploading upload cannot expose asset URLs, but the route still
+        # has to fetch it through the async repository method before rejecting.
+        asyncio.run(
+            get_upload_asset_urls(
+                project_id=uuid4_from_string(project_id),
+                video_id=init_response.video_id,
+                request=request,
+                actor=user,
+                repository=repository,
+                storage_signer=FakeStorageSigner(),
+            )
+        )
+
+    complete_response = asyncio.run(
+        complete_upload(
+            project_id=uuid4_from_string(project_id),
+            video_id=init_response.video_id,
+            payload=UploadCompleteRequest(observed_file_size_bytes=10_000),
+            request=request,
+            actor=user,
+            repository=repository,
+            preprocess_queue=PreprocessQueue(),
+        )
+    )
+    canceled_init = asyncio.run(
+        init_upload(
+            project_id=uuid4_from_string(project_id),
+            payload=UploadInitRequest(
+                filename="cancel-me.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=10_000,
+            ),
+            request=request,
+            actor=user,
+            repository=repository,
+            storage_signer=FakeStorageSigner(),
+        )
+    )
+    asyncio.run(
+        cancel_upload(
+            project_id=uuid4_from_string(project_id),
+            video_id=canceled_init.video_id,
+            actor=user,
+            repository=repository,
+        )
+    )
+
+    assert complete_response.status == UploadStatus.PROCESSING
+    assert repository.async_calls == [
+        "init",
+        "active",
+        "get",
+        "get",
+        "complete",
+        "init",
+        "get",
+        "failed",
+    ]
 
 
 def test_upload_sync_flag_cannot_run_media_inside_request(
@@ -474,3 +791,29 @@ def test_preprocessing_fails_non_render_ready_probe(
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.code == "video_not_render_ready"
+
+
+def _supabase_response(rows, *, headers: dict[str, str] | None = None):
+    return SimpleNamespace(status_code=200, headers=headers or {}, json=lambda: rows)
+
+
+def _upload_row(values: dict[str, object]) -> dict[str, object]:
+    now = "2026-07-05T00:00:00+00:00"
+    return {
+        "id": str(values["id"]),
+        "project_id": str(values["project_id"]),
+        "workspace_id": str(values["workspace_id"]),
+        "storage_bucket": str(values["storage_bucket"]),
+        "storage_path": str(values["storage_path"]),
+        "original_filename": str(values["original_filename"]),
+        "mime_type": str(values["mime_type"]),
+        "file_size_bytes": int(values["file_size_bytes"]),
+        "byte_size": int(values["byte_size"]),
+        "status": str(values.get("status") or "uploading"),
+        "thumbnail_path": None,
+        "metadata": {},
+        "error_code": None,
+        "error_message": None,
+        "created_at": now,
+        "updated_at": now,
+    }

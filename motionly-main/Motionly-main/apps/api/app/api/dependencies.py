@@ -27,6 +27,7 @@ from app.services.auth import (
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import EditPlannerProvider
 from app.services.music import MusicProvider
+from app.services.offload import run_blocking
 from app.services.queue import (
     BrollQueue,
     EffectsQueue,
@@ -74,21 +75,24 @@ async def get_actor(
         if not authorization or not authorization.lower().startswith("bearer "):
             raise ApiError(401, "auth_required", "Sign in before using Motionly.")
         token = authorization.split(" ", 1)[1].strip()
-        try:
-            verified = verify_supabase_jwt(token=token, jwt_secret=settings.supabase_jwt_secret)
-        except ApiError as exc:
-            if (
-                exc.code != "auth_token_invalid"
-                or "algorithm" not in exc.message.lower()
-                or not settings.supabase_url
-                or not settings.supabase_service_role_key
-            ):
-                raise
-            verified = verify_supabase_token_with_auth_api(
-                token=token,
-                supabase_url=str(settings.supabase_url),
-                service_role_key=settings.supabase_service_role_key,
-            )
+        request_state = getattr(request, "state", None)
+        verified = getattr(request_state, "verified_supabase_token", None)
+        if verified is None:
+            try:
+                verified = verify_supabase_jwt(token=token, jwt_secret=settings.supabase_jwt_secret)
+            except ApiError as exc:
+                if (
+                    exc.code != "auth_token_invalid"
+                    or "algorithm" not in exc.message.lower()
+                    or not settings.supabase_url
+                    or not settings.supabase_service_role_key
+                ):
+                    raise
+                verified = verify_supabase_token_with_auth_api(
+                    token=token,
+                    supabase_url=str(settings.supabase_url),
+                    service_role_key=settings.supabase_service_role_key,
+                )
         if not x_motionly_workspace_id:
             raise ApiError(401, "auth_context_missing", "Workspace context is required.")
         try:
@@ -96,11 +100,13 @@ async def get_actor(
         except ValueError as exc:
             raise ApiError(401, "auth_context_invalid", "Workspace context is invalid.") from exc
         if settings.supabase_url and settings.supabase_service_role_key:
-            require_workspace_membership(
+            await run_blocking(
+                require_workspace_membership,
                 supabase_url=str(settings.supabase_url),
                 service_role_key=settings.supabase_service_role_key,
                 user_id=verified.user_id,
                 workspace_id=workspace_id,
+                metrics_registry=getattr(request.app.state, "metrics_registry", None),
             )
         elif settings.app_env not in LOCAL_AUTH_BYPASS_ENVS:
             raise ApiError(500, "auth_not_configured", "Workspace auth is not configured.")

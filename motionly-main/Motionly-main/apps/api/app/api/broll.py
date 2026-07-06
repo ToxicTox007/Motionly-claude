@@ -72,6 +72,20 @@ StockProvidersDep = Annotated[list[StockVideoProvider], Depends(get_stock_video_
 StorageSignerDep = Annotated[StorageSigner, Depends(get_storage_signer)]
 
 
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
+async def _response_for_slot(repository: InMemoryBrollRepository, slot):
+    async_method = getattr(repository, "response_for_slot_async", None)
+    if async_method is not None:
+        return await async_method(slot)
+    return repository.response_for_slot(slot)
+
+
 @router.post("/library/init", response_model=UserBrollUploadInitResponse, status_code=201)
 async def init_user_broll_upload(
     project_id: UUID,
@@ -105,7 +119,10 @@ async def init_user_broll_upload(
         if payload.width > payload.height
         else StockOrientation.SQUARE
     )
-    asset = repository.upsert_asset(
+    asset = await _repository_call(
+        repository,
+        "upsert_asset_async",
+        "upsert_asset",
         workspace_id=actor.workspace_id,
         project_id=project_id,
         provider=StockProviderKey.USER_LIBRARY,
@@ -146,7 +163,10 @@ async def complete_user_broll_upload(
     repository: BrollRepositoryDep,
     storage_signer: StorageSignerDep,
 ) -> UserBrollUploadCompleteResponse:
-    asset = repository.get_asset(
+    asset = await _repository_call(
+        repository,
+        "get_asset_async",
+        "get_asset",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         asset_id=asset_id,
@@ -162,7 +182,13 @@ async def complete_user_broll_upload(
         path=path,
         expires_in_seconds=request.app.state.settings.upload_signed_url_ttl_seconds,
     )
-    asset = repository.mark_library_asset_ready(asset=asset, download_url=download.url)
+    asset = await _repository_call(
+        repository,
+        "mark_library_asset_ready_async",
+        "mark_library_asset_ready",
+        asset=asset,
+        download_url=download.url,
+    )
     return UserBrollUploadCompleteResponse(asset=asset.to_response())
 
 
@@ -173,13 +199,19 @@ async def list_user_broll_library(
     actor: ActorDep,
     repository: BrollRepositoryDep,
     storage_signer: StorageSignerDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> UserBrollLibraryResponse:
     ttl = request.app.state.settings.upload_signed_url_ttl_seconds
     responses = []
-    for asset in repository.list_library_assets(
+    assets = await _repository_call(
+        repository,
+        "list_library_assets_async",
+        "list_library_assets",
         project_id=project_id,
         workspace_id=actor.workspace_id,
-    ):
+        limit=limit,
+    )
+    for asset in assets:
         response = asset.to_response()
         path = str(asset.raw_metadata.get("storage_path") or "")
         bucket = str(
@@ -206,7 +238,10 @@ async def delete_user_broll_library_asset(
     repository: BrollRepositoryDep,
     storage_signer: StorageSignerDep,
 ) -> UserBrollDeleteResponse:
-    asset = repository.get_asset(
+    asset = await _repository_call(
+        repository,
+        "get_asset_async",
+        "get_asset",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         asset_id=asset_id,
@@ -221,7 +256,10 @@ async def delete_user_broll_library_asset(
                 bucket=bucket,
                 path=path,
             ).unlink(missing_ok=True)
-    repository.delete_library_asset(
+    await _repository_call(
+        repository,
+        "delete_library_asset_async",
+        "delete_library_asset",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         asset_id=asset_id,
@@ -296,7 +334,10 @@ async def generate_broll(
         semantic_context=visual_manifest_cache_signature(visual_manifest),
     )
     if not payload.force:
-        cached = repository.find_cached_slots(
+        cached = await _repository_call(
+            repository,
+            "find_cached_slots_async",
+            "find_cached_slots",
             project_id=project_id,
             workspace_id=actor.workspace_id,
             cache_key=cache_key,
@@ -304,7 +345,10 @@ async def generate_broll(
         if cached:
             for slot in cached:
                 if slot.selected_asset_id:
-                    asset = repository.get_asset(
+                    asset = await _repository_call(
+                        repository,
+                        "get_asset_async",
+                        "get_asset",
                         project_id=project_id,
                         workspace_id=actor.workspace_id,
                         asset_id=slot.selected_asset_id,
@@ -314,9 +358,9 @@ async def generate_broll(
                         repository=repository,
                         settings=request.app.state.settings,
                         storage_signer=storage_signer,
-                    )
+                )
             return BrollGenerateResponse(
-                slots=[repository.response_for_slot(slot) for slot in cached],
+                slots=[await _response_for_slot(repository, slot) for slot in cached],
                 job_id=f"sync-complete--broll--{project_id}--{plan.id}",
                 status="ready",
                 cached=True,
@@ -343,11 +387,19 @@ async def list_broll(
     project_id: UUID,
     actor: ActorDep,
     repository: BrollRepositoryDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> BrollListResponse:
-    slots = repository.list_slots(project_id=project_id, workspace_id=actor.workspace_id)
+    slots = await _repository_call(
+        repository,
+        "list_slots_async",
+        "list_slots",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        limit=limit,
+    )
     active_version = max([slot.version for slot in slots], default=None)
     return BrollListResponse(
-        slots=[repository.response_for_slot(slot) for slot in slots],
+        slots=[await _response_for_slot(repository, slot) for slot in slots],
         active_version=active_version,
     )
 
@@ -364,13 +416,19 @@ async def swap_broll(
 ) -> BrollSwapResponse:
     request_state = getattr(getattr(request, "app", None), "state", None)
     storage_signer = storage_signer or getattr(request_state, "storage_signer", StorageSigner())
-    slot = repository.get_slot(
+    slot = await _repository_call(
+        repository,
+        "get_slot_async",
+        "get_slot",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         slot_id=slot_id,
     )
     if payload.asset_id is not None:
-        asset = repository.get_asset(
+        asset = await _repository_call(
+            repository,
+            "get_asset_async",
+            "get_asset",
             project_id=project_id,
             workspace_id=actor.workspace_id,
             asset_id=payload.asset_id,
@@ -384,7 +442,10 @@ async def swap_broll(
                 settings=request_state.settings,
                 storage_signer=storage_signer,
             )
-    updated = repository.update_slot_selection(
+    updated = await _repository_call(
+        repository,
+        "update_slot_selection_async",
+        "update_slot_selection",
         slot=slot,
         asset_id=payload.asset_id,
         disabled=payload.disabled,
@@ -402,10 +463,10 @@ async def swap_broll(
         source="manual_editor",
         decision_id=str(slot_id),
         action="swap_broll",
-        ai_payload=repository.response_for_slot(slot).model_dump(mode="json"),
-        user_payload=repository.response_for_slot(updated).model_dump(mode="json"),
+        ai_payload=(await _response_for_slot(repository, slot)).model_dump(mode="json"),
+        user_payload=(await _response_for_slot(repository, updated)).model_dump(mode="json"),
     )
-    return BrollSwapResponse(slot=repository.response_for_slot(updated))
+    return BrollSwapResponse(slot=await _response_for_slot(repository, updated))
 
 
 @router.patch("/{slot_id}/region", response_model=BrollRegionUpdateResponse)
@@ -417,12 +478,18 @@ async def update_broll_region(
     repository: BrollRepositoryDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> BrollRegionUpdateResponse:
-    slot = repository.get_slot(
+    slot = await _repository_call(
+        repository,
+        "get_slot_async",
+        "get_slot",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         slot_id=slot_id,
     )
-    updated = repository.update_slot_region(
+    updated = await _repository_call(
+        repository,
+        "update_slot_region_async",
+        "update_slot_region",
         slot=slot,
         start_ms=payload.start_ms,
         end_ms=payload.end_ms,
@@ -441,10 +508,10 @@ async def update_broll_region(
         source="manual_editor",
         decision_id=str(slot_id),
         action="update_broll_region",
-        ai_payload=repository.response_for_slot(slot).model_dump(mode="json"),
-        user_payload=repository.response_for_slot(updated).model_dump(mode="json"),
+        ai_payload=(await _response_for_slot(repository, slot)).model_dump(mode="json"),
+        user_payload=(await _response_for_slot(repository, updated)).model_dump(mode="json"),
     )
-    return BrollRegionUpdateResponse(slot=repository.response_for_slot(updated))
+    return BrollRegionUpdateResponse(slot=await _response_for_slot(repository, updated))
 
 
 @router.get("/{slot_id}/search", response_model=BrollSearchResponse)
@@ -462,7 +529,10 @@ async def search_broll_candidates(
         "visual_clip_model",
         "openai/clip-vit-base-patch32",
     )
-    slot = repository.get_slot(
+    slot = await _repository_call(
+        repository,
+        "get_slot_async",
+        "get_slot",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         slot_id=slot_id,
@@ -497,7 +567,10 @@ async def search_broll_candidates(
     adjacent_embeddings: list[list[float]] = []
     for asset_id in slot.candidate_asset_ids:
         try:
-            asset = repository.get_asset(
+            asset = await _repository_call(
+                repository,
+                "get_asset_async",
+                "get_asset",
                 project_id=project_id,
                 workspace_id=actor.workspace_id,
                 asset_id=asset_id,
@@ -551,12 +624,15 @@ async def search_broll_candidates(
     scored_candidates = [item for item in scored_candidates if item is not None]
     scored_candidates.sort(key=lambda item: item[0], reverse=True)
     assets = [asset for _score, asset in scored_candidates[:10]]
-    updated = repository.add_slot_candidates(
+    updated = await _repository_call(
+        repository,
+        "add_slot_candidates_async",
+        "add_slot_candidates",
         slot=slot,
         asset_ids=[asset.id for asset in assets],
     )
     return BrollSearchResponse(
-        slot=repository.response_for_slot(updated),
+        slot=await _response_for_slot(repository, updated),
         candidates=[asset.to_response() for asset in assets],
         query=search_query,
     )

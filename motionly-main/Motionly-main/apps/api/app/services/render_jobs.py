@@ -17,6 +17,7 @@ def complete_render_job(
     *,
     job: RenderJobRecord,
     repository: InMemoryRenderRepository,
+    metrics_registry: object | None = None,
     export_bucket: str,
     storage_root: str,
     supabase_url: str | None,
@@ -223,6 +224,12 @@ def complete_render_job(
         f"effects_config={_effects_log(job.manifest)}",
         f"export_path={export.storage_path}",
     ]
+    _record_render_metrics(metrics_registry, benchmark_ms=benchmark_ms)
+    _record_export_metrics(
+        metrics_registry,
+        export_duration_ms=benchmark_ms,
+        export_file_size_bytes=file_size_bytes,
+    )
     return repository.transition_job(
         job=job,
         status=RenderJobStatus.COMPLETE,
@@ -233,9 +240,32 @@ def complete_render_job(
     )
 
 
+def _record_render_metrics(metrics_registry: object | None, *, benchmark_ms: int | None) -> None:
+    if metrics_registry is None or benchmark_ms is None or not hasattr(metrics_registry, "observe"):
+        return
+    metrics_registry.observe("render_latency_ms", benchmark_ms, engine="ffmpeg")
+    metrics_registry.observe("render_duration_ms", benchmark_ms, engine="ffmpeg")
+
+
+def _record_export_metrics(
+    metrics_registry: object | None,
+    *,
+    export_duration_ms: int | None,
+    export_file_size_bytes: int | None,
+) -> None:
+    if metrics_registry is None or not hasattr(metrics_registry, "observe"):
+        return
+    if export_duration_ms is not None:
+        metrics_registry.observe("export_latency_ms", export_duration_ms, format="mp4")
+        metrics_registry.observe("export_duration_ms", export_duration_ms, format="mp4")
+    if export_file_size_bytes is not None:
+        metrics_registry.observe("export_file_size_bytes", export_file_size_bytes, format="mp4")
+
+
 def complete_render_job_by_id(
     *,
     repository: InMemoryRenderRepository,
+    metrics_registry: object | None = None,
     workspace_id: UUID,
     project_id: UUID,
     render_job_id: UUID,
@@ -254,6 +284,7 @@ def complete_render_job_by_id(
     return complete_render_job(
         job=job,
         repository=repository,
+        metrics_registry=metrics_registry,
         export_bucket=export_bucket,
         storage_root=storage_root,
         supabase_url=supabase_url,
@@ -1111,6 +1142,7 @@ def complete_remotion_render_job(
     *,
     job: RenderJobRecord,
     repository: InMemoryRenderRepository,
+    metrics_registry: object | None = None,
     export_bucket: str,
     export_storage_path: str,
     benchmark_ms: int,
@@ -1197,5 +1229,11 @@ def complete_remotion_render_job(
         progress_pct=100,
         message="Export is ready to download.",
         metadata={"export_id": str(export.id)},
+    )
+    _record_render_metrics(metrics_registry, benchmark_ms=benchmark_ms)
+    _record_export_metrics(
+        metrics_registry,
+        export_duration_ms=benchmark_ms,
+        export_file_size_bytes=file_size_bytes,
     )
     return job, export

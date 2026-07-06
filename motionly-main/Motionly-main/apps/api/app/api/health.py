@@ -1,5 +1,4 @@
 import asyncio
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -54,13 +53,12 @@ async def ready(
     request: Request, response: Response = None  # type: ignore[assignment]
 ) -> DependencyHealthResponse:
     settings = request.app.state.settings
-    names = ("redis", "supabase", "storage", "ffmpeg", "providers", "workers")
+    names = ("redis", "supabase", "storage", "renderer", "workers")
     results = await asyncio.gather(
         _probe_redis(settings),
         _probe_supabase_ready(settings),
         _probe_storage(settings),
-        _probe_ffmpeg(),
-        _probe_providers(settings),
+        _probe_renderer(settings),
         _probe_workers(request),
         return_exceptions=True,
     )
@@ -136,19 +134,18 @@ async def _probe_storage(settings) -> DependencyHealth:
     return DependencyHealth(status="ok", message="Storage API responded.")
 
 
-async def _probe_ffmpeg() -> DependencyHealth:
-    executable = shutil.which("ffmpeg")
-    if not executable:
-        return DependencyHealth(status="down", message="FFmpeg is not installed.")
-    process = await asyncio.create_subprocess_exec(
-        executable,
-        "-version",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
+async def _probe_renderer(settings) -> DependencyHealth:
+    if not settings.render_execute_ffmpeg and not settings.remotion_enabled:
+        return DependencyHealth(status="ok", message="Render execution is simulated.")
+    if settings.redis_url or settings.app_env != "production":
+        return DependencyHealth(
+            status="ok",
+            message="Media rendering is delegated to worker runtimes.",
+        )
+    return DependencyHealth(
+        status="down",
+        message="Renderer workers require REDIS_URL in production.",
     )
-    if await process.wait() != 0:
-        return DependencyHealth(status="down", message="FFmpeg probe failed.")
-    return DependencyHealth(status="ok", message="FFmpeg executed successfully.")
 
 
 async def _probe_providers(settings) -> DependencyHealth:
@@ -235,10 +232,14 @@ async def dependencies(request: Request) -> DependencyHealthResponse:
         "renderer": _renderer_health(settings),
         "redis": _redis_dependency_health(request),
         "supabase": await _supabase_health(settings),
+        "providers": await _provider_dependency_health(settings),
     }
     audio_ml_providers = getattr(request.app.state, "audio_ml_providers", None)
     if not audio_ml_providers:
-        checks["audio_ml"] = DependencyHealth(status="degraded", message="Audio ML providers are disabled.")
+        checks["audio_ml"] = DependencyHealth(
+            status="degraded",
+            message="Audio ML providers are disabled.",
+        )
     else:
         states = {}
         all_ok = True
@@ -264,6 +265,19 @@ async def dependencies(request: Request) -> DependencyHealthResponse:
         request_id=request.state.request_id,
         dependencies=checks,
     )
+
+
+async def _provider_dependency_health(settings) -> DependencyHealth:
+    try:
+        result = await _probe_providers(settings)
+    except Exception as exc:
+        return DependencyHealth(
+            status="degraded",
+            message=f"Provider probe failed: {str(exc)[:240]}",
+        )
+    if result.status == "down":
+        result.status = "degraded"
+    return result
 
 
 def _worker_health(settings) -> DependencyHealth:

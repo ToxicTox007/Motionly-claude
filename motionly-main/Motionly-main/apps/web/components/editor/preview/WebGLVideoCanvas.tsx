@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 interface WebGLVideoCanvasProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  active: boolean;
   contrast: number;
   brightness: number;
   saturation: number;
@@ -37,11 +38,15 @@ void main() {
   outColor = vec4(clamp(color.rgb, 0.0, 1.0), color.a);
 }`;
 
-export function WebGLVideoCanvas({ videoRef, contrast, brightness, saturation, vignette }: WebGLVideoCanvasProps) {
+export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, saturation, vignette }: WebGLVideoCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [available, setAvailable] = useState(false);
 
   useEffect(() => {
+    if (!active) {
+      setAvailable(false);
+      return;
+    }
     const canvas = canvasRef.current;
     const video = videoRef.current;
     if (!canvas || !video) return;
@@ -112,7 +117,7 @@ export function WebGLVideoCanvas({ videoRef, contrast, brightness, saturation, v
       gl.deleteShader(vertex);
       gl.deleteShader(fragment);
     };
-  }, [brightness, contrast, saturation, videoRef, vignette]);
+  }, [active, brightness, contrast, saturation, videoRef, vignette]);
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-[1] h-full w-full" style={{ opacity: available ? 1 : 0 }} aria-hidden="true" />;
 }

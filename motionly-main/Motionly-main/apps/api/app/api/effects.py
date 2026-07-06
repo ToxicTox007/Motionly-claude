@@ -16,23 +16,16 @@ from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.effects import InMemoryEffectsRepository
 from app.repositories.plans import InMemoryPlanRepository
-from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.effects import (
     EffectsConfigRequest,
     EffectsConfigResponse,
-    EffectsStatus,
     EffectsUpdateResponse,
 )
-from app.services.ai_feedback import record_ai_feedback
 from app.services.effects import (
     DEFAULT_AFTER_EFFECTS_PRESETS,
-    after_effects_handoff_urls,
     build_effects_cache_key,
     defaults_for_preset,
-    effect_count_limit_per_30s,
     normalize_motion_and_gradient,
-    preview_urls,
-    render_time_impact,
 )
 from app.services.layer_job_enqueue import (
     build_queued_layer_response_fields,
@@ -50,13 +43,26 @@ PlanRepositoryDep = Annotated[InMemoryPlanRepository, Depends(get_plan_repositor
 EffectsQueueDep = Annotated[EffectsQueue, Depends(get_effects_queue)]
 
 
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
 @router.get("", response_model=EffectsConfigResponse | None)
 async def get_effects(
     project_id: UUID,
     actor: ActorDep,
     repository: EffectsRepositoryDep,
 ) -> EffectsConfigResponse | None:
-    config = repository.latest_config(project_id=project_id, workspace_id=actor.workspace_id)
+    config = await _repository_call(
+        repository,
+        "latest_config_async",
+        "latest_config",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
     return repository.response_for_config(config) if config else None
 
 
@@ -153,7 +159,10 @@ async def update_effects(
     )
 
     if not payload.force:
-        cached = repository.find_cached_config(
+        cached = await _repository_call(
+            repository,
+            "find_cached_config_async",
+            "find_cached_config",
             project_id=project_id,
             workspace_id=actor.workspace_id,
             cache_key=cache_key,

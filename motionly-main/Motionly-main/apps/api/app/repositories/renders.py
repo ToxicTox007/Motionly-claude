@@ -18,6 +18,22 @@ from app.schemas.renders import (
     RenderSpecs,
     RenderTemplateId,
 )
+from app.services.supabase import SupabaseRestClient
+
+RENDER_JOB_COLUMNS = (
+    "id,workspace_id,project_id,uploaded_video_id,caption_track_id,status,planner_version,"
+    "manifest,keep_segments,specs,template_id,render_engine,renderer_version,props_hash,"
+    "artifact_path,benchmark_ms,logs,progress_pct,error_code,error_message,created_at,updated_at"
+)
+RENDER_JOB_EVENT_COLUMNS = (
+    "id,render_job_id,workspace_id,project_id,event_type,from_status,to_status,progress_pct,"
+    "message,error_code,latency_ms,metadata,created_at"
+)
+EXPORT_COLUMNS = (
+    "id,workspace_id,project_id,render_job_id,version,storage_bucket,storage_path,format,width,"
+    "height,fps,duration_ms,file_size_bytes,thumbnail_url,settings_summary,"
+    "restored_from_export_id,created_at"
+)
 
 
 @dataclass
@@ -270,7 +286,13 @@ class InMemoryRenderRepository:
             raise ApiError(403, "workspace_access_denied", "You do not have access to this render.")
         return job
 
-    def list_render_jobs(self, *, project_id: UUID, workspace_id: UUID) -> list[RenderJobRecord]:
+    def list_render_jobs(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[RenderJobRecord]:
         self.caption_repository.get_project_for_workspace(
             project_id=project_id,
             workspace_id=workspace_id,
@@ -283,7 +305,7 @@ class InMemoryRenderRepository:
             ],
             key=lambda job: job.created_at,
             reverse=True,
-        )
+        )[:limit]
 
     def list_recent_render_jobs(self, *, limit: int = 25) -> list[RenderJobRecord]:
         return sorted(
@@ -360,7 +382,12 @@ class InMemoryRenderRepository:
             event_type="admin_cancel",
         )
 
-    def events_for_job(self, render_job_id: UUID) -> list[RenderJobEventRecord]:
+    def events_for_job(
+        self,
+        render_job_id: UUID,
+        *,
+        limit: int = 100,
+    ) -> list[RenderJobEventRecord]:
         return sorted(
             [
                 event
@@ -368,7 +395,7 @@ class InMemoryRenderRepository:
                 if event.render_job_id == render_job_id
             ],
             key=lambda event: event.created_at,
-        )
+        )[-limit:]
 
     def create_export(self, **values: object) -> ExportRecord:
         if values.get("restored_from_export_id") is None:
@@ -442,7 +469,13 @@ class InMemoryRenderRepository:
             restored_from_export_id=source.id,
         )
 
-    def list_exports(self, *, project_id: UUID, workspace_id: UUID) -> list[ExportRecord]:
+    def list_exports(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[ExportRecord]:
         self.caption_repository.get_project_for_workspace(
             project_id=project_id,
             workspace_id=workspace_id,
@@ -455,7 +488,7 @@ class InMemoryRenderRepository:
             ],
             key=lambda export: export.version,
             reverse=True,
-        )
+        )[:limit]
 
     def get_export(self, *, export_id: UUID, workspace_id: UUID) -> ExportRecord:
         export = self.exports.get(export_id)
@@ -473,30 +506,28 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         caption_repository: InMemoryCaptionRepository,
         supabase_url: str,
         service_role_key: str,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__(caption_repository)
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="renders",
+            metrics_registry=metrics_registry,
+        )
 
     def create_render_job(self, **values: object) -> RenderJobRecord:
         payload = self._json_safe(values)
-        response = httpx.post(
-            f"{self.rest_url}/render_jobs",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/render_jobs",
             json=payload,
-            timeout=10,
         )
         if self._is_missing_column_error(response):
-            response = httpx.post(
-                f"{self.rest_url}/render_jobs",
-                headers=self.headers,
+            response = self.client.request(
+                "POST",
+                "/render_jobs",
                 json=self._compat_render_job_payload(payload),
-                timeout=10,
             )
         self._raise_for_supabase(response)
         job = self._job_from_row(response.json()[0])
@@ -522,11 +553,31 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             "to_status": self._db_status(to_status),
             "metadata": values.get("metadata") or {},
         }
-        response = httpx.post(
-            f"{self.rest_url}/render_job_events",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/render_job_events",
             json=self._json_safe(event_values),
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._event_from_row(response.json()[0])
+
+    async def add_event_async(self, **values: object) -> RenderJobEventRecord:
+        job = values.pop("job")
+        from_status = values.get("from_status")
+        to_status = values.get("to_status")
+        event_values = {
+            "render_job_id": job.id,
+            "workspace_id": job.workspace_id,
+            "project_id": job.project_id,
+            **values,
+            "from_status": self._db_status(from_status) if from_status else None,
+            "to_status": self._db_status(to_status),
+            "metadata": values.get("metadata") or {},
+        }
+        response = await self.client.async_request(
+            "POST",
+            "/render_job_events",
+            json=self._json_safe(event_values),
         )
         self._raise_for_supabase(response)
         return self._event_from_row(response.json()[0])
@@ -545,24 +596,63 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             "logs": getattr(job, "logs", []),
             "updated_at": datetime.now(UTC).isoformat(),
         }
-        response = httpx.patch(
-            f"{self.rest_url}/render_jobs",
-            headers=self.headers,
-            params={"id": f"eq.{job.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/render_jobs",
+            params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
             json=payload,
-            timeout=10,
         )
         if self._is_missing_column_error(response):
-            response = httpx.patch(
-                f"{self.rest_url}/render_jobs",
-                headers=self.headers,
-                params={"id": f"eq.{job.id}", "select": "*"},
+            response = self.client.request(
+                "PATCH",
+                "/render_jobs",
+                params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
                 json=self._compat_render_job_update_payload(job=job, values=payload),
-                timeout=10,
             )
         self._raise_for_supabase(response)
         updated = self._job_from_row(response.json()[0])
         self.add_event(
+            job=updated,
+            event_type=values.get("event_type") or status.value,
+            from_status=job.status,
+            to_status=status,
+            progress_pct=progress_pct,
+            message=values["message"],
+            error_code=values.get("error_code"),
+            metadata=values.get("metadata"),
+        )
+        return updated
+
+    async def transition_job_async(self, **values: object) -> RenderJobRecord:
+        job = values["job"]
+        status = values["status"]
+        progress_pct = values["progress_pct"]
+        payload = {
+            "status": status.value,
+            "progress_pct": progress_pct,
+            "error_code": values.get("error_code"),
+            "error_message": values.get("error_message"),
+            "artifact_path": getattr(job, "artifact_path", None),
+            "benchmark_ms": getattr(job, "benchmark_ms", None),
+            "logs": getattr(job, "logs", []),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        response = await self.client.async_request(
+            "PATCH",
+            "/render_jobs",
+            params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
+            json=payload,
+        )
+        if self._is_missing_column_error(response):
+            response = await self.client.async_request(
+                "PATCH",
+                "/render_jobs",
+                params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
+                json=self._compat_render_job_update_payload(job=job, values=payload),
+            )
+        self._raise_for_supabase(response)
+        updated = self._job_from_row(response.json()[0])
+        await self.add_event_async(
             job=updated,
             event_type=values.get("event_type") or status.value,
             from_status=job.status,
@@ -605,20 +695,18 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
                         ),
                     }
                 )
-                response = httpx.patch(
-                    f"{self.rest_url}/exports",
-                    headers=self.headers,
-                    params={"id": f"eq.{existing.id}"},
+                response = self.client.request(
+                    "PATCH",
+                    "/exports",
+                    params={"id": f"eq.{existing.id}", "select": EXPORT_COLUMNS},
                     json=payload,
-                    timeout=10,
                 )
                 if self._is_missing_column_error(response):
-                    response = httpx.patch(
-                        f"{self.rest_url}/exports",
-                        headers=self.headers,
-                        params={"id": f"eq.{existing.id}"},
+                    response = self.client.request(
+                        "PATCH",
+                        "/exports",
+                        params={"id": f"eq.{existing.id}", "select": EXPORT_COLUMNS},
                         json=self._compat_export_payload(payload),
-                        timeout=10,
                     )
                 self._raise_for_supabase(response)
                 return self._export_from_row(response.json()[0])
@@ -627,18 +715,16 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             workspace_id=values["workspace_id"],
         )
         payload = {**self._json_safe(values), "version": len(existing) + 1}
-        response = httpx.post(
-            f"{self.rest_url}/exports",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/exports",
             json=payload,
-            timeout=10,
         )
         if self._is_missing_column_error(response):
-            response = httpx.post(
-                f"{self.rest_url}/exports",
-                headers=self.headers,
+            response = self.client.request(
+                "POST",
+                "/exports",
                 json=self._compat_export_payload(payload),
-                timeout=10,
             )
         self._raise_for_supabase(response)
         return self._export_from_row(response.json()[0])
@@ -673,21 +759,52 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             restored_from_export_id=source.id,
         )
 
-    def list_render_jobs(self, *, project_id: UUID, workspace_id: UUID) -> list[RenderJobRecord]:
+    def list_render_jobs(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[RenderJobRecord]:
         self.caption_repository.get_project_for_workspace(
             project_id=project_id,
             workspace_id=workspace_id,
         )
-        response = httpx.get(
-            f"{self.rest_url}/render_jobs",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/render_jobs",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": RENDER_JOB_COLUMNS,
                 "order": "created_at.desc",
+                "limit": str(limit),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._job_from_row(row) for row in response.json()]
+
+    async def list_render_jobs_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[RenderJobRecord]:
+        self.caption_repository.get_project_for_workspace(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+        response = await self.client.async_request(
+            "GET",
+            "/render_jobs",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": RENDER_JOB_COLUMNS,
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
         )
         self._raise_for_supabase(response)
         return [self._job_from_row(row) for row in response.json()]
@@ -699,17 +816,40 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         render_job_id: UUID,
         workspace_id: UUID,
     ) -> RenderJobRecord:
-        response = httpx.get(
-            f"{self.rest_url}/render_jobs",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/render_jobs",
             params={
                 "id": f"eq.{render_job_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": RENDER_JOB_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "render_job_not_found", "Render job was not found.")
+        return self._job_from_row(rows[0])
+
+    async def get_render_job_async(
+        self,
+        *,
+        project_id: UUID,
+        render_job_id: UUID,
+        workspace_id: UUID,
+    ) -> RenderJobRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/render_jobs",
+            params={
+                "id": f"eq.{render_job_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": RENDER_JOB_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -718,29 +858,27 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         return self._job_from_row(rows[0])
 
     def list_recent_render_jobs(self, *, limit: int = 25) -> list[RenderJobRecord]:
-        response = httpx.get(
-            f"{self.rest_url}/render_jobs",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/render_jobs",
             params={
-                "select": "*",
+                "select": RENDER_JOB_COLUMNS,
                 "order": "created_at.desc",
                 "limit": str(limit),
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return [self._job_from_row(row) for row in response.json()]
 
     def get_render_job_by_id(self, *, render_job_id: UUID) -> RenderJobRecord:
-        response = httpx.get(
-            f"{self.rest_url}/render_jobs",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/render_jobs",
             params={
                 "id": f"eq.{render_job_id}",
-                "select": "*",
+                "select": RENDER_JOB_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -748,50 +886,121 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             raise ApiError(404, "render_job_not_found", "Render job was not found.")
         return self._job_from_row(rows[0])
 
-    def events_for_job(self, render_job_id: UUID) -> list[RenderJobEventRecord]:
-        response = httpx.get(
-            f"{self.rest_url}/render_job_events",
-            headers=self.headers,
+    def events_for_job(
+        self,
+        render_job_id: UUID,
+        *,
+        limit: int = 100,
+    ) -> list[RenderJobEventRecord]:
+        response = self.client.request(
+            "GET",
+            "/render_job_events",
             params={
                 "render_job_id": f"eq.{render_job_id}",
-                "select": "*",
+                "select": RENDER_JOB_EVENT_COLUMNS,
                 "order": "created_at.asc",
+                "limit": str(limit),
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return [self._event_from_row(row) for row in response.json()]
 
-    def list_exports(self, *, project_id: UUID, workspace_id: UUID) -> list[ExportRecord]:
+    async def events_for_job_async(
+        self,
+        render_job_id: UUID,
+        *,
+        limit: int = 100,
+    ) -> list[RenderJobEventRecord]:
+        response = await self.client.async_request(
+            "GET",
+            "/render_job_events",
+            params={
+                "render_job_id": f"eq.{render_job_id}",
+                "select": RENDER_JOB_EVENT_COLUMNS,
+                "order": "created_at.asc",
+                "limit": str(limit),
+            },
+        )
+        self._raise_for_supabase(response)
+        return [self._event_from_row(row) for row in response.json()]
+
+    def list_exports(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[ExportRecord]:
         self.caption_repository.get_project_for_workspace(
             project_id=project_id,
             workspace_id=workspace_id,
         )
-        response = httpx.get(
-            f"{self.rest_url}/exports",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/exports",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": EXPORT_COLUMNS,
                 "order": "version.desc",
+                "limit": str(limit),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._export_from_row(row) for row in response.json()]
+
+    async def list_exports_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[ExportRecord]:
+        self.caption_repository.get_project_for_workspace(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+        response = await self.client.async_request(
+            "GET",
+            "/exports",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EXPORT_COLUMNS,
+                "order": "version.desc",
+                "limit": str(limit),
+            },
         )
         self._raise_for_supabase(response)
         return [self._export_from_row(row) for row in response.json()]
 
     def get_export(self, *, export_id: UUID, workspace_id: UUID) -> ExportRecord:
-        response = httpx.get(
-            f"{self.rest_url}/exports",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/exports",
             params={
                 "id": f"eq.{export_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": EXPORT_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "export_not_found", "Export was not found.")
+        return self._export_from_row(rows[0])
+
+    async def get_export_async(self, *, export_id: UUID, workspace_id: UUID) -> ExportRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/exports",
+            params={
+                "id": f"eq.{export_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": EXPORT_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()

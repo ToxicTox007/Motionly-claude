@@ -55,6 +55,20 @@ if ! command -v pnpm >/dev/null 2>&1 && command -v corepack >/dev/null 2>&1; the
   corepack prepare pnpm@9.15.4 --activate >/dev/null 2>&1 || true
 fi
 
+api_extra=""
+case "$ROLE" in
+  visual | matte)
+    api_extra="[visual-ml]"
+    ;;
+esac
+
+if ! python -c 'import pydantic_settings' >/dev/null 2>&1; then
+  echo "Installing API Python dependencies..."
+  python -m pip install --no-cache-dir --upgrade pip
+  python -m pip install --no-cache-dir --upgrade --force-reinstall "numpy>=1.26.4,<2.0"
+  python -m pip install --no-cache-dir "./apps/api${api_extra}"
+fi
+
 # Ensure worker dependencies are actually available before starting the loop.
 if ! node --input-type=module -e 'await import("bullmq")' >/dev/null 2>&1; then
   echo "Installing worker Node.js dependencies..."
@@ -74,6 +88,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python -m app.workers.prefetch_models
+if [[ "${MODEL_PREFETCH}" == "true" ]]; then
+  python -m app.workers.prefetch_models
+fi
 cd apps/worker
 exec node src/worker.mjs --loop

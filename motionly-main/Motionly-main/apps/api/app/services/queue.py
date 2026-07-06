@@ -9,6 +9,8 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import UUID
 
+from app.services.queue_slo import raise_if_queue_backpressured
+from app.services.request_counters import increment_queue_calls
 from app.services.tracing import current_trace_id
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,15 @@ class QueueRegistry:
     def __init__(self) -> None:
         self.jobs: dict[str, EnqueuedJob] = {}
 
+    def get_job(self, job_id: str, *, queue_name: str | None = None) -> EnqueuedJob | None:
+        increment_queue_calls()
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        if queue_name is not None and job.queue_name != queue_name:
+            return None
+        return job
+
     def enqueue(
         self,
         *,
@@ -72,6 +83,7 @@ class QueueRegistry:
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
+        increment_queue_calls()
         job = EnqueuedJob(
             id=job_id,
             kind=kind,
@@ -88,6 +100,7 @@ class QueueRegistry:
         return job
 
     def retry(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         attempts = job.attempts + 1
         status = (
@@ -114,12 +127,14 @@ class QueueRegistry:
         return retried
 
     def start(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         started = self._copy_job(job, status=QueueJobStatus.RUNNING)
         self.jobs[job_id] = started
         return started
 
     def complete(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         completed = self._copy_job(job, status=QueueJobStatus.SUCCEEDED)
         self.jobs[job_id] = completed
@@ -133,6 +148,7 @@ class QueueRegistry:
         error_message: str | None = None,
         backoff_seconds: int | None = None,
     ) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         attempts = job.attempts + 1
         status = (
@@ -160,6 +176,7 @@ class QueueRegistry:
         return failed
 
     def cancel(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         canceled = EnqueuedJob(
             id=job.id,
@@ -182,6 +199,7 @@ class QueueRegistry:
         return canceled
 
     def mark_stuck_as_dead_letter(self, *, timeout_seconds: int) -> list[EnqueuedJob]:
+        increment_queue_calls()
         cutoff = datetime.now(UTC) - timedelta(seconds=timeout_seconds)
         moved = []
         for job in list(self.jobs.values()):
@@ -216,6 +234,7 @@ class QueueRegistry:
         timeout_seconds: int,
         backoff_seconds: int = 30,
     ) -> list[EnqueuedJob]:
+        increment_queue_calls()
         cutoff = datetime.now(UTC) - timedelta(seconds=max(1, timeout_seconds))
         recovered = []
         for job in list(self.jobs.values()):
@@ -238,6 +257,7 @@ class QueueRegistry:
         return recovered
 
     def snapshots(self) -> list[QueueSnapshot]:
+        increment_queue_calls()
         queue_names = sorted({job.queue_name for job in self.jobs.values()})
         now = datetime.now(UTC)
         snapshots = []
@@ -322,6 +342,13 @@ class BullMQQueueRegistry:
                 jobs[job.id] = job
         return jobs
 
+    def get_job(self, job_id: str, *, queue_name: str | None = None) -> EnqueuedJob | None:
+        increment_queue_calls()
+        record = self._bridge("job", {"id": job_id, "queue_name": queue_name})
+        if record is None:
+            return None
+        return self._job_from_bridge(record)
+
     def enqueue(
         self,
         *,
@@ -335,6 +362,7 @@ class BullMQQueueRegistry:
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
+        increment_queue_calls()
         payload = {
             "id": job_id,
             "kind": kind,
@@ -350,13 +378,16 @@ class BullMQQueueRegistry:
         return self._job_from_bridge(self._bridge("enqueue", payload))
 
     def retry(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         return self._job_from_bridge(self._bridge("retry", {"id": job_id}))
 
     def start(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         return self._copy_job(job, status=QueueJobStatus.RUNNING)
 
     def complete(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         return self._copy_job(job, status=QueueJobStatus.SUCCEEDED)
 
@@ -368,6 +399,7 @@ class BullMQQueueRegistry:
         error_message: str | None = None,
         backoff_seconds: int | None = None,
     ) -> EnqueuedJob:
+        increment_queue_calls()
         job = self.jobs[job_id]
         status = (
             QueueJobStatus.DEAD_LETTER
@@ -382,9 +414,11 @@ class BullMQQueueRegistry:
         )
 
     def cancel(self, job_id: str) -> EnqueuedJob:
+        increment_queue_calls()
         return self._job_from_bridge(self._bridge("cancel", {"id": job_id}))
 
     def mark_stuck_as_dead_letter(self, *, timeout_seconds: int) -> list[EnqueuedJob]:
+        increment_queue_calls()
         records = self._bridge(
             "mark-stuck-dead-letter",
             {"timeout_seconds": max(1, timeout_seconds)},
@@ -399,6 +433,7 @@ class BullMQQueueRegistry:
         timeout_seconds: int,
         backoff_seconds: int = 30,
     ) -> list[EnqueuedJob]:
+        increment_queue_calls()
         records = self._bridge(
             "recover-stuck",
             {
@@ -419,6 +454,31 @@ class BullMQQueueRegistry:
         return jobs
 
     def snapshots(self) -> list[QueueSnapshot]:
+        increment_queue_calls()
+        records = self._bridge("snapshots", {})
+        if isinstance(records, list):
+            snapshots = []
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                snapshots.append(
+                    QueueSnapshot(
+                        queue_name=str(record.get("queue_name") or ""),
+                        queued=int(record.get("queued") or 0),
+                        running=int(record.get("running") or 0),
+                        succeeded=int(record.get("succeeded") or 0),
+                        failed=int(record.get("failed") or 0),
+                        dead_letter=int(record.get("dead_letter") or 0),
+                        canceled=int(record.get("canceled") or 0),
+                        oldest_queued_seconds=(
+                            int(record["oldest_queued_seconds"])
+                            if record.get("oldest_queued_seconds") is not None
+                            else None
+                        ),
+                    )
+                )
+            return snapshots
+
         queue_names = sorted({job.queue_name for job in self.jobs.values()})
         now = datetime.now(UTC)
         snapshots = []
@@ -545,6 +605,10 @@ class BullMQQueueRegistry:
 class BaseQueue:
     queue_name = "default"
     kind = "job"
+    active_duplicate_statuses = {
+        QueueJobStatus.QUEUED,
+        QueueJobStatus.RUNNING,
+    }
 
     def __init__(
         self,
@@ -564,10 +628,24 @@ class BaseQueue:
         render_engine: str = "ffmpeg_basic",
         queue_name: str | None = None,
     ) -> EnqueuedJob:
+        target_queue_name = queue_name or self.queue_name
+        duplicate = self._active_duplicate(job_id=job_id, queue_name=target_queue_name)
+        if duplicate is not None:
+            logger.info(
+                "duplicate_queue_job_deduped",
+                extra={
+                    "job_id": duplicate.id,
+                    "kind": kind or self.kind,
+                    "queue_name": target_queue_name,
+                    "status": duplicate.status.value,
+                },
+            )
+            return duplicate
+        raise_if_queue_backpressured(self.registry, target_queue_name)
         return self.registry.enqueue(
             job_id=job_id,
             kind=kind or self.kind,
-            queue_name=queue_name or self.queue_name,
+            queue_name=target_queue_name,
             priority=priority,
             workspace_id=workspace_id,
             project_id=project_id,
@@ -577,6 +655,22 @@ class BaseQueue:
 
     def _job_id(self, *parts: object) -> str:
         return "--".join(str(part) for part in parts if part is not None)
+
+    def _active_duplicate(self, *, job_id: str, queue_name: str) -> EnqueuedJob | None:
+        getter = getattr(self.registry, "get_job", None)
+        if getter is None:
+            return None
+        try:
+            job = getter(job_id, queue_name=queue_name)
+        except Exception:
+            logger.exception(
+                "queue_duplicate_lookup_failed",
+                extra={"job_id": job_id, "queue_name": queue_name},
+            )
+            return None
+        if job is None or job.status not in self.active_duplicate_statuses:
+            return None
+        return job
 
     def retry(self, job_id: str) -> EnqueuedJob:
         return self.registry.retry(job_id)

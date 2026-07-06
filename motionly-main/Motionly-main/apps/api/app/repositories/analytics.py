@@ -15,6 +15,12 @@ from app.schemas.analytics import (
     FineTuningExample,
     FineTuningSignal,
 )
+from app.services.supabase import SupabaseRestClient
+
+AI_EDIT_FEEDBACK_EVENT_COLUMNS = (
+    "id,workspace_id,project_id,edit_plan_id,user_id,event_type,layer,decision_id,action,source,"
+    "ai_payload,user_payload,metadata,created_at"
+)
 
 
 @dataclass
@@ -186,15 +192,15 @@ class SupabaseAnalyticsRepository(InMemoryAnalyticsRepository):
         *,
         supabase_url: str,
         service_role_key: str,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__()
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="analytics",
+            metrics_registry=metrics_registry,
+        )
 
     def record_event(
         self,
@@ -227,26 +233,79 @@ class SupabaseAnalyticsRepository(InMemoryAnalyticsRepository):
             "metadata": metadata or {},
         }
         if decision_id and event_type == AIEditFeedbackEventType.KEPT:
-            existing = httpx.get(
-                f"{self.rest_url}/ai_edit_feedback_events",
-                headers=self.headers,
+            existing = self.client.request(
+                "GET",
+                "/ai_edit_feedback_events",
                 params={
                     "workspace_id": f"eq.{workspace_id}",
                     "event_type": "eq.kept",
                     "decision_id": f"eq.{decision_id}",
-                    "select": "*",
+                    "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
                     "limit": "1",
                 },
-                timeout=10,
             )
             self._raise_for_supabase(existing)
             if existing.json():
                 return self._event_from_row(existing.json()[0])
-        response = httpx.post(
-            f"{self.rest_url}/ai_edit_feedback_events",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/ai_edit_feedback_events",
+            params={"select": AI_EDIT_FEEDBACK_EVENT_COLUMNS},
             json=[payload],
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._event_from_row(response.json()[0])
+
+    async def record_event_async(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        user_id: UUID,
+        event_type: AIEditFeedbackEventType,
+        layer: AIEditLayer,
+        source: str,
+        edit_plan_id: UUID | None = None,
+        decision_id: str | None = None,
+        action: str | None = None,
+        ai_payload: dict[str, Any] | None = None,
+        user_payload: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> AIEditFeedbackEventRecord:
+        payload = {
+            "workspace_id": str(workspace_id),
+            "project_id": str(project_id),
+            "edit_plan_id": str(edit_plan_id) if edit_plan_id else None,
+            "user_id": str(user_id),
+            "event_type": event_type.value,
+            "layer": layer.value,
+            "decision_id": decision_id,
+            "action": action,
+            "source": source,
+            "ai_payload": ai_payload or {},
+            "user_payload": user_payload or {},
+            "metadata": metadata or {},
+        }
+        if decision_id and event_type == AIEditFeedbackEventType.KEPT:
+            existing = await self.client.async_request(
+                "GET",
+                "/ai_edit_feedback_events",
+                params={
+                    "workspace_id": f"eq.{workspace_id}",
+                    "event_type": "eq.kept",
+                    "decision_id": f"eq.{decision_id}",
+                    "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
+                    "limit": "1",
+                },
+            )
+            self._raise_for_supabase(existing)
+            if existing.json():
+                return self._event_from_row(existing.json()[0])
+        response = await self.client.async_request(
+            "POST",
+            "/ai_edit_feedback_events",
+            params={"select": AI_EDIT_FEEDBACK_EVENT_COLUMNS},
+            json=[payload],
         )
         self._raise_for_supabase(response)
         return self._event_from_row(response.json()[0])
@@ -262,20 +321,100 @@ class SupabaseAnalyticsRepository(InMemoryAnalyticsRepository):
         params = {
             "workspace_id": f"eq.{workspace_id}",
             "project_id": f"eq.{project_id}",
-            "select": "*",
+            "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
             "order": "created_at.desc",
             "limit": str(limit),
         }
         if layer:
             params["layer"] = f"eq.{layer.value}"
-        response = httpx.get(
-            f"{self.rest_url}/ai_edit_feedback_events",
-            headers=self.headers,
+        response = self.client.request("GET", "/ai_edit_feedback_events", params=params)
+        self._raise_for_supabase(response)
+        return [self._event_from_row(row) for row in response.json()]
+
+    async def list_events_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        layer: AIEditLayer | None = None,
+        limit: int = 100,
+    ) -> list[AIEditFeedbackEventRecord]:
+        params = {
+            "workspace_id": f"eq.{workspace_id}",
+            "project_id": f"eq.{project_id}",
+            "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
+        if layer:
+            params["layer"] = f"eq.{layer.value}"
+        response = await self.client.async_request(
+            "GET",
+            "/ai_edit_feedback_events",
             params=params,
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return [self._event_from_row(row) for row in response.json()]
+
+    async def summarize_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> AIEditAnalyticsSummary:
+        events = await self.list_events_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            limit=10_000,
+        )
+        layers = []
+        for layer in AIEditLayer:
+            layer_events = [event for event in events if event.layer == layer]
+            suggested = _count(layer_events, AIEditFeedbackEventType.AI_SUGGESTED)
+            kept = _count(layer_events, AIEditFeedbackEventType.KEPT)
+            changed = _count(layer_events, AIEditFeedbackEventType.CHANGED)
+            rejected = _count(layer_events, AIEditFeedbackEventType.REJECTED)
+            denominator = kept + changed + rejected
+            layers.append(
+                AIEditLayerSummary(
+                    layer=layer,
+                    suggested=suggested,
+                    kept=kept,
+                    changed=changed,
+                    rejected=rejected,
+                    keep_rate=round(kept / denominator, 4) if denominator else 0,
+                )
+            )
+        return AIEditAnalyticsSummary(
+            total_events=len(events),
+            training_example_count=len(self.fine_tuning_examples(events=events)),
+            layers=layers,
+        )
+
+    async def fine_tuning_examples_async(
+        self,
+        *,
+        project_id: UUID | None = None,
+        workspace_id: UUID | None = None,
+        events: list[AIEditFeedbackEventRecord] | None = None,
+        limit: int = 250,
+    ) -> list[FineTuningExample]:
+        source_events = events
+        if source_events is None:
+            if project_id is None or workspace_id is None:
+                source_events = []
+            else:
+                source_events = await self.list_events_async(
+                    project_id=project_id,
+                    workspace_id=workspace_id,
+                    limit=10_000,
+                )
+        examples = [
+            example
+            for event in sorted(source_events, key=lambda item: item.created_at, reverse=True)
+            if (example := _fine_tuning_example_for_event(event)) is not None
+        ]
+        return examples[:limit]
 
     def _event_from_row(self, row: dict[str, Any]) -> AIEditFeedbackEventRecord:
         return AIEditFeedbackEventRecord(

@@ -18,7 +18,11 @@ from app.services.transcription_jobs import (
 )
 from app.services.upload_jobs import complete_upload_preprocessing_by_id
 from app.services.visual_intelligence import run_visual_analysis_for_upload
-from app.services.visual_jobs import queue_visual_analysis_for_upload, visual_provider_identity
+from app.services.visual_jobs import (
+    build_visual_cache_key,
+    queue_visual_analysis_for_upload,
+    visual_provider_identity,
+)
 
 router = APIRouter(prefix="/internal/jobs", tags=["internal jobs"])
 
@@ -183,12 +187,20 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             )
         if all(hasattr(request.app.state, name) for name in ("visual_repository", "visual_queue")):
             provider_name, model = visual_provider_identity(settings)
+            cache_key = build_visual_cache_key(
+                upload=upload,
+                provider=provider_name,
+                model=model,
+                sample_rate_fps=settings.visual_sample_fps,
+                scene_threshold=settings.visual_scene_threshold,
+            )
             scheduled = queue_visual_analysis_for_upload(
                 upload=upload,
                 repository=request.app.state.visual_repository,
                 visual_queue=request.app.state.visual_queue,
                 provider=provider_name,
                 model=model,
+                cache_key=cache_key,
             )
             result.update(
                 {
@@ -276,6 +288,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
     if job.kind == "render":
         render = complete_render_job_by_id(
             repository=request.app.state.render_repository,
+            metrics_registry=getattr(request.app.state, "metrics_registry", None),
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             render_job_id=job.resource_id,

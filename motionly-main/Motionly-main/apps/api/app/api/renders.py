@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.billing import enforce_render_entitlement
@@ -82,6 +82,37 @@ _RENDERER_VERSIONS: dict[RenderEngine, str] = {
     RenderEngine.FFMPEG_BASIC: "ffmpeg-timeline-v3",
     RenderEngine.REMOTION_PREMIUM: "remotion-timeline-v2",
 }
+
+
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
+async def _events_for_job(repository, render_job_id: UUID, *, limit: int = 100):
+    async_method = getattr(repository, "events_for_job_async", None)
+    if async_method is not None:
+        return await async_method(render_job_id, limit=limit)
+    return repository.events_for_job(render_job_id, limit=limit)
+
+
+async def _get_render_job(
+    repository,
+    *,
+    project_id: UUID,
+    render_job_id: UUID,
+    workspace_id: UUID,
+):
+    return await _repository_call(
+        repository,
+        "get_render_job_async",
+        "get_render_job",
+        project_id=project_id,
+        render_job_id=render_job_id,
+        workspace_id=workspace_id,
+    )
 
 
 def _select_render_engine(
@@ -1117,14 +1148,20 @@ async def list_renders(
     project_id: UUID,
     actor: ActorDep,
     repository: RenderRepositoryDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> RenderListResponse:
+    jobs = await _repository_call(
+        repository,
+        "list_render_jobs_async",
+        "list_render_jobs",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        limit=limit,
+    )
     return RenderListResponse(
         jobs=[
-            job.to_response(repository.events_for_job(job.id))
-            for job in repository.list_render_jobs(
-                project_id=project_id,
-                workspace_id=actor.workspace_id,
-            )
+            job.to_response(await _events_for_job(repository, job.id))
+            for job in jobs
         ],
     )
 
@@ -1139,12 +1176,13 @@ async def get_render(
     actor: ActorDep,
     repository: RenderRepositoryDep,
 ) -> RenderJobResponse:
-    job = repository.get_render_job(
+    job = await _get_render_job(
+        repository,
         project_id=project_id,
         render_job_id=render_job_id,
         workspace_id=actor.workspace_id,
     )
-    return job.to_response(repository.events_for_job(job.id))
+    return job.to_response(await _events_for_job(repository, job.id))
 
 
 @router.get("/projects/{project_id}/renders/{render_job_id}/events")
@@ -1165,12 +1203,13 @@ async def stream_render_events(
         while True:
             if await request.is_disconnected():
                 break
-            job = repository.get_render_job(
+            job = await _get_render_job(
+                repository,
                 project_id=project_id,
                 render_job_id=render_job_id,
                 workspace_id=actor.workspace_id,
             )
-            payload = job.to_response(repository.events_for_job(job.id)).model_dump(
+            payload = job.to_response(await _events_for_job(repository, job.id)).model_dump(
                 mode="json",
             )
             signature = (
@@ -1206,7 +1245,8 @@ async def cancel_render(
     repository: RenderRepositoryDep,
     render_queue: RenderQueueDep,
 ) -> RenderJobResponse:
-    job = repository.get_render_job(
+    job = await _get_render_job(
+        repository,
         project_id=project_id,
         render_job_id=render_job_id,
         workspace_id=actor.workspace_id,
@@ -1229,7 +1269,10 @@ async def cancel_render(
         # Best effort: queued jobs are removed from the queue when possible, and running jobs
         # still observe the persisted canceled status.
         pass
-    job = repository.transition_job(
+    job = await _repository_call(
+        repository,
+        "transition_job_async",
+        "transition_job",
         job=job,
         status=RenderJobStatus.CANCELED,
         progress_pct=job.progress_pct,
@@ -1238,7 +1281,7 @@ async def cancel_render(
         error_code="render_cancelled",
         error_message="Render canceled.",
     )
-    return job.to_response(repository.events_for_job(job.id))
+    return job.to_response(await _events_for_job(repository, job.id))
 
 
 @router.post(
@@ -1278,15 +1321,18 @@ async def list_exports(
     project_id: UUID,
     actor: ActorDep,
     repository: RenderRepositoryDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> ExportListResponse:
+    exports = await _repository_call(
+        repository,
+        "list_exports_async",
+        "list_exports",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        limit=limit,
+    )
     return ExportListResponse(
-        exports=[
-            export.to_response()
-            for export in repository.list_exports(
-                project_id=project_id,
-                workspace_id=actor.workspace_id,
-            )
-        ],
+        exports=[export.to_response() for export in exports],
     )
 
 
@@ -1298,7 +1344,13 @@ async def get_export_download_url(
     repository: RenderRepositoryDep,
     storage_signer: StorageSignerDep,
 ) -> ExportDownloadUrlResponse:
-    export = repository.get_export(export_id=export_id, workspace_id=actor.workspace_id)
+    export = await _repository_call(
+        repository,
+        "get_export_async",
+        "get_export",
+        export_id=export_id,
+        workspace_id=actor.workspace_id,
+    )
     operations = getattr(request.app.state, "operations_repository", None)
     if operations is not None:
         operations.approve_export(

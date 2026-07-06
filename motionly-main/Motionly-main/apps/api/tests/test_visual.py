@@ -9,7 +9,12 @@ from app.api.errors import ApiError
 from app.api.internal_jobs import run_queue_job
 from app.api.visual import analyze_visual_manifest, get_visual_manifest, get_visual_status
 from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
-from app.repositories.visual import InMemoryVisualRepository
+from app.repositories.visual import (
+    SEGMENTATION_MATTE_COLUMNS,
+    VIDEO_MANIFEST_COLUMNS,
+    InMemoryVisualRepository,
+    SupabaseVisualRepository,
+)
 from app.schemas.uploads import UploadStatus, VideoMetadata
 from app.schemas.visual import (
     CameraMotion,
@@ -23,6 +28,7 @@ from app.services.local_storage import LocalObjectStorage
 from app.services.queue import QueueRegistry, VisualQueue
 from app.services.storage import StorageSigner
 from app.services.visual_intelligence import FixtureVisualIntelligenceProvider
+from app.services.visual_jobs import build_visual_cache_key
 
 
 def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> None:
@@ -44,6 +50,13 @@ def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> N
     assert first.job_id == f"visual--{context.project_id}--{upload.id}--{context.workspace_id}"
     assert first.manifest.status == VisualManifestStatus.QUEUED
     assert first.manifest.uploaded_video_id == upload.id
+    assert first.manifest.cache_key == build_visual_cache_key(
+        upload=upload,
+        provider="fixture",
+        model="fixture-visual-v1",
+        sample_rate_fps=2.0,
+        scene_threshold=0.42,
+    )
     assert first.manifest.manifest is None
 
     asyncio.run(
@@ -108,6 +121,7 @@ def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> N
     assert second.cached is True
     assert second.manifest.id == ready.id
     assert second.manifest.version == first.manifest.version
+    assert second.manifest.cache_key == first.manifest.cache_key
 
     fetched = asyncio.run(
         get_visual_manifest(
@@ -292,6 +306,212 @@ def test_visual_status_returns_signed_matte_preview_when_available(tmp_path) -> 
     )
 
 
+def test_supabase_visual_repository_reads_with_explicit_projections(monkeypatch) -> None:
+    upload_repository = InMemoryUploadRepository()
+    repository = SupabaseVisualRepository(
+        upload_repository=upload_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    upload_id = uuid4()
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: [])
+
+    monkeypatch.setattr("app.repositories.visual.SupabaseRestClient.request", fake_request)
+
+    assert (
+        repository.latest_for_upload(
+            uploaded_video_id=upload_id,
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+        is None
+    )
+    assert (
+        repository.latest_matte_for_upload(
+            uploaded_video_id=upload_id,
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+        is None
+    )
+
+    assert calls[0] == (
+        "GET",
+        "/video_manifests",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "uploaded_video_id": f"eq.{upload_id}",
+                "select": VIDEO_MANIFEST_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            }
+        },
+    )
+    assert calls[1] == (
+        "GET",
+        "/segmentation_mattes",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "uploaded_video_id": f"eq.{upload_id}",
+                "select": SEGMENTATION_MATTE_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            }
+        },
+    )
+
+
+def test_supabase_visual_async_reads_use_bounded_projections(monkeypatch) -> None:
+    upload_repository = InMemoryUploadRepository()
+    repository = SupabaseVisualRepository(
+        upload_repository=upload_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    upload_id = uuid4()
+    calls = []
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: [])
+
+    monkeypatch.setattr(
+        "app.repositories.visual.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    assert (
+        asyncio.run(
+            repository.latest_for_upload_async(
+                uploaded_video_id=upload_id,
+                project_id=project_id,
+                workspace_id=workspace_id,
+            )
+        )
+        is None
+    )
+    assert (
+        asyncio.run(
+            repository.latest_matte_for_upload_async(
+                uploaded_video_id=upload_id,
+                project_id=project_id,
+                workspace_id=workspace_id,
+            )
+        )
+        is None
+    )
+
+    assert calls[0] == (
+        "GET",
+        "/video_manifests",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "uploaded_video_id": f"eq.{upload_id}",
+                "select": VIDEO_MANIFEST_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            }
+        },
+    )
+    assert calls[1] == (
+        "GET",
+        "/segmentation_mattes",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "uploaded_video_id": f"eq.{upload_id}",
+                "select": SEGMENTATION_MATTE_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            }
+        },
+    )
+
+
+def test_visual_api_prefers_async_repository_methods(tmp_path) -> None:
+    context = _make_visual_context(tmp_path)
+    upload = _seed_upload(context, status=UploadStatus.READY)
+
+    class AsyncVisualRepository(InMemoryVisualRepository):
+        def __init__(self, upload_repository):
+            super().__init__(upload_repository)
+            self.async_calls: list[str] = []
+
+        async def latest_for_upload_async(self, **kwargs):
+            self.async_calls.append("latest-for-upload")
+            return self.latest_for_upload(**kwargs)
+
+        async def latest_matte_for_upload_async(self, **kwargs):
+            self.async_calls.append("latest-matte-for-upload")
+            return self.latest_matte_for_upload(**kwargs)
+
+        async def latest_manifest_async(self, **kwargs):
+            self.async_calls.append("latest-manifest")
+            return self.latest_manifest(**kwargs)
+
+    repository = AsyncVisualRepository(context.upload_repository)
+    context.request.app.state.visual_repository = repository
+    repository.create_manifest(
+        workspace_id=context.workspace_id,
+        project_id=context.project_id,
+        uploaded_video_id=upload.id,
+        status=VisualManifestStatus.QUEUED,
+        provider="fixture",
+        model="fixture-visual-v1",
+        manifest=None,
+        cache_key="visual-cache",
+    )
+    repository.create_matte(
+        workspace_id=context.workspace_id,
+        project_id=context.project_id,
+        uploaded_video_id=upload.id,
+        status=MatteStatus.PENDING,
+        cache_key="matte-cache",
+        source_file_hash="hash",
+        segmentation_settings={"enabled": True},
+        model_version="matte-v1",
+    )
+
+    status = asyncio.run(
+        get_visual_status(
+            project_id=context.project_id,
+            request=context.request,
+            actor=context.actor,
+            repository=repository,
+        )
+    )
+    manifest = asyncio.run(
+        get_visual_manifest(
+            project_id=context.project_id,
+            actor=context.actor,
+            repository=repository,
+        )
+    )
+
+    assert status.status == "processing"
+    assert manifest.cache_key == "visual-cache"
+    assert repository.async_calls == [
+        "latest-for-upload",
+        "latest-matte-for-upload",
+        "latest-manifest",
+    ]
+
+
 def _make_visual_context(tmp_path) -> SimpleNamespace:
     upload_repository = InMemoryUploadRepository()
     visual_repository = InMemoryVisualRepository(upload_repository)
@@ -305,6 +525,7 @@ def _make_visual_context(tmp_path) -> SimpleNamespace:
         media_work_dir=str(tmp_path),
         supabase_url=None,
         supabase_service_role_key=None,
+        visual_intelligence_provider="fixture",
         visual_sample_fps=2.0,
         visual_scene_threshold=0.42,
     )

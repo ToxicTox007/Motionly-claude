@@ -4,12 +4,36 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_api_image_contains_no_ffmpeg_or_ml_runtime() -> None:
-    dockerfile = (ROOT / "apps/api/Dockerfile").read_text()
+    dockerfiles = [
+        ROOT / "Dockerfile",
+        ROOT / "apps/api/Dockerfile",
+    ]
     pyproject = (ROOT / "apps/api/pyproject.toml").read_text()
     core_dependencies = pyproject.split("[project.optional-dependencies]", 1)[0]
-    assert "ffmpeg" not in dockerfile.lower()
+    for dockerfile in dockerfiles:
+        dockerfile_lower = dockerfile.read_text().lower()
+        assert "ffmpeg" not in dockerfile_lower
+        assert "nodejs" not in dockerfile_lower
+        assert "npm" not in dockerfile_lower
+        assert "lightning-sdk" not in dockerfile_lower
+        assert "apps/worker" not in dockerfile_lower
     for dependency in ("torch", "tensorflow", "transformers", "demucs", "pyannote"):
         assert dependency not in core_dependencies.lower()
+
+
+def test_media_runtime_stays_in_worker_images() -> None:
+    worker_dockerfile = (ROOT / "apps/worker/Dockerfile").read_text().lower()
+    python_worker_dockerfile = (ROOT / "apps/worker/Dockerfile.python").read_text().lower()
+    assert "ffmpeg" in worker_dockerfile
+    assert "chromium" in worker_dockerfile
+    assert "ffmpeg" in python_worker_dockerfile
+
+
+def test_api_image_uses_configurable_process_count() -> None:
+    for dockerfile in (ROOT / "Dockerfile", ROOT / "apps/api/Dockerfile"):
+        source = dockerfile.read_text()
+        assert "WEB_CONCURRENCY=2" in source
+        assert "--workers ${WEB_CONCURRENCY:-2}" in source
 
 
 def test_workers_never_route_domain_compute_through_internal_api() -> None:
@@ -36,7 +60,14 @@ def test_heavy_endpoints_enqueue_worker_jobs() -> None:
 
 def test_heavy_endpoints_require_worker_queue_before_enqueue() -> None:
     api_dir = ROOT / "apps/api/app/api"
-    for filename in ("plans.py", "broll.py", "music.py", "effects.py", "captions.py", "publishing.py"):
+    for filename in (
+        "plans.py",
+        "broll.py",
+        "music.py",
+        "effects.py",
+        "captions.py",
+        "publishing.py",
+    ):
         source = (api_dir / filename).read_text()
         assert "prepare_heavy_job_enqueue" in source
 

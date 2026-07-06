@@ -44,19 +44,21 @@ import {
   buildApiHeaders,
   editorApiRequest,
   pollPlanJob,
+  startAdaptivePolling,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
-import { EditorLayout } from "./editor-layout";
+import {
+  PRODUCT_FLOW_STAGES,
+  productFlowStageIndex,
+  renderStatusLabel,
+  uploadStatusMessage,
+} from "@/lib/product-flow-status";
+import { EditorLayout, type CreatorTask } from "./editor-layout";
 import { ThemeMenu } from "./theme-menu";
 import { UploadPanel } from "./upload-panel";
-import { AIStep } from "./editor/ai-step";
-import { CaptionsTab } from "./editor/tabs/captions-tab";
-import { ElementPalette } from "./editor/dnd/ElementPalette";
 import { type PaletteElement } from "./editor/dnd/element-catalog";
 import { PropertiesInspector } from "./editor/PropertiesInspector";
-import { VersionHistoryPanel } from "./editor/VersionHistoryPanel";
-import { ScalePanel } from "./editor/ScalePanel";
 import {
   EditorHistoryProvider,
   useEditorHistory,
@@ -155,6 +157,10 @@ const BrollTab = dynamic(
   () => import("./editor/tabs/broll-tab").then((mod) => mod.BrollTab),
   { loading: () => <InspectorLoading /> },
 );
+const CaptionsTab = dynamic(
+  () => import("./editor/tabs/captions-tab").then((mod) => mod.CaptionsTab),
+  { loading: () => <InspectorLoading /> },
+);
 const AudioTab = dynamic(
   () => import("./editor/tabs/audio-tab").then((mod) => mod.AudioTab),
   { loading: () => <InspectorLoading /> },
@@ -163,8 +169,27 @@ const LookTab = dynamic(
   () => import("./editor/tabs/look-tab").then((mod) => mod.LookTab),
   { loading: () => <InspectorLoading /> },
 );
+const AIStep = dynamic(
+  () => import("./editor/ai-step").then((mod) => mod.AIStep),
+  { loading: () => <InspectorLoading /> },
+);
 const ExportStep = dynamic(
   () => import("./editor/export-step").then((mod) => mod.ExportStep),
+  { loading: () => <InspectorLoading /> },
+);
+const VersionHistoryPanel = dynamic(
+  () =>
+    import("./editor/VersionHistoryPanel").then(
+      (mod) => mod.VersionHistoryPanel,
+    ),
+  { loading: () => <InspectorLoading /> },
+);
+const ScalePanel = dynamic(
+  () => import("./editor/ScalePanel").then((mod) => mod.ScalePanel),
+  { loading: () => <InspectorLoading /> },
+);
+const ElementPalette = dynamic(
+  () => import("./editor/dnd/ElementPalette").then((mod) => mod.ElementPalette),
   { loading: () => <InspectorLoading /> },
 );
 
@@ -337,7 +362,9 @@ export function EditorClient(props: EditorClientProps) {
     }
 
     let cancelled = false;
+    let stopPolling: (() => void) | null = null;
     const poll = async () => {
+      if (document.visibilityState !== "visible") return;
       try {
         const response = await fetch(
           `${env.apiBaseUrl}/projects/${projectId}/transcript`,
@@ -363,18 +390,20 @@ export function EditorClient(props: EditorClientProps) {
           nextTranscript.status === "failed" ||
           nextTranscript.status === "captions_unavailable"
         ) {
-          router.refresh();
+          stopPolling?.();
         }
       } catch (error) {
         console.error(error);
       }
     };
 
-    void poll();
-    const timer = window.setInterval(() => void poll(), 5000);
+    stopPolling = startAdaptivePolling(() => poll(), {
+      intervalMs: 5000,
+      maxIntervalMs: 15000,
+    });
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      stopPolling?.();
     };
   }, [
     apiAccessToken,
@@ -801,6 +830,54 @@ function EditorClientEditor(props: EditorClientEditorProps) {
   );
   const selectedManualElement =
     manualElements.find((element) => element.id === selectedElementId) ?? null;
+  const creatorTasks = useMemo(
+    () =>
+      buildCreatorTasks({
+        upload: upload!,
+        transcript: localTranscript,
+        visualStatus,
+        activePlan,
+        captionTracks: localCaptionTracks,
+        brollSlots: localBrollSlots,
+        musicSelection: localMusicSelection,
+        renderJobs,
+        exports,
+      }),
+    [
+      activePlan,
+      exports,
+      localBrollSlots,
+      localCaptionTracks,
+      localMusicSelection,
+      localTranscript,
+      renderJobs,
+      upload,
+      visualStatus,
+    ],
+  );
+  const activeCreatorTask =
+    creatorTasks.find((task) => task.status === "blocked") ??
+    creatorTasks.find((task) => task.status === "active") ??
+    creatorTasks.find((task) => task.status === "waiting") ??
+    creatorTasks[creatorTasks.length - 1];
+  const creatorProgressPct = Math.round(
+    (creatorTasks.filter((task) => task.status === "done").length /
+      creatorTasks.length) *
+      100,
+  );
+  const latestRenderJob = renderJobs[0] ?? null;
+  const hasCancelableRender = Boolean(
+    latestRenderJob &&
+      ["queued", "processing", "preparing", "rendering", "uploading"].includes(
+        latestRenderJob.status,
+      ),
+  );
+  const hasRetryableTask = creatorTasks.some(
+    (task) => task.status === "blocked",
+  );
+  const jobLabel = latestRenderJob
+    ? renderStatusLabel(latestRenderJob.status)
+    : activeCreatorTask?.label ?? "No active job";
 
   const setPlayheadMsWrapped = useCallback(
     (ms: number | ((prev: number) => number)) => {
@@ -1336,6 +1413,28 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         saveStatus={elementSaving ? "saving" : saveStatus}
         onExport={() => setInspectorTabWrapped("export")}
         onAiEdit={() => setInspectorTabWrapped("ai")}
+        creatorFlow={{
+          tasks: creatorTasks,
+          activeTaskKey: activeCreatorTask?.key ?? creatorTasks[0].key,
+          progressPct: creatorProgressPct,
+          onTaskSelect: (task) =>
+            setInspectorTabWrapped(inspectorTabForCreatorTask(task.key)),
+        }}
+        commandBar={{
+          canUndo,
+          canRedo,
+          onUndo: () => void undo(),
+          onRedo: () => void redo(),
+          onRetry: () => {
+            setInspectorTabWrapped(
+              latestRenderJob?.status === "failed" ? "export" : "ai",
+            );
+          },
+          onCancel: () => setInspectorTabWrapped("export"),
+          hasRetry: hasRetryableTask,
+          hasCancel: hasCancelableRender,
+          jobLabel,
+        }}
       >
         {{
           leftPanel: (
@@ -1939,6 +2038,182 @@ function selectedElementInsight({
   };
 }
 
+function buildCreatorTasks({
+  upload,
+  transcript,
+  visualStatus,
+  activePlan,
+  captionTracks,
+  brollSlots,
+  musicSelection,
+  renderJobs,
+  exports,
+}: {
+  upload: UploadedVideoSummary;
+  transcript: TranscriptSummary | null;
+  visualStatus: VisualAnalysisStatusSummary;
+  activePlan: EditPlanRecordSummary | null;
+  captionTracks: CaptionTrackSummary[];
+  brollSlots: BrollSlotSummary[];
+  musicSelection: MusicSelectionSummary | null;
+  renderJobs: RenderJobSummary[];
+  exports: ExportSummary[];
+}): CreatorTask[] {
+  const latestRenderJob = renderJobs[0] ?? null;
+  const hasExport = exports.length > 0 || latestRenderJob?.status === "complete";
+  const transcriptProgress = transcript?.progress_pct ?? 0;
+  const transcriptFailed =
+    transcript?.status === "failed" ||
+    transcript?.status === "captions_unavailable";
+  const transcriptReady = transcript?.status === "ready";
+  const visualReady = visualStatus.status === "ready";
+  const visualBlocked =
+    visualStatus.status === "unavailable";
+  const planReady = Boolean(activePlan);
+  const captionsReady = captionTracks.length > 0;
+  const brollReady =
+    activePlan?.broll_density === "none" || brollSlots.length > 0;
+  const musicReady = Boolean(musicSelection);
+  const renderActive = latestRenderJob
+    ? ["queued", "processing", "preparing", "rendering", "uploading"].includes(
+        latestRenderJob.status,
+      )
+    : false;
+  const renderBlocked = latestRenderJob?.status === "failed";
+
+  return [
+    {
+      key: "upload",
+      label: "Upload",
+      shortLabel: "Upload",
+      description: "Source video is received and ready for editing.",
+      status: upload.status === "ready" ? "done" : "active",
+      progress: upload.status === "ready" ? 100 : 65,
+      detail: uploadStatusMessage(upload.status),
+      actionLabel: null,
+    },
+    {
+      key: "prepare",
+      label: "Prepare",
+      shortLabel: "Prepare",
+      description: "Transcript and visual context are prepared as small recoverable tasks.",
+      status: transcriptFailed
+        ? "blocked"
+        : transcriptReady && (visualReady || visualBlocked)
+          ? "done"
+          : "active",
+      progress: transcriptReady ? 100 : Math.max(5, transcriptProgress),
+      detail: transcriptFailed
+        ? transcript?.error_message || "Transcription needs a retry."
+        : visualBlocked
+          ? "Visual context skipped; transcript can keep the edit moving."
+          : transcriptReady
+            ? "Transcript ready."
+            : "Preparing transcript and visual context.",
+      actionLabel: transcriptFailed ? "Retry" : null,
+    },
+    {
+      key: "draft",
+      label: "Draft",
+      shortLabel: "Draft",
+      description: "AI edit plan, cuts, pacing, and story structure.",
+      status: planReady ? "done" : transcriptReady ? "active" : "waiting",
+      progress: planReady ? 100 : transcriptReady ? 25 : 0,
+      detail: planReady
+        ? `Timeline v${activePlan?.version ?? 1} is ready.`
+        : transcriptReady
+          ? "Ready to generate the first AI edit."
+          : "Waiting for transcript.",
+      actionLabel: planReady ? "Review" : "Generate",
+    },
+    {
+      key: "review",
+      label: "Review",
+      shortLabel: "Review",
+      description: "Captions, cuts, B-roll, and music are checked before polish.",
+      status:
+        captionsReady && brollReady && musicReady
+          ? "done"
+          : planReady
+            ? "active"
+            : "waiting",
+      progress: Math.round(
+        ((captionsReady ? 1 : 0) + (brollReady ? 1 : 0) + (musicReady ? 1 : 0)) /
+          3 *
+          100,
+      ),
+      detail: `${captionsReady ? "Captions ready" : "Captions pending"} · ${
+        brollReady ? "B-roll ready" : "B-roll pending"
+      } · ${musicReady ? "Music ready" : "Music pending"}`,
+      actionLabel: planReady ? "Open" : null,
+    },
+    {
+      key: "polish",
+      label: "Polish",
+      shortLabel: "Polish",
+      description: "Quick fixes, look, audio, and timeline refinements stay optional.",
+      status: planReady ? "active" : "waiting",
+      progress: planReady ? 40 : 0,
+      detail: planReady
+        ? "Use focused tools only when the draft needs changes."
+        : "Waiting for a draft.",
+      actionLabel: planReady ? "Fix" : null,
+    },
+    {
+      key: "export",
+      label: "Export",
+      shortLabel: "Export",
+      description: "Render progress, retry, cancel, download, and publish live here.",
+      status: hasExport
+        ? "done"
+        : renderBlocked
+          ? "blocked"
+          : renderActive
+            ? "active"
+            : planReady
+              ? "waiting"
+              : "waiting",
+      progress: hasExport
+        ? 100
+        : latestRenderJob?.progress_pct ?? (renderActive ? 12 : 0),
+      detail: latestRenderJob
+        ? renderStatusLabel(latestRenderJob.status)
+        : planReady
+          ? "Ready when the timeline is approved."
+          : "Waiting for a draft.",
+      actionLabel: renderBlocked ? "Retry" : hasExport ? "Download" : "Render",
+    },
+    {
+      key: "publish",
+      label: "Publish",
+      shortLabel: "Publish",
+      description: "Publishing is last, after a verified export exists.",
+      status: hasExport ? "active" : "waiting",
+      progress: hasExport ? 25 : 0,
+      detail: hasExport ? "Export can be published." : "Waiting for export.",
+      actionLabel: hasExport ? "Publish" : null,
+    },
+  ];
+}
+
+function inspectorTabForCreatorTask(taskKey: string): InspectorTab {
+  switch (taskKey) {
+    case "upload":
+    case "prepare":
+    case "draft":
+      return "ai";
+    case "review":
+      return "captions";
+    case "polish":
+      return "look";
+    case "export":
+    case "publish":
+      return "export";
+    default:
+      return "ai";
+  }
+}
+
 function InspectorLoading() {
   return (
     <div className="space-y-4 p-4 min-h-[160px] animate-pulse">
@@ -2141,7 +2416,9 @@ function ProcessingScreen({
   const router = useRouter();
 
   useEffect(() => {
-    const refresh = () => router.refresh();
+    const refresh = () => {
+      if (document.visibilityState === "visible") router.refresh();
+    };
     const timer = window.setInterval(refresh, 4000);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") refresh();
@@ -2153,51 +2430,7 @@ function ProcessingScreen({
     };
   }, [router]);
 
-  const stages = [
-    {
-      key: "uploading",
-      label: "Uploading",
-      description: "Transferring your video to secure storage",
-    },
-    {
-      key: "transcribing",
-      label: "Transcribing",
-      description: "Extracting audio and generating subtitles",
-    },
-    {
-      key: "analysis",
-      label: "Visual analysis",
-      description: "Detecting visual cuts and framing hints",
-    },
-    {
-      key: "drafting",
-      label: "Drafting timeline",
-      description: "Structuring template clips and transitions",
-    },
-    {
-      key: "preview",
-      label: "Rendering preview",
-      description: "Assembling initial video preview",
-    },
-    {
-      key: "exporting",
-      label: "Exporting",
-      description: "Building final output",
-    },
-  ];
-
-  const getActiveStageIndex = (currentStatus: string): number => {
-    const s = currentStatus.toLowerCase();
-    if (s.includes("register") || s.includes("upload")) return 0;
-    if (s.includes("transcrib") || s.includes("process")) return 1;
-    if (s.includes("analyz") || s.includes("visual")) return 2;
-    if (s.includes("draft")) return 3;
-    if (s.includes("render")) return 4;
-    if (s.includes("export")) return 5;
-    return 1; // default
-  };
-
-  const activeIdx = getActiveStageIndex(status);
+  const activeIdx = productFlowStageIndex(status);
 
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
@@ -2226,7 +2459,7 @@ function ProcessingScreen({
             Processing Video
           </h2>
           <p className="text-xs text-muted-foreground">
-            Status: {status.replace(/_/g, " ")}
+            {uploadStatusMessage(status)}
           </p>
         </div>
 
@@ -2235,7 +2468,7 @@ function ProcessingScreen({
             Processing Stages
           </h3>
           <div className="space-y-2.5 font-bold" aria-live="polite">
-            {stages.map((stage, idx) => {
+            {PRODUCT_FLOW_STAGES.map((stage, idx) => {
               const isCompleted = idx < activeIdx;
               const isActive = idx === activeIdx;
               return (
@@ -2283,7 +2516,7 @@ function ProcessingScreen({
           <div
             className="pixel-progress-fill h-full bg-primary transition-all duration-300"
             style={{
-              width: `${Math.round(((activeIdx + 0.5) / stages.length) * 100)}%`,
+              width: `${Math.round(((activeIdx + 0.5) / PRODUCT_FLOW_STAGES.length) * 100)}%`,
             }}
           />
         </div>

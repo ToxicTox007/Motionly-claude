@@ -19,6 +19,13 @@ ActorDep = Annotated[Actor, Depends(get_actor)]
 AnalyticsRepositoryDep = Annotated[InMemoryAnalyticsRepository, Depends(get_analytics_repository)]
 
 
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
 @router.get("/ai-edits", response_model=AIEditAnalyticsResponse)
 async def get_ai_edit_analytics(
     project_id: UUID,
@@ -27,14 +34,24 @@ async def get_ai_edit_analytics(
     layer: Annotated[AIEditLayer | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> AIEditAnalyticsResponse:
-    events = repository.list_events(
+    events = await _repository_call(
+        repository,
+        "list_events_async",
+        "list_events",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         layer=layer,
         limit=limit,
     )
+    summary = await _repository_call(
+        repository,
+        "summarize_async",
+        "summarize",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
     return AIEditAnalyticsResponse(
-        summary=repository.summarize(project_id=project_id, workspace_id=actor.workspace_id),
+        summary=summary,
         events=[event.to_response() for event in events],
     )
 
@@ -46,7 +63,10 @@ async def record_ai_edit_feedback(
     actor: ActorDep,
     repository: AnalyticsRepositoryDep,
 ) -> AIEditFeedbackEventResponse:
-    event = repository.record_event(
+    event = await _repository_call(
+        repository,
+        "record_event_async",
+        "record_event",
         workspace_id=actor.workspace_id,
         project_id=project_id,
         user_id=actor.user_id,
@@ -70,7 +90,10 @@ async def get_fine_tuning_dataset(
     repository: AnalyticsRepositoryDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 250,
 ) -> FineTuningDatasetResponse:
-    examples = repository.fine_tuning_examples(
+    examples = await _repository_call(
+        repository,
+        "fine_tuning_examples_async",
+        "fine_tuning_examples",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         limit=limit,

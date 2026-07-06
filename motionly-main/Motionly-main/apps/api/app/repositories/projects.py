@@ -6,6 +6,11 @@ import httpx
 
 from app.api.errors import ApiError
 from app.schemas.projects import ProjectResponse, ProjectStatus
+from app.services.supabase import SupabaseRestClient
+
+PROJECT_RESPONSE_COLUMNS = (
+    "id,workspace_id,created_by,title,status,active_video_id,created_at,updated_at"
+)
 
 
 @dataclass
@@ -52,12 +57,12 @@ class InMemoryProjectRepository:
         self.projects[project.id] = project
         return project
 
-    def list_projects(self, *, workspace_id: UUID) -> list[ProjectApiRecord]:
+    def list_projects(self, *, workspace_id: UUID, limit: int = 100) -> list[ProjectApiRecord]:
         return sorted(
             [project for project in self.projects.values() if project.workspace_id == workspace_id],
             key=lambda project: project.updated_at,
             reverse=True,
-        )
+        )[:limit]
 
     def get_project(self, *, project_id: UUID, workspace_id: UUID) -> ProjectApiRecord:
         project = self.projects.get(project_id)
@@ -87,14 +92,19 @@ class InMemoryProjectRepository:
 
 
 class SupabaseProjectRepository:
-    def __init__(self, *, supabase_url: str, service_role_key: str) -> None:
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+    def __init__(
+        self,
+        *,
+        supabase_url: str,
+        service_role_key: str,
+        metrics_registry: object | None = None,
+    ) -> None:
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="projects",
+            metrics_registry=metrics_registry,
+        )
 
     def create_project(
         self,
@@ -103,45 +113,107 @@ class SupabaseProjectRepository:
         created_by: UUID,
         title: str,
     ) -> ProjectApiRecord:
-        response = httpx.post(
-            f"{self.rest_url}/projects",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/projects",
             json={
                 "workspace_id": str(workspace_id),
                 "created_by": str(created_by),
                 "title": title,
                 "status": ProjectStatus.DRAFT,
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return self._project_from_row(response.json()[0])
 
-    def list_projects(self, *, workspace_id: UUID) -> list[ProjectApiRecord]:
-        response = httpx.get(
-            f"{self.rest_url}/projects",
-            headers=self.headers,
+    async def create_project_async(
+        self,
+        *,
+        workspace_id: UUID,
+        created_by: UUID,
+        title: str,
+    ) -> ProjectApiRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/projects",
+            json={
+                "workspace_id": str(workspace_id),
+                "created_by": str(created_by),
+                "title": title,
+                "status": ProjectStatus.DRAFT,
+            },
+        )
+        self._raise_for_supabase(response)
+        return self._project_from_row(response.json()[0])
+
+    def list_projects(self, *, workspace_id: UUID, limit: int = 100) -> list[ProjectApiRecord]:
+        response = self.client.request(
+            "GET",
+            "/projects",
             params={
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": (
+                    "id,workspace_id,created_by,title,status,"
+                    "active_video_id,created_at,updated_at"
+                ),
                 "order": "updated_at.desc",
+                "limit": str(limit),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._project_from_row(row) for row in response.json()]
+
+    async def list_projects_async(
+        self,
+        *,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[ProjectApiRecord]:
+        response = await self.client.async_request(
+            "GET",
+            "/projects",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "select": PROJECT_RESPONSE_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": str(limit),
+            },
         )
         self._raise_for_supabase(response)
         return [self._project_from_row(row) for row in response.json()]
 
     def get_project(self, *, project_id: UUID, workspace_id: UUID) -> ProjectApiRecord:
-        response = httpx.get(
-            f"{self.rest_url}/projects",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/projects",
             params={
                 "id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": PROJECT_RESPONSE_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "project_not_found", "Project was not found.")
+        return self._project_from_row(rows[0])
+
+    async def get_project_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> ProjectApiRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/projects",
+            params={
+                "id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": PROJECT_RESPONSE_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -162,16 +234,44 @@ class SupabaseProjectRepository:
             payload["title"] = title
         if status is not None:
             payload["status"] = status
-        response = httpx.patch(
-            f"{self.rest_url}/projects",
-            headers=self.headers,
+        response = self.client.request(
+            "PATCH",
+            "/projects",
             params={
                 "id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": PROJECT_RESPONSE_COLUMNS,
             },
             json=payload,
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "project_not_found", "Project was not found.")
+        return self._project_from_row(rows[0])
+
+    async def update_project_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        title: str | None = None,
+        status: ProjectStatus | None = None,
+    ) -> ProjectApiRecord:
+        payload: dict[str, object] = {"updated_at": datetime.now(UTC).isoformat()}
+        if title is not None:
+            payload["title"] = title
+        if status is not None:
+            payload["status"] = status
+        response = await self.client.async_request(
+            "PATCH",
+            "/projects",
+            params={
+                "id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": PROJECT_RESPONSE_COLUMNS,
+            },
+            json=payload,
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -181,14 +281,25 @@ class SupabaseProjectRepository:
 
     def delete_project(self, *, project_id: UUID, workspace_id: UUID) -> None:
         self.get_project(project_id=project_id, workspace_id=workspace_id)
-        response = httpx.delete(
-            f"{self.rest_url}/projects",
-            headers=self.headers,
+        response = self.client.request(
+            "DELETE",
+            "/projects",
             params={
                 "id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+
+    async def delete_project_async(self, *, project_id: UUID, workspace_id: UUID) -> None:
+        await self.get_project_async(project_id=project_id, workspace_id=workspace_id)
+        response = await self.client.async_request(
+            "DELETE",
+            "/projects",
+            params={
+                "id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+            },
         )
         self._raise_for_supabase(response)
 

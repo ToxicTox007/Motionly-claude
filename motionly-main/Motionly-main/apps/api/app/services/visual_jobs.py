@@ -1,9 +1,11 @@
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 
 from app.repositories.uploads import UploadRecord
 from app.repositories.visual import InMemoryVisualRepository, VideoManifestRecord
-from app.schemas.visual import VisualManifestStatus
+from app.schemas.visual import VISUAL_MANIFEST_SCHEMA_VERSION, VisualManifestStatus
 from app.services.queue import EnqueuedJob, VisualQueue
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,36 @@ def visual_provider_identity(settings: object) -> tuple[str, str]:
     )
 
 
+def build_visual_cache_key(
+    *,
+    upload: UploadRecord,
+    provider: str,
+    model: str,
+    sample_rate_fps: float,
+    scene_threshold: float,
+) -> str:
+    source_identity = {
+        "bucket": upload.storage_bucket,
+        "path": upload.storage_path,
+        "size": upload.file_size_bytes,
+        "updated_at": upload.updated_at.isoformat(),
+    }
+    payload = {
+        "kind": "visual_manifest",
+        "schema_version": VISUAL_MANIFEST_SCHEMA_VERSION,
+        "upload_id": str(upload.id),
+        "source": source_identity,
+        "provider": provider,
+        "model": model,
+        "sample_rate_fps": round(float(sample_rate_fps), 4),
+        "scene_threshold": round(float(scene_threshold), 4),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"visual:v1:{digest}"
+
+
 def queue_visual_analysis_for_upload(
     *,
     upload: UploadRecord,
@@ -33,12 +65,14 @@ def queue_visual_analysis_for_upload(
     visual_queue: VisualQueue,
     provider: str,
     model: str,
+    cache_key: str,
     force: bool = False,
 ) -> VisualScheduleResult:
-    existing = repository.latest_for_upload(
+    existing = repository.find_manifest_by_cache_key(
         uploaded_video_id=upload.id,
         project_id=upload.project_id,
         workspace_id=upload.workspace_id,
+        cache_key=cache_key,
     )
     if existing and existing.status == VisualManifestStatus.READY and not force:
         logger.info(
@@ -69,6 +103,7 @@ def queue_visual_analysis_for_upload(
         provider=provider,
         model=model,
         manifest=None,
+        cache_key=cache_key,
         error_code=None,
         error_message=None,
     )

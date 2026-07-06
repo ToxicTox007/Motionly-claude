@@ -63,7 +63,7 @@ def test_supabase_repository_never_writes_plain_social_tokens(monkeypatch) -> No
             ],
         )
 
-    monkeypatch.setattr("app.repositories.publishing.httpx.request", request)
+    monkeypatch.setattr("app.services.supabase.httpx.request", request)
     repository = SupabasePublishingRepository(
         supabase_url="https://supabase.example",
         service_role_key="service-role",

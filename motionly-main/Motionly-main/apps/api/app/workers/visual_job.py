@@ -66,11 +66,11 @@ def _runner():
 
 
 def _serve() -> None:
-    import sys
     import app
     print(f"DEBUG: app.__file__ = {app.__file__}", flush=True)
     print(f"DEBUG: sys.path = {sys.path}", flush=True)
     execute = _runner()
+    print("VISUAL_DEBUG executor_ready", file=sys.stderr, flush=True)
     for line in sys.stdin:
         request: dict[str, object] = {}
         try:
@@ -78,9 +78,18 @@ def _serve() -> None:
             if request.get("control") == "ping":
                 print(json.dumps({"id": request.get("id"), "result": {"ok": True}}), flush=True)
                 continue
+            payload = dict(request.get("payload") or {})
+            print(
+                "VISUAL_DEBUG request_received "
+                f"workspace_id={payload.get('workspace_id')} "
+                f"project_id={payload.get('project_id')} "
+                f"video_id={payload.get('video_id')}",
+                file=sys.stderr,
+                flush=True,
+            )
             response = {
                 "id": request.get("id"),
-                "result": execute(dict(request.get("payload") or {})),
+                "result": execute(payload),
             }
         except ApiError as exc:
             response = {

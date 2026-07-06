@@ -65,7 +65,7 @@ LIGHTNING_GPU_MACHINE="${LIGHTNING_GPU_MACHINE:-L4}"
 LIGHTNING_IMAGE_TAG="${LIGHTNING_IMAGE_TAG:-$(date -u +%Y%m%d%H%M%S)}"
 LIGHTNING_GPU_PLATFORM="${LIGHTNING_GPU_PLATFORM:-linux/amd64}"
 LIGHTNING_MIN_REPLICAS="${LIGHTNING_MIN_REPLICAS:-0}"
-LIGHTNING_MAX_REPLICAS="${LIGHTNING_MAX_REPLICAS:-1}"
+LIGHTNING_MAX_REPLICAS="${LIGHTNING_MAX_REPLICAS:-${GPU_MAX_WORKER_COUNT:-4}}"
 LIGHTNING_DEPLOY_SOURCE="${LIGHTNING_DEPLOY_SOURCE:-auto}"
 LIGHTNING_STUDIO="${LIGHTNING_STUDIO:-}"
 LIGHTNING_STUDIO_PROJECT_PATH="${LIGHTNING_STUDIO_PROJECT_PATH:-/teamspace/studios/this_studio/motionly-gpu}"
@@ -163,7 +163,14 @@ upload_image() {
 }
 
 deployment_exists() {
-  lightning deployment inspect "$1" --teamspace "$LIGHTNING_TEAMSPACE" >/dev/null 2>&1
+  local output
+  if ! output="$(lightning deployment inspect "$1" --teamspace "$LIGHTNING_TEAMSPACE" 2>&1)"; then
+    return 1
+  fi
+  if grep -qi "was not found" <<<"$output"; then
+    return 1
+  fi
+  return 0
 }
 
 path_mapping_args=()
@@ -184,6 +191,9 @@ base_env_args=(
   -e "EXPORT_STORAGE_BUCKET=${EXPORT_STORAGE_BUCKET}"
   -e "UPLOAD_STORAGE_BUCKET=${UPLOAD_STORAGE_BUCKET}"
   -e "RENDER_EXECUTE_FFMPEG=${RENDER_EXECUTE_FFMPEG}"
+  -e "HF_HOME=/var/cache/motionly/huggingface"
+  -e "TORCH_HOME=/var/cache/motionly/torch"
+  -e "XDG_CACHE_HOME=/var/cache/motionly"
   -e "PYTHONPATH=${LIGHTNING_STUDIO_PROJECT_PATH}/apps/api"
 )
 
@@ -283,8 +293,9 @@ deploy_create_or_update \
   "$GPU_SOURCE_REF" \
   "${VISUAL_COMMAND_ARGS[@]}" \
   -e "ML_WORKER_ENABLED=true" \
+  -e "PYTHON_MEDIA_WORKER_ENABLED=true" \
   -e "MODEL_PREFETCH=${MODEL_PREFETCH}" \
-  -e "WORKER_QUEUES=visual_analysis" \
+  -e "WORKER_QUEUES=visual_analysis,transcription" \
   -e "WORKER_CONCURRENCY=1" \
   -e "VISUAL_ANALYSIS_WORKER_CONCURRENCY=${VISUAL_ANALYSIS_WORKER_CONCURRENCY}"
 

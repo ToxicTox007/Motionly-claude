@@ -9,12 +9,20 @@ from app.api.captions import (
 )
 from app.api.captions import (
     generate_captions,
+    list_captions,
     update_caption_segments,
     update_caption_track,
 )
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.repositories.captions import InMemoryCaptionRepository, SupabaseCaptionRepository
+from app.repositories.captions import (
+    CAPTION_SEGMENT_COLUMNS,
+    CAPTION_TRACK_COLUMNS,
+    TRANSCRIPT_COLUMNS,
+    TRANSCRIPT_WORD_COLUMNS,
+    InMemoryCaptionRepository,
+    SupabaseCaptionRepository,
+)
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.captions import (
     CaptionGenerateRequest,
@@ -84,9 +92,13 @@ def run_generate_captions(
     repository: InMemoryCaptionRepository,
     transcription_queue: TranscriptionQueue,
 ) -> object:
-    from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, DummyResponse
-    from app.services.queue import QueueRegistry
     from app.schemas.captions import CaptionGenerateResponse
+    from app.services.queue import QueueRegistry
+    from tests.worker_job_test_helpers import (
+        DummyResponse,
+        build_queue_request_state,
+        run_enqueued_job,
+    )
 
     registry = QueueRegistry()
     transcription_queue = TranscriptionQueue(registry=registry)
@@ -109,10 +121,11 @@ def run_generate_captions(
         )
     )
     if getattr(captions_response, "status", None) == "queued":
-        asyncio.run(
-            run_enqueued_job(job_id=captions_response.job_id, request=request)
+        asyncio.run(run_enqueued_job(job_id=captions_response.job_id, request=request))
+        tracks = repository.list_caption_tracks(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
         )
-        tracks = repository.list_caption_tracks(project_id=project_id, workspace_id=actor.workspace_id)
         track = sorted(tracks, key=lambda item: item.updated_at, reverse=True)[0]
         captions_response = CaptionGenerateResponse(
             track=track.to_response(),
@@ -348,15 +361,14 @@ def test_supabase_caption_repository_reads_tracks_with_segments(monkeypatch) -> 
             },
         ],
     }
-    responses = [
-        [track_row],
-        [segment_row],
-    ]
+    responses = [[track_row], [segment_row]]
+    calls = []
 
-    def fake_get(*_args, **_kwargs):
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
         return SimpleNamespace(status_code=200, json=lambda: responses.pop(0))
 
-    monkeypatch.setattr("app.repositories.captions.httpx.get", fake_get)
+    monkeypatch.setattr("app.repositories.captions.SupabaseRestClient.request", fake_request)
 
     track = repository.get_caption_track(
         project_id=project_id,
@@ -390,6 +402,255 @@ def test_supabase_caption_repository_reads_tracks_with_segments(monkeypatch) -> 
                 ),
             ],
         )
+    ]
+    assert calls[0] == (
+        "GET",
+        "/caption_tracks",
+        {
+            "params": {
+                "id": f"eq.{track_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": CAPTION_TRACK_COLUMNS,
+                "limit": "1",
+            }
+        },
+    )
+    assert calls[1] == (
+        "GET",
+        "/caption_segments",
+        {
+            "params": {
+                "caption_track_id": f"eq.{track_id}",
+                "select": CAPTION_SEGMENT_COLUMNS,
+                "order": "segment_index.asc",
+                "limit": "1000",
+            }
+        },
+    )
+
+
+@pytest.mark.anyio
+async def test_supabase_caption_async_reads_use_bounded_projections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = SupabaseCaptionRepository(
+        upload_repository=InMemoryUploadRepository(),
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    transcript_id = uuid4()
+    track_id = uuid4()
+    segment_id = uuid4()
+    word_id = uuid4()
+    now = "2026-07-06T00:00:00+00:00"
+    transcript_row = {
+        "id": str(transcript_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "uploaded_video_id": str(uuid4()),
+        "status": "ready",
+        "language": "en",
+        "language_hint": "auto",
+        "provider": "fixture",
+        "model": "fixture",
+        "confidence": 0.95,
+        "quality_status": "ok",
+        "quality_reasons": [],
+        "duration_ms": 1_000,
+        "raw_payload": {},
+        "error_code": None,
+        "error_message": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    word_row = {
+        "id": str(word_id),
+        "word_index": 0,
+        "text": "ship",
+        "start_ms": 0,
+        "end_ms": 250,
+        "confidence": 0.9,
+    }
+    track_row = {
+        "id": str(track_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "transcript_id": str(transcript_id),
+        "preset": CaptionPresetKey.BOLD_INFLUENCER.value,
+        "schema_version": CAPTION_SCHEMA_VERSION,
+        "style": get_caption_preset(CaptionPresetKey.BOLD_INFLUENCER).style.model_dump(
+            mode="json",
+        ),
+        "hide_filler_words": False,
+        "created_at": now,
+        "updated_at": now,
+    }
+    segment_word = {
+        "id": str(word_id),
+        "index": 0,
+        "text": "ship",
+        "start_ms": 0,
+        "end_ms": 250,
+        "confidence": 0.9,
+    }
+    segment_row = {
+        "id": str(segment_id),
+        "caption_track_id": str(track_id),
+        "segment_index": 0,
+        "start_ms": 0,
+        "end_ms": 250,
+        "text": "ship",
+        "line_count": 1,
+        "words": [segment_word],
+        "highlight_words": [],
+    }
+    responses = [[transcript_row], [word_row], [track_row], [segment_row]]
+    calls = []
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: responses.pop(0))
+
+    monkeypatch.setattr(
+        "app.repositories.captions.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    transcript = await repository.latest_transcript_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    tracks = await repository.list_caption_tracks_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        limit=25,
+    )
+
+    assert transcript is not None
+    assert transcript.words[0].text == "ship"
+    assert tracks[0].id == track_id
+    assert tracks[0].segments[0].text == "ship"
+    assert calls[0][2]["params"] == {
+        "workspace_id": f"eq.{workspace_id}",
+        "project_id": f"eq.{project_id}",
+        "select": TRANSCRIPT_COLUMNS,
+        "order": "updated_at.desc",
+        "limit": "1",
+    }
+    assert calls[1][2]["params"] == {
+        "transcript_id": f"eq.{transcript_id}",
+        "select": TRANSCRIPT_WORD_COLUMNS,
+        "order": "word_index.asc",
+        "limit": "5000",
+    }
+    assert calls[2][2]["params"] == {
+        "workspace_id": f"eq.{workspace_id}",
+        "project_id": f"eq.{project_id}",
+        "select": CAPTION_TRACK_COLUMNS,
+        "order": "updated_at.desc",
+        "limit": "25",
+    }
+    assert calls[3][2]["params"] == {
+        "caption_track_id": f"eq.{track_id}",
+        "select": CAPTION_SEGMENT_COLUMNS,
+        "order": "segment_index.asc",
+        "limit": "1000",
+    }
+
+
+def test_caption_api_prefers_async_repository_methods() -> None:
+    request = make_request()
+    repository, project_id, workspace_id, user_id = make_repository()
+
+    class AsyncCaptionRepository(InMemoryCaptionRepository):
+        def __init__(self, upload_repository):
+            super().__init__(upload_repository)
+            self.async_calls: list[str] = []
+
+        async def latest_transcript_async(self, **kwargs):
+            self.async_calls.append("latest-transcript")
+            return self.latest_transcript(**kwargs)
+
+        async def get_transcript_async(self, **kwargs):
+            self.async_calls.append("get-transcript")
+            return self.get_transcript(**kwargs)
+
+        async def list_caption_tracks_async(self, **kwargs):
+            self.async_calls.append("list-tracks")
+            return self.list_caption_tracks(**kwargs)
+
+        async def get_caption_track_async(self, **kwargs):
+            self.async_calls.append("get-track")
+            return self.get_caption_track(**kwargs)
+
+        async def update_caption_track_async(self, **kwargs):
+            self.async_calls.append("update-track")
+            return self.update_caption_track(**kwargs)
+
+        async def replace_caption_segments_async(self, **kwargs):
+            self.async_calls.append("replace-segments")
+            return self.replace_caption_segments(**kwargs)
+
+    async_repository = AsyncCaptionRepository(repository.upload_repository)
+    transcription = asyncio.run(
+        create_transcription(
+            project_id=project_id,
+            payload=TranscriptionCreateRequest(language_hint=LanguageHint.AUTO),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=async_repository,
+            transcription_provider=FixtureTranscriptionProvider(),
+            transcription_queue=TranscriptionQueue(),
+        )
+    )
+    captions = run_generate_captions(
+        project_id=project_id,
+        payload=CaptionGenerateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
+        actor=Actor(user_id=user_id, workspace_id=workspace_id),
+        repository=async_repository,
+        transcription_queue=TranscriptionQueue(),
+    )
+    asyncio.run(
+        list_captions(
+            project_id=project_id,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=async_repository,
+        )
+    )
+    asyncio.run(
+        update_caption_track(
+            project_id=project_id,
+            track_id=captions.track.id,
+            payload=CaptionUpdateRequest(preset=CaptionPresetKey.BOLD_INFLUENCER),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=async_repository,
+            transcription_queue=TranscriptionQueue(),
+            request=request,
+        )
+    )
+    asyncio.run(
+        update_caption_segments(
+            project_id=project_id,
+            track_id=captions.track.id,
+            payload=CaptionSegmentsUpdateRequest(segments=captions.track.segments),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=async_repository,
+            request=request,
+        )
+    )
+
+    assert transcription.transcript_id is not None
+    assert async_repository.async_calls == [
+        "latest-transcript",
+        "list-tracks",
+        "get-track",
+        "get-transcript",
+        "update-track",
+        "get-track",
+        "replace-segments",
     ]
 
 

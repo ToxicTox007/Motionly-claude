@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Input, Label, Select, Slider, TextArea, PanelSection } from "../ui";
 import { Button } from "../../button";
 import { Loader2, RefreshCw, Save } from "lucide-react";
@@ -76,7 +75,6 @@ export function CaptionsTab({
   onPreviewTrackUpdated,
   onPlanUpdated,
 }: CaptionsTabProps) {
-  const router = useRouter();
   const [tracks, setTracks] = useState(initialTracks);
   const activeTrack = tracks[0] ?? null;
   const [preset, setPreset] = useState<CaptionPresetKey>(
@@ -148,7 +146,6 @@ export function CaptionsTab({
       );
       applyTrack(payload.track);
       setMessage("Caption style updated.");
-      router.refresh();
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);
@@ -179,7 +176,6 @@ export function CaptionsTab({
       applyTrack(payload.track);
       await savePlanHighlights(payload.track.segments);
       setMessage("Caption edits saved.");
-      router.refresh();
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);

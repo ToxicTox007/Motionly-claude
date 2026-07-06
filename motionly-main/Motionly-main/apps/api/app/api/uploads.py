@@ -21,6 +21,7 @@ from app.schemas.uploads import (
     UploadReadResponse,
     UploadStatus,
 )
+from app.services.offload import run_blocking
 from app.services.queue import PreprocessQueue
 from app.services.storage import StorageSigner
 from app.services.upload_validation import validate_upload_preflight
@@ -31,6 +32,13 @@ ActorDep = Annotated[Actor, Depends(get_actor)]
 UploadRepositoryDep = Annotated[InMemoryUploadRepository, Depends(get_upload_repository)]
 StorageSignerDep = Annotated[StorageSigner, Depends(get_storage_signer)]
 PreprocessQueueDep = Annotated[PreprocessQueue, Depends(get_preprocess_queue)]
+
+
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return await run_blocking(getattr(repository, sync_name), **kwargs)
 
 
 @router.post("/init", response_model=UploadInitResponse, status_code=201)
@@ -49,39 +57,22 @@ async def init_upload(
         file_size_bytes=payload.file_size_bytes,
         max_file_size_bytes=settings.upload_max_file_size_bytes,
     )
-    repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
-
-    active_uploads = repository.count_active_uploads(workspace_id=actor.workspace_id)
-    if active_uploads >= settings.upload_max_concurrent_per_workspace:
-        raise ApiError(
-            429,
-            "upload_concurrency_limit",
-            "Your workspace has too many active uploads. Try again when one finishes.",
-        )
-
-    provisional_id = UUID(int=0)
-    storage_path = (
-        f"workspaces/{actor.workspace_id}/projects/{project_id}/raw/"
-        f"{provisional_id}.{validation.extension}"
-    )
-    upload = repository.create_upload(
+    upload = await _repository_call(
+        repository,
+        "initialize_upload_async",
+        "initialize_upload",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         storage_bucket=settings.upload_storage_bucket,
-        storage_path=storage_path,
+        storage_extension=validation.extension,
         original_filename=payload.filename,
         mime_type=payload.mime_type,
         file_size_bytes=payload.file_size_bytes,
+        max_active_uploads=settings.upload_max_concurrent_per_workspace,
     )
-    upload.storage_path = (
-        f"workspaces/{actor.workspace_id}/projects/{project_id}/raw/"
-        f"{upload.id}.{validation.extension}"
-    )
-    if hasattr(repository, "update_storage_path"):
-        upload = repository.update_storage_path(upload=upload, storage_path=upload.storage_path)
-    upload = repository.transition_upload(upload=upload, status=UploadStatus.UPLOADING)
 
-    signed_upload = storage_signer.create_signed_upload(
+    signed_upload = await run_blocking(
+        storage_signer.create_signed_upload,
         bucket=upload.storage_bucket,
         path=upload.storage_path,
         mime_type=upload.mime_type,
@@ -110,33 +101,18 @@ async def complete_upload(
     repository: UploadRepositoryDep,
     preprocess_queue: PreprocessQueueDep,
 ) -> UploadCompleteResponse:
-    upload = repository.get_upload_for_project(
+    upload = await _repository_call(
+        repository,
+        "complete_upload_for_processing_async",
+        "complete_upload_for_processing",
         project_id=project_id,
         video_id=video_id,
         workspace_id=actor.workspace_id,
+        observed_file_size_bytes=payload.observed_file_size_bytes,
     )
-    if (
-        payload.observed_file_size_bytes
-        and payload.observed_file_size_bytes != upload.file_size_bytes
-    ):
-        raise ApiError(
-            409,
-            "upload_size_mismatch",
-            "The uploaded object size did not match preflight.",
-        )
 
-    if upload.status == UploadStatus.PROCESSING:
-        job = preprocess_queue.enqueue_video_preprocess(
-            video_id=upload.id,
-            project_id=upload.project_id,
-            workspace_id=upload.workspace_id,
-        )
-        return UploadCompleteResponse(video_id=upload.id, status=upload.status, job_id=job.id)
-
-    upload = repository.transition_upload(upload=upload, status=UploadStatus.UPLOADED)
-    upload = repository.transition_upload(upload=upload, status=UploadStatus.PROCESSING)
-    repository.attach_active_video(project_id=project_id, video_id=video_id)
-    job = preprocess_queue.enqueue_video_preprocess(
+    job = await run_blocking(
+        preprocess_queue.enqueue_video_preprocess,
         video_id=upload.id,
         project_id=upload.project_id,
         workspace_id=upload.workspace_id,
@@ -151,7 +127,10 @@ async def cancel_upload(
     actor: ActorDep,
     repository: UploadRepositoryDep,
 ) -> UploadReadResponse:
-    upload = repository.get_upload_for_project(
+    upload = await _repository_call(
+        repository,
+        "get_upload_for_project_async",
+        "get_upload_for_project",
         project_id=project_id,
         video_id=video_id,
         workspace_id=actor.workspace_id,
@@ -165,7 +144,10 @@ async def cancel_upload(
             "This upload is already being processed and can no longer be canceled.",
         )
 
-    upload = repository.mark_failed(
+    upload = await _repository_call(
+        repository,
+        "mark_failed_async",
+        "mark_failed",
         upload=upload,
         error_code="upload_canceled",
         error_message="Upload canceled before the source video was completed.",
@@ -179,7 +161,10 @@ async def get_active_upload(
     actor: ActorDep,
     repository: UploadRepositoryDep,
 ) -> UploadReadResponse:
-    upload = repository.get_active_upload(
+    upload = await _repository_call(
+        repository,
+        "get_active_upload_async",
+        "get_active_upload",
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
@@ -193,7 +178,10 @@ async def get_upload(
     actor: ActorDep,
     repository: UploadRepositoryDep,
 ) -> UploadReadResponse:
-    upload = repository.get_upload_for_project(
+    upload = await _repository_call(
+        repository,
+        "get_upload_for_project_async",
+        "get_upload_for_project",
         project_id=project_id,
         video_id=video_id,
         workspace_id=actor.workspace_id,
@@ -210,7 +198,10 @@ async def get_upload_asset_urls(
     repository: UploadRepositoryDep,
     storage_signer: StorageSignerDep,
 ) -> UploadAssetUrlsResponse:
-    upload = repository.get_upload_for_project(
+    upload = await _repository_call(
+        repository,
+        "get_upload_for_project_async",
+        "get_upload_for_project",
         project_id=project_id,
         video_id=video_id,
         workspace_id=actor.workspace_id,
@@ -226,7 +217,8 @@ async def get_upload_asset_urls(
         request.app.state.settings.upload_signed_url_ttl_seconds,
         StorageSigner.MAX_DOWNLOAD_TTL_SECONDS,
     )
-    source = storage_signer.create_signed_download(
+    source = await run_blocking(
+        storage_signer.create_signed_download,
         bucket=upload.storage_bucket,
         path=upload.storage_path,
         expires_in_seconds=ttl,
@@ -234,7 +226,8 @@ async def get_upload_asset_urls(
     thumbnail_url = None
     if upload.thumbnail_path:
         try:
-            thumbnail = storage_signer.create_signed_download(
+            thumbnail = await run_blocking(
+                storage_signer.create_signed_download,
                 bucket="thumbnails",
                 path=_thumbnail_object_path(upload.thumbnail_path),
                 expires_in_seconds=ttl,

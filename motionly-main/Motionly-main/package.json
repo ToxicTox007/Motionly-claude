@@ -9,6 +9,10 @@
     "typecheck": "turbo typecheck",
     "test": "turbo test",
     "format": "prettier --check .",
+    "perf:k6": "k6 run scripts/perf/k6-api-workflows.js",
+    "perf:bullmq": "node scripts/perf/bullmq-queue-load.mjs",
+    "perf:browser": "pnpm --filter @motionly/web perf:browser",
+    "perf:media": "node scripts/perf/media-golden-benchmarks.mjs",
     "contracts:generate": "pnpm --filter @motionly/shared contracts:generate",
     "contracts:check": "pnpm --filter @motionly/shared contracts:check"
   },

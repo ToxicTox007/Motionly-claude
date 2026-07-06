@@ -9,7 +9,11 @@ from app.api.analytics import (
 )
 from app.api.dependencies import Actor
 from app.api.plans import create_plan, update_plan_cuts
-from app.repositories.analytics import InMemoryAnalyticsRepository
+from app.repositories.analytics import (
+    AI_EDIT_FEEDBACK_EVENT_COLUMNS,
+    InMemoryAnalyticsRepository,
+    SupabaseAnalyticsRepository,
+)
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
@@ -88,14 +92,231 @@ def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -
     assert {example.signal.value for example in dataset.examples} == {"positive", "correction"}
 
 
+def test_supabase_analytics_repository_lists_with_explicit_projection(monkeypatch) -> None:
+    repository = SupabaseAnalyticsRepository(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(is_success=True, json=lambda: [])
+
+    monkeypatch.setattr("app.repositories.analytics.SupabaseRestClient.request", fake_request)
+
+    assert (
+        repository.list_events(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            layer=AIEditLayer.CUTS,
+            limit=25,
+        )
+        == []
+    )
+    assert calls == [
+        (
+            "GET",
+            "/ai_edit_feedback_events",
+            {
+                "params": {
+                    "workspace_id": f"eq.{workspace_id}",
+                    "project_id": f"eq.{project_id}",
+                    "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
+                    "order": "created_at.desc",
+                    "limit": "25",
+                    "layer": "eq.cuts",
+                }
+            },
+        )
+    ]
+
+
+def test_supabase_analytics_async_methods_use_bounded_projections(monkeypatch) -> None:
+    repository = SupabaseAnalyticsRepository(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    user_id = uuid4()
+    event_id = uuid4()
+    now = "2026-07-06T00:00:00+00:00"
+    event_row = {
+        "id": str(event_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "edit_plan_id": None,
+        "user_id": str(user_id),
+        "event_type": "changed",
+        "layer": "cuts",
+        "decision_id": "cut-1",
+        "action": None,
+        "source": "manual_editor",
+        "ai_payload": {"start_ms": 0},
+        "user_payload": {"start_ms": 100},
+        "metadata": {},
+        "created_at": now,
+    }
+    responses = [[event_row], []]
+    calls = []
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(is_success=True, json=lambda: responses.pop(0))
+
+    monkeypatch.setattr(
+        "app.repositories.analytics.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    event = asyncio.run(
+        repository.record_event_async(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            user_id=user_id,
+            event_type=AIEditFeedbackEventType.CHANGED,
+            layer=AIEditLayer.CUTS,
+            source="manual_editor",
+            decision_id="cut-1",
+            ai_payload={"start_ms": 0},
+            user_payload={"start_ms": 100},
+        )
+    )
+    events = asyncio.run(
+        repository.list_events_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            layer=AIEditLayer.CUTS,
+            limit=25,
+        )
+    )
+
+    assert event.id == event_id
+    assert events == []
+    assert calls[0] == (
+        "POST",
+        "/ai_edit_feedback_events",
+        {
+            "params": {"select": AI_EDIT_FEEDBACK_EVENT_COLUMNS},
+            "json": [
+                {
+                    "workspace_id": str(workspace_id),
+                    "project_id": str(project_id),
+                    "edit_plan_id": None,
+                    "user_id": str(user_id),
+                    "event_type": "changed",
+                    "layer": "cuts",
+                    "decision_id": "cut-1",
+                    "action": None,
+                    "source": "manual_editor",
+                    "ai_payload": {"start_ms": 0},
+                    "user_payload": {"start_ms": 100},
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+    assert calls[1] == (
+        "GET",
+        "/ai_edit_feedback_events",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
+                "order": "created_at.desc",
+                "limit": "25",
+                "layer": "eq.cuts",
+            }
+        },
+    )
+
+
+def test_analytics_api_prefers_async_repository_methods() -> None:
+    project_id = uuid4()
+    workspace_id = uuid4()
+    user_id = uuid4()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    class AsyncAnalyticsRepository(InMemoryAnalyticsRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.async_calls: list[str] = []
+
+        async def record_event_async(self, **kwargs):
+            self.async_calls.append("record-event")
+            return self.record_event(**kwargs)
+
+        async def list_events_async(self, **kwargs):
+            self.async_calls.append("list-events")
+            return self.list_events(**kwargs)
+
+        async def summarize_async(self, **kwargs):
+            self.async_calls.append("summarize")
+            return self.summarize(**kwargs)
+
+        async def fine_tuning_examples_async(self, **kwargs):
+            self.async_calls.append("fine-tuning")
+            return self.fine_tuning_examples(**kwargs)
+
+    repository = AsyncAnalyticsRepository()
+
+    asyncio.run(
+        record_ai_edit_feedback(
+            project_id=project_id,
+            payload=AIEditFeedbackEventCreateRequest(
+                event_type=AIEditFeedbackEventType.KEPT,
+                layer=AIEditLayer.CUTS,
+                decision_id="cut-1",
+                ai_payload={"start_ms": 0},
+                user_payload={"start_ms": 0},
+                source="render_confirmation",
+            ),
+            actor=actor,
+            repository=repository,
+        )
+    )
+    asyncio.run(
+        get_ai_edit_analytics(
+            project_id=project_id,
+            actor=actor,
+            repository=repository,
+            layer=AIEditLayer.CUTS,
+            limit=25,
+        )
+    )
+    asyncio.run(
+        get_fine_tuning_dataset(
+            project_id=project_id,
+            actor=actor,
+            repository=repository,
+            limit=25,
+        )
+    )
+
+    assert repository.async_calls == [
+        "record-event",
+        "list-events",
+        "summarize",
+        "fine-tuning",
+    ]
+
+
 def test_plan_suggestions_and_manual_cut_overrides_create_feedback_events() -> None:
     plan_repository, project_id, workspace_id, user_id = make_plan_repository()
     analytics_repository = InMemoryAnalyticsRepository()
     request = request_with_analytics(analytics_repository)
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
 
-    from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, DummyResponse
     from app.services.queue import QueueRegistry
+    from tests.worker_job_test_helpers import (
+        DummyResponse,
+        build_queue_request_state,
+        run_enqueued_job,
+    )
 
     registry = QueueRegistry()
     request = build_queue_request_state(
@@ -117,9 +338,7 @@ def test_plan_suggestions_and_manual_cut_overrides_create_feedback_events() -> N
             response=DummyResponse(),
         )
     )
-    asyncio.run(
-        run_enqueued_job(job_id=created_resp.job_id, request=request)
-    )
+    asyncio.run(run_enqueued_job(job_id=created_resp.job_id, request=request))
     plan = plan_repository.active_plan(project_id=project_id, workspace_id=workspace_id)
     created = SimpleNamespace(plan=plan)
 

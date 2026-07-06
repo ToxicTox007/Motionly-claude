@@ -12,6 +12,19 @@ from app.schemas.billing import (
     UsageLedgerEntryResponse,
 )
 from app.services.billing import monthly_period
+from app.services.supabase import SupabaseRestClient
+
+SUBSCRIPTION_COLUMNS = (
+    "workspace_id,plan,status,stripe_customer_id,stripe_subscription_id,stripe_price_id,"
+    "current_period_start,current_period_end,cancel_at_period_end,updated_at"
+)
+USAGE_LEDGER_COLUMNS = (
+    "id,workspace_id,event_type,quantity,source_id,metadata,created_at"
+)
+BILLING_ADJUSTMENT_COLUMNS = (
+    "id,workspace_id,stripe_event_id,adjustment_type,amount_cents,currency,reason,"
+    "metadata,created_at"
+)
 
 
 @dataclass
@@ -219,22 +232,46 @@ class InMemoryBillingRepository:
 
 
 class SupabaseBillingRepository(InMemoryBillingRepository):
-    def __init__(self, *, supabase_url: str, service_role_key: str) -> None:
+    def __init__(
+        self,
+        *,
+        supabase_url: str,
+        service_role_key: str,
+        metrics_registry: object | None = None,
+    ) -> None:
         super().__init__()
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="billing",
+            metrics_registry=metrics_registry,
+        )
 
     def get_subscription(self, *, workspace_id: UUID) -> SubscriptionRecord:
-        response = httpx.get(
-            f"{self.rest_url}/subscriptions",
-            headers=self.headers,
-            params={"workspace_id": f"eq.{workspace_id}", "select": "*", "limit": "1"},
-            timeout=10,
+        response = self.client.request(
+            "GET",
+            "/subscriptions",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "select": SUBSCRIPTION_COLUMNS,
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            return super().get_subscription(workspace_id=workspace_id)
+        return self._subscription_from_row(rows[0])
+
+    async def get_subscription_async(self, *, workspace_id: UUID) -> SubscriptionRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/subscriptions",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "select": SUBSCRIPTION_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -243,12 +280,23 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
         return self._subscription_from_row(rows[0])
 
     def upsert_subscription(self, **values: object) -> SubscriptionRecord:
-        response = httpx.post(
-            f"{self.rest_url}/subscriptions",
-            headers={**self.headers, "prefer": "resolution=merge-duplicates,return=representation"},
+        response = self.client.request(
+            "POST",
+            "/subscriptions",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
             params={"on_conflict": "workspace_id"},
             json=self._json_safe(values),
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._subscription_from_row(response.json()[0])
+
+    async def upsert_subscription_async(self, **values: object) -> SubscriptionRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/subscriptions",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "workspace_id"},
+            json=self._json_safe(values),
         )
         self._raise_for_supabase(response)
         return self._subscription_from_row(response.json()[0])
@@ -264,70 +312,142 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
         period_start, period_end = (
             (period_start, period_end) if period_start and period_end else monthly_period()
         )
-        response = httpx.get(
-            f"{self.rest_url}/usage_ledger",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/usage_ledger",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "event_type": f"eq.{event_type.value}",
                 "created_at": [f"gte.{period_start.isoformat()}", f"lt.{period_end.isoformat()}"],
                 "select": "quantity",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return sum(int(row["quantity"]) for row in response.json())
+
+    async def count_usage_async(
+        self,
+        *,
+        workspace_id: UUID,
+        event_type: UsageEventType,
+        period_start: datetime | None = None,
+        period_end: datetime | None = None,
+    ) -> int:
+        period_start, period_end = (
+            (period_start, period_end) if period_start and period_end else monthly_period()
+        )
+        response = await self.client.async_request(
+            "GET",
+            "/usage_ledger",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "event_type": f"eq.{event_type.value}",
+                "created_at": [f"gte.{period_start.isoformat()}", f"lt.{period_end.isoformat()}"],
+                "select": "quantity",
+            },
         )
         self._raise_for_supabase(response)
         return sum(int(row["quantity"]) for row in response.json())
 
     def record_usage(self, **values: object) -> UsageLedgerEntry:
         event_type_value = getattr(values["event_type"], "value", values["event_type"])
-        response = httpx.post(
-            f"{self.rest_url}/usage_ledger",
-            headers={
-                **self.headers,
-                "prefer": "resolution=ignore-duplicates,return=representation",
-            },
+        response = self.client.request(
+            "POST",
+            "/usage_ledger",
+            headers={"prefer": "resolution=ignore-duplicates,return=representation"},
             params={"on_conflict": "workspace_id,event_type,source_id"},
             json=self._json_safe(values),
-            timeout=10,
         )
         self._raise_for_supabase(response)
         if not response.json():
-            existing = httpx.get(
-                f"{self.rest_url}/usage_ledger",
-                headers=self.headers,
+            existing = self.client.request(
+                "GET",
+                "/usage_ledger",
                 params={
                     "workspace_id": f"eq.{values['workspace_id']}",
                     "event_type": f"eq.{event_type_value}",
                     "source_id": f"eq.{values['source_id']}",
-                    "select": "*",
+                    "select": USAGE_LEDGER_COLUMNS,
                     "limit": "1",
                 },
-                timeout=10,
+            )
+            self._raise_for_supabase(existing)
+            return self._usage_from_row(existing.json()[0])
+        return self._usage_from_row(response.json()[0])
+
+    async def record_usage_async(self, **values: object) -> UsageLedgerEntry:
+        event_type_value = getattr(values["event_type"], "value", values["event_type"])
+        response = await self.client.async_request(
+            "POST",
+            "/usage_ledger",
+            headers={"prefer": "resolution=ignore-duplicates,return=representation"},
+            params={"on_conflict": "workspace_id,event_type,source_id"},
+            json=self._json_safe(values),
+        )
+        self._raise_for_supabase(response)
+        if not response.json():
+            existing = await self.client.async_request(
+                "GET",
+                "/usage_ledger",
+                params={
+                    "workspace_id": f"eq.{values['workspace_id']}",
+                    "event_type": f"eq.{event_type_value}",
+                    "source_id": f"eq.{values['source_id']}",
+                    "select": USAGE_LEDGER_COLUMNS,
+                    "limit": "1",
+                },
             )
             self._raise_for_supabase(existing)
             return self._usage_from_row(existing.json()[0])
         return self._usage_from_row(response.json()[0])
 
     def has_processed_stripe_event(self, event_id: str) -> bool:
-        response = httpx.get(
-            f"{self.rest_url}/stripe_webhook_events",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/stripe_webhook_events",
             params={"id": f"eq.{event_id}", "select": "id", "limit": "1"},
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return bool(response.json())
+
+    async def has_processed_stripe_event_async(self, event_id: str) -> bool:
+        response = await self.client.async_request(
+            "GET",
+            "/stripe_webhook_events",
+            params={"id": f"eq.{event_id}", "select": "id", "limit": "1"},
         )
         self._raise_for_supabase(response)
         return bool(response.json())
 
     def record_stripe_event(self, *, event_id: str, event_type: str) -> StripeWebhookEventRecord:
-        response = httpx.post(
-            f"{self.rest_url}/stripe_webhook_events",
-            headers={
-                **self.headers,
-                "prefer": "resolution=ignore-duplicates,return=representation",
-            },
+        response = self.client.request(
+            "POST",
+            "/stripe_webhook_events",
+            headers={"prefer": "resolution=ignore-duplicates,return=representation"},
             params={"on_conflict": "id"},
             json={"id": event_id, "event_type": event_type},
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        if not response.json():
+            return StripeWebhookEventRecord(id=event_id, event_type=event_type)
+        return StripeWebhookEventRecord(
+            id=response.json()[0]["id"],
+            event_type=response.json()[0]["event_type"],
+            processed_at=self._parse_datetime(response.json()[0]["processed_at"]),
+        )
+
+    async def record_stripe_event_async(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+    ) -> StripeWebhookEventRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/stripe_webhook_events",
+            headers={"prefer": "resolution=ignore-duplicates,return=representation"},
+            params={"on_conflict": "id"},
+            json={"id": event_id, "event_type": event_type},
         )
         self._raise_for_supabase(response)
         if not response.json():
@@ -351,38 +471,78 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             filters["stripe_customer_id"] = f"eq.{stripe_customer_id}"
         else:
             return None
-        response = httpx.get(
-            f"{self.rest_url}/subscriptions",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/subscriptions",
             params=filters,
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return UUID(str(rows[0]["workspace_id"])) if rows else None
+
+    async def workspace_for_stripe_subscription_async(
+        self,
+        *,
+        stripe_subscription_id: str | None = None,
+        stripe_customer_id: str | None = None,
+    ) -> UUID | None:
+        filters: dict[str, str] = {"select": "workspace_id", "limit": "1"}
+        if stripe_subscription_id:
+            filters["stripe_subscription_id"] = f"eq.{stripe_subscription_id}"
+        elif stripe_customer_id:
+            filters["stripe_customer_id"] = f"eq.{stripe_customer_id}"
+        else:
+            return None
+        response = await self.client.async_request(
+            "GET",
+            "/subscriptions",
+            params=filters,
         )
         self._raise_for_supabase(response)
         rows = response.json()
         return UUID(str(rows[0]["workspace_id"])) if rows else None
 
     def record_billing_adjustment(self, **values: object) -> BillingAdjustmentRecord:
-        response = httpx.post(
-            f"{self.rest_url}/billing_adjustments",
-            headers={
-                **self.headers,
-                "prefer": "resolution=ignore-duplicates,return=representation",
-            },
+        response = self.client.request(
+            "POST",
+            "/billing_adjustments",
+            headers={"prefer": "resolution=ignore-duplicates,return=representation"},
             params={"on_conflict": "stripe_event_id"},
             json=self._json_safe(values),
-            timeout=10,
         )
         self._raise_for_supabase(response)
         if not response.json():
-            existing = httpx.get(
-                f"{self.rest_url}/billing_adjustments",
-                headers=self.headers,
+            existing = self.client.request(
+                "GET",
+                "/billing_adjustments",
                 params={
                     "stripe_event_id": f"eq.{values['stripe_event_id']}",
-                    "select": "*",
+                    "select": BILLING_ADJUSTMENT_COLUMNS,
                     "limit": "1",
                 },
-                timeout=10,
+            )
+            self._raise_for_supabase(existing)
+            return self._adjustment_from_row(existing.json()[0])
+        return self._adjustment_from_row(response.json()[0])
+
+    async def record_billing_adjustment_async(self, **values: object) -> BillingAdjustmentRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/billing_adjustments",
+            headers={"prefer": "resolution=ignore-duplicates,return=representation"},
+            params={"on_conflict": "stripe_event_id"},
+            json=self._json_safe(values),
+        )
+        self._raise_for_supabase(response)
+        if not response.json():
+            existing = await self.client.async_request(
+                "GET",
+                "/billing_adjustments",
+                params={
+                    "stripe_event_id": f"eq.{values['stripe_event_id']}",
+                    "select": BILLING_ADJUSTMENT_COLUMNS,
+                    "limit": "1",
+                },
             )
             self._raise_for_supabase(existing)
             return self._adjustment_from_row(existing.json()[0])

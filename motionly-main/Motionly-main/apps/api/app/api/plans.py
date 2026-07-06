@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.api.dependencies import (
     Actor,
@@ -62,6 +62,67 @@ EditPlannerProviderDep = Annotated[EditPlannerProvider, Depends(get_edit_planner
 PlanQueueDep = Annotated[PlanQueue, Depends(get_plan_queue)]
 
 
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
+async def _get_project_for_workspace(repository, *, project_id: UUID, workspace_id: UUID) -> None:
+    await _repository_call(
+        repository,
+        "get_project_for_workspace_async",
+        "get_project_for_workspace",
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+
+
+async def _get_active_upload(repository, *, project_id: UUID, workspace_id: UUID):
+    return await _repository_call(
+        repository,
+        "get_active_upload_async",
+        "get_active_upload",
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+
+
+async def _get_plan(repository, *, project_id: UUID, workspace_id: UUID, plan_id: UUID):
+    return await _repository_call(
+        repository,
+        "get_plan_async",
+        "get_plan",
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=plan_id,
+    )
+
+
+async def _update_plan_cuts(
+    repository,
+    *,
+    project_id: UUID,
+    workspace_id: UUID,
+    plan_id: UUID,
+    plan,
+    summary,
+    target_duration_s: int,
+):
+    return await _repository_call(
+        repository,
+        "update_plan_cuts_async",
+        "update_plan_cuts",
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=plan_id,
+        plan=plan,
+        summary=summary,
+        target_duration_s=target_duration_s,
+    )
+
+
 @router.post("", response_model=PlanCreateResponse, status_code=201)
 async def create_plan(
     project_id: UUID,
@@ -73,7 +134,11 @@ async def create_plan(
     response: Response = None,  # type: ignore[assignment]
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanCreateResponse:
-    repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
+    await _get_project_for_workspace(
+        repository,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
     payload = _apply_phase5_learning(
         payload=payload,
         request=request,
@@ -105,7 +170,11 @@ async def create_plan(
             or "Transcript quality must be recovered before edit planning.",
         )
 
-    upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
+    upload = await _get_active_upload(
+        repository,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
     video_duration_ms = upload.metadata.duration_ms or transcript.duration_ms or 0
     visual_manifest, visual_context_flag = _visual_context(
         repository=repository,
@@ -133,7 +202,10 @@ async def create_plan(
     )
     execution_id = f"sync-complete--plan--{project_id}--{transcript.id}"
     if not payload.force:
-        cached = repository.find_cached_plan(
+        cached = await _repository_call(
+            repository,
+            "find_cached_plan_async",
+            "find_cached_plan",
             project_id=project_id,
             workspace_id=actor.workspace_id,
             cache_key=cache_key,
@@ -145,7 +217,8 @@ async def create_plan(
                 source_duration_ms=video_duration_ms or cached.target_duration_s * 1000,
             )
             if migrated is not cached.plan:
-                cached = repository.update_plan_cuts(
+                cached = await _update_plan_cuts(
+                    repository,
                     project_id=project_id,
                     workspace_id=actor.workspace_id,
                     plan_id=cached.id,
@@ -204,11 +277,15 @@ async def get_plan_job_status(
     repository: PlanRepositoryDep,
     request: Request,
 ) -> PlanJobStatusResponse:
-    repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
-    
+    await _get_project_for_workspace(
+        repository,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+
     queue_registry = request.app.state.queue_registry
     job = queue_registry.jobs.get(job_id)
-    
+
     transcript_id = None
     try:
         parts = job_id.split("--")
@@ -217,18 +294,20 @@ async def get_plan_job_status(
     except Exception:
         pass
 
-    def find_completed_plan(t_id):
+    async def find_completed_plan(t_id: UUID | None):
         if not t_id:
             return None
-        plans = repository.list_plans(project_id=project_id, workspace_id=actor.workspace_id)
-        matching = [p for p in plans if p.transcript_id == t_id]
-        if not matching:
-            return None
-        matching.sort(key=lambda p: p.updated_at, reverse=True)
-        return matching[0]
+        return await _repository_call(
+            repository,
+            "find_latest_plan_for_transcript_async",
+            "find_latest_plan_for_transcript",
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            transcript_id=t_id,
+        )
 
     if not job:
-        db_plan = find_completed_plan(transcript_id)
+        db_plan = await find_completed_plan(transcript_id)
         if db_plan:
             if db_plan.status == EditPlanStatus.READY:
                 return PlanJobStatusResponse(status="succeeded", progress=100, plan_id=db_plan.id)
@@ -236,24 +315,24 @@ async def get_plan_job_status(
                 return PlanJobStatusResponse(
                     status="failed",
                     progress=0,
-                    failure_reason="Edit planning failed during execution"
+                    failure_reason="Edit planning failed during execution",
                 )
         return PlanJobStatusResponse(status="failed", progress=0, failure_reason="Job not found")
 
     from app.services.queue import QueueJobStatus
     if job.status == QueueJobStatus.SUCCEEDED:
-        db_plan = find_completed_plan(transcript_id)
+        db_plan = await find_completed_plan(transcript_id)
         return PlanJobStatusResponse(
             status="succeeded",
             progress=100,
-            plan_id=db_plan.id if db_plan else None
+            plan_id=db_plan.id if db_plan else None,
         )
     elif job.status == QueueJobStatus.RUNNING:
         return PlanJobStatusResponse(status="running", progress=50)
     elif job.status == QueueJobStatus.QUEUED:
         return PlanJobStatusResponse(status="queued", progress=0)
     else:
-        db_plan = find_completed_plan(transcript_id)
+        db_plan = await find_completed_plan(transcript_id)
         reason = "Job failed in queue worker"
         if db_plan and db_plan.validation_errors:
             reason = db_plan.validation_errors[0]
@@ -330,8 +409,16 @@ async def list_plans(
     project_id: UUID,
     actor: ActorDep,
     repository: PlanRepositoryDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> PlanListResponse:
-    plans = repository.list_plans(project_id=project_id, workspace_id=actor.workspace_id)
+    plans = await _repository_call(
+        repository,
+        "list_plans_async",
+        "list_plans",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        limit=limit,
+    )
     active = next((plan for plan in plans if plan.is_active), None)
     return PlanListResponse(
         plans=[plan.to_response() for plan in plans],
@@ -344,10 +431,15 @@ async def list_plan_snapshots(
     project_id: UUID,
     actor: ActorDep,
     repository: PlanRepositoryDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> PlanSnapshotListResponse:
-    snapshots = repository.list_plan_snapshots(
+    snapshots = await _repository_call(
+        repository,
+        "list_plan_snapshots_async",
+        "list_plan_snapshots",
         project_id=project_id,
         workspace_id=actor.workspace_id,
+        limit=limit,
     )
     return PlanSnapshotListResponse(
         snapshots=[snapshot.to_response() for snapshot in snapshots],
@@ -362,15 +454,25 @@ async def create_plan_snapshot(
     repository: PlanRepositoryDep,
 ) -> PlanSnapshotCreateResponse:
     source_plan = (
-        repository.get_plan(
+        await _get_plan(
+            repository,
             project_id=project_id,
             workspace_id=actor.workspace_id,
             plan_id=payload.plan_id,
         )
         if payload.plan_id
-        else repository.active_plan(project_id=project_id, workspace_id=actor.workspace_id)
+        else await _repository_call(
+            repository,
+            "active_plan_async",
+            "active_plan",
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
     )
-    snapshot = repository.create_plan_snapshot(
+    snapshot = await _repository_call(
+        repository,
+        "create_plan_snapshot_async",
+        "create_plan_snapshot",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         source_plan=source_plan,
@@ -393,7 +495,10 @@ async def restore_plan_snapshot(
     repository: PlanRepositoryDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanSnapshotRestoreResponse:
-    plan = repository.restore_plan_snapshot(
+    plan = await _repository_call(
+        repository,
+        "restore_plan_snapshot_async",
+        "restore_plan_snapshot",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         snapshot_id=snapshot_id,
@@ -428,7 +533,10 @@ async def activate_plan(
     actor: ActorDep,
     repository: PlanRepositoryDep,
 ) -> PlanActivateResponse:
-    plan = repository.activate_plan(
+    plan = await _repository_call(
+        repository,
+        "activate_plan_async",
+        "activate_plan",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
@@ -445,7 +553,8 @@ async def update_plan_cuts(
     repository: PlanRepositoryDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanCutsUpdateResponse:
-    record = repository.get_plan(
+    record = await _get_plan(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
@@ -464,21 +573,28 @@ async def update_plan_cuts(
         plan=plan,
         timeline=compile_timeline(
             plan=plan,
-            source_video_id=repository.get_active_upload(
-                project_id=project_id,
-                workspace_id=actor.workspace_id,
-            ).id,
-            source_duration_ms=(
-                repository.get_active_upload(
+            source_video_id=(
+                await _get_active_upload(
+                    repository,
                     project_id=project_id,
                     workspace_id=actor.workspace_id,
+                )
+            ).id,
+            source_duration_ms=(
+                (
+                    await _get_active_upload(
+                        repository,
+                        project_id=project_id,
+                        workspace_id=actor.workspace_id,
+                    )
                 ).metadata.duration_ms
                 or target_duration_s * 1000
             ),
             preserve_layers_from=record.plan.timeline,
         ),
     )
-    updated = repository.update_plan_cuts(
+    updated = await _update_plan_cuts(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
@@ -516,7 +632,8 @@ async def update_plan_caption_highlights(
     repository: PlanRepositoryDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanCaptionHighlightsUpdateResponse:
-    record = repository.get_plan(
+    record = await _get_plan(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
@@ -524,7 +641,8 @@ async def update_plan_caption_highlights(
     plan = record.plan.model_copy(
         update={"caption_highlights": payload.caption_highlights},
     )
-    updated = repository.update_plan_cuts(
+    updated = await _update_plan_cuts(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
@@ -570,13 +688,15 @@ async def update_plan_manual_elements(
     repository: PlanRepositoryDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanManualElementsUpdateResponse:
-    record = repository.get_plan(
+    record = await _get_plan(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
     )
     plan = record.plan.model_copy(update={"manual_elements": payload.manual_elements})
-    upload = repository.get_active_upload(
+    upload = await _get_active_upload(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
@@ -589,7 +709,8 @@ async def update_plan_manual_elements(
             preserve_layers_from=record.plan.timeline,
         ),
     )
-    updated = repository.update_plan_cuts(
+    updated = await _update_plan_cuts(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
@@ -613,11 +734,13 @@ async def update_plan_manual_elements(
         action="update_manual_elements",
         ai_payload={
             "manual_elements": [
-                item.model_dump(mode="json") for item in record.plan.manual_elements
-            ]
+                element.model_dump(mode="json") for element in record.plan.manual_elements
+            ],
         },
         user_payload={
-            "manual_elements": [item.model_dump(mode="json") for item in payload.manual_elements]
+            "manual_elements": [
+                element.model_dump(mode="json") for element in payload.manual_elements
+            ],
         },
         metadata={"previous_version": record.version},
     )
@@ -633,13 +756,18 @@ async def update_project_timeline(
     repository: PlanRepositoryDep,
     request: Request = None,  # type: ignore[assignment]
 ) -> TimelineUpdateResponse:
-    record = repository.get_plan(
+    record = await _get_plan(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
     )
-    plan = project_timeline_to_legacy_plan(plan=record.plan, timeline=payload.timeline)
-    updated = repository.update_plan_cuts(
+    plan = project_timeline_to_legacy_plan(
+        plan=record.plan,
+        timeline=payload.timeline,
+    )
+    updated = await _update_plan_cuts(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
@@ -658,11 +786,16 @@ async def update_project_timeline(
         edit_plan_id=plan_id,
         event_type=AIEditFeedbackEventType.CHANGED,
         layer=AIEditLayer.CUTS,
-        source="canonical_timeline",
+        source="timeline_editor",
         decision_id=f"{plan_id}:timeline",
         action="update_timeline",
+        ai_payload={
+            "timeline": (
+                record.plan.timeline.model_dump(mode="json") if record.plan.timeline else None
+            )
+        },
         user_payload={"timeline": payload.timeline.model_dump(mode="json")},
-        metadata={"timeline_schema_version": payload.timeline.schema_version},
+        metadata={"previous_version": record.version},
     )
     return TimelineUpdateResponse(plan=updated.to_response())
 
@@ -675,12 +808,14 @@ async def compile_project_timeline(
     repository: PlanRepositoryDep,
     request: Request,
 ) -> TimelineUpdateResponse:
-    record = repository.get_plan(
+    record = await _get_plan(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
     )
-    upload = repository.get_active_upload(
+    upload = await _get_active_upload(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
@@ -743,7 +878,8 @@ async def compile_project_timeline(
         preserve_layers_from=record.plan.timeline,
     )
     plan = project_timeline_to_legacy_plan(plan=record.plan, timeline=timeline)
-    updated = repository.update_plan_cuts(
+    updated = await _update_plan_cuts(
+        repository,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         plan_id=plan_id,

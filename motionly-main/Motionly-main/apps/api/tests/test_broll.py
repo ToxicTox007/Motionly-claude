@@ -19,7 +19,12 @@ from app.api.broll import (
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository
-from app.repositories.broll import InMemoryBrollRepository
+from app.repositories.broll import (
+    BROLL_SLOT_COLUMNS,
+    STOCK_ASSET_COLUMNS,
+    InMemoryBrollRepository,
+    SupabaseBrollRepository,
+)
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
@@ -231,6 +236,303 @@ def test_user_broll_library_upload_list_and_delete() -> None:
         )
     )
     assert deleted.status == "deleted"
+
+
+def test_supabase_broll_async_reads_use_bounded_projections(monkeypatch) -> None:
+    upload_repository = InMemoryUploadRepository()
+    caption_repository = InMemoryCaptionRepository(upload_repository)
+    plan_repository = InMemoryPlanRepository(caption_repository)
+    repository = SupabaseBrollRepository(
+        plan_repository=plan_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    upload_repository.seed_project(project_id=project_id, workspace_id=workspace_id)
+    plan_id = uuid4()
+    slot_id = uuid4()
+    asset_id = uuid4()
+    now = "2026-07-06T00:00:00+00:00"
+    slot_row = {
+        "id": str(slot_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "edit_plan_id": str(plan_id),
+        "version": 2,
+        "schema_version": 2,
+        "status": "ready",
+        "start_ms": 0,
+        "end_ms": 1500,
+        "keywords": ["office"],
+        "intent": "cutaway",
+        "density": "medium",
+        "priority": 0.8,
+        "selected_asset_id": str(asset_id),
+        "candidate_asset_ids": [str(asset_id)],
+        "crossfade_ms": 260,
+        "provider": "pexels",
+        "score": 0.9,
+        "error_code": None,
+        "error_message": None,
+        "metadata": {},
+        "created_at": now,
+        "updated_at": now,
+    }
+    asset_row = {
+        "id": str(asset_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "provider": "user_library",
+        "provider_asset_id": "asset-1",
+        "title": "Office clip",
+        "thumbnail_url": None,
+        "preview_video_url": "https://cdn.example.com/preview.mp4",
+        "download_url": "https://cdn.example.com/download.mp4",
+        "license": "user_owned",
+        "width": 1080,
+        "height": 1920,
+        "duration_ms": 3000,
+        "orientation": "portrait",
+        "score": 1,
+        "raw_metadata": {"status": "ready"},
+        "created_at": now,
+    }
+    responses = [[slot_row], [asset_row], [asset_row]]
+    calls = []
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: responses.pop(0))
+
+    monkeypatch.setattr(
+        "app.repositories.broll.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    slots = asyncio.run(
+        repository.find_cached_slots_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            cache_key="broll-cache-key",
+        )
+    )
+    library = asyncio.run(
+        repository.list_library_assets_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            limit=25,
+        )
+    )
+    asset = asyncio.run(
+        repository.get_asset_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            asset_id=asset_id,
+        )
+    )
+
+    assert slots[0].id == slot_id
+    assert library[0].id == asset_id
+    assert asset.id == asset_id
+    assert calls[0] == (
+        "GET",
+        "/broll_slots",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "cache_key": "eq.broll-cache-key",
+                "select": BROLL_SLOT_COLUMNS,
+                "order": "version.desc,start_ms.asc",
+                "limit": "500",
+            }
+        },
+    )
+    assert calls[1] == (
+        "GET",
+        "/stock_assets",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "provider": "in.(user_library,runway)",
+                "select": STOCK_ASSET_COLUMNS,
+                "order": "created_at.desc",
+                "limit": "25",
+            }
+        },
+    )
+    assert calls[2] == (
+        "GET",
+        "/stock_assets",
+        {
+            "params": {
+                "id": f"eq.{asset_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": STOCK_ASSET_COLUMNS,
+                "limit": "1",
+            }
+        },
+    )
+
+
+def test_broll_api_prefers_async_repository_methods() -> None:
+    base_repository, project_id, workspace_id, user_id = make_broll_repository()
+
+    class AsyncBrollRepository(InMemoryBrollRepository):
+        def __init__(self, plan_repository):
+            super().__init__(plan_repository)
+            self.async_calls: list[str] = []
+
+        async def upsert_asset_async(self, **kwargs):
+            self.async_calls.append("upsert-asset")
+            return self.upsert_asset(**kwargs)
+
+        async def get_asset_async(self, **kwargs):
+            self.async_calls.append("get-asset")
+            return self.get_asset(**kwargs)
+
+        async def list_library_assets_async(self, **kwargs):
+            self.async_calls.append("list-library")
+            return self.list_library_assets(**kwargs)
+
+        async def mark_library_asset_ready_async(self, **kwargs):
+            self.async_calls.append("mark-library-ready")
+            return self.mark_library_asset_ready(**kwargs)
+
+        async def find_cached_slots_async(self, **kwargs):
+            self.async_calls.append("find-cache")
+            return self.find_cached_slots(**kwargs)
+
+        async def list_slots_async(self, **kwargs):
+            self.async_calls.append("list-slots")
+            return self.list_slots(**kwargs)
+
+        async def get_slot_async(self, **kwargs):
+            self.async_calls.append("get-slot")
+            return self.get_slot(**kwargs)
+
+        async def update_slot_selection_async(self, **kwargs):
+            self.async_calls.append("update-selection")
+            return self.update_slot_selection(**kwargs)
+
+        async def update_slot_region_async(self, **kwargs):
+            self.async_calls.append("update-region")
+            return self.update_slot_region(**kwargs)
+
+        async def response_for_slot_async(self, slot):
+            self.async_calls.append("response-for-slot")
+            return self.response_for_slot(slot)
+
+    repository = AsyncBrollRepository(base_repository.plan_repository)
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    billing_repository = make_creator_billing_repository(workspace_id)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    upload_storage_bucket="raw-uploads",
+                    upload_signed_url_ttl_seconds=900,
+                    media_work_dir="/tmp/motionly-tests",
+                    billing_enabled=False,
+                    visual_clip_model="fixture-clip-model",
+                ),
+                storage_signer=StorageSigner(base_url="http://localhost:8000"),
+            )
+        )
+    )
+    signer = StorageSigner(base_url="http://localhost:8000")
+    initialized = asyncio.run(
+        init_user_broll_upload(
+            project_id=project_id,
+            payload=UserBrollUploadInitRequest(
+                filename="office-cutaway.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=4096,
+                width=1080,
+                height=1920,
+                duration_ms=3200,
+            ),
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+    asyncio.run(
+        complete_user_broll_upload(
+            project_id=project_id,
+            asset_id=initialized.asset.id,
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+    asyncio.run(
+        list_user_broll_library(
+            project_id=project_id,
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+    first = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=billing_repository,
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
+    )
+    cached = run_generate_broll(
+        project_id=project_id,
+        payload=BrollGenerateRequest(),
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=billing_repository,
+        broll_queue=BrollQueue(),
+        providers=[FixtureStockVideoProvider()],
+    )
+    asyncio.run(list_broll(project_id=project_id, actor=actor, repository=repository))
+    slot = first.slots[0]
+    alternate = slot.candidates[1]
+    asyncio.run(
+        swap_broll(
+            project_id=project_id,
+            slot_id=slot.id,
+            payload=BrollSwapRequest(asset_id=alternate.id),
+            actor=actor,
+            repository=repository,
+        )
+    )
+    asyncio.run(
+        update_broll_region(
+            project_id=project_id,
+            slot_id=slot.id,
+            payload=BrollRegionUpdateRequest(start_ms=750, end_ms=2250),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    assert cached.cached is True
+    assert "upsert-asset" in repository.async_calls
+    assert "get-asset" in repository.async_calls
+    assert "list-library" in repository.async_calls
+    assert "mark-library-ready" in repository.async_calls
+    assert repository.async_calls.count("find-cache") >= 2
+    assert "list-slots" in repository.async_calls
+    assert "get-slot" in repository.async_calls
+    assert "update-selection" in repository.async_calls
+    assert "update-region" in repository.async_calls
+    assert "response-for-slot" in repository.async_calls
 
 
 def test_generate_broll_stores_stage_4_semantic_metadata() -> None:

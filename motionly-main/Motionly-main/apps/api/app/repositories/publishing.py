@@ -3,8 +3,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-import httpx
-
 from app.api.errors import ApiError
 from app.schemas.publishing import (
     PublishConnectionResponse,
@@ -13,7 +11,20 @@ from app.schemas.publishing import (
     PublishPlatform,
     PublishStatus,
 )
+from app.services.supabase import SupabaseRestClient
 from app.services.token_cipher import TokenCipher
+
+PUBLISH_CONNECTION_COLUMNS = (
+    "id,workspace_id,platform,access_token,refresh_token,token_expires_at,"
+    "refresh_token_expires_at,scopes,connection_status,last_refresh_at,"
+    "last_refresh_failure_reason,external_account_id,account_name,created_at"
+)
+PUBLISH_JOB_COLUMNS = (
+    "id,workspace_id,project_id,export_id,connection_id,platform,status,title,caption,privacy,"
+    "external_post_id,external_url,provider_operation_id,error_message,error_code,"
+    "error_category,user_message,retryable,reconnect_required,retry_after_seconds,retry_count,"
+    "duplicate_publish_risk,created_at,updated_at"
+)
 
 
 @dataclass
@@ -108,12 +119,17 @@ class InMemoryPublishingRepository:
             setattr(existing, key, value)
         return existing
 
-    def list_connections(self, *, workspace_id: UUID) -> list[PublishConnectionRecord]:
+    def list_connections(
+        self,
+        *,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[PublishConnectionRecord]:
         return sorted(
             [item for item in self.connections.values() if item.workspace_id == workspace_id],
             key=lambda item: item.created_at,
             reverse=True,
-        )
+        )[:limit]
 
     def list_all_connections(self) -> list[PublishConnectionRecord]:
         return sorted(
@@ -201,7 +217,13 @@ class InMemoryPublishingRepository:
             raise ApiError(403, "workspace_access_denied", "Publish job is not in this workspace.")
         return record
 
-    def list_jobs(self, *, project_id: UUID, workspace_id: UUID) -> list[PublishJobRecord]:
+    def list_jobs(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[PublishJobRecord]:
         return sorted(
             [
                 item
@@ -210,7 +232,7 @@ class InMemoryPublishingRepository:
             ],
             key=lambda item: item.created_at,
             reverse=True,
-        )
+        )[:limit]
 
     def update_job(self, *, job: PublishJobRecord, **values: object) -> PublishJobRecord:
         for key, value in values.items():
@@ -248,28 +270,40 @@ class InMemoryPublishingRepository:
 
 class SupabasePublishingRepository(InMemoryPublishingRepository):
     def __init__(
-        self, *, supabase_url: str, service_role_key: str, token_cipher: TokenCipher
+        self,
+        *,
+        supabase_url: str,
+        service_role_key: str,
+        token_cipher: TokenCipher,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__()
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="publishing",
+            metrics_registry=metrics_registry,
+            timeout_seconds=15,
+        )
         self.token_cipher = token_cipher
 
     def create_connection(self, **values: object) -> PublishConnectionRecord:
         return self._write_connection("POST", "/publish_connections", self._encrypt_tokens(values))
 
+    async def create_connection_async(self, **values: object) -> PublishConnectionRecord:
+        return await self._write_connection_async(
+            "POST",
+            "/publish_connections",
+            self._encrypt_tokens(values),
+        )
+
     def upsert_connection(self, **values: object) -> PublishConnectionRecord:
-        response = httpx.post(
-            f"{self.rest_url}/publish_connections",
-            headers={**self.headers, "prefer": "resolution=merge-duplicates,return=representation"},
+        response = self.client.request(
+            "POST",
+            "/publish_connections",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
             params={"on_conflict": "workspace_id,platform,external_account_id"},
             json=self._json(self._encrypt_tokens(values)),
-            timeout=15,
         )
         if response.status_code >= 400:
             raise ApiError(
@@ -279,14 +313,54 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
             )
         return self._connection(response.json()[0])
 
-    def list_connections(self, *, workspace_id: UUID) -> list[PublishConnectionRecord]:
+    async def upsert_connection_async(self, **values: object) -> PublishConnectionRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/publish_connections",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
+            params={"on_conflict": "workspace_id,platform,external_account_id"},
+            json=self._json(self._encrypt_tokens(values)),
+        )
+        if response.status_code >= 400:
+            raise ApiError(
+                502,
+                "publishing_repository_failed",
+                "Publishing account could not be saved.",
+            )
+        return self._connection(response.json()[0])
+
+    def list_connections(
+        self,
+        *,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[PublishConnectionRecord]:
         rows = self._request(
             "GET",
             "/publish_connections",
             params={
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": PUBLISH_CONNECTION_COLUMNS,
                 "order": "created_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [self._connection(row) for row in rows]
+
+    async def list_connections_async(
+        self,
+        *,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[PublishConnectionRecord]:
+        rows = await self._request_async(
+            "GET",
+            "/publish_connections",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "select": PUBLISH_CONNECTION_COLUMNS,
+                "order": "created_at.desc",
+                "limit": str(limit),
             },
         )
         return [self._connection(row) for row in rows]
@@ -295,7 +369,11 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
         rows = self._request(
             "GET",
             "/publish_connections",
-            params={"select": "*", "order": "created_at.desc"},
+            params={
+                "select": PUBLISH_CONNECTION_COLUMNS,
+                "order": "created_at.desc",
+                "limit": "1000",
+            },
         )
         return [self._connection(row) for row in rows]
 
@@ -306,7 +384,29 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
             params={
                 "id": f"eq.{connection_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": PUBLISH_CONNECTION_COLUMNS,
+                "limit": "1",
+            },
+        )
+        if not rows:
+            raise ApiError(
+                404, "publish_connection_not_found", "Publishing connection was not found."
+            )
+        return self._connection(rows[0])
+
+    async def get_connection_async(
+        self,
+        *,
+        connection_id: UUID,
+        workspace_id: UUID,
+    ) -> PublishConnectionRecord:
+        rows = await self._request_async(
+            "GET",
+            "/publish_connections",
+            params={
+                "id": f"eq.{connection_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": PUBLISH_CONNECTION_COLUMNS,
                 "limit": "1",
             },
         )
@@ -320,8 +420,20 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
         self.get_connection(connection_id=connection_id, workspace_id=workspace_id)
         self._request("DELETE", "/publish_connections", params={"id": f"eq.{connection_id}"})
 
+    async def delete_connection_async(self, *, connection_id: UUID, workspace_id: UUID) -> None:
+        await self.get_connection_async(connection_id=connection_id, workspace_id=workspace_id)
+        await self._request_async(
+            "DELETE",
+            "/publish_connections",
+            params={"id": f"eq.{connection_id}"},
+        )
+
     def create_job(self, **values: object) -> PublishJobRecord:
         rows = self._request("POST", "/publish_jobs", json=self._json(values))
+        return self._job(rows[0])
+
+    async def create_job_async(self, **values: object) -> PublishJobRecord:
+        rows = await self._request_async("POST", "/publish_jobs", json=self._json(values))
         return self._job(rows[0])
 
     def get_job(self, *, job_id: UUID, workspace_id: UUID) -> PublishJobRecord:
@@ -331,7 +443,7 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
             params={
                 "id": f"eq.{job_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": PUBLISH_JOB_COLUMNS,
                 "limit": "1",
             },
         )
@@ -339,15 +451,42 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
             raise ApiError(404, "publish_job_not_found", "Publish job was not found.")
         return self._job(rows[0])
 
-    def list_jobs(self, *, project_id: UUID, workspace_id: UUID) -> list[PublishJobRecord]:
+    def list_jobs(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[PublishJobRecord]:
         rows = self._request(
             "GET",
             "/publish_jobs",
             params={
                 "project_id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": PUBLISH_JOB_COLUMNS,
                 "order": "created_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [self._job(row) for row in rows]
+
+    async def list_jobs_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[PublishJobRecord]:
+        rows = await self._request_async(
+            "GET",
+            "/publish_jobs",
+            params={
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": PUBLISH_JOB_COLUMNS,
+                "order": "created_at.desc",
+                "limit": str(limit),
             },
         )
         return [self._job(row) for row in rows]
@@ -384,7 +523,40 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
                 "export_id": f"eq.{export_id}",
                 "connection_id": f"eq.{connection_id}",
                 "status": f"in.({active_values})",
-                "select": "*",
+                "select": PUBLISH_JOB_COLUMNS,
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        return self._job(rows[0]) if rows else None
+
+    async def find_active_job_async(
+        self,
+        *,
+        workspace_id: UUID,
+        export_id: UUID,
+        connection_id: UUID,
+    ) -> PublishJobRecord | None:
+        active_values = ",".join(
+            status.value
+            for status in (
+                PublishStatus.QUEUED,
+                PublishStatus.REFRESHING_TOKEN,
+                PublishStatus.PUBLISHING,
+                PublishStatus.UPLOADING,
+                PublishStatus.PROCESSING,
+                PublishStatus.RETRY_SCHEDULED,
+            )
+        )
+        rows = await self._request_async(
+            "GET",
+            "/publish_jobs",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "export_id": f"eq.{export_id}",
+                "connection_id": f"eq.{connection_id}",
+                "status": f"in.({active_values})",
+                "select": PUBLISH_JOB_COLUMNS,
                 "order": "created_at.desc",
                 "limit": "1",
             },
@@ -438,7 +610,11 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
 
     def encrypt_legacy_tokens(self) -> int:
         """One-way startup migration for rows written before encrypted envelopes existed."""
-        rows = self._request("GET", "/publish_connections", params={"select": "*"})
+        rows = self._request(
+            "GET",
+            "/publish_connections",
+            params={"select": PUBLISH_CONNECTION_COLUMNS, "limit": "1000"},
+        )
         migrated = 0
         for row in rows:
             access_token = str(row.get("access_token") or "")
@@ -464,10 +640,32 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
         rows = self._request(method, path, json=self._json(values))
         return self._connection(rows[0])
 
+    async def _write_connection_async(
+        self,
+        method: str,
+        path: str,
+        values: dict[str, object],
+    ) -> PublishConnectionRecord:
+        rows = await self._request_async(method, path, json=self._json(values))
+        return self._connection(rows[0])
+
     def _request(self, method: str, path: str, **kwargs: object) -> list[dict[str, object]]:
-        response = httpx.request(
-            method, f"{self.rest_url}{path}", headers=self.headers, timeout=15, **kwargs
-        )
+        response = self.client.request(method, path, **kwargs)
+        if response.status_code >= 400:
+            raise ApiError(
+                502, "publishing_repository_failed", "Publishing data could not be saved."
+            )
+        if response.status_code == 204 or not response.content:
+            return []
+        return response.json()
+
+    async def _request_async(
+        self,
+        method: str,
+        path: str,
+        **kwargs: object,
+    ) -> list[dict[str, object]]:
+        response = await self.client.async_request(method, path, **kwargs)
         if response.status_code >= 400:
             raise ApiError(
                 502, "publishing_repository_failed", "Publishing data could not be saved."

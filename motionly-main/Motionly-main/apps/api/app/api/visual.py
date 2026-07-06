@@ -21,13 +21,24 @@ from app.schemas.visual import (
 )
 from app.services.matte_jobs import matte_availability
 from app.services.queue import VisualQueue
-from app.services.visual_jobs import queue_visual_analysis_for_upload, visual_provider_identity
+from app.services.visual_jobs import (
+    build_visual_cache_key,
+    queue_visual_analysis_for_upload,
+    visual_provider_identity,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/visual", tags=["visual intelligence"])
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
 VisualRepositoryDep = Annotated[InMemoryVisualRepository, Depends(get_visual_repository)]
 VisualQueueDep = Annotated[VisualQueue, Depends(get_visual_queue)]
+
+
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
 
 
 @router.get("/status", response_model=VisualStatusResponse)
@@ -38,12 +49,18 @@ async def get_visual_status(
     repository: VisualRepositoryDep,
 ) -> VisualStatusResponse:
     upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
-    record = repository.latest_for_upload(
+    record = await _repository_call(
+        repository,
+        "latest_for_upload_async",
+        "latest_for_upload",
         uploaded_video_id=upload.id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
-    matte_record = repository.latest_matte_for_upload(
+    matte_record = await _repository_call(
+        repository,
+        "latest_matte_for_upload_async",
+        "latest_matte_for_upload",
         uploaded_video_id=upload.id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -93,12 +110,20 @@ async def analyze_visual_manifest(
         )
     settings = request.app.state.settings
     provider_name, model = visual_provider_identity(settings)
+    cache_key = build_visual_cache_key(
+        upload=upload,
+        provider=provider_name,
+        model=model,
+        sample_rate_fps=settings.visual_sample_fps,
+        scene_threshold=settings.visual_scene_threshold,
+    )
     scheduled = queue_visual_analysis_for_upload(
         upload=upload,
         repository=repository,
         visual_queue=visual_queue,
         provider=provider_name,
         model=model,
+        cache_key=cache_key,
         force=payload.force,
     )
     return VisualAnalyzeResponse(
@@ -116,7 +141,13 @@ async def get_visual_manifest(
     repository: VisualRepositoryDep,
 ) -> VideoManifestResponse:
     repository.get_project_for_workspace(project_id=project_id, workspace_id=actor.workspace_id)
-    record = repository.latest_manifest(project_id=project_id, workspace_id=actor.workspace_id)
+    record = await _repository_call(
+        repository,
+        "latest_manifest_async",
+        "latest_manifest",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
     if not record:
         raise ApiError(
             404,

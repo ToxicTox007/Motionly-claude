@@ -32,6 +32,7 @@ interface EditorHistoryContextValue {
 const EditorHistoryContext = createContext<EditorHistoryContextValue | null>(null);
 
 const HISTORY_LIMIT = 50;
+const HISTORY_PERSIST_DEBOUNCE_MS = 250;
 
 export function EditorHistoryProvider({
   children,
@@ -54,8 +55,8 @@ export function EditorHistoryProvider({
     setRedoStack([]);
   }, []);
 
-  useEffect(() => persistStack(storageKey, "undo", undoStack), [storageKey, undoStack]);
-  useEffect(() => persistStack(storageKey, "redo", redoStack), [redoStack, storageKey]);
+  useDebouncedHistoryPersistence(storageKey, "undo", undoStack);
+  useDebouncedHistoryPersistence(storageKey, "redo", redoStack);
 
   const runEntry = useCallback(async (direction: "undo" | "redo", entry: HistoryEntry) => {
     setCurrentLabel(`${entry.label}: ${direction === "undo" ? "undoing" : "redoing"}…`);
@@ -100,6 +101,19 @@ export function EditorHistoryProvider({
       {children}
     </EditorHistoryContext.Provider>
   );
+}
+
+function useDebouncedHistoryPersistence(
+  storageKey: string,
+  direction: "undo" | "redo",
+  entries: HistoryEntry[],
+) {
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      persistStack(storageKey, direction, entries);
+    }, HISTORY_PERSIST_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [direction, entries, storageKey]);
 }
 
 function readStack(storageKey: string, direction: "undo" | "redo"): HistoryEntry[] {

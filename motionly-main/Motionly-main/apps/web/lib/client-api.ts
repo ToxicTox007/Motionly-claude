@@ -9,6 +9,16 @@ type BuildApiHeadersOptions = {
   json?: boolean;
 };
 
+type CachedSession = {
+  accessToken?: string;
+  userId?: string;
+  expiresAt: number;
+};
+
+const SESSION_CACHE_TTL_MS = 30_000;
+let cachedSession: CachedSession | null = null;
+let pendingSession: Promise<CachedSession> | null = null;
+
 export async function buildApiHeaders({
   workspaceId,
   userId,
@@ -18,12 +28,9 @@ export async function buildApiHeaders({
   let token = accessToken;
   let sessionUserId = userId;
   if (!token) {
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    token = session?.access_token;
-    sessionUserId = session?.user.id ?? userId;
+    const session = await getCachedSession();
+    token = session.accessToken;
+    sessionUserId = session.userId ?? userId;
   }
 
   if (!token) {
@@ -35,6 +42,30 @@ export async function buildApiHeaders({
     authorization: `Bearer ${token}`,
     "x-motionly-workspace-id": workspaceId,
     "x-motionly-user-id": sessionUserId ?? "",
+  };
+}
+
+async function getCachedSession(): Promise<CachedSession> {
+  const now = Date.now();
+  if (cachedSession && cachedSession.expiresAt > now) return cachedSession;
+  if (!pendingSession) {
+    pendingSession = readSession().finally(() => {
+      pendingSession = null;
+    });
+  }
+  cachedSession = await pendingSession;
+  return cachedSession;
+}
+
+async function readSession(): Promise<CachedSession> {
+  const supabase = createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return {
+    accessToken: session?.access_token,
+    userId: session?.user.id,
+    expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
   };
 }
 
@@ -186,9 +217,9 @@ export async function pollPlanJob(
   options: EditorApiRequestOptions,
   onProgress?: (progress: number) => void
 ): Promise<string> {
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const maxRetries = 120;
   for (let i = 0; i < maxRetries; i++) {
+    await waitForInteractivePollingTurn();
     const response = await editorApiRequest<PlanJobStatusResponse>(
       statusUrl,
       {
@@ -209,8 +240,90 @@ export async function pollPlanJob(
     if (onProgress && response.progress !== undefined) {
       onProgress(response.progress);
     }
-    await delay(1000);
+    await delay(Math.min(3000, 1000 + i * 100));
   }
   throw new Error("Plan generation timed out.");
 }
 
+type AdaptivePollingOptions = {
+  intervalMs?: number;
+  maxIntervalMs?: number;
+  backoffStepMs?: number;
+  immediate?: boolean;
+};
+
+export function startAdaptivePolling(
+  callback: () => void | Promise<void>,
+  {
+    intervalMs = 3000,
+    maxIntervalMs = 10_000,
+    backoffStepMs = 500,
+    immediate = true,
+  }: AdaptivePollingOptions = {},
+): () => void {
+  let stopped = false;
+  let timer: number | null = null;
+  let turn = 0;
+
+  const clear = () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+  };
+  const schedule = (delayMs: number) => {
+    clear();
+    timer = window.setTimeout(() => {
+      void tick();
+    }, delayMs);
+  };
+  const tick = async () => {
+    if (stopped) return;
+    await waitForInteractivePollingTurn();
+    if (stopped) return;
+    try {
+      await callback();
+    } finally {
+      if (!stopped) {
+        const nextDelay = Math.min(maxIntervalMs, intervalMs + turn * backoffStepMs);
+        turn += 1;
+        schedule(nextDelay);
+      }
+    }
+  };
+
+  if (immediate) {
+    void tick();
+  } else {
+    schedule(intervalMs);
+  }
+
+  return () => {
+    stopped = true;
+    clear();
+  };
+}
+
+export async function waitForInteractivePollingTurn(): Promise<void> {
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    await new Promise<void>((resolve) => {
+      const onVisible = () => {
+        if (document.visibilityState !== "visible") return;
+        document.removeEventListener("visibilitychange", onVisible);
+        resolve();
+      };
+      document.addEventListener("visibilitychange", onVisible);
+    });
+  }
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    await new Promise<void>((resolve) => {
+      const onOnline = () => {
+        window.removeEventListener("online", onOnline);
+        resolve();
+      };
+      window.addEventListener("online", onOnline, { once: true });
+    });
+  }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

@@ -8,6 +8,9 @@ x-media-environment: &media-environment
   APP_ENV: production
   PROCESS_ROLE: worker
   MEDIA_WORK_DIR: /var/data/motionly
+  HF_HOME: /var/cache/motionly/huggingface
+  TORCH_HOME: /var/cache/motionly/torch
+  XDG_CACHE_HOME: /var/cache/motionly
   WORKER_API_BASE_URL: http://api:8000
   GPU_WORKER_INSTANCE_TYPE: ${GPU_WORKER_INSTANCE_TYPE:-g5.xlarge}
   GPU_MAX_CONCURRENT_JOBS_PER_GPU: ${GPU_MAX_CONCURRENT_JOBS_PER_GPU:-1}

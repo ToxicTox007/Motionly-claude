@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import {
+  ensureUploadRecordExists,
   persistentPythonExecutor,
   resetPythonExecutorsForTest,
 } from "./worker.mjs";
@@ -260,4 +261,49 @@ test("restart limit is enforced and emits a structured event", async () => {
   assert.ok(
     events.some((event) => event.event === "subprocess_restart_limit_exceeded"),
   );
+});
+
+test("upload preflight fails fast when the upload row is gone", async () => {
+  process.env.SUPABASE_URL = "https://example.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
+  const job = {
+    data: {
+      resource_id: "video-123",
+      project_id: "project-123",
+      workspace_id: "workspace-123",
+    },
+  };
+
+  await assert.rejects(
+    ensureUploadRecordExists(job, {
+      fetchImpl: async (url, options) => {
+        assert.match(String(url), /uploaded_videos/);
+        assert.equal(options.headers.apikey, "test-service-role");
+        return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+      },
+    }),
+    (error) => error.code === "upload_not_found",
+  );
+});
+
+test("upload preflight accepts matching uploads", async () => {
+  process.env.SUPABASE_URL = "https://example.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
+  const job = {
+    data: {
+      resource_id: "video-123",
+      project_id: "project-123",
+      workspace_id: "workspace-123",
+    },
+  };
+
+  const row = await ensureUploadRecordExists(job, {
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify([{ id: "video-123", status: "ready" }]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+  });
+
+  assert.deepEqual(row, { id: "video-123", status: "ready" });
 });

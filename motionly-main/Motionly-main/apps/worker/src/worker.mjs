@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statfsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "bullmq";
@@ -30,10 +30,22 @@ function rendererPath() {
 }
 
 const pythonExecutors = new Map();
+const workerStartedAt = Date.now();
+let firstJobStarted = false;
+
+function diskFreeBytes(path = env("MEDIA_WORK_DIR", "/tmp")) {
+  try {
+    const stats = statfsSync(path);
+    return Number(stats.bavail) * Number(stats.bsize);
+  } catch {
+    return null;
+  }
+}
 
 export function pythonExecutorConfig(overrides = {}) {
   return {
     requestTimeoutMs: Number(overrides.requestTimeoutMs || env("PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS", "900000")),
+    startupTimeoutMs: Number(overrides.startupTimeoutMs || env("PYTHON_EXECUTOR_STARTUP_TIMEOUT_MS", "900000")),
     heartbeatIntervalMs: Number(overrides.heartbeatIntervalMs || env("PYTHON_EXECUTOR_HEARTBEAT_INTERVAL_MS", "15000")),
     heartbeatTimeoutMs: Number(overrides.heartbeatTimeoutMs || env("PYTHON_EXECUTOR_HEARTBEAT_TIMEOUT_MS", "120000")),
     restartBackoffMs: Number(overrides.restartBackoffMs || env("PYTHON_EXECUTOR_RESTART_BACKOFF_MS", "1000")),
@@ -135,7 +147,10 @@ async function startPythonExecutor(state) {
   state.restartTimestamps.push(state.config.now());
   state.restartCount += 1;
   startHeartbeatTimer(state);
-  await sendSupervisorControl(state, "ping");
+  await sendSupervisorRequest(state, null, {
+    timeoutMs: state.config.startupTimeoutMs,
+    control: "ping",
+  });
 }
 
 function pruneRestartTimestamps(state) {
@@ -159,12 +174,10 @@ function attachSupervisorListeners(state) {
   child.stderr.on("data", (data) => {
     const text = String(data);
     globalThis.process.stderr.write(text);
-    if (/fatal python error|traceback/i.test(text) && state.pending.size > 0) {
-      handleSupervisorFailure(
-        state,
-        pythonExecutorError("python_stderr_fatal", `${state.name} reported a fatal stderr error`),
-      );
-    }
+    emitSupervisorEvent(state, "subprocess_stderr", {
+      message: text.trim().slice(-1_000),
+      pending_requests: state.pending.size,
+    });
   });
   child.on("error", (error) => {
     handleSupervisorFailure(
@@ -198,6 +211,13 @@ function handleSupervisorStdout(state, chunk) {
     try {
       response = JSON.parse(line);
     } catch {
+      if (/^[\[{]/.test(line) && state.pending.size > 0) {
+        handleSupervisorFailure(
+          state,
+          pythonExecutorError("python_protocol_invalid", `${state.name} emitted invalid JSON`),
+        );
+        return;
+      }
       globalThis.process.stderr.write(`[${state.name} stdout] ${line}\n`);
       return;
     }
@@ -324,6 +344,19 @@ export function resetPythonExecutorsForTest() {
   closePythonExecutors();
 }
 
+export function queueWaitMs(job, now = Date.now()) {
+  const timestamp = Date.parse(job?.data?.enqueued_at || "");
+  if (Number.isFinite(timestamp)) return Math.max(0, now - timestamp);
+  return Math.max(0, now - Number(job?.timestamp || now));
+}
+
+export function jobRuntimeTelemetry(job, { startedAt, finishedAt = Date.now() } = {}) {
+  return {
+    runtime_ms: Math.max(0, finishedAt - startedAt),
+    queue_wait_ms: queueWaitMs(job, startedAt),
+  };
+}
+
 function isSubprocessFailureCode(code) {
   return new Set([
     "subprocess_crashed",
@@ -353,6 +386,7 @@ async function runVisualJob(job) {
   if (env("ML_WORKER_ENABLED") !== "true") {
     throw new Error("visual_analysis requires the dedicated GPU/ML worker image");
   }
+  await ensureUploadRecordExists(job);
   return persistentPythonExecutor("visual-ml", "app.workers.visual_job", {
     workspace_id: String(job.data.workspace_id),
     project_id: String(job.data.project_id),
@@ -364,6 +398,7 @@ async function runMatteJob(job) {
   if (env("ML_WORKER_ENABLED") !== "true") {
     throw new Error("matte_extraction requires the dedicated GPU/media worker image");
   }
+  await ensureUploadRecordExists(job);
   return persistentPythonExecutor("matte-gpu", "app.workers.matte_job", {
     workspace_id: String(job.data.workspace_id),
     project_id: String(job.data.project_id),
@@ -474,11 +509,49 @@ function processEnv() {
   return { ...globalThis.process.env };
 }
 
+function supabaseHeaders() {
+  const serviceRoleKey = env("SUPABASE_SERVICE_ROLE_KEY");
+  return {
+    apikey: serviceRoleKey,
+    authorization: `Bearer ${serviceRoleKey}`,
+    "content-type": "application/json",
+  };
+}
+
+export async function ensureUploadRecordExists(job, { fetchImpl = globalThis.fetch } = {}) {
+  const supabaseUrl = env("SUPABASE_URL");
+  const serviceRoleKey = env("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for GPU/media queues.");
+  }
+  const url = new URL("/rest/v1/uploaded_videos", supabaseUrl);
+  url.searchParams.set("select", "id,status");
+  url.searchParams.set("id", `eq.${job.data.resource_id}`);
+  url.searchParams.set("project_id", `eq.${job.data.project_id}`);
+  url.searchParams.set("workspace_id", `eq.${job.data.workspace_id}`);
+  url.searchParams.set("limit", "1");
+  const response = await fetchImpl(url, { headers: supabaseHeaders() });
+  if (!response.ok) {
+    throw pythonExecutorError(
+      "supabase_upload_preflight_failed",
+      `Upload preflight returned HTTP ${response.status}`,
+    );
+  }
+  const rows = await response.json();
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw pythonExecutorError("upload_not_found", "Upload was not found.");
+  }
+  return rows[0];
+}
+
 async function runJob(job) {
   if (job.data.status === "canceled") {
     throw new Error(`Queue job ${job.id} was canceled`);
   }
 
+  const startedAt = Date.now();
+  const coldStartMs = firstJobStarted ? null : Math.max(0, startedAt - workerStartedAt);
+  firstJobStarted = true;
   console.log(
     JSON.stringify({
       event: "job_started",
@@ -486,12 +559,13 @@ async function runJob(job) {
       kind: job.data.kind,
       queue_name: job.queueName,
       attempt: job.attemptsMade + 1,
+      queue_wait_ms: queueWaitMs(job, startedAt),
+      cold_start_ms: coldStartMs,
       trace_id: job.data.trace_id || null,
     }),
   );
 
   await job.updateProgress(1);
-  const startedAt = Date.now();
   let result;
   try {
     result =
@@ -512,6 +586,19 @@ async function runJob(job) {
           : await runDomainJob(job);
     await reportProviderSlo(job, true, Date.now() - startedAt);
   } catch (error) {
+    if (error instanceof Error && error.code === "upload_not_found") {
+      job.discard();
+    }
+    console.error(
+      JSON.stringify({
+        event: "job_runtime_metrics",
+        queue_job_id: job.id,
+        queue_name: job.queueName,
+        kind: job.data.kind,
+        success: false,
+        ...jobRuntimeTelemetry(job, { startedAt }),
+      }),
+    );
     await reportProviderSlo(
       job,
       false,
@@ -521,6 +608,16 @@ async function runJob(job) {
     throw error;
   }
   await job.updateProgress(100);
+  console.log(
+    JSON.stringify({
+      event: "job_runtime_metrics",
+      queue_job_id: job.id,
+      queue_name: job.queueName,
+      kind: job.data.kind,
+      success: true,
+      ...jobRuntimeTelemetry(job, { startedAt }),
+    }),
+  );
   return result;
 }
 
@@ -700,6 +797,18 @@ async function main() {
   }
   const workers = queueNames.map((queueName) => createWorker(queueName, connection));
   await sendHeartbeat();
+  console.log(
+    JSON.stringify({
+      event: "worker_ready",
+      process_alive: true,
+      redis_connected: true,
+      api_reachable: hasApiConfig(),
+      models_loaded: env("MODEL_PREFETCH") === "true" ? "prefetch_requested" : "not_requested",
+      disk_free_bytes: diskFreeBytes(),
+      queue_consumers_attached: workers.length,
+      queues: queueNames,
+    }),
+  );
   const heartbeatTimer = setInterval(() => {
     void sendHeartbeat().catch((error) => console.error(JSON.stringify({
       event: "worker_heartbeat_failed",

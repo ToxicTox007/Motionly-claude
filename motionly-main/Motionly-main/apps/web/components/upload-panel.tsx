@@ -14,6 +14,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/button";
 import { buildApiHeaders } from "@/lib/client-api";
 import { env, resolveProxiedUrl } from "@/lib/env";
+import { shouldToast } from "@/lib/notification-taxonomy";
+import { uploadStatusMessage } from "@/lib/product-flow-status";
 import { cn } from "@/lib/utils";
 import { useToast } from "./toast";
 
@@ -366,11 +368,13 @@ export function UploadPanel({
       setPhase("failed");
       const failMsg = friendlyUploadError((error as Error).message);
       setMessage(failMsg);
-      toast({
-        title: "Upload Failed",
-        description: failMsg,
-        variant: "error",
-      });
+      if (shouldToast("short_action_feedback")) {
+        toast({
+          title: "Upload Failed",
+          description: failMsg,
+          variant: "error",
+        });
+      }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
@@ -978,10 +982,7 @@ function gcd(left: number, right: number): number {
 }
 
 function statusMessage(status: string) {
-  if (status === "processing") return "Extracting metadata and thumbnail...";
-  if (status === "uploaded")
-    return "Upload confirmed. Waiting for preprocessing...";
-  return `Processing: ${status}`;
+  return uploadStatusMessage(status);
 }
 
 function storageUploadErrorMessage(status: number, responseText: string) {

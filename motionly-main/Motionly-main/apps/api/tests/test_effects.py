@@ -5,12 +5,15 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.api.dependencies import Actor
-from app.api.effects import update_effects
+from app.api.effects import get_effects, update_effects
 from app.api.errors import ApiError
-from app.api.plans import create_plan
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.captions import InMemoryCaptionRepository
-from app.repositories.effects import InMemoryEffectsRepository
+from app.repositories.effects import (
+    EFFECTS_CONFIG_COLUMNS,
+    InMemoryEffectsRepository,
+    SupabaseEffectsRepository,
+)
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.billing import BillingPlanKey, SubscriptionStatus
@@ -31,8 +34,7 @@ from app.schemas.effects import (
 )
 from app.schemas.plans import BrollDensity, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
-from app.services.edit_planner import FixtureEditPlannerProvider
-from app.services.queue import EffectsQueue, PlanQueue
+from app.services.queue import EffectsQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
 
@@ -74,6 +76,7 @@ def make_effects_repository() -> tuple[InMemoryEffectsRepository, UUID, UUID, UU
     )
     plan_repository = InMemoryPlanRepository(caption_repository)
     from tests.worker_job_test_helpers import seed_active_plan
+
     seed_active_plan(
         plan_repository=plan_repository,
         project_id=project_id,
@@ -95,8 +98,8 @@ def run_update_effects(
     plan_repository: InMemoryPlanRepository,
     effects_queue: EffectsQueue,
 ) -> object:
-    from tests.worker_job_test_helpers import run_enqueued_job, DummyResponse
     from app.schemas.effects import EffectsUpdateResponse
+    from tests.worker_job_test_helpers import DummyResponse, run_enqueued_job
 
     # Ensure queue registry is populated in request
     registry = effects_queue.registry
@@ -119,9 +122,7 @@ def run_update_effects(
         )
     )
     if getattr(effects_response, "status", None) == "queued":
-        asyncio.run(
-            run_enqueued_job(job_id=effects_response.job_id, request=request)
-        )
+        asyncio.run(run_enqueued_job(job_id=effects_response.job_id, request=request))
         config = repository.latest_config(project_id=project_id, workspace_id=actor.workspace_id)
         effects_response = EffectsUpdateResponse(
             config=repository.response_for_config(config),
@@ -129,7 +130,6 @@ def run_update_effects(
             status="ready",
         )
     return effects_response
-
 
 
 def test_update_effects_creates_visual_preset_config() -> None:
@@ -153,6 +153,164 @@ def test_update_effects_creates_visual_preset_config() -> None:
     assert response.config.render_time_impact in {"low", "medium", "high"}
     assert response.config.after_effects_project_url is None
     assert response.config.correction_manifest_url is None
+
+
+def test_supabase_effects_repository_reads_with_explicit_projection(monkeypatch) -> None:
+    upload_repository = InMemoryUploadRepository()
+    caption_repository = InMemoryCaptionRepository(upload_repository)
+    plan_repository = InMemoryPlanRepository(caption_repository)
+    repository = SupabaseEffectsRepository(
+        plan_repository=plan_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(is_success=True, json=lambda: [])
+
+    monkeypatch.setattr("app.repositories.effects.SupabaseRestClient.request", fake_request)
+
+    assert repository.latest_config(project_id=project_id, workspace_id=workspace_id) is None
+    assert calls == [
+        (
+            "GET",
+            "/visual_presets",
+            {
+                "params": {
+                    "workspace_id": f"eq.{workspace_id}",
+                    "project_id": f"eq.{project_id}",
+                    "select": EFFECTS_CONFIG_COLUMNS,
+                    "order": "updated_at.desc",
+                    "limit": "1",
+                }
+            },
+        )
+    ]
+
+
+def test_supabase_effects_async_reads_use_bounded_projections(monkeypatch) -> None:
+    upload_repository = InMemoryUploadRepository()
+    caption_repository = InMemoryCaptionRepository(upload_repository)
+    plan_repository = InMemoryPlanRepository(caption_repository)
+    repository = SupabaseEffectsRepository(
+        plan_repository=plan_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    calls = []
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(is_success=True, json=lambda: [])
+
+    monkeypatch.setattr(
+        "app.repositories.effects.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    assert (
+        asyncio.run(
+            repository.latest_config_async(
+                project_id=project_id,
+                workspace_id=workspace_id,
+            )
+        )
+        is None
+    )
+    assert (
+        asyncio.run(
+            repository.find_cached_config_async(
+                project_id=project_id,
+                workspace_id=workspace_id,
+                cache_key="effects-cache-key",
+            )
+        )
+        is None
+    )
+    assert calls == [
+        (
+            "GET",
+            "/visual_presets",
+            {
+                "params": {
+                    "workspace_id": f"eq.{workspace_id}",
+                    "project_id": f"eq.{project_id}",
+                    "select": EFFECTS_CONFIG_COLUMNS,
+                    "order": "updated_at.desc",
+                    "limit": "1",
+                }
+            },
+        ),
+        (
+            "GET",
+            "/visual_presets",
+            {
+                "params": {
+                    "workspace_id": f"eq.{workspace_id}",
+                    "project_id": f"eq.{project_id}",
+                    "cache_key": "eq.effects-cache-key",
+                    "select": EFFECTS_CONFIG_COLUMNS,
+                    "order": "updated_at.desc",
+                    "limit": "1",
+                }
+            },
+        ),
+    ]
+
+
+def test_effects_api_prefers_async_repository_methods() -> None:
+    base_repository, project_id, workspace_id, user_id = make_effects_repository()
+
+    class AsyncEffectsRepository(InMemoryEffectsRepository):
+        def __init__(self, plan_repository):
+            super().__init__(plan_repository)
+            self.async_calls: list[str] = []
+
+        async def latest_config_async(self, **kwargs):
+            self.async_calls.append("latest-config")
+            return self.latest_config(**kwargs)
+
+        async def find_cached_config_async(self, **kwargs):
+            self.async_calls.append("find-cache")
+            return self.find_cached_config(**kwargs)
+
+    repository = AsyncEffectsRepository(base_repository.plan_repository)
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    payload = EffectsConfigRequest(preset=VisualPresetKey.OLD_MONEY)
+
+    run_update_effects(
+        project_id=project_id,
+        payload=payload,
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=InMemoryBillingRepository(),
+        plan_repository=repository.plan_repository,
+        effects_queue=EffectsQueue(),
+    )
+    cached = run_update_effects(
+        project_id=project_id,
+        payload=payload,
+        request=_request(),
+        actor=actor,
+        repository=repository,
+        billing_repository=InMemoryBillingRepository(),
+        plan_repository=repository.plan_repository,
+        effects_queue=EffectsQueue(),
+    )
+    latest = asyncio.run(
+        get_effects(project_id=project_id, actor=actor, repository=repository)
+    )
+
+    assert cached.cached is True
+    assert latest is not None
+    assert repository.async_calls == ["find-cache", "find-cache", "latest-config"]
 
 
 def test_update_effects_reuses_cached_config() -> None:
@@ -409,8 +567,9 @@ def test_update_effects_persists_per_clip_motion_effects() -> None:
 
 
 def _request(*, billing_enabled: bool = True):
-    from tests.worker_job_test_helpers import build_queue_request_state
     from app.services.queue import QueueRegistry
+    from tests.worker_job_test_helpers import build_queue_request_state
+
     registry = QueueRegistry()
     return build_queue_request_state(
         registry=registry,

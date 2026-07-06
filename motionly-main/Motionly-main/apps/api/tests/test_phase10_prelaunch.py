@@ -39,6 +39,9 @@ def test_provider_slo_rate_limit_and_cost_alert_inputs_are_measured() -> None:
     )
 
     assert operations.cost_summary()["cost_per_approved_export_usd"] == 0.002
+    assert operations.cost_summary()["by_provider"]["openrouter"] == 0.002
+    assert operations.provider_slo_summary()[0]["success_rate"] == 0
+    assert operations.provider_slo_summary()[0]["p95_latency_ms"] == 2500
     assert any(
         event["provider"] == "openrouter"
         and event["error_code"] == "rate_limit_exceeded"

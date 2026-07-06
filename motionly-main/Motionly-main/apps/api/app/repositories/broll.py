@@ -16,6 +16,20 @@ from app.schemas.broll import (
     StockProviderKey,
     StockVideoAssetResponse,
 )
+from app.services.supabase import SupabaseRestClient
+
+STOCK_ASSET_COLUMNS = (
+    "id,workspace_id,project_id,provider,provider_asset_id,title,thumbnail_url,preview_video_url,"
+    "download_url,license,width,height,duration_ms,orientation,score,raw_metadata,created_at"
+)
+BROLL_SLOT_COLUMNS = (
+    "id,workspace_id,project_id,edit_plan_id,version,schema_version,status,start_ms,end_ms,"
+    "keywords,intent,density,priority,selected_asset_id,candidate_asset_ids,crossfade_ms,"
+    "provider,score,error_code,error_message,metadata,created_at,updated_at"
+)
+DEFAULT_BROLL_SLOT_LIMIT = 100
+DEFAULT_BROLL_LIBRARY_LIMIT = 100
+MAX_CACHED_BROLL_SLOT_ROWS = 500
 
 
 @dataclass
@@ -200,6 +214,7 @@ class InMemoryBrollRepository:
         project_id: UUID,
         workspace_id: UUID,
         version: int | None = None,
+        limit: int = DEFAULT_BROLL_SLOT_LIMIT,
     ) -> list[BrollSlotRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
         records = [
@@ -211,7 +226,7 @@ class InMemoryBrollRepository:
             version = max(slot.version for slot in records)
         if version is not None:
             records = [slot for slot in records if slot.version == version]
-        return sorted(records, key=lambda slot: slot.start_ms)
+        return sorted(records, key=lambda slot: slot.start_ms)[:limit]
 
     def get_slot(self, *, project_id: UUID, workspace_id: UUID, slot_id: UUID) -> BrollSlotRecord:
         slot = self.slots.get(slot_id)
@@ -234,10 +249,14 @@ class InMemoryBrollRepository:
         return asset
 
     def list_library_assets(
-        self, *, project_id: UUID, workspace_id: UUID
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = DEFAULT_BROLL_LIBRARY_LIMIT,
     ) -> list[StockAssetRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
-        return sorted(
+        assets = sorted(
             [
                 asset
                 for asset in self.assets.values()
@@ -248,6 +267,7 @@ class InMemoryBrollRepository:
             key=lambda asset: asset.created_at,
             reverse=True,
         )
+        return assets[:limit]
 
     def mark_library_asset_ready(
         self, *, asset: StockAssetRecord, download_url: str
@@ -353,22 +373,34 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         plan_repository: InMemoryPlanRepository,
         supabase_url: str,
         service_role_key: str,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__(plan_repository)
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="broll",
+            metrics_registry=metrics_registry,
+        )
 
     def upsert_asset(self, **values: object) -> StockAssetRecord:
-        response = httpx.post(
-            f"{self.rest_url}/stock_assets",
-            headers={**self.headers, "prefer": "resolution=merge-duplicates,return=representation"},
+        response = self.client.request(
+            "POST",
+            "/stock_assets",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
+            params={"select": STOCK_ASSET_COLUMNS},
             json=self._json_safe(values),
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    async def upsert_asset_async(self, **values: object) -> StockAssetRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/stock_assets",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
+            params={"select": STOCK_ASSET_COLUMNS},
+            json=self._json_safe(values),
         )
         self._raise_for_supabase(response)
         return self._asset_from_row(response.json()[0])
@@ -383,9 +415,10 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
     ) -> list[BrollSlotRecord]:
         existing = self.list_slots(project_id=project_id, workspace_id=workspace_id, version=None)
         version = (max([slot.version for slot in existing], default=0)) + 1
-        response = httpx.post(
-            f"{self.rest_url}/broll_slots",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/broll_slots",
+            params={"select": BROLL_SLOT_COLUMNS},
             json=[
                 self._json_safe(
                     {
@@ -397,7 +430,39 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
                 )
                 for slot in slots
             ],
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._slot_from_row(row) for row in response.json()]
+
+    async def create_slot_set_async(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        cache_key: str,
+        slots: list[dict[str, object]],
+    ) -> list[BrollSlotRecord]:
+        existing = await self.list_slots_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            version=None,
+        )
+        version = (max([slot.version for slot in existing], default=0)) + 1
+        response = await self.client.async_request(
+            "POST",
+            "/broll_slots",
+            params={"select": BROLL_SLOT_COLUMNS},
+            json=[
+                self._json_safe(
+                    {
+                        **slot,
+                        "version": version,
+                        "schema_version": BROLL_SCHEMA_VERSION,
+                        "cache_key": cache_key,
+                    }
+                )
+                for slot in slots
+            ],
         )
         self._raise_for_supabase(response)
         return [self._slot_from_row(row) for row in response.json()]
@@ -405,17 +470,39 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
     def find_cached_slots(
         self, *, project_id: UUID, workspace_id: UUID, cache_key: str
     ) -> list[BrollSlotRecord]:
-        response = httpx.get(
-            f"{self.rest_url}/broll_slots",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/broll_slots",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
                 "cache_key": f"eq.{cache_key}",
-                "select": "*",
+                "select": BROLL_SLOT_COLUMNS,
                 "order": "version.desc,start_ms.asc",
+                "limit": str(MAX_CACHED_BROLL_SLOT_ROWS),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            return []
+        latest = max(int(row["version"]) for row in rows)
+        return [self._slot_from_row(row) for row in rows if int(row["version"]) == latest]
+
+    async def find_cached_slots_async(
+        self, *, project_id: UUID, workspace_id: UUID, cache_key: str
+    ) -> list[BrollSlotRecord]:
+        response = await self.client.async_request(
+            "GET",
+            "/broll_slots",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "cache_key": f"eq.{cache_key}",
+                "select": BROLL_SLOT_COLUMNS,
+                "order": "version.desc,start_ms.asc",
+                "limit": str(MAX_CACHED_BROLL_SLOT_ROWS),
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -425,20 +512,50 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         return [self._slot_from_row(row) for row in rows if int(row["version"]) == latest]
 
     def list_slots(
-        self, *, project_id: UUID, workspace_id: UUID, version: int | None = None
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        version: int | None = None,
+        limit: int = DEFAULT_BROLL_SLOT_LIMIT,
     ) -> list[BrollSlotRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
         params = {
             "workspace_id": f"eq.{workspace_id}",
             "project_id": f"eq.{project_id}",
-            "select": "*",
+            "select": BROLL_SLOT_COLUMNS,
             "order": "version.desc,start_ms.asc",
+            "limit": str(limit),
         }
         if version is not None:
             params["version"] = f"eq.{version}"
-        response = httpx.get(
-            f"{self.rest_url}/broll_slots", headers=self.headers, params=params, timeout=10
-        )
+        response = self.client.request("GET", "/broll_slots", params=params)
+        self._raise_for_supabase(response)
+        records = [self._slot_from_row(row) for row in response.json()]
+        if version is None and records:
+            latest = max(slot.version for slot in records)
+            records = [slot for slot in records if slot.version == latest]
+        return records
+
+    async def list_slots_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        version: int | None = None,
+        limit: int = DEFAULT_BROLL_SLOT_LIMIT,
+    ) -> list[BrollSlotRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        params = {
+            "workspace_id": f"eq.{workspace_id}",
+            "project_id": f"eq.{project_id}",
+            "select": BROLL_SLOT_COLUMNS,
+            "order": "version.desc,start_ms.asc",
+            "limit": str(limit),
+        }
+        if version is not None:
+            params["version"] = f"eq.{version}"
+        response = await self.client.async_request("GET", "/broll_slots", params=params)
         self._raise_for_supabase(response)
         records = [self._slot_from_row(row) for row in response.json()]
         if version is None and records:
@@ -447,17 +564,36 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         return records
 
     def get_slot(self, *, project_id: UUID, workspace_id: UUID, slot_id: UUID) -> BrollSlotRecord:
-        response = httpx.get(
-            f"{self.rest_url}/broll_slots",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/broll_slots",
             params={
                 "id": f"eq.{slot_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": BROLL_SLOT_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "broll_slot_not_found", "B-roll slot was not found.")
+        return self._slot_from_row(rows[0])
+
+    async def get_slot_async(
+        self, *, project_id: UUID, workspace_id: UUID, slot_id: UUID
+    ) -> BrollSlotRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/broll_slots",
+            params={
+                "id": f"eq.{slot_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": BROLL_SLOT_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -468,17 +604,36 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
     def get_asset(
         self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID
     ) -> StockAssetRecord:
-        response = httpx.get(
-            f"{self.rest_url}/stock_assets",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/stock_assets",
             params={
                 "id": f"eq.{asset_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": STOCK_ASSET_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "stock_asset_not_found", "Stock asset was not found.")
+        return self._asset_from_row(rows[0])
+
+    async def get_asset_async(
+        self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID
+    ) -> StockAssetRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/stock_assets",
+            params={
+                "id": f"eq.{asset_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": STOCK_ASSET_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -487,20 +642,47 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         return self._asset_from_row(rows[0])
 
     def list_library_assets(
-        self, *, project_id: UUID, workspace_id: UUID
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = DEFAULT_BROLL_LIBRARY_LIMIT,
     ) -> list[StockAssetRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
-        response = httpx.get(
-            f"{self.rest_url}/stock_assets",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/stock_assets",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
                 "provider": "in.(user_library,runway)",
-                "select": "*",
+                "select": STOCK_ASSET_COLUMNS,
                 "order": "created_at.desc",
+                "limit": str(limit),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._asset_from_row(row) for row in response.json()]
+
+    async def list_library_assets_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = DEFAULT_BROLL_LIBRARY_LIMIT,
+    ) -> list[StockAssetRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        response = await self.client.async_request(
+            "GET",
+            "/stock_assets",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "provider": "in.(user_library,runway)",
+                "select": STOCK_ASSET_COLUMNS,
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
         )
         self._raise_for_supabase(response)
         return [self._asset_from_row(row) for row in response.json()]
@@ -508,16 +690,31 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
     def mark_library_asset_ready(
         self, *, asset: StockAssetRecord, download_url: str
     ) -> StockAssetRecord:
-        response = httpx.patch(
-            f"{self.rest_url}/stock_assets",
-            headers=self.headers,
-            params={"id": f"eq.{asset.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
             json={
                 "download_url": download_url,
                 "preview_video_url": download_url,
                 "raw_metadata": {**asset.raw_metadata, "status": "ready"},
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    async def mark_library_asset_ready_async(
+        self, *, asset: StockAssetRecord, download_url: str
+    ) -> StockAssetRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json={
+                "download_url": download_url,
+                "preview_video_url": download_url,
+                "raw_metadata": {**asset.raw_metadata, "status": "ready"},
+            },
         )
         self._raise_for_supabase(response)
         return self._asset_from_row(response.json()[0])
@@ -534,12 +731,32 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         }
         if score is not None:
             payload["score"] = score
-        response = httpx.patch(
-            f"{self.rest_url}/stock_assets",
-            headers=self.headers,
-            params={"id": f"eq.{asset.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
             json=payload,
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    async def update_asset_metadata_async(
+        self,
+        *,
+        asset: StockAssetRecord,
+        raw_metadata: dict[str, object],
+        score: float | None = None,
+    ) -> StockAssetRecord:
+        payload: dict[str, object] = {
+            "raw_metadata": {**asset.raw_metadata, **raw_metadata},
+        }
+        if score is not None:
+            payload["score"] = score
+        response = await self.client.async_request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json=payload,
         )
         self._raise_for_supabase(response)
         return self._asset_from_row(response.json()[0])
@@ -552,10 +769,10 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         path: str,
         download_url: str,
     ) -> StockAssetRecord:
-        response = httpx.patch(
-            f"{self.rest_url}/stock_assets",
-            headers=self.headers,
-            params={"id": f"eq.{asset.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
             json={
                 "download_url": download_url,
                 "preview_video_url": download_url,
@@ -566,7 +783,32 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
                     "storage_path": path,
                 },
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    async def mark_stock_asset_owned_async(
+        self,
+        *,
+        asset: StockAssetRecord,
+        bucket: str,
+        path: str,
+        download_url: str,
+    ) -> StockAssetRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json={
+                "download_url": download_url,
+                "preview_video_url": download_url,
+                "raw_metadata": {
+                    **asset.raw_metadata,
+                    "owned_copy": True,
+                    "storage_bucket": bucket,
+                    "storage_path": path,
+                },
+            },
         )
         self._raise_for_supabase(response)
         return self._asset_from_row(response.json()[0])
@@ -575,11 +817,27 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
         if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
             raise ApiError(409, "library_asset_required", "Only owned assets can be deleted.")
-        response = httpx.delete(
-            f"{self.rest_url}/stock_assets",
-            headers=self.headers,
+        response = self.client.request(
+            "DELETE",
+            "/stock_assets",
+            headers={"prefer": "return=minimal"},
             params={"id": f"eq.{asset_id}", "workspace_id": f"eq.{workspace_id}"},
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+
+    async def delete_library_asset_async(
+        self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID
+    ) -> None:
+        asset = await self.get_asset_async(
+            project_id=project_id, workspace_id=workspace_id, asset_id=asset_id
+        )
+        if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
+            raise ApiError(409, "library_asset_required", "Only owned assets can be deleted.")
+        response = await self.client.async_request(
+            "DELETE",
+            "/stock_assets",
+            headers={"prefer": "return=minimal"},
+            params={"id": f"eq.{asset_id}", "workspace_id": f"eq.{workspace_id}"},
         )
         self._raise_for_supabase(response)
 
@@ -591,16 +849,36 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             raise ApiError(
                 409, "broll_asset_not_candidate", "Choose one of this slot's candidate assets."
             )
-        response = httpx.patch(
-            f"{self.rest_url}/broll_slots",
-            headers=self.headers,
-            params={"id": f"eq.{slot.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/broll_slots",
+            params={"id": f"eq.{slot.id}", "select": BROLL_SLOT_COLUMNS},
             json={
                 "status": status.value,
                 "selected_asset_id": str(asset_id) if asset_id else None,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._slot_from_row(response.json()[0])
+
+    async def update_slot_selection_async(
+        self, *, slot: BrollSlotRecord, asset_id: UUID | None, disabled: bool
+    ) -> BrollSlotRecord:
+        status = BrollSlotStatus.DISABLED if disabled else BrollSlotStatus.READY
+        if not disabled and asset_id not in slot.candidate_asset_ids:
+            raise ApiError(
+                409, "broll_asset_not_candidate", "Choose one of this slot's candidate assets."
+            )
+        response = await self.client.async_request(
+            "PATCH",
+            "/broll_slots",
+            params={"id": f"eq.{slot.id}", "select": BROLL_SLOT_COLUMNS},
+            json={
+                "status": status.value,
+                "selected_asset_id": str(asset_id) if asset_id else None,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
         )
         self._raise_for_supabase(response)
         return self._slot_from_row(response.json()[0])
@@ -622,12 +900,37 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             payload["status"] = (
                 BrollSlotStatus.DISABLED if disabled else BrollSlotStatus.READY
             ).value
-        response = httpx.patch(
-            f"{self.rest_url}/broll_slots",
-            headers=self.headers,
-            params={"id": f"eq.{slot.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/broll_slots",
+            params={"id": f"eq.{slot.id}", "select": BROLL_SLOT_COLUMNS},
             json=payload,
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._slot_from_row(response.json()[0])
+
+    async def update_slot_region_async(
+        self,
+        *,
+        slot: BrollSlotRecord,
+        start_ms: int,
+        end_ms: int,
+        disabled: bool | None = None,
+    ) -> BrollSlotRecord:
+        payload: dict[str, object] = {
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        if disabled is not None:
+            payload["status"] = (
+                BrollSlotStatus.DISABLED if disabled else BrollSlotStatus.READY
+            ).value
+        response = await self.client.async_request(
+            "PATCH",
+            "/broll_slots",
+            params={"id": f"eq.{slot.id}", "select": BROLL_SLOT_COLUMNS},
+            json=payload,
         )
         self._raise_for_supabase(response)
         return self._slot_from_row(response.json()[0])
@@ -642,15 +945,36 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         for asset_id in asset_ids:
             if asset_id not in candidate_asset_ids:
                 candidate_asset_ids.append(asset_id)
-        response = httpx.patch(
-            f"{self.rest_url}/broll_slots",
-            headers=self.headers,
-            params={"id": f"eq.{slot.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/broll_slots",
+            params={"id": f"eq.{slot.id}", "select": BROLL_SLOT_COLUMNS},
             json={
                 "candidate_asset_ids": [str(asset_id) for asset_id in candidate_asset_ids],
                 "updated_at": datetime.now(UTC).isoformat(),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._slot_from_row(response.json()[0])
+
+    async def add_slot_candidates_async(
+        self,
+        *,
+        slot: BrollSlotRecord,
+        asset_ids: list[UUID],
+    ) -> BrollSlotRecord:
+        candidate_asset_ids = [*slot.candidate_asset_ids]
+        for asset_id in asset_ids:
+            if asset_id not in candidate_asset_ids:
+                candidate_asset_ids.append(asset_id)
+        response = await self.client.async_request(
+            "PATCH",
+            "/broll_slots",
+            params={"id": f"eq.{slot.id}", "select": BROLL_SLOT_COLUMNS},
+            json={
+                "candidate_asset_ids": [str(asset_id) for asset_id in candidate_asset_ids],
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
         )
         self._raise_for_supabase(response)
         return self._slot_from_row(response.json()[0])
@@ -662,6 +986,17 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         for asset_id in asset_ids:
             if asset_id not in self.assets:
                 self.assets[asset_id] = self.get_asset(
+                    project_id=slot.project_id, workspace_id=slot.workspace_id, asset_id=asset_id
+                )
+        return slot.to_response(self.assets)
+
+    async def response_for_slot_async(self, slot: BrollSlotRecord) -> BrollSlotResponse:
+        asset_ids = [*slot.candidate_asset_ids]
+        if slot.selected_asset_id and slot.selected_asset_id not in asset_ids:
+            asset_ids.append(slot.selected_asset_id)
+        for asset_id in asset_ids:
+            if asset_id not in self.assets:
+                self.assets[asset_id] = await self.get_asset_async(
                     project_id=slot.project_id, workspace_id=slot.workspace_id, asset_id=asset_id
                 )
         return slot.to_response(self.assets)

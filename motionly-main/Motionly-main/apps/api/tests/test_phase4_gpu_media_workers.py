@@ -1,3 +1,6 @@
+import json
+import os
+import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -16,6 +19,7 @@ from app.services.gpu_autoscaling import (
     policy_from_settings,
     should_timeout_job,
 )
+from app.services.lightning_scaling import LightningScalingService
 from app.services.local_storage import LocalObjectStorage
 from app.services.matte_jobs import (
     MATTE_MODEL_VERSION,
@@ -25,8 +29,10 @@ from app.services.matte_jobs import (
     matte_segmentation_settings,
     run_matte_for_upload,
 )
-from app.services.queue import MatteQueue, QueueRegistry
+from app.services.queue import MatteQueue, QueueRegistry, QueueSnapshot
 from app.services.render_jobs import _segmentation_matte_path_from_manifest
+from app.services.visual_intelligence import _resize_frame_for_analysis
+from app.workers import prefetch_models
 
 
 @pytest.fixture
@@ -325,6 +331,7 @@ def test_gpu_autoscaling_policy_and_resource_limits():
         gpu_scale_down_queue_depth=1,
         gpu_autoscale_cooldown_seconds=300,
         gpu_max_worker_count=3,
+        lightning_max_replicas=2,
         gpu_oom_alert_threshold=2,
         gpu_long_job_timeout_seconds=30,
     )
@@ -334,6 +341,7 @@ def test_gpu_autoscaling_policy_and_resource_limits():
     assert policy.max_concurrent_jobs_per_gpu == 1
     assert policy.gpu_memory_ceiling_mb == 16000
     assert policy.matte_worker_concurrency == 2
+    assert policy.max_worker_count == 2
     assert autoscale_decision(
         policy=policy,
         queue_depth=5,
@@ -344,7 +352,7 @@ def test_gpu_autoscaling_policy_and_resource_limits():
     assert autoscale_decision(
         policy=policy,
         queue_depth=8,
-        current_workers=3,
+        current_workers=2,
         last_scaled_at=None,
         now=now,
     ) == "hold"
@@ -365,3 +373,277 @@ def test_gpu_autoscaling_policy_and_resource_limits():
     assert should_timeout_job(started_at=now - timedelta(seconds=31), now=now, policy=policy)
     assert oom_alert_event(oom_count=1, policy=policy) is None
     assert oom_alert_event(oom_count=2, policy=policy)["event"] == "gpu_oom_threshold_exceeded"
+
+
+def test_lightning_scaling_uses_backlog_proportional_replicas(monkeypatch):
+    settings = SimpleNamespace(
+        lightning_user_id="user",
+        lightning_api_key="key",
+        lightning_teamspace="teamspace",
+        lightning_visual_deployment="motionly-visual-worker",
+        lightning_matte_deployment="motionly-matte-worker",
+        lightning_render_deployment="motionly-gpu-render-worker",
+        gpu_worker_instance_type="g5.xlarge",
+        gpu_max_concurrent_jobs_per_gpu=2,
+        gpu_memory_ceiling_mb=16000,
+        matte_worker_concurrency=1,
+        visual_worker_concurrency=1,
+        gpu_scale_up_queue_depth=4,
+        gpu_scale_down_queue_depth=0,
+        gpu_autoscale_cooldown_seconds=300,
+        gpu_max_worker_count=4,
+        lightning_max_replicas=None,
+        gpu_oom_alert_threshold=2,
+        gpu_long_job_timeout_seconds=1800,
+    )
+    updates = []
+
+    def capture_update(self, name, replicas):
+        updates.append((name, replicas))
+
+    monkeypatch.setattr(LightningScalingService, "_set_deployment_replicas", capture_update)
+    result = LightningScalingService(settings).run(
+        [
+            QueueSnapshot(
+                queue_name="visual_analysis",
+                queued=7,
+                running=1,
+                succeeded=0,
+                failed=0,
+                dead_letter=0,
+                canceled=0,
+                oldest_queued_seconds=60,
+            )
+        ]
+    )
+
+    deployment = result["deployments"][0]
+    assert deployment["deployment"] == "motionly-visual-worker"
+    assert deployment["queues"] == ["visual_analysis", "transcription"]
+    assert deployment["desired_replicas"] == 4
+    assert updates[0] == ("motionly-visual-worker", 4)
+
+
+@pytest.mark.parametrize(
+    ("queued", "expected_replicas"),
+    [(1, 1), (4, 2), (8, 3), (16, 3)],
+)
+def test_lightning_scaling_respects_lightning_replica_cap_for_backlog(
+    monkeypatch,
+    queued,
+    expected_replicas,
+):
+    settings = SimpleNamespace(
+        lightning_user_id="user",
+        lightning_api_key="key",
+        lightning_teamspace="teamspace",
+        lightning_visual_deployment="motionly-visual-worker",
+        lightning_matte_deployment="motionly-matte-worker",
+        lightning_render_deployment="motionly-gpu-render-worker",
+        gpu_worker_instance_type="g5.xlarge",
+        gpu_max_concurrent_jobs_per_gpu=2,
+        gpu_memory_ceiling_mb=16000,
+        matte_worker_concurrency=1,
+        visual_worker_concurrency=1,
+        gpu_scale_up_queue_depth=4,
+        gpu_scale_down_queue_depth=0,
+        gpu_autoscale_cooldown_seconds=300,
+        gpu_max_worker_count=10,
+        lightning_max_replicas=3,
+        gpu_oom_alert_threshold=2,
+        gpu_long_job_timeout_seconds=1800,
+    )
+    updates = []
+
+    def capture_update(self, name, replicas):
+        updates.append((name, replicas))
+
+    monkeypatch.setattr(LightningScalingService, "_set_deployment_replicas", capture_update)
+    result = LightningScalingService(settings).run(
+        [
+            QueueSnapshot(
+                queue_name="visual_analysis",
+                queued=queued,
+                running=0,
+                succeeded=0,
+                failed=0,
+                dead_letter=0,
+                canceled=0,
+                oldest_queued_seconds=60,
+            )
+        ]
+    )
+
+    deployment = result["deployments"][0]
+    assert deployment["desired_replicas"] == expected_replicas
+    assert updates[0] == ("motionly-visual-worker", expected_replicas)
+
+
+def test_lightning_scaling_holds_target_during_cooldown(monkeypatch):
+    settings = SimpleNamespace(
+        lightning_user_id="user",
+        lightning_api_key="key",
+        lightning_teamspace="teamspace",
+        lightning_visual_deployment="motionly-visual-worker",
+        lightning_matte_deployment="motionly-matte-worker",
+        lightning_render_deployment="motionly-gpu-render-worker",
+        gpu_worker_instance_type="g5.xlarge",
+        gpu_max_concurrent_jobs_per_gpu=1,
+        gpu_memory_ceiling_mb=16000,
+        matte_worker_concurrency=1,
+        visual_worker_concurrency=1,
+        gpu_scale_up_queue_depth=4,
+        gpu_scale_down_queue_depth=0,
+        gpu_autoscale_cooldown_seconds=300,
+        gpu_max_worker_count=4,
+        lightning_max_replicas=4,
+        gpu_oom_alert_threshold=2,
+        gpu_long_job_timeout_seconds=1800,
+    )
+    updates = []
+
+    def capture_update(self, name, replicas):
+        updates.append((name, replicas))
+
+    monkeypatch.setattr(LightningScalingService, "_set_deployment_replicas", capture_update)
+    service = LightningScalingService(settings)
+    first = service.run(
+        [
+            QueueSnapshot(
+                queue_name="render_gpu",
+                queued=1,
+                running=0,
+                succeeded=0,
+                failed=0,
+                dead_letter=0,
+                canceled=0,
+                oldest_queued_seconds=60,
+            )
+        ]
+    )
+    second = service.run(
+        [
+            QueueSnapshot(
+                queue_name="render_gpu",
+                queued=10,
+                running=0,
+                succeeded=0,
+                failed=0,
+                dead_letter=0,
+                canceled=0,
+                oldest_queued_seconds=60,
+            )
+        ]
+    )
+
+    render_first = first["deployments"][2]
+    render_second = second["deployments"][2]
+    assert render_first["desired_replicas"] == 1
+    assert render_second["decision"] == "hold_cooldown"
+    assert render_second["desired_replicas"] == 1
+    assert updates == [("motionly-gpu-render-worker", 1)]
+
+
+def test_model_prefetch_emits_readiness_telemetry(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("MODEL_PREFETCH", "true")
+    monkeypatch.setattr(prefetch_models.importlib.util, "find_spec", lambda _name: None)
+    monkeypatch.setattr(prefetch_models, "_disk_free_bytes", lambda _path: 2048)
+    monkeypatch.setattr(prefetch_models, "_gpu_memory_allocated_mb", lambda: 128)
+    monkeypatch.setattr(
+        prefetch_models,
+        "get_settings",
+        lambda: SimpleNamespace(media_work_dir=str(tmp_path)),
+    )
+
+    prefetch_models.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["event"] == "model_prefetch_completed"
+    assert payload["models_attempted"] == 0
+    assert payload["failure_count"] == 0
+    assert payload["disk_free_bytes"] == 2048
+    assert payload["gpu_memory_allocated_mb"] == 128
+    assert payload["cache_budget"]["budget_bytes"] == 0
+    assert payload["tmp_cleanup"]["removed"] >= 0
+
+
+def test_worker_cache_budget_evicts_oldest_files(tmp_path):
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    old_file = cache_dir / "old.bin"
+    new_file = cache_dir / "new.bin"
+    old_file.write_bytes(b"a" * 8)
+    new_file.write_bytes(b"b" * 8)
+    os.utime(old_file, (time.time() - 120, time.time() - 120))
+    os.utime(new_file, (time.time(), time.time()))
+
+    result = prefetch_models.enforce_worker_cache_budget(
+        cache_dirs=[str(cache_dir)],
+        max_bytes=8,
+    )
+
+    assert result["budget_bytes"] == 8
+    assert result["total_bytes"] == 8
+    assert result["removed"] == 1
+    assert result["bytes_removed"] == 8
+    assert not old_file.exists()
+    assert new_file.exists()
+
+
+def test_worker_tmp_cleanup_only_removes_old_motionly_paths(tmp_path):
+    stale = tmp_path / "motionly-stale"
+    fresh = tmp_path / "motionly-fresh"
+    unrelated = tmp_path / "other-stale"
+    stale.mkdir()
+    fresh.mkdir()
+    unrelated.mkdir()
+    (stale / "payload.bin").write_bytes(b"x" * 4)
+    (fresh / "payload.bin").write_bytes(b"x" * 4)
+    (unrelated / "payload.bin").write_bytes(b"x" * 4)
+    old_time = time.time() - 120
+    os.utime(stale, (old_time, old_time))
+    os.utime(stale / "payload.bin", (old_time, old_time))
+    os.utime(unrelated, (old_time, old_time))
+
+    result = prefetch_models.cleanup_worker_tmp(
+        tmp_dir=str(tmp_path),
+        max_age_seconds=60,
+    )
+
+    assert result["removed"] == 1
+    assert result["bytes_removed"] == 4
+    assert not stale.exists()
+    assert fresh.exists()
+    assert unrelated.exists()
+
+
+def test_visual_analysis_resizes_large_frames_before_inference():
+    calls = []
+    large_frame = SimpleNamespace(shape=(1080, 1920, 3))
+    resized_frame = SimpleNamespace(shape=(360, 640, 3))
+
+    class FakeCv2:
+        INTER_AREA = "area"
+
+        @staticmethod
+        def resize(frame, target_size, interpolation):
+            calls.append((frame, target_size, interpolation))
+            return resized_frame
+
+    result = _resize_frame_for_analysis(cv2=FakeCv2, frame=large_frame)
+
+    assert result is resized_frame
+    assert calls == [(large_frame, (640, 360), "area")]
+
+
+def test_visual_analysis_keeps_small_frames_without_copying():
+    small_frame = SimpleNamespace(shape=(360, 640, 3))
+
+    class FakeCv2:
+        INTER_AREA = "area"
+
+        @staticmethod
+        def resize(*_args, **_kwargs):
+            raise AssertionError("small frames should not be resized")
+
+    assert _resize_frame_for_analysis(cv2=FakeCv2, frame=small_frame) is small_frame

@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Input, Label, Slider, PanelSection } from "../ui";
 import { Button } from "../../button";
 import { Check, Film, Loader2, Sparkles, X } from "lucide-react";
@@ -54,7 +53,6 @@ export function BrollTab({
   onSlotsUpdated,
   onPreviewBrollUpdated,
 }: BrollTabProps) {
-  const router = useRouter();
   const [density, setDensity] = useState<BrollDensity>(
     activePlanBrollDensity || "medium",
   );
@@ -101,7 +99,6 @@ export function BrollTab({
       if (payload.slots?.length === 0) {
         setMessage("No B-roll slots were created from the active timeline.");
       }
-      router.refresh();
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);
@@ -137,7 +134,6 @@ export function BrollTab({
       setMessage(
         disabled ? "B-roll slot disabled." : "B-roll selection saved.",
       );
-      router.refresh();
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);
@@ -169,7 +165,6 @@ export function BrollTab({
       setMessage(
         `Found ${payload.candidates?.length ?? 0} candidates for "${payload.query}".`,
       );
-      router.refresh();
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);

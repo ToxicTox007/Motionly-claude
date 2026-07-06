@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Label, Select, Slider } from "./ui";
 import { Button } from "../button";
 import {
@@ -25,8 +24,19 @@ import type {
   RenderJobSummary,
   RenderTemplateId,
 } from "@motionly/shared";
-import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
+import {
+  buildApiHeaders,
+  editorApiRequest,
+  startAdaptivePolling,
+  waitForInteractivePollingTurn,
+} from "@/lib/client-api";
 import { env } from "@/lib/env";
+import { shouldToast } from "@/lib/notification-taxonomy";
+import {
+  publishStatusLabel,
+  queuedWaitBandLabel,
+  renderStatusLabel,
+} from "@/lib/product-flow-status";
 import { createClient } from "@/lib/supabase/browser";
 import type { PreviewExportState } from "./preview/VideoPreview";
 import { useToast } from "../toast";
@@ -127,7 +137,6 @@ export function ExportStep({
   maxExportResolution,
   onPreviewExportUpdated,
 }: ExportStepProps) {
-  const router = useRouter();
   const { toast } = useToast();
   const [templateId, setTemplateId] =
     useState<RenderTemplateId>("luxury_reel_v1");
@@ -179,6 +188,10 @@ export function ExportStep({
   const renderUiState = getRenderUiState(latestJob);
   const progress = getDisplayProgress(latestJob);
   const etaLabel = estimateRenderEta(latestJob, nowMs);
+  const waitBandLabel =
+    latestJob?.status === "queued"
+      ? queuedWaitBandLabel(latestJob.created_at, nowMs)
+      : null;
   const retryableJob = latestJob?.status === "failed" ? latestJob : null;
   const canceledJob = latestJob?.status === "canceled" ? latestJob : null;
   const primaryRenderAction = getPrimaryRenderAction({
@@ -238,8 +251,10 @@ export function ExportStep({
       )
     )
       return;
-    const timer = window.setInterval(() => void refreshPublishing(), 3000);
-    return () => window.clearInterval(timer);
+    return startAdaptivePolling(() => refreshPublishing(), {
+      intervalMs: 3000,
+      maxIntervalMs: 9000,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publishJobs]);
 
@@ -277,21 +292,25 @@ export function ExportStep({
       ]);
       setMessage(`Render queued: ${payload.queue_job_id}`);
       setStreamingJobId(payload.job.id);
-      toast({
-        title: "Render Queued",
-        description: "Your video has been added to the render queue.",
-        variant: "success",
-      });
+      if (shouldToast("short_action_feedback")) {
+        toast({
+          title: "Render Queued",
+          description: "Your video has been added to the render queue.",
+          variant: "success",
+        });
+      }
     } catch (error) {
       console.error(error);
       const errMsg = (error as Error).message;
       setMessage(errMsg);
-      toast({
-        title: "Export Failed to Start",
-        description:
-          "Check for missing timeline clips, verify your network connection, or try again.",
-        variant: "error",
-      });
+      if (shouldToast("short_action_feedback")) {
+        toast({
+          title: "Export Failed to Start",
+          description:
+            "Check for missing timeline clips, verify your network connection, or try again.",
+          variant: "error",
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -336,20 +355,24 @@ export function ExportStep({
       ]);
       setMessage(`Queued ${payload.jobs.length} export targets.`);
       setStreamingJobId(payload.jobs[0]?.id ?? null);
-      toast({
-        title: "Bulk Render Queued",
-        description: `Successfully enqueued ${payload.jobs.length} export targets.`,
-        variant: "success",
-      });
+      if (shouldToast("short_action_feedback")) {
+        toast({
+          title: "Bulk Render Queued",
+          description: `Successfully enqueued ${payload.jobs.length} export targets.`,
+          variant: "success",
+        });
+      }
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);
-      toast({
-        title: "Bulk Render Failed",
-        description:
-          "Failed to queue multiple exports. Verify that captions are active and try again.",
-        variant: "error",
-      });
+      if (shouldToast("short_action_feedback")) {
+        toast({
+          title: "Bulk Render Failed",
+          description:
+            "Failed to queue multiple exports. Verify that captions are active and try again.",
+          variant: "error",
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -399,11 +422,13 @@ export function ExportStep({
             void refreshExports();
             setStreamingJobId(null);
             setMessage("Export is ready to download.");
-            toast({
-              title: "Export Ready",
-              description: "Your video has compiled successfully.",
-              variant: "success",
-            });
+            if (shouldToast("short_action_feedback")) {
+              toast({
+                title: "Export Ready",
+                description: "Your video has compiled successfully.",
+                variant: "success",
+              });
+            }
           } else if (status === "failed" || status === "canceled") {
             setStreamingJobId(null);
             setMessage(
@@ -411,14 +436,17 @@ export function ExportStep({
                 ? (row.error_message ?? "Render failed.")
                 : "Render canceled.",
             );
-            toast({
-              title: status === "failed" ? "Render Failed" : "Render Canceled",
-              description:
-                status === "failed"
-                  ? "Server-side compilation failed. Reducing effects or retrying may help."
-                  : "The render was canceled.",
-              variant: status === "failed" ? "error" : "info",
-            });
+            if (shouldToast("short_action_feedback")) {
+              toast({
+                title:
+                  status === "failed" ? "Render Failed" : "Render Canceled",
+                description:
+                  status === "failed"
+                    ? "Server-side compilation failed. Reducing effects or retrying may help."
+                    : "The render was canceled.",
+                variant: status === "failed" ? "error" : "info",
+              });
+            }
           } else if (status) {
             setMessage(`${statusLabel(status)} (${row.progress_pct ?? 0}%)`);
           }
@@ -477,26 +505,31 @@ export function ExportStep({
             if (job.status === "complete") {
               await refreshExports();
               setStreamingJobId(null);
-              router.refresh();
-              toast({
-                title: "Render Complete",
-                description: "Your video export is ready.",
-                variant: "success",
-              });
+              if (shouldToast("short_action_feedback")) {
+                toast({
+                  title: "Render Complete",
+                  description: "Your video export is ready.",
+                  variant: "success",
+                });
+              }
               return;
             }
             if (job.status === "failed" || job.status === "canceled") {
               setStreamingJobId(null);
               setLoading(false);
-              toast({
-                title:
-                  job.status === "failed" ? "Render Failed" : "Render Canceled",
-                description:
-                  job.status === "failed"
-                    ? "Server-side compilation failed. Click Retry or reduce complexity."
-                    : "Render was canceled.",
-                variant: job.status === "failed" ? "error" : "info",
-              });
+              if (shouldToast("short_action_feedback")) {
+                toast({
+                  title:
+                    job.status === "failed"
+                      ? "Render Failed"
+                      : "Render Canceled",
+                  description:
+                    job.status === "failed"
+                      ? "Server-side compilation failed. Click Retry or reduce complexity."
+                      : "Render was canceled.",
+                  variant: job.status === "failed" ? "error" : "info",
+                });
+              }
               return;
             }
           }
@@ -524,7 +557,6 @@ export function ExportStep({
     activeStreamJobId,
     apiAccessToken,
     projectId,
-    router,
     userId,
     workspaceId,
   ]);
@@ -538,7 +570,8 @@ export function ExportStep({
 
   async function pollRender(renderJobId: string) {
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      if (attempt > 0) await sleep(2500);
+      if (attempt > 0) await sleep(Math.min(8000, 2500 + attempt * 250));
+      await waitForInteractivePollingTurn();
       let response: Response;
       try {
         response = await fetch(
@@ -1091,6 +1124,11 @@ export function ExportStep({
                     ETA {etaLabel}
                   </span>
                 ) : null}
+                {waitBandLabel ? (
+                  <span className="block text-[10px] font-bold text-muted-foreground font-mono">
+                    {waitBandLabel}
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </div>
@@ -1497,27 +1535,8 @@ function socialLabel(platform: PublishPlatform) {
   ];
 }
 
-function publishStatusLabel(status: PublishJob["status"]) {
-  return {
-    queued: "Queued",
-    publishing: "Publishing",
-    published: "Published",
-    failed: "Failed",
-  }[status];
-}
-
 function statusLabel(status: RenderJobSummary["status"]) {
-  const labels: Record<string, string> = {
-    queued: "Queued",
-    processing: "Processing",
-    preparing: "Processing",
-    rendering: "Rendering",
-    uploading: "Uploading",
-    complete: "Completed",
-    failed: "Failed",
-    canceled: "Canceled",
-  };
-  return labels[status] ?? status;
+  return renderStatusLabel(status);
 }
 
 function getRenderUiState(job?: RenderJobSummary): RenderUiState {

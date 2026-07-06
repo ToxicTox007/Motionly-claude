@@ -9,11 +9,24 @@ import { env } from "@/lib/env";
 import type { StockVideoAssetSummary } from "@motionly/shared";
 import { CATEGORY_LABELS, ELEMENT_CATALOG, type PaletteCategory, type PaletteElement } from "./element-catalog";
 
+const PRIMARY_CREATOR_CATEGORIES = new Set<PaletteCategory>([
+  "text",
+  "media",
+  "audio",
+  "effects",
+  "ai",
+]);
+
 export function ElementPalette({ projectId, workspaceId, userId, apiAccessToken }: { projectId: string; workspaceId: string; userId: string; apiAccessToken: string }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<PaletteCategory | "all">("all");
   const [open, setOpen] = useState<Record<string, boolean>>(
-    Object.fromEntries(Object.keys(CATEGORY_LABELS).map((key) => [key, true])),
+    Object.fromEntries(
+      (Object.keys(CATEGORY_LABELS) as PaletteCategory[]).map((key) => [
+        key,
+        PRIMARY_CREATOR_CATEGORIES.has(key),
+      ]),
+    ),
   );
   const [library, setLibrary] = useState<StockVideoAssetSummary[]>([]);
   const [libraryBusy, setLibraryBusy] = useState(false);

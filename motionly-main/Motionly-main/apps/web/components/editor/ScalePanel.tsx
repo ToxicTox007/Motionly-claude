@@ -5,7 +5,11 @@ import type React from "react";
 import { Activity, BrainCircuit, Film, Layers3, Loader2, Save, Users } from "lucide-react";
 import type { CaptionTrackSummary, EditPlanRecordSummary, EffectsConfigSummary } from "@motionly/shared";
 import { Button } from "@/components/button";
-import { editorApiRequest, pollPlanJob } from "@/lib/client-api";
+import {
+  editorApiRequest,
+  pollPlanJob,
+  startAdaptivePolling,
+} from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/browser";
 import { cn } from "@/lib/utils";
@@ -101,8 +105,10 @@ export function ScalePanel(props: ScalePanelProps) {
 
   useEffect(() => {
     if (!resources.some((item) => ["queued", "processing"].includes(item.status))) return;
-    const timer = window.setInterval(() => void load(), 3000);
-    return () => window.clearInterval(timer);
+    return startAdaptivePolling(() => load(), {
+      intervalMs: 3000,
+      maxIntervalMs: 9000,
+    });
   }, [load, resources]);
 
   const profiles = useMemo(() => resources.filter((item) => item.kind === "style_profile"), [resources]);

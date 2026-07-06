@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import os
 from collections.abc import Awaitable, Callable
 from time import monotonic, perf_counter, time
@@ -9,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import LOCAL_AUTH_BYPASS_ENVS, env_flag_enabled
 from app.core.logging import get_logger
 from app.services.auth import verify_supabase_jwt, verify_supabase_token_with_auth_api
+from app.services.request_counters import RequestCounters, current_request_counters
 from app.services.tracing import current_trace_id
 
 logger = get_logger(__name__)
@@ -25,22 +28,51 @@ async def request_id_middleware(
     request.state.request_id = request_id
     request.state.trace_id = trace_id
     trace_token = current_trace_id.set(trace_id)
+    counters = RequestCounters()
+    counters_token = current_request_counters.set(counters)
+    lag_started_at = perf_counter()
+    await asyncio.sleep(0)
+    event_loop_lag_ms = max(0.0, (perf_counter() - lag_started_at) * 1000)
     started_at = perf_counter()
     try:
         response = await call_next(request)
     finally:
         current_trace_id.reset(trace_token)
+        current_request_counters.reset(counters_token)
     response.headers["x-request-id"] = request_id
     response.headers["traceparent"] = f"00-{trace_id}-{span_id}-01"
     latency_ms = round((perf_counter() - started_at) * 1000)
     metrics = getattr(request.app.state, "metrics_registry", None)
     if metrics:
         metrics.observe(
+            "event_loop_lag_ms",
+            event_loop_lag_ms,
+            route=_route_label(request),
+        )
+        metrics.observe(
             "http_request_duration_ms",
             latency_ms,
             method=request.method,
-            route=request.url.path,
+            route=_route_label(request),
             status=str(response.status_code),
+        )
+    response_size = response.headers.get("content-length", "unknown")
+    workspace_hash = _workspace_hash(request)
+    if latency_ms >= 1000:
+        logger.warning(
+            "api_slow_request",
+            extra={
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "route": _route_label(request),
+                "method": request.method,
+                "status_code": response.status_code,
+                "latency_ms": latency_ms,
+                "workspace_hash": workspace_hash,
+                "supabase_call_count": counters.supabase_calls,
+                "queue_call_count": counters.queue_calls,
+                "response_size": response_size,
+            },
         )
     logger.info(
         "api_request_completed",
@@ -50,8 +82,13 @@ async def request_id_middleware(
             "span_id": span_id,
             "method": request.method,
             "path": request.url.path,
+            "route": _route_label(request),
             "status_code": response.status_code,
             "latency_ms": latency_ms,
+            "workspace_hash": workspace_hash,
+            "supabase_call_count": counters.supabase_calls,
+            "queue_call_count": counters.queue_calls,
+            "response_size": response_size,
             "user_id": request.headers.get("x-motionly-user-id"),
             "workspace_id": request.headers.get("x-motionly-workspace-id"),
             "service": "motionly-api",
@@ -59,6 +96,24 @@ async def request_id_middleware(
         },
     )
     return response
+
+
+def _route_label(request: Request) -> str:
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    if isinstance(path, str) and path:
+        return path
+    return request.url.path
+
+
+def _workspace_hash(request: Request) -> str | None:
+    workspace_id = (
+        getattr(request.state, "workspace_id", None)
+        or request.headers.get("x-motionly-workspace-id")
+    )
+    if not workspace_id:
+        return None
+    return hashlib.sha256(str(workspace_id).encode()).hexdigest()[:12]
 
 
 class InMemoryRateLimiter:
@@ -154,6 +209,9 @@ def _verified_identity(request: Request) -> str | None:
                 )
             except Exception:
                 return None
+        request_state = getattr(request, "state", None)
+        if request_state is not None:
+            request_state.verified_supabase_token = verified
         return f"user:{verified.user_id}"
     if env_flag_enabled(os.getenv("SKIP_API_AUTH")) and settings.app_env in LOCAL_AUTH_BYPASS_ENVS:
         return "user:local-development"

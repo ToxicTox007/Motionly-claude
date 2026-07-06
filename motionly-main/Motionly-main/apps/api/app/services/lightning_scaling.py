@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 from dataclasses import dataclass
@@ -26,7 +27,9 @@ class LightningScalingService:
         self.settings = settings
         self.teamspace = settings.lightning_teamspace
         self.enabled = bool(
-            settings.lightning_user_id and settings.lightning_api_key and settings.lightning_teamspace
+            settings.lightning_user_id
+            and settings.lightning_api_key
+            and settings.lightning_teamspace
         )
         self.policy = policy_from_settings(settings)
         self.specs = [
@@ -78,12 +81,17 @@ class LightningScalingService:
             )
 
             desired = state.desired_replicas
-            if queued > 0 or running > 0:
-                desired = 1
+            if decision == "hold_cooldown":
+                desired = state.desired_replicas
+            elif queued > 0 or running > 0:
+                desired = self._desired_replicas_for_backlog(queued=queued, running=running)
             elif decision == "scale_down":
                 desired = 0
             elif decision == "scale_up":
-                desired = 1
+                desired = min(
+                    self.policy.max_worker_count,
+                    max(1, state.desired_replicas + 1),
+                )
 
             changed = desired != state.desired_replicas
             if changed:
@@ -107,6 +115,12 @@ class LightningScalingService:
             )
 
         return {"status": "ok", "teamspace": self.teamspace, "deployments": results}
+
+    def _desired_replicas_for_backlog(self, *, queued: int, running: int) -> int:
+        capacity = max(1, self.policy.max_concurrent_jobs_per_gpu)
+        backlog = max(0, queued) + max(0, running)
+        desired = max(1, math.ceil(backlog / capacity))
+        return min(self.policy.max_worker_count, desired)
 
     def _set_deployment_replicas(self, name: str, replicas: int) -> None:
         env = {

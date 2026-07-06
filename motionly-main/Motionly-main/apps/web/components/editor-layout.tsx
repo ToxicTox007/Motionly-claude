@@ -3,7 +3,23 @@
 import React, { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Sparkles, Download, ChevronLeft, Eye, LayoutGrid, SlidersHorizontal, X } from "lucide-react";
+import {
+  Sparkles,
+  Download,
+  ChevronLeft,
+  Eye,
+  LayoutGrid,
+  SlidersHorizontal,
+  X,
+  CheckCircle2,
+  Circle,
+  Clock3,
+  RotateCcw,
+  Square,
+  Undo2,
+  Redo2,
+  Activity,
+} from "lucide-react";
 import { ThemeMenu } from "@/components/theme-menu";
 import { cn } from "@/lib/utils";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -23,6 +39,23 @@ interface EditorLayoutProps {
   onExport: () => void;
   /** Called when the AI toolbar button is clicked */
   onAiEdit: () => void;
+  creatorFlow: {
+    tasks: CreatorTask[];
+    activeTaskKey: string;
+    progressPct: number;
+    onTaskSelect?: (task: CreatorTask) => void;
+  };
+  commandBar: {
+    canUndo: boolean;
+    canRedo: boolean;
+    onUndo: () => void;
+    onRedo: () => void;
+    onRetry: () => void;
+    onCancel: () => void;
+    hasRetry: boolean;
+    hasCancel: boolean;
+    jobLabel: string;
+  };
   /** The four main content areas, passed as an object for clarity */
   children: {
     leftPanel: React.ReactNode;
@@ -31,6 +64,24 @@ interface EditorLayoutProps {
     bottomPanel: React.ReactNode;
   };
 }
+
+export type CreatorTaskStatus =
+  | "done"
+  | "active"
+  | "waiting"
+  | "blocked"
+  | "skipped";
+
+export type CreatorTask = {
+  key: string;
+  label: string;
+  shortLabel: string;
+  description: string;
+  status: CreatorTaskStatus;
+  progress?: number | null;
+  detail?: string | null;
+  actionLabel?: string | null;
+};
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +92,8 @@ export function EditorLayout({
   saveStatus = "saved",
   onExport,
   onAiEdit,
+  creatorFlow,
+  commandBar,
   children: { leftPanel, centerPanel, rightPanel, bottomPanel },
 }: EditorLayoutProps) {
   const [activeSheet, setActiveSheet] = useState<"left" | "right" | null>(null);
@@ -67,6 +120,13 @@ export function EditorLayout({
         onTitleChange={onTitleChange}
         onTitleCommit={onTitleCommit}
         saveStatus={saveStatus}
+        onExport={onExport}
+        onAiEdit={onAiEdit}
+        commandBar={commandBar}
+      />
+
+      <CreatorProgressRail
+        flow={creatorFlow}
         onExport={onExport}
         onAiEdit={onAiEdit}
       />
@@ -118,6 +178,20 @@ export function EditorLayout({
 
         {/* Responsive Content Area */}
         <div className="flex-1 flex flex-col min-h-0 overflow-y-auto p-2 pb-20 gap-2">
+          <section
+            aria-label="Current creator task"
+            className="card shrink-0 overflow-hidden border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000]"
+          >
+            <CurrentTaskCard
+              task={
+                creatorFlow.tasks.find(
+                  (task) => task.key === creatorFlow.activeTaskKey,
+                ) ?? creatorFlow.tasks[0]
+              }
+              onSelect={creatorFlow.onTaskSelect}
+            />
+          </section>
+
           <section
             id="editor-preview"
             aria-labelledby="preview-heading"
@@ -247,6 +321,7 @@ interface TopToolbarProps {
   saveStatus: "saving" | "saved" | "error";
   onExport: () => void;
   onAiEdit: () => void;
+  commandBar: EditorLayoutProps["commandBar"];
 }
 
 function TopToolbar({
@@ -256,9 +331,10 @@ function TopToolbar({
   saveStatus,
   onExport,
   onAiEdit,
+  commandBar,
 }: TopToolbarProps) {
   return (
-    <div className="bg-surface border-b-4 border-foreground sticky top-0 z-40 flex items-center gap-2 px-3 py-2 min-h-[60px] max-w-full overflow-x-hidden">
+    <div className="bg-surface border-b-4 border-foreground sticky top-0 z-40 flex flex-wrap items-center gap-2 px-3 py-2 min-h-[60px] max-w-full overflow-x-hidden">
       <Link
         href="/dashboard"
         className="flex items-center gap-1.5 pr-2.5 bg-surface text-foreground border-2 border-foreground rounded px-3 py-1 font-bold text-sm hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms]"
@@ -298,6 +374,38 @@ function TopToolbar({
 
       <div className="hidden flex-1 lg:block" />
 
+      <div className="hidden items-center gap-1 rounded border-2 border-foreground bg-muted px-1 py-1 lg:flex">
+        <IconCommandButton
+          label="Undo"
+          onClick={commandBar.onUndo}
+          disabled={!commandBar.canUndo}
+          icon={Undo2}
+        />
+        <IconCommandButton
+          label="Redo"
+          onClick={commandBar.onRedo}
+          disabled={!commandBar.canRedo}
+          icon={Redo2}
+        />
+        <div className="mx-1 h-6 w-0.5 bg-foreground/50" />
+        <IconCommandButton
+          label="Retry"
+          onClick={commandBar.onRetry}
+          disabled={!commandBar.hasRetry}
+          icon={RotateCcw}
+        />
+        <IconCommandButton
+          label="Cancel"
+          onClick={commandBar.onCancel}
+          disabled={!commandBar.hasCancel}
+          icon={Square}
+        />
+        <span className="ml-1 inline-flex min-h-8 items-center gap-1.5 rounded bg-surface px-2 text-[11px] font-black uppercase tracking-wide text-muted-foreground">
+          <Activity className="size-3.5" strokeWidth={2} />
+          {commandBar.jobLabel}
+        </span>
+      </div>
+
       <div className="flex items-center justify-end gap-2">
         <ThemeMenu
           items={[
@@ -331,6 +439,166 @@ function TopToolbar({
         <SaveBadge status={saveStatus} />
       </div>
     </div>
+  );
+}
+
+function CreatorProgressRail({
+  flow,
+  onExport,
+  onAiEdit,
+}: {
+  flow: EditorLayoutProps["creatorFlow"];
+  onExport: () => void;
+  onAiEdit: () => void;
+}) {
+  const activeTask =
+    flow.tasks.find((task) => task.key === flow.activeTaskKey) ??
+    flow.tasks[0];
+  return (
+    <div className="border-b-2 border-foreground bg-muted px-3 py-2">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+        <div className="min-w-0 lg:w-64">
+          <p className="truncate text-xs font-black uppercase tracking-[0.18em] text-muted-foreground">
+            Creator flow
+          </p>
+          <div
+            className="mt-1 h-2 overflow-hidden rounded-full border-2 border-foreground bg-surface"
+            role="progressbar"
+            aria-label="Project progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={flow.progressPct}
+          >
+            <div
+              className="h-full bg-primary"
+              style={{ width: `${flow.progressPct}%` }}
+            />
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
+          {flow.tasks.map((task) => (
+            <button
+              key={task.key}
+              type="button"
+              onClick={() => flow.onTaskSelect?.(task)}
+              className={cn(
+                "flex min-h-11 min-w-[7.25rem] shrink-0 items-center gap-2 rounded border-2 border-foreground px-2 text-left text-xs font-black transition",
+                task.key === activeTask?.key
+                  ? "bg-primary text-primary-foreground shadow-[2px_2px_0px_#000]"
+                  : "bg-surface text-foreground hover:bg-surface-elevated",
+              )}
+            >
+              <TaskStatusIcon status={task.status} />
+              <span className="min-w-0 truncate">{task.shortLabel}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2 lg:w-52 lg:justify-end">
+          <button
+            type="button"
+            onClick={onAiEdit}
+            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded border-2 border-foreground bg-accent px-3 text-xs font-black text-accent-foreground lg:flex-none"
+          >
+            <Sparkles className="size-4" strokeWidth={2} />
+            Draft
+          </button>
+          <button
+            type="button"
+            onClick={onExport}
+            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded border-2 border-foreground bg-primary px-3 text-xs font-black text-primary-foreground lg:flex-none"
+          >
+            <Download className="size-4" strokeWidth={2} />
+            Export
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CurrentTaskCard({
+  task,
+  onSelect,
+}: {
+  task?: CreatorTask;
+  onSelect?: (task: CreatorTask) => void;
+}) {
+  if (!task) return null;
+  const progress =
+    typeof task.progress === "number"
+      ? Math.max(0, Math.min(100, task.progress))
+      : null;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect?.(task)}
+      className="block w-full p-3 text-left"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
+            Current task
+          </p>
+          <h2 className="mt-1 text-base font-black tracking-tight">
+            {task.label}
+          </h2>
+          <p className="mt-1 text-xs font-semibold text-muted-foreground">
+            {task.description}
+          </p>
+        </div>
+        <TaskStatusIcon status={task.status} />
+      </div>
+      {progress !== null ? (
+        <div className="mt-3 h-2 overflow-hidden rounded-full border-2 border-foreground bg-muted">
+          <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
+        </div>
+      ) : null}
+      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] font-black uppercase tracking-wide">
+        <span className="truncate text-muted-foreground">
+          {task.detail ?? task.status}
+        </span>
+        {task.actionLabel ? (
+          <span className="shrink-0 rounded border-2 border-foreground bg-primary px-2 py-1 text-primary-foreground">
+            {task.actionLabel}
+          </span>
+        ) : null}
+      </div>
+    </button>
+  );
+}
+
+function TaskStatusIcon({ status }: { status: CreatorTaskStatus }) {
+  if (status === "done")
+    return <CheckCircle2 className="size-4 shrink-0 text-success" strokeWidth={2} />;
+  if (status === "active")
+    return <Clock3 className="size-4 shrink-0 text-primary" strokeWidth={2} />;
+  if (status === "blocked")
+    return <RotateCcw className="size-4 shrink-0 text-danger" strokeWidth={2} />;
+  return <Circle className="size-4 shrink-0 text-muted-foreground" strokeWidth={2} />;
+}
+
+function IconCommandButton({
+  label,
+  icon: Icon,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  icon: React.ElementType;
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex size-8 items-center justify-center rounded border-2 border-foreground bg-surface text-foreground transition hover:bg-surface-elevated disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <Icon className="size-4" strokeWidth={2} />
+    </button>
   );
 }
 

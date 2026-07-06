@@ -2,8 +2,12 @@ import base64
 import hashlib
 import hmac
 import json
+import os
+import threading
 import time
 from dataclasses import dataclass
+from time import monotonic
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -15,6 +19,17 @@ from app.api.errors import ApiError
 class VerifiedToken:
     user_id: UUID
     claims: dict[str, object]
+
+
+_membership_cache: dict[tuple[str, UUID, UUID], float] = {}
+_membership_cache_lock = threading.Lock()
+
+
+def _membership_cache_ttl_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("AUTH_MEMBERSHIP_CACHE_TTL_SECONDS", "30")))
+    except ValueError:
+        return 30.0
 
 
 def verify_supabase_jwt(
@@ -105,7 +120,29 @@ def require_workspace_membership(
     service_role_key: str,
     user_id: UUID,
     workspace_id: UUID,
+    metrics_registry: Any | None = None,
 ) -> None:
+    cache_key = (supabase_url.rstrip("/"), user_id, workspace_id)
+    ttl_seconds = _membership_cache_ttl_seconds()
+    if ttl_seconds > 0:
+        now = monotonic()
+        with _membership_cache_lock:
+            expires_at = _membership_cache.get(cache_key)
+            if expires_at and expires_at > now:
+                if metrics_registry is not None:
+                    metrics_registry.observe(
+                        "auth_membership_cache_count",
+                        1,
+                        result="hit",
+                    )
+                return
+        if metrics_registry is not None:
+            metrics_registry.observe(
+                "auth_membership_cache_count",
+                1,
+                result="miss",
+            )
+
     response = httpx.get(
         f"{supabase_url.rstrip('/')}/rest/v1/workspace_members",
         headers={
@@ -129,6 +166,14 @@ def require_workspace_membership(
         )
     if not response.json():
         raise ApiError(403, "workspace_access_denied", "You do not have access to this workspace.")
+    if ttl_seconds > 0:
+        with _membership_cache_lock:
+            _membership_cache[cache_key] = monotonic() + ttl_seconds
+
+
+def clear_membership_cache_for_test() -> None:
+    with _membership_cache_lock:
+        _membership_cache.clear()
 
 
 def _decode_json(value: str) -> dict[str, object]:

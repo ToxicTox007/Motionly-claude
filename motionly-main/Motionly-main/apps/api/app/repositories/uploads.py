@@ -6,7 +6,14 @@ import httpx
 
 from app.api.errors import ApiError
 from app.schemas.uploads import UploadReadResponse, UploadStatus, VideoMetadata
+from app.services.supabase import SupabaseRestClient
 from app.services.upload_state import assert_upload_transition
+
+UPLOAD_RESPONSE_COLUMNS = (
+    "id,project_id,workspace_id,storage_bucket,storage_path,original_filename,mime_type,"
+    "file_size_bytes,byte_size,status,thumbnail_path,metadata,error_code,error_message,"
+    "created_at,updated_at"
+)
 
 
 @dataclass
@@ -118,6 +125,43 @@ class InMemoryUploadRepository:
         self.uploads[upload.id] = upload
         return upload
 
+    def initialize_upload(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        storage_bucket: str,
+        storage_extension: str,
+        original_filename: str,
+        mime_type: str,
+        file_size_bytes: int,
+        max_active_uploads: int,
+    ) -> UploadRecord:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        if self.count_active_uploads(workspace_id=workspace_id) >= max_active_uploads:
+            raise ApiError(
+                429,
+                "upload_concurrency_limit",
+                "Your workspace has too many active uploads. Try again when one finishes.",
+            )
+        upload_id = uuid4()
+        upload = UploadRecord(
+            id=upload_id,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            storage_bucket=storage_bucket,
+            storage_path=(
+                f"workspaces/{workspace_id}/projects/{project_id}/raw/"
+                f"{upload_id}.{storage_extension}"
+            ),
+            original_filename=original_filename,
+            mime_type=mime_type,
+            file_size_bytes=file_size_bytes,
+            status=UploadStatus.UPLOADING,
+        )
+        self.uploads[upload.id] = upload
+        return upload
+
     def get_upload_for_project(
         self,
         *,
@@ -183,28 +227,93 @@ class InMemoryUploadRepository:
         if project := self.projects.get(project_id):
             project.active_video_id = video_id
 
+    def complete_upload_for_processing(
+        self,
+        *,
+        project_id: UUID,
+        video_id: UUID,
+        workspace_id: UUID,
+        observed_file_size_bytes: int | None = None,
+    ) -> UploadRecord:
+        upload = self.get_upload_for_project(
+            project_id=project_id,
+            video_id=video_id,
+            workspace_id=workspace_id,
+        )
+        if observed_file_size_bytes and observed_file_size_bytes != upload.file_size_bytes:
+            raise ApiError(
+                409,
+                "upload_size_mismatch",
+                "The uploaded object size did not match preflight.",
+            )
+        if upload.status == UploadStatus.PROCESSING:
+            return upload
+        if upload.status == UploadStatus.UPLOADING:
+            assert_upload_transition(upload.status, UploadStatus.UPLOADED)
+            assert_upload_transition(UploadStatus.UPLOADED, UploadStatus.PROCESSING)
+        elif upload.status == UploadStatus.UPLOADED:
+            assert_upload_transition(upload.status, UploadStatus.PROCESSING)
+        else:
+            assert_upload_transition(upload.status, UploadStatus.UPLOADED)
+        upload.status = UploadStatus.PROCESSING
+        upload.updated_at = datetime.now(UTC)
+        self.attach_active_video(project_id=project_id, video_id=video_id)
+        return upload
+
 
 class SupabaseUploadRepository:
-    def __init__(self, *, supabase_url: str, service_role_key: str) -> None:
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+    def __init__(
+        self,
+        *,
+        supabase_url: str,
+        service_role_key: str,
+        metrics_registry: object | None = None,
+    ) -> None:
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="uploads",
+            metrics_registry=metrics_registry,
+        )
 
     def get_project_for_workspace(self, *, project_id: UUID, workspace_id: UUID) -> ProjectRecord:
-        response = httpx.get(
-            f"{self.rest_url}/projects",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/projects",
             params={
                 "id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "select": "id,workspace_id,title,active_video_id",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "project_not_found", "Project was not found.")
+        row = rows[0]
+        return ProjectRecord(
+            id=UUID(row["id"]),
+            workspace_id=UUID(row["workspace_id"]),
+            title=row["title"],
+            active_video_id=UUID(row["active_video_id"]) if row.get("active_video_id") else None,
+        )
+
+    async def get_project_for_workspace_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> ProjectRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/projects",
+            params={
+                "id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": "id,workspace_id,title,active_video_id",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -219,15 +328,30 @@ class SupabaseUploadRepository:
         )
 
     def count_active_uploads(self, *, workspace_id: UUID) -> int:
-        response = httpx.get(
-            f"{self.rest_url}/uploaded_videos",
-            headers={**self.headers, "prefer": "count=exact"},
+        response = self.client.request(
+            "GET",
+            "/uploaded_videos",
+            headers={"prefer": "count=exact"},
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "status": "in.(created,uploading,uploaded)",
                 "select": "id",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        content_range = response.headers.get("content-range", "0-0/0")
+        return int(content_range.rsplit("/", 1)[-1])
+
+    async def count_active_uploads_async(self, *, workspace_id: UUID) -> int:
+        response = await self.client.async_request(
+            "GET",
+            "/uploaded_videos",
+            headers={"prefer": "count=exact"},
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "status": "in.(created,uploading,uploaded)",
+                "select": "id",
+            },
         )
         self._raise_for_supabase(response)
         content_range = response.headers.get("content-range", "0-0/0")
@@ -244,9 +368,9 @@ class SupabaseUploadRepository:
         mime_type: str,
         file_size_bytes: int,
     ) -> UploadRecord:
-        response = httpx.post(
-            f"{self.rest_url}/uploaded_videos",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/uploaded_videos",
             json={
                 "workspace_id": str(workspace_id),
                 "project_id": str(project_id),
@@ -258,7 +382,97 @@ class SupabaseUploadRepository:
                 "file_size_bytes": file_size_bytes,
                 "status": UploadStatus.CREATED,
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._upload_from_row(response.json()[0])
+
+    def initialize_upload(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        storage_bucket: str,
+        storage_extension: str,
+        original_filename: str,
+        mime_type: str,
+        file_size_bytes: int,
+        max_active_uploads: int,
+    ) -> UploadRecord:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        if self.count_active_uploads(workspace_id=workspace_id) >= max_active_uploads:
+            raise ApiError(
+                429,
+                "upload_concurrency_limit",
+                "Your workspace has too many active uploads. Try again when one finishes.",
+            )
+        upload_id = uuid4()
+        storage_path = (
+            f"workspaces/{workspace_id}/projects/{project_id}/raw/"
+            f"{upload_id}.{storage_extension}"
+        )
+        response = self.client.request(
+            "POST",
+            "/uploaded_videos",
+            params={"select": UPLOAD_RESPONSE_COLUMNS},
+            json={
+                "id": str(upload_id),
+                "workspace_id": str(workspace_id),
+                "project_id": str(project_id),
+                "storage_bucket": storage_bucket,
+                "storage_path": storage_path,
+                "original_filename": original_filename,
+                "mime_type": mime_type,
+                "byte_size": file_size_bytes,
+                "file_size_bytes": file_size_bytes,
+                "status": UploadStatus.UPLOADING.value,
+            },
+        )
+        self._raise_for_supabase(response)
+        return self._upload_from_row(response.json()[0])
+
+    async def initialize_upload_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        storage_bucket: str,
+        storage_extension: str,
+        original_filename: str,
+        mime_type: str,
+        file_size_bytes: int,
+        max_active_uploads: int,
+    ) -> UploadRecord:
+        await self.get_project_for_workspace_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+        if await self.count_active_uploads_async(workspace_id=workspace_id) >= max_active_uploads:
+            raise ApiError(
+                429,
+                "upload_concurrency_limit",
+                "Your workspace has too many active uploads. Try again when one finishes.",
+            )
+        upload_id = uuid4()
+        storage_path = (
+            f"workspaces/{workspace_id}/projects/{project_id}/raw/"
+            f"{upload_id}.{storage_extension}"
+        )
+        response = await self.client.async_request(
+            "POST",
+            "/uploaded_videos",
+            params={"select": UPLOAD_RESPONSE_COLUMNS},
+            json={
+                "id": str(upload_id),
+                "workspace_id": str(workspace_id),
+                "project_id": str(project_id),
+                "storage_bucket": storage_bucket,
+                "storage_path": storage_path,
+                "original_filename": original_filename,
+                "mime_type": mime_type,
+                "byte_size": file_size_bytes,
+                "file_size_bytes": file_size_bytes,
+                "status": UploadStatus.UPLOADING.value,
+            },
         )
         self._raise_for_supabase(response)
         return self._upload_from_row(response.json()[0])
@@ -270,17 +484,40 @@ class SupabaseUploadRepository:
         video_id: UUID,
         workspace_id: UUID,
     ) -> UploadRecord:
-        response = httpx.get(
-            f"{self.rest_url}/uploaded_videos",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/uploaded_videos",
             params={
                 "id": f"eq.{video_id}",
                 "project_id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": UPLOAD_RESPONSE_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "upload_not_found", "Upload was not found.")
+        return self._upload_from_row(rows[0])
+
+    async def get_upload_for_project_async(
+        self,
+        *,
+        project_id: UUID,
+        video_id: UUID,
+        workspace_id: UUID,
+    ) -> UploadRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/uploaded_videos",
+            params={
+                "id": f"eq.{video_id}",
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -290,17 +527,40 @@ class SupabaseUploadRepository:
 
     def get_active_upload(self, *, project_id: UUID, workspace_id: UUID) -> UploadRecord:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
-        response = httpx.get(
-            f"{self.rest_url}/uploaded_videos",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/uploaded_videos",
             params={
                 "project_id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": UPLOAD_RESPONSE_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "upload_not_found", "Upload was not found.")
+        return self._upload_from_row(rows[0])
+
+    async def get_active_upload_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> UploadRecord:
+        await self.get_project_for_workspace_async(project_id=project_id, workspace_id=workspace_id)
+        response = await self.client.async_request(
+            "GET",
+            "/uploaded_videos",
+            params={
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -310,12 +570,11 @@ class SupabaseUploadRepository:
 
     def transition_upload(self, *, upload: UploadRecord, status: UploadStatus) -> UploadRecord:
         assert_upload_transition(upload.status, status)
-        response = httpx.patch(
-            f"{self.rest_url}/uploaded_videos",
-            headers=self.headers,
-            params={"id": f"eq.{upload.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
             json={"status": status, "updated_at": datetime.now(UTC).isoformat()},
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return self._upload_from_row(response.json()[0])
@@ -328,10 +587,10 @@ class SupabaseUploadRepository:
         thumbnail_path: str | None,
     ) -> UploadRecord:
         assert_upload_transition(upload.status, UploadStatus.READY)
-        response = httpx.patch(
-            f"{self.rest_url}/uploaded_videos",
-            headers=self.headers,
-            params={"id": f"eq.{upload.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
             json={
                 "status": UploadStatus.READY.value,
                 "metadata": metadata.model_dump(mode="json"),
@@ -343,7 +602,6 @@ class SupabaseUploadRepository:
                 "error_message": None,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return self._upload_from_row(response.json()[0])
@@ -356,41 +614,153 @@ class SupabaseUploadRepository:
         error_message: str,
     ) -> UploadRecord:
         assert_upload_transition(upload.status, UploadStatus.FAILED)
-        response = httpx.patch(
-            f"{self.rest_url}/uploaded_videos",
-            headers=self.headers,
-            params={"id": f"eq.{upload.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
             json={
                 "status": UploadStatus.FAILED.value,
                 "error_code": error_code,
                 "error_message": error_message,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._upload_from_row(response.json()[0])
+
+    async def mark_failed_async(
+        self,
+        *,
+        upload: UploadRecord,
+        error_code: str,
+        error_message: str,
+    ) -> UploadRecord:
+        assert_upload_transition(upload.status, UploadStatus.FAILED)
+        response = await self.client.async_request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            json={
+                "status": UploadStatus.FAILED.value,
+                "error_code": error_code,
+                "error_message": error_message,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
         )
         self._raise_for_supabase(response)
         return self._upload_from_row(response.json()[0])
 
     def attach_active_video(self, *, project_id: UUID, video_id: UUID) -> None:
-        response = httpx.patch(
-            f"{self.rest_url}/projects",
-            headers=self.headers,
+        response = self.client.request(
+            "PATCH",
+            "/projects",
             params={"id": f"eq.{project_id}"},
             json={"active_video_id": str(video_id), "updated_at": datetime.now(UTC).isoformat()},
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+
+    async def attach_active_video_async(self, *, project_id: UUID, video_id: UUID) -> None:
+        response = await self.client.async_request(
+            "PATCH",
+            "/projects",
+            params={"id": f"eq.{project_id}"},
+            json={"active_video_id": str(video_id), "updated_at": datetime.now(UTC).isoformat()},
         )
         self._raise_for_supabase(response)
 
     def update_storage_path(self, *, upload: UploadRecord, storage_path: str) -> UploadRecord:
-        response = httpx.patch(
-            f"{self.rest_url}/uploaded_videos",
-            headers=self.headers,
-            params={"id": f"eq.{upload.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
             json={"storage_path": storage_path, "updated_at": datetime.now(UTC).isoformat()},
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return self._upload_from_row(response.json()[0])
+
+    def complete_upload_for_processing(
+        self,
+        *,
+        project_id: UUID,
+        video_id: UUID,
+        workspace_id: UUID,
+        observed_file_size_bytes: int | None = None,
+    ) -> UploadRecord:
+        upload = self.get_upload_for_project(
+            project_id=project_id,
+            video_id=video_id,
+            workspace_id=workspace_id,
+        )
+        if observed_file_size_bytes and observed_file_size_bytes != upload.file_size_bytes:
+            raise ApiError(
+                409,
+                "upload_size_mismatch",
+                "The uploaded object size did not match preflight.",
+            )
+        if upload.status == UploadStatus.PROCESSING:
+            return upload
+        if upload.status == UploadStatus.UPLOADING:
+            assert_upload_transition(upload.status, UploadStatus.UPLOADED)
+            assert_upload_transition(UploadStatus.UPLOADED, UploadStatus.PROCESSING)
+        elif upload.status == UploadStatus.UPLOADED:
+            assert_upload_transition(upload.status, UploadStatus.PROCESSING)
+        else:
+            assert_upload_transition(upload.status, UploadStatus.UPLOADED)
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            json={
+                "status": UploadStatus.PROCESSING.value,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        updated = self._upload_from_row(response.json()[0])
+        self.attach_active_video(project_id=project_id, video_id=video_id)
+        return updated
+
+    async def complete_upload_for_processing_async(
+        self,
+        *,
+        project_id: UUID,
+        video_id: UUID,
+        workspace_id: UUID,
+        observed_file_size_bytes: int | None = None,
+    ) -> UploadRecord:
+        upload = await self.get_upload_for_project_async(
+            project_id=project_id,
+            video_id=video_id,
+            workspace_id=workspace_id,
+        )
+        if observed_file_size_bytes and observed_file_size_bytes != upload.file_size_bytes:
+            raise ApiError(
+                409,
+                "upload_size_mismatch",
+                "The uploaded object size did not match preflight.",
+            )
+        if upload.status == UploadStatus.PROCESSING:
+            return upload
+        if upload.status == UploadStatus.UPLOADING:
+            assert_upload_transition(upload.status, UploadStatus.UPLOADED)
+            assert_upload_transition(UploadStatus.UPLOADED, UploadStatus.PROCESSING)
+        elif upload.status == UploadStatus.UPLOADED:
+            assert_upload_transition(upload.status, UploadStatus.PROCESSING)
+        else:
+            assert_upload_transition(upload.status, UploadStatus.UPLOADED)
+        response = await self.client.async_request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            json={
+                "status": UploadStatus.PROCESSING.value,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        updated = self._upload_from_row(response.json()[0])
+        await self.attach_active_video_async(project_id=project_id, video_id=video_id)
+        return updated
 
     def _upload_from_row(self, row: dict[str, object]) -> UploadRecord:
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}

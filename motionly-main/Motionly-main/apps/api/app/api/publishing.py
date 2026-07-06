@@ -2,7 +2,7 @@ from typing import Annotated
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
 from app.api.dependencies import Actor, get_actor
@@ -31,6 +31,13 @@ from app.services.publishing import (
 
 router = APIRouter(tags=["publishing"])
 ActorDep = Annotated[Actor, Depends(get_actor)]
+
+
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
 
 
 @router.post(
@@ -80,7 +87,10 @@ async def complete_publish_oauth(
         code=code,
         redirect_uri=_oauth_redirect_uri(request=request, platform=platform),
     )
-    request.app.state.publishing_repository.upsert_connection(
+    await _repository_call(
+        request.app.state.publishing_repository,
+        "upsert_connection_async",
+        "upsert_connection",
         workspace_id=UUID(values["workspace_id"]),
         platform=platform,
         access_token=account.access_token,
@@ -100,13 +110,21 @@ async def complete_publish_oauth(
 
 
 @router.get("/publish/connections", response_model=PublishConnectionListResponse)
-async def list_connections(actor: ActorDep, request: Request) -> PublishConnectionListResponse:
+async def list_connections(
+    actor: ActorDep,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> PublishConnectionListResponse:
     repository: InMemoryPublishingRepository = request.app.state.publishing_repository
+    connections = await _repository_call(
+        repository,
+        "list_connections_async",
+        "list_connections",
+        workspace_id=actor.workspace_id,
+        limit=limit,
+    )
     return PublishConnectionListResponse(
-        connections=[
-            item.to_response()
-            for item in repository.list_connections(workspace_id=actor.workspace_id)
-        ]
+        connections=[item.to_response() for item in connections]
     )
 
 
@@ -115,27 +133,45 @@ async def create_connection(
     payload: PublishConnectionCreateRequest, actor: ActorDep, request: Request
 ) -> PublishConnectionResponse:
     repository: InMemoryPublishingRepository = request.app.state.publishing_repository
-    record = repository.create_connection(workspace_id=actor.workspace_id, **payload.model_dump())
+    record = await _repository_call(
+        repository,
+        "create_connection_async",
+        "create_connection",
+        workspace_id=actor.workspace_id,
+        **payload.model_dump(),
+    )
     return record.to_response()
 
 
 @router.delete("/publish/connections/{connection_id}", status_code=204)
 async def delete_connection(connection_id: UUID, actor: ActorDep, request: Request) -> Response:
-    request.app.state.publishing_repository.delete_connection(
-        connection_id=connection_id, workspace_id=actor.workspace_id
+    await _repository_call(
+        request.app.state.publishing_repository,
+        "delete_connection_async",
+        "delete_connection",
+        connection_id=connection_id,
+        workspace_id=actor.workspace_id,
     )
     return Response(status_code=204)
 
 
 @router.get("/projects/{project_id}/publish", response_model=PublishJobListResponse)
 async def list_publish_jobs(
-    project_id: UUID, actor: ActorDep, request: Request
+    project_id: UUID,
+    actor: ActorDep,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> PublishJobListResponse:
     request.app.state.project_repository.get_project(
         project_id=project_id, workspace_id=actor.workspace_id
     )
-    jobs = request.app.state.publishing_repository.list_jobs(
-        project_id=project_id, workspace_id=actor.workspace_id
+    jobs = await _repository_call(
+        request.app.state.publishing_repository,
+        "list_jobs_async",
+        "list_jobs",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        limit=limit,
     )
     return PublishJobListResponse(jobs=[item.to_response() for item in jobs])
 
@@ -154,10 +190,17 @@ async def create_publish_job(
         raise ApiError(
             422, "publish_export_project_mismatch", "Export does not belong to this project."
         )
-    connection = request.app.state.publishing_repository.get_connection(
-        connection_id=payload.connection_id, workspace_id=actor.workspace_id
+    connection = await _repository_call(
+        request.app.state.publishing_repository,
+        "get_connection_async",
+        "get_connection",
+        connection_id=payload.connection_id,
+        workspace_id=actor.workspace_id,
     )
-    active_job = request.app.state.publishing_repository.find_active_job(
+    active_job = await _repository_call(
+        request.app.state.publishing_repository,
+        "find_active_job_async",
+        "find_active_job",
         workspace_id=actor.workspace_id,
         export_id=payload.export_id,
         connection_id=connection.id,
@@ -168,7 +211,10 @@ async def create_publish_job(
             "publish_job_already_in_progress",
             "This export is already being published to that account.",
         )
-    record = request.app.state.publishing_repository.create_job(
+    record = await _repository_call(
+        request.app.state.publishing_repository,
+        "create_job_async",
+        "create_job",
         workspace_id=actor.workspace_id,
         project_id=project_id,
         export_id=payload.export_id,

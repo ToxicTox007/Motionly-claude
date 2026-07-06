@@ -252,6 +252,7 @@ async def complete_remotion_job(
     job, export = complete_remotion_render_job(
         job=job,
         repository=repository,
+        metrics_registry=getattr(request.app.state, "metrics_registry", None),
         export_bucket=payload.artifact_bucket,
         export_storage_path=payload.export_storage_path,
         benchmark_ms=payload.benchmark_ms,

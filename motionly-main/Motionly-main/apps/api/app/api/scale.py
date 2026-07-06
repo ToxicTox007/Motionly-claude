@@ -33,6 +33,97 @@ router = APIRouter(tags=["Phase 5 intelligence and scale"])
 ActorDep = Annotated[Actor, Depends(get_actor)]
 
 
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
+async def _scale_create(request: Request, **values):
+    return await _repository_call(
+        request.app.state.scale_repository,
+        "create_async",
+        "create",
+        **values,
+    )
+
+
+async def _scale_get(request: Request, *, resource_id: UUID, workspace_id: UUID):
+    return await _repository_call(
+        request.app.state.scale_repository,
+        "get_async",
+        "get",
+        resource_id=resource_id,
+        workspace_id=workspace_id,
+    )
+
+
+async def _scale_list(
+    request: Request,
+    *,
+    workspace_id: UUID,
+    kind: str | None = None,
+    project_id: UUID | None = None,
+    limit: int = 100,
+):
+    return await _repository_call(
+        request.app.state.scale_repository,
+        "list_async",
+        "list",
+        workspace_id=workspace_id,
+        kind=kind,
+        project_id=project_id,
+        limit=limit,
+    )
+
+
+async def _scale_latest(
+    request: Request,
+    *,
+    workspace_id: UUID,
+    kind: str,
+    project_id: UUID | None = None,
+    status: ScaleResourceStatus | None = None,
+):
+    return await _repository_call(
+        request.app.state.scale_repository,
+        "latest_async",
+        "latest",
+        workspace_id=workspace_id,
+        kind=kind,
+        project_id=project_id,
+        status=status,
+    )
+
+
+async def _scale_update(request: Request, *, record, **values):
+    return await _repository_call(
+        request.app.state.scale_repository,
+        "update_async",
+        "update",
+        record=record,
+        **values,
+    )
+
+
+async def _scale_update_if_revision(
+    request: Request,
+    *,
+    record,
+    expected_revision: int,
+    **values,
+):
+    return await _repository_call(
+        request.app.state.scale_repository,
+        "update_if_revision_async",
+        "update_if_revision",
+        record=record,
+        expected_revision=expected_revision,
+        **values,
+    )
+
+
 @router.get(
     "/projects/{project_id}/phase5/audio-intelligence",
     response_model=AudioIntelligenceResponse,
@@ -61,14 +152,17 @@ async def list_project_scale_resources(
     actor: ActorDep,
     request: Request,
     kind: Annotated[str | None, Query(max_length=80)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> ScaleResourceListResponse:
     request.app.state.project_repository.get_project(
         project_id=project_id, workspace_id=actor.workspace_id
     )
-    resources = request.app.state.scale_repository.list(
+    resources = await _scale_list(
+        request,
         workspace_id=actor.workspace_id,
         project_id=project_id,
         kind=kind,
+        limit=limit,
     )
     return ScaleResourceListResponse(resources=[item.to_response() for item in resources])
 
@@ -77,8 +171,12 @@ async def list_project_scale_resources(
 async def get_scale_resource(
     resource_id: UUID, actor: ActorDep, request: Request
 ) -> ScaleResourceResponse:
-    return request.app.state.scale_repository.get(
-        resource_id=resource_id, workspace_id=actor.workspace_id
+    return (
+        await _scale_get(
+            request,
+            resource_id=resource_id,
+            workspace_id=actor.workspace_id,
+        )
     ).to_response()
 
 
@@ -294,9 +392,16 @@ async def train_style_profile(
 
 
 @router.get("/phase5/templates", response_model=ScaleResourceListResponse)
-async def list_saved_templates(actor: ActorDep, request: Request) -> ScaleResourceListResponse:
-    records = request.app.state.scale_repository.list(
-        workspace_id=actor.workspace_id, kind="saved_template"
+async def list_saved_templates(
+    actor: ActorDep,
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> ScaleResourceListResponse:
+    records = await _scale_list(
+        request,
+        workspace_id=actor.workspace_id,
+        kind="saved_template",
+        limit=limit,
     )
     return ScaleResourceListResponse(resources=[item.to_response() for item in records])
 
@@ -305,13 +410,16 @@ async def list_saved_templates(actor: ActorDep, request: Request) -> ScaleResour
 async def create_saved_template(
     payload: SavedTemplateCreateRequest, actor: ActorDep, request: Request
 ) -> ScaleResourceResponse:
-    return request.app.state.scale_repository.create(
-        workspace_id=actor.workspace_id,
-        project_id=None,
-        kind="saved_template",
-        name=payload.name,
-        status=ScaleResourceStatus.READY,
-        payload={"settings": payload.settings.model_dump(mode="json")},
+    return (
+        await _scale_create(
+            request,
+            workspace_id=actor.workspace_id,
+            project_id=None,
+            kind="saved_template",
+            name=payload.name,
+            status=ScaleResourceStatus.READY,
+            payload={"settings": payload.settings.model_dump(mode="json")},
+        )
     ).to_response()
 
 
@@ -322,8 +430,10 @@ async def update_saved_template(
     actor: ActorDep,
     request: Request,
 ) -> ScaleResourceResponse:
-    record = request.app.state.scale_repository.get(
-        resource_id=template_id, workspace_id=actor.workspace_id
+    record = await _scale_get(
+        request,
+        resource_id=template_id,
+        workspace_id=actor.workspace_id,
     )
     if record.kind != "saved_template":
         raise ApiError(409, "saved_template_required", "Resource is not a saved template.")
@@ -332,7 +442,7 @@ async def update_saved_template(
         values["name"] = payload.name
     if payload.settings is not None:
         values["payload"] = {"settings": payload.settings.model_dump(mode="json")}
-    return request.app.state.scale_repository.update(record=record, **values).to_response()
+    return (await _scale_update(request, record=record, **values)).to_response()
 
 
 @router.delete("/phase5/templates/{template_id}", status_code=204)
@@ -353,13 +463,15 @@ async def get_collaboration_manifest(
     request.app.state.project_repository.get_project(
         project_id=project_id, workspace_id=actor.workspace_id
     )
-    record = request.app.state.scale_repository.latest(
+    record = await _scale_latest(
+        request,
         workspace_id=actor.workspace_id,
         project_id=project_id,
         kind="collaboration_manifest",
     )
     if not record:
-        record = request.app.state.scale_repository.create(
+        record = await _scale_create(
+            request,
             workspace_id=actor.workspace_id,
             project_id=project_id,
             kind="collaboration_manifest",
@@ -384,7 +496,8 @@ async def update_collaboration_manifest(
     request.app.state.project_repository.get_project(
         project_id=project_id, workspace_id=actor.workspace_id
     )
-    record = request.app.state.scale_repository.latest(
+    record = await _scale_latest(
+        request,
         workspace_id=actor.workspace_id,
         project_id=project_id,
         kind="collaboration_manifest",
@@ -392,7 +505,8 @@ async def update_collaboration_manifest(
     if not record:
         if payload.base_revision != 0:
             raise ApiError(409, "collaboration_revision_conflict", "Reload the shared edit.")
-        record = request.app.state.scale_repository.create(
+        record = await _scale_create(
+            request,
             workspace_id=actor.workspace_id,
             project_id=project_id,
             kind="collaboration_manifest",
@@ -409,11 +523,14 @@ async def update_collaboration_manifest(
             "Another editor saved a newer revision. Reload before saving.",
             details={"current_revision": record.revision},
         )
-    return request.app.state.scale_repository.update_if_revision(
-        record=record,
-        expected_revision=payload.base_revision,
-        payload={"manifest": payload.manifest},
-        revision=record.revision + 1,
+    return (
+        await _scale_update_if_revision(
+            request,
+            record=record,
+            expected_revision=payload.base_revision,
+            payload={"manifest": payload.manifest},
+            revision=record.revision + 1,
+        )
     ).to_response()
 
 

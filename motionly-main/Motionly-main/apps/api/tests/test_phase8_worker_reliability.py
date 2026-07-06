@@ -32,7 +32,7 @@ from app.services.queue import (
 from app.services.retention import RetentionService
 from app.services.transcription_jobs import run_transcription_for_upload
 from app.services.upload_jobs import complete_upload_preprocessing
-from app.services.visual_jobs import queue_visual_analysis_for_upload
+from app.services.visual_jobs import build_visual_cache_key, queue_visual_analysis_for_upload
 
 
 def _seed_ready_upload():
@@ -218,6 +218,13 @@ def test_phase8_ready_preprocess_and_transcription_paths_are_idempotent(
 
 def test_phase8_visual_duplicate_queued_work_is_collapsed() -> None:
     upload_repository, _caption_repository, visual_repository, upload = _seed_ready_upload()
+    cache_key = build_visual_cache_key(
+        upload=upload,
+        provider="local_ml",
+        model="clip|blip|yolo",
+        sample_rate_fps=2.0,
+        scene_threshold=0.42,
+    )
     existing = visual_repository.create_manifest(
         workspace_id=upload.workspace_id,
         project_id=upload.project_id,
@@ -226,6 +233,7 @@ def test_phase8_visual_duplicate_queued_work_is_collapsed() -> None:
         provider="local_ml",
         model="clip|blip|yolo",
         manifest=None,
+        cache_key=cache_key,
         error_code=None,
         error_message=None,
     )
@@ -236,6 +244,7 @@ def test_phase8_visual_duplicate_queued_work_is_collapsed() -> None:
         visual_queue=VisualQueue(QueueRegistry()),
         provider="local_ml",
         model="clip|blip|yolo",
+        cache_key=cache_key,
     )
 
     assert result.manifest.id == existing.id
@@ -398,8 +407,14 @@ def test_phase8_supabase_export_create_reuses_existing_row(monkeypatch) -> None:
             ],
         )
 
-    monkeypatch.setattr("app.repositories.renders.httpx.get", fake_get)
-    monkeypatch.setattr("app.repositories.renders.httpx.patch", fake_patch)
+    def fake_request(method, url, *, headers, params=None, json=None, timeout):
+        if method == "GET":
+            return fake_get(url, headers=headers, params=params, timeout=timeout)
+        if method == "PATCH":
+            return fake_patch(url, headers=headers, params=params, json=json, timeout=timeout)
+        raise AssertionError(f"Unexpected method {method}")
+
+    monkeypatch.setattr("app.services.supabase.httpx.request", fake_request)
 
     workspace_id = uuid4()
     project_id = uuid4()

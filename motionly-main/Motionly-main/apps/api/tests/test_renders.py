@@ -24,13 +24,25 @@ from app.api.renders import (
 from app.api.renders import (
     create_render as create_render_api,
 )
+from app.api.renders import (
+    list_exports as list_exports_api,
+)
+from app.api.renders import (
+    list_renders as list_renders_api,
+)
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.effects import InMemoryEffectsRepository
 from app.repositories.music import InMemoryMusicRepository
 from app.repositories.plans import InMemoryPlanRepository
-from app.repositories.renders import InMemoryRenderRepository, SupabaseRenderRepository
+from app.repositories.renders import (
+    EXPORT_COLUMNS,
+    RENDER_JOB_COLUMNS,
+    RENDER_JOB_EVENT_COLUMNS,
+    InMemoryRenderRepository,
+    SupabaseRenderRepository,
+)
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.broll import BrollSlotStatus, StockOrientation, StockProviderKey
 from app.schemas.captions import CaptionPresetKey, LanguageHint
@@ -1154,6 +1166,340 @@ def test_create_export_is_idempotent_for_same_render_job() -> None:
 
     assert first.id == second.id
     assert len(repository.list_exports(project_id=project_id, workspace_id=workspace_id)) == 1
+
+
+def test_render_and_export_lists_apply_limit() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    first_job = repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=uuid4(),
+        caption_track_id=uuid4(),
+        status=RenderJobStatus.QUEUED,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+    )
+    second_job = repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=uuid4(),
+        caption_track_id=uuid4(),
+        status=RenderJobStatus.RENDERING,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+    )
+    first_export = repository.create_export(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        render_job_id=first_job.id,
+        storage_bucket="exports",
+        storage_path="exports/first.mp4",
+        format="mp4",
+        width=720,
+        height=1280,
+        fps=30,
+        settings_summary={},
+    )
+    second_export = repository.create_export(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        render_job_id=second_job.id,
+        storage_bucket="exports",
+        storage_path="exports/second.mp4",
+        format="mp4",
+        width=720,
+        height=1280,
+        fps=30,
+        settings_summary={},
+    )
+
+    renders = asyncio.run(
+        list_renders_api(
+            project_id=project_id,
+            actor=actor,
+            repository=repository,
+            limit=1,
+        )
+    )
+    exports = asyncio.run(
+        list_exports_api(
+            project_id=project_id,
+            actor=actor,
+            repository=repository,
+            limit=1,
+        )
+    )
+
+    assert len(renders.jobs) == 1
+    assert len(exports.exports) == 1
+    assert {renders.jobs[0].id}.issubset({first_job.id, second_job.id})
+    assert exports.exports[0].id == second_export.id
+    assert first_export.id != second_export.id
+
+
+@pytest.mark.anyio
+async def test_supabase_render_async_lists_use_bounded_projections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = make_supabase_render_repository()
+    workspace_id = uuid4()
+    project_id = uuid4()
+    render_job_id = uuid4()
+    export_id = uuid4()
+    calls = []
+    repository.caption_repository.upload_repository.seed_project(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/render_jobs":
+            return _supabase_response([_render_job_row(render_job_id, project_id, workspace_id)])
+        if path == "/render_job_events":
+            return _supabase_response([_render_event_row(render_job_id, project_id, workspace_id)])
+        if path == "/exports":
+            return _supabase_response(
+                [_export_row(export_id, render_job_id, project_id, workspace_id)]
+            )
+        raise AssertionError(f"unexpected Supabase call: {method} {path}")
+
+    monkeypatch.setattr(
+        "app.repositories.renders.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    jobs = await repository.list_render_jobs_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        limit=25,
+    )
+    events = await repository.events_for_job_async(render_job_id, limit=10)
+    exports = await repository.list_exports_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        limit=5,
+    )
+    export = await repository.get_export_async(export_id=export_id, workspace_id=workspace_id)
+
+    assert jobs[0].id == render_job_id
+    assert events[0].render_job_id == render_job_id
+    assert exports[0].id == export_id
+    assert export.id == export_id
+    assert calls[0][2]["params"] == {
+        "workspace_id": f"eq.{workspace_id}",
+        "project_id": f"eq.{project_id}",
+        "select": RENDER_JOB_COLUMNS,
+        "order": "created_at.desc",
+        "limit": "25",
+    }
+    assert calls[1][2]["params"] == {
+        "render_job_id": f"eq.{render_job_id}",
+        "select": RENDER_JOB_EVENT_COLUMNS,
+        "order": "created_at.asc",
+        "limit": "10",
+    }
+    assert calls[2][2]["params"] == {
+        "workspace_id": f"eq.{workspace_id}",
+        "project_id": f"eq.{project_id}",
+        "select": EXPORT_COLUMNS,
+        "order": "version.desc",
+        "limit": "5",
+    }
+    assert calls[3][2]["params"] == {
+        "id": f"eq.{export_id}",
+        "workspace_id": f"eq.{workspace_id}",
+        "select": EXPORT_COLUMNS,
+        "limit": "1",
+    }
+
+
+def test_render_api_prefers_async_repository_methods() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    class AsyncRenderRepository(InMemoryRenderRepository):
+        def __init__(self, caption_repository):
+            super().__init__(caption_repository)
+            self.async_calls: list[str] = []
+
+        async def list_render_jobs_async(self, **kwargs):
+            self.async_calls.append("list-renders")
+            return self.list_render_jobs(**kwargs)
+
+        async def get_render_job_async(self, **kwargs):
+            self.async_calls.append("get-render")
+            return self.get_render_job(**kwargs)
+
+        async def events_for_job_async(self, render_job_id, *, limit=100):
+            self.async_calls.append("events")
+            return self.events_for_job(render_job_id, limit=limit)
+
+        async def transition_job_async(self, **kwargs):
+            self.async_calls.append("transition")
+            return self.transition_job(**kwargs)
+
+        async def list_exports_async(self, **kwargs):
+            self.async_calls.append("list-exports")
+            return self.list_exports(**kwargs)
+
+        async def get_export_async(self, **kwargs):
+            self.async_calls.append("get-export")
+            return self.get_export(**kwargs)
+
+    async_repository = AsyncRenderRepository(repository.caption_repository)
+    job = async_repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=uuid4(),
+        caption_track_id=uuid4(),
+        status=RenderJobStatus.QUEUED,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+    )
+    export = async_repository.create_export(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        render_job_id=job.id,
+        storage_bucket="exports",
+        storage_path="exports/render.mp4",
+        format="mp4",
+        width=720,
+        height=1280,
+        fps=30,
+        settings_summary={},
+    )
+
+    asyncio.run(
+        list_renders_api(
+            project_id=project_id,
+            actor=actor,
+            repository=async_repository,
+            limit=1,
+        )
+    )
+    asyncio.run(
+        cancel_render(
+            project_id=project_id,
+            render_job_id=job.id,
+            actor=actor,
+            repository=async_repository,
+            render_queue=SimpleNamespace(cancel=lambda *_args, **_kwargs: None),
+        )
+    )
+    asyncio.run(
+        list_exports_api(
+            project_id=project_id,
+            actor=actor,
+            repository=async_repository,
+            limit=1,
+        )
+    )
+    asyncio.run(
+        get_export_download_url(
+            export_id=export.id,
+            request=SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(
+                        settings=SimpleNamespace(export_signed_url_ttl_seconds=60),
+                        operations_repository=None,
+                    )
+                )
+            ),
+            actor=actor,
+            repository=async_repository,
+            storage_signer=SimpleNamespace(
+                create_signed_download=lambda **_kwargs: SimpleNamespace(url="https://signed")
+            ),
+        )
+    )
+
+    assert async_repository.async_calls == [
+        "list-renders",
+        "events",
+        "get-render",
+        "transition",
+        "events",
+        "list-exports",
+        "get-export",
+    ]
+
+
+def _supabase_response(rows):
+    return SimpleNamespace(status_code=200, json=lambda: rows)
+
+
+def _render_job_row(render_job_id, project_id, workspace_id):
+    now = "2026-07-06T00:00:00+00:00"
+    return {
+        "id": str(render_job_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "uploaded_video_id": str(uuid4()),
+        "caption_track_id": str(uuid4()),
+        "status": "queued",
+        "planner_version": "test",
+        "manifest": {},
+        "keep_segments": [],
+        "specs": {"width": 720, "height": 1280, "fps": 30, "format": "mp4"},
+        "template_id": None,
+        "render_engine": "ffmpeg_basic",
+        "renderer_version": "test-renderer",
+        "props_hash": "props",
+        "artifact_path": None,
+        "benchmark_ms": None,
+        "logs": [],
+        "progress_pct": 5,
+        "error_code": None,
+        "error_message": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _render_event_row(render_job_id, project_id, workspace_id):
+    return {
+        "id": str(uuid4()),
+        "render_job_id": str(render_job_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "event_type": "queued",
+        "from_status": None,
+        "to_status": "queued",
+        "progress_pct": 5,
+        "message": "queued",
+        "error_code": None,
+        "latency_ms": None,
+        "metadata": {},
+        "created_at": "2026-07-06T00:00:00+00:00",
+    }
+
+
+def _export_row(export_id, render_job_id, project_id, workspace_id):
+    return {
+        "id": str(export_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "render_job_id": str(render_job_id),
+        "version": 1,
+        "storage_bucket": "exports",
+        "storage_path": "exports/render.mp4",
+        "format": "mp4",
+        "width": 720,
+        "height": 1280,
+        "fps": 30,
+        "duration_ms": 1_000,
+        "file_size_bytes": 10,
+        "thumbnail_url": None,
+        "settings_summary": {},
+        "restored_from_export_id": None,
+        "manifest": {},
+        "created_at": "2026-07-06T00:00:00+00:00",
+    }
 
 
 def test_supabase_render_job_hydrates_from_live_schema_compat_logs() -> None:

@@ -18,6 +18,21 @@ from app.schemas.plans import (
     PlanSummary,
 )
 from app.services.edit_plan_validation import EditPlanValidationContext, validate_edit_plan
+from app.services.supabase import SupabaseRestClient
+
+EDIT_PLAN_COLUMNS = (
+    "id,workspace_id,project_id,transcript_id,version,schema_version,status,is_active,style,"
+    "target_duration_s,broll_density,prompt,feedback,provider,model,planner_source,model_name,"
+    "prompt_version,retry_count,fallback_reason,cache_key,schema_hash,latency_ms,"
+    "cost_estimate_usd,validation_errors,summary,plan,created_at,updated_at"
+)
+EDIT_PLAN_SNAPSHOT_COLUMNS = (
+    "id,workspace_id,project_id,source_plan_id,source_plan_version,transcript_id,"
+    "schema_version,style,target_duration_s,broll_density,prompt,feedback,provider,model,"
+    "planner_source,model_name,prompt_version,retry_count,fallback_reason,cache_key,"
+    "schema_hash,summary,plan,name,notes,created_by_user_id,validation_errors,latency_ms,"
+    "cost_estimate_usd,created_at"
+)
 
 
 @dataclass
@@ -159,7 +174,13 @@ class InMemoryPlanRepository:
             workspace_id=workspace_id,
         )
 
-    def list_plans(self, *, project_id: UUID, workspace_id: UUID) -> list[EditPlanRecord]:
+    def list_plans(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[EditPlanRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
         return sorted(
             [
@@ -169,7 +190,7 @@ class InMemoryPlanRepository:
             ],
             key=lambda plan: plan.version,
             reverse=True,
-        )
+        )[:limit]
 
     def active_plan(self, *, project_id: UUID, workspace_id: UUID) -> EditPlanRecord:
         plans = self.list_plans(project_id=project_id, workspace_id=workspace_id)
@@ -209,6 +230,24 @@ class InMemoryPlanRepository:
             if plan.project_id == project_id
             and plan.workspace_id == workspace_id
             and plan.cache_key == cache_key
+        ]
+        if not matches:
+            return None
+        return sorted(matches, key=lambda plan: plan.updated_at, reverse=True)[0]
+
+    def find_latest_plan_for_transcript(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        transcript_id: UUID,
+    ) -> EditPlanRecord | None:
+        matches = [
+            plan
+            for plan in self.plans.values()
+            if plan.project_id == project_id
+            and plan.workspace_id == workspace_id
+            and plan.transcript_id == transcript_id
         ]
         if not matches:
             return None
@@ -330,6 +369,7 @@ class InMemoryPlanRepository:
         *,
         project_id: UUID,
         workspace_id: UUID,
+        limit: int = 100,
     ) -> list[EditPlanSnapshotRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
         return sorted(
@@ -340,7 +380,7 @@ class InMemoryPlanRepository:
             ],
             key=lambda snapshot: snapshot.created_at,
             reverse=True,
-        )
+        )[:limit]
 
     def get_plan_snapshot(
         self,
@@ -473,28 +513,56 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         caption_repository: InMemoryCaptionRepository,
         supabase_url: str,
         service_role_key: str,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__(caption_repository)
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="plans",
+            metrics_registry=metrics_registry,
+        )
 
-    def list_plans(self, *, project_id: UUID, workspace_id: UUID) -> list[EditPlanRecord]:
+    def list_plans(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[EditPlanRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
-        response = httpx.get(
-            f"{self.rest_url}/edit_plans",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/edit_plans",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": EDIT_PLAN_COLUMNS,
                 "order": "version.desc",
+                "limit": str(limit),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._plan_from_row(row) for row in response.json()]
+
+    async def list_plans_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[EditPlanRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        response = await self.client.async_request(
+            "GET",
+            "/edit_plans",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EDIT_PLAN_COLUMNS,
+                "order": "version.desc",
+                "limit": str(limit),
+            },
         )
         self._raise_for_supabase(response)
         return [self._plan_from_row(row) for row in response.json()]
@@ -506,17 +574,40 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         workspace_id: UUID,
         plan_id: UUID,
     ) -> EditPlanRecord:
-        response = httpx.get(
-            f"{self.rest_url}/edit_plans",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/edit_plans",
             params={
                 "id": f"eq.{plan_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": EDIT_PLAN_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "edit_plan_not_found", "Edit plan was not found.")
+        return self._plan_from_row(rows[0])
+
+    async def get_plan_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        plan_id: UUID,
+    ) -> EditPlanRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/edit_plans",
+            params={
+                "id": f"eq.{plan_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EDIT_PLAN_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -531,18 +622,86 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         workspace_id: UUID,
         cache_key: str,
     ) -> EditPlanRecord | None:
-        response = httpx.get(
-            f"{self.rest_url}/edit_plans",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/edit_plans",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
                 "cache_key": f"eq.{cache_key}",
-                "select": "*",
+                "select": EDIT_PLAN_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._plan_from_row(rows[0]) if rows else None
+
+    async def find_cached_plan_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        cache_key: str,
+    ) -> EditPlanRecord | None:
+        response = await self.client.async_request(
+            "GET",
+            "/edit_plans",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "cache_key": f"eq.{cache_key}",
+                "select": EDIT_PLAN_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._plan_from_row(rows[0]) if rows else None
+
+    def find_latest_plan_for_transcript(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        transcript_id: UUID,
+    ) -> EditPlanRecord | None:
+        response = self.client.request(
+            "GET",
+            "/edit_plans",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "transcript_id": f"eq.{transcript_id}",
+                "select": EDIT_PLAN_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._plan_from_row(rows[0]) if rows else None
+
+    async def find_latest_plan_for_transcript_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        transcript_id: UUID,
+    ) -> EditPlanRecord | None:
+        response = await self.client.async_request(
+            "GET",
+            "/edit_plans",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "transcript_id": f"eq.{transcript_id}",
+                "select": EDIT_PLAN_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -550,26 +709,31 @@ class SupabasePlanRepository(InMemoryPlanRepository):
 
     def create_plan(self, **values: object) -> EditPlanRecord:
         values = self._prepare_plan_values_for_write(values)
-        existing = self.list_plans(
-            project_id=values["project_id"],
-            workspace_id=values["workspace_id"],
-        )
-        self._deactivate_project_plans(
-            project_id=values["project_id"],
-            workspace_id=values["workspace_id"],
-        )
-        response = httpx.post(
-            f"{self.rest_url}/edit_plans",
-            headers=self.headers,
-            json={
-                **self._json_safe(values),
-                "version": len(existing) + 1,
-                "is_active": True,
-            },
-            timeout=10,
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_create_active_edit_plan",
+            params={"select": EDIT_PLAN_COLUMNS},
+            json=self._create_active_plan_rpc_payload(values),
         )
         self._raise_for_supabase(response)
-        return self._plan_from_row(response.json()[0])
+        rows = response.json()
+        if not rows:
+            raise ApiError(502, "edit_plan_create_failed", "Edit plan could not be saved.")
+        return self._plan_from_row(rows[0])
+
+    async def create_plan_async(self, **values: object) -> EditPlanRecord:
+        values = self._prepare_plan_values_for_write(values)
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_create_active_edit_plan",
+            params={"select": EDIT_PLAN_COLUMNS},
+            json=self._create_active_plan_rpc_payload(values),
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(502, "edit_plan_create_failed", "Edit plan could not be saved.")
+        return self._plan_from_row(rows[0])
 
     def create_plan_snapshot(
         self,
@@ -592,11 +756,39 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             notes=notes,
             created_by_user_id=created_by_user_id,
         )
-        response = httpx.post(
-            f"{self.rest_url}/edit_plan_snapshots",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/edit_plan_snapshots",
             json=payload,
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._snapshot_from_row(response.json()[0])
+
+    async def create_plan_snapshot_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        source_plan: EditPlanRecord,
+        name: str,
+        notes: str | None,
+        created_by_user_id: UUID,
+    ) -> EditPlanSnapshotRecord:
+        await self.get_plan_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=source_plan.id,
+        )
+        payload = self._snapshot_payload(
+            source_plan=source_plan,
+            name=name,
+            notes=notes,
+            created_by_user_id=created_by_user_id,
+        )
+        response = await self.client.async_request(
+            "POST",
+            "/edit_plan_snapshots",
+            json=payload,
         )
         self._raise_for_supabase(response)
         return self._snapshot_from_row(response.json()[0])
@@ -606,18 +798,41 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         *,
         project_id: UUID,
         workspace_id: UUID,
+        limit: int = 100,
     ) -> list[EditPlanSnapshotRecord]:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
-        response = httpx.get(
-            f"{self.rest_url}/edit_plan_snapshots",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/edit_plan_snapshots",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": EDIT_PLAN_SNAPSHOT_COLUMNS,
                 "order": "created_at.desc",
+                "limit": str(limit),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [self._snapshot_from_row(row) for row in response.json()]
+
+    async def list_plan_snapshots_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = 100,
+    ) -> list[EditPlanSnapshotRecord]:
+        self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
+        response = await self.client.async_request(
+            "GET",
+            "/edit_plan_snapshots",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EDIT_PLAN_SNAPSHOT_COLUMNS,
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
         )
         self._raise_for_supabase(response)
         return [self._snapshot_from_row(row) for row in response.json()]
@@ -629,17 +844,40 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         workspace_id: UUID,
         snapshot_id: UUID,
     ) -> EditPlanSnapshotRecord:
-        response = httpx.get(
-            f"{self.rest_url}/edit_plan_snapshots",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/edit_plan_snapshots",
             params={
                 "id": f"eq.{snapshot_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": EDIT_PLAN_SNAPSHOT_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "plan_snapshot_not_found", "Plan snapshot was not found.")
+        return self._snapshot_from_row(rows[0])
+
+    async def get_plan_snapshot_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        snapshot_id: UUID,
+    ) -> EditPlanSnapshotRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/edit_plan_snapshots",
+            params={
+                "id": f"eq.{snapshot_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EDIT_PLAN_SNAPSHOT_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -684,6 +922,43 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             plan=snapshot.plan,
         )
 
+    async def restore_plan_snapshot_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        snapshot_id: UUID,
+    ) -> EditPlanRecord:
+        snapshot = await self.get_plan_snapshot_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            snapshot_id=snapshot_id,
+        )
+        return await self.create_plan_async(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            transcript_id=snapshot.transcript_id,
+            schema_version=snapshot.schema_version,
+            status=EditPlanStatus.READY,
+            style=snapshot.style,
+            target_duration_s=snapshot.target_duration_s,
+            broll_density=snapshot.broll_density,
+            prompt=snapshot.prompt,
+            feedback=snapshot.feedback,
+            provider="motionly_snapshot",
+            model=f"snapshot:{snapshot.id}",
+            cache_key=f"snapshot:{snapshot.id}:{snapshot.cache_key}",
+            schema_hash=snapshot.schema_hash,
+            latency_ms=None,
+            cost_estimate_usd=None,
+            validation_errors=[
+                *snapshot.validation_errors,
+                f"restored_from_snapshot:{snapshot.id}",
+            ],
+            summary=snapshot.summary,
+            plan=snapshot.plan,
+        )
+
     def activate_plan(
         self,
         *,
@@ -691,17 +966,44 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         workspace_id: UUID,
         plan_id: UUID,
     ) -> EditPlanRecord:
-        self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
-        self._deactivate_project_plans(project_id=project_id, workspace_id=workspace_id)
-        response = httpx.patch(
-            f"{self.rest_url}/edit_plans",
-            headers=self.headers,
-            params={"id": f"eq.{plan_id}", "select": "*"},
-            json={"is_active": True, "updated_at": datetime.now(UTC).isoformat()},
-            timeout=10,
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_activate_edit_plan",
+            params={"select": EDIT_PLAN_COLUMNS},
+            json={
+                "p_workspace_id": str(workspace_id),
+                "p_project_id": str(project_id),
+                "p_plan_id": str(plan_id),
+            },
         )
         self._raise_for_supabase(response)
-        return self._plan_from_row(response.json()[0])
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "edit_plan_not_found", "Edit plan was not found.")
+        return self._plan_from_row(rows[0])
+
+    async def activate_plan_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        plan_id: UUID,
+    ) -> EditPlanRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_activate_edit_plan",
+            params={"select": EDIT_PLAN_COLUMNS},
+            json={
+                "p_workspace_id": str(workspace_id),
+                "p_project_id": str(project_id),
+                "p_plan_id": str(plan_id),
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "edit_plan_not_found", "Edit plan was not found.")
+        return self._plan_from_row(rows[0])
 
     def update_plan_cuts(
         self,
@@ -721,10 +1023,10 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             transcript_id=existing.transcript_id,
             plan_id=plan_id,
         )
-        response = httpx.patch(
-            f"{self.rest_url}/edit_plans",
-            headers=self.headers,
-            params={"id": f"eq.{plan_id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/edit_plans",
+            params={"id": f"eq.{plan_id}", "select": EDIT_PLAN_COLUMNS},
             json=self._json_safe(
                 {
                     "plan": plan,
@@ -735,20 +1037,78 @@ class SupabasePlanRepository(InMemoryPlanRepository):
                     "updated_at": datetime.now(UTC).isoformat(),
                 }
             ),
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return self._plan_from_row(response.json()[0])
 
-    def _deactivate_project_plans(self, *, project_id: UUID, workspace_id: UUID) -> None:
-        response = httpx.patch(
-            f"{self.rest_url}/edit_plans",
-            headers=self.headers,
-            params={"workspace_id": f"eq.{workspace_id}", "project_id": f"eq.{project_id}"},
-            json={"is_active": False, "updated_at": datetime.now(UTC).isoformat()},
-            timeout=10,
+    async def update_plan_cuts_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        plan_id: UUID,
+        plan: EditPlan,
+        summary: PlanSummary,
+        target_duration_s: int,
+    ) -> EditPlanRecord:
+        existing = await self.get_plan_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=plan_id,
+        )
+        plan = self._validate_plan_for_write(
+            plan=plan,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            transcript_id=existing.transcript_id,
+            plan_id=plan_id,
+        )
+        response = await self.client.async_request(
+            "PATCH",
+            "/edit_plans",
+            params={"id": f"eq.{plan_id}", "select": EDIT_PLAN_COLUMNS},
+            json=self._json_safe(
+                {
+                    "plan": plan,
+                    "summary": summary,
+                    "schema_version": plan.schema_version,
+                    "target_duration_s": plan.target_duration_s,
+                    "prompt_version": plan.prompt_version,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                }
+            ),
         )
         self._raise_for_supabase(response)
+        return self._plan_from_row(response.json()[0])
+
+    def _create_active_plan_rpc_payload(self, values: dict[str, object]) -> dict[str, object]:
+        safe = self._json_safe(values)
+        return {
+            "p_workspace_id": safe["workspace_id"],
+            "p_project_id": safe["project_id"],
+            "p_transcript_id": safe["transcript_id"],
+            "p_schema_version": safe["schema_version"],
+            "p_status": safe["status"],
+            "p_style": safe["style"],
+            "p_target_duration_s": safe["target_duration_s"],
+            "p_broll_density": safe["broll_density"],
+            "p_prompt": safe["prompt"],
+            "p_feedback": safe.get("feedback"),
+            "p_provider": safe["provider"],
+            "p_model": safe["model"],
+            "p_planner_source": safe["planner_source"],
+            "p_model_name": safe["model_name"],
+            "p_prompt_version": safe["prompt_version"],
+            "p_retry_count": safe["retry_count"],
+            "p_fallback_reason": safe.get("fallback_reason"),
+            "p_cache_key": safe["cache_key"],
+            "p_schema_hash": safe["schema_hash"],
+            "p_latency_ms": safe.get("latency_ms"),
+            "p_cost_estimate_usd": safe.get("cost_estimate_usd"),
+            "p_validation_errors": safe.get("validation_errors", []),
+            "p_summary": safe["summary"],
+            "p_plan": safe["plan"],
+        }
 
     def _plan_from_row(self, row: dict[str, object]) -> EditPlanRecord:
         return EditPlanRecord(

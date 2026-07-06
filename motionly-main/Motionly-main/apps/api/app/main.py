@@ -129,6 +129,7 @@ def create_app() -> FastAPI:
         SupabaseProjectRepository(
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryProjectRepository()
@@ -137,6 +138,7 @@ def create_app() -> FastAPI:
         SupabaseUploadRepository(
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryUploadRepository()
@@ -147,6 +149,7 @@ def create_app() -> FastAPI:
             upload_repository=upload_repository,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryCaptionRepository(upload_repository)
@@ -156,6 +159,7 @@ def create_app() -> FastAPI:
             caption_repository=app.state.caption_repository,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryRenderRepository(app.state.caption_repository)
@@ -171,6 +175,7 @@ def create_app() -> FastAPI:
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
             token_cipher=app.state.publish_token_cipher,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryPublishingRepository()
@@ -191,6 +196,7 @@ def create_app() -> FastAPI:
             caption_repository=app.state.caption_repository,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryPlanRepository(app.state.caption_repository)
@@ -200,6 +206,7 @@ def create_app() -> FastAPI:
             plan_repository=app.state.plan_repository,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryBrollRepository(app.state.plan_repository)
@@ -209,6 +216,7 @@ def create_app() -> FastAPI:
             plan_repository=app.state.plan_repository,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryMusicRepository(app.state.plan_repository)
@@ -218,6 +226,7 @@ def create_app() -> FastAPI:
             plan_repository=app.state.plan_repository,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryEffectsRepository(app.state.plan_repository)
@@ -235,6 +244,7 @@ def create_app() -> FastAPI:
         SupabaseBillingRepository(
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryBillingRepository()
@@ -243,6 +253,7 @@ def create_app() -> FastAPI:
         SupabaseAnalyticsRepository(
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryAnalyticsRepository()
@@ -252,6 +263,7 @@ def create_app() -> FastAPI:
         SupabaseScaleRepository(
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryScaleRepository()
@@ -261,6 +273,7 @@ def create_app() -> FastAPI:
             upload_repository=upload_repository,
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryVisualRepository(upload_repository)

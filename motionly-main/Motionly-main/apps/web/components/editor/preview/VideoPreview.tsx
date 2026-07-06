@@ -127,6 +127,8 @@ export function VideoPreview({
     id: "canvas",
     data: { zone: "canvas" },
   });
+  const previewRootRef = React.useRef<HTMLDivElement | null>(null);
+  const isPreviewVisible = usePreviewVisibility(previewRootRef);
   const [isPlaying, setIsPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);
@@ -237,7 +239,10 @@ export function VideoPreview({
   }, [videoRef]);
 
   return (
-    <div className="pixel-grid-fine flex h-full min-h-0 max-w-full flex-col items-center justify-center gap-2 overflow-hidden bg-foreground/[0.02] p-1.5 sm:gap-3 sm:p-4">
+    <div
+      ref={previewRootRef}
+      className="pixel-grid-fine flex h-full min-h-0 max-w-full flex-col items-center justify-center gap-2 overflow-hidden bg-foreground/[0.02] p-1.5 sm:gap-3 sm:p-4"
+    >
       <h2 id="preview-heading" className="sr-only">Preview</h2>
       {/* ── Video + overlays ─────────────────────────────────────────────── */}
       <div
@@ -284,6 +289,7 @@ export function VideoPreview({
               previewLook.mattePreview.previewUrl ? (
                 <MattePreviewCanvas
                   videoRef={videoRef}
+                  active={isPreviewVisible}
                   matteSrc={previewLook.mattePreview.previewUrl}
                   objectFit={objectFit}
                   objectPosition={objectPosition}
@@ -309,6 +315,7 @@ export function VideoPreview({
           {sourceUrl ? (
             <WebGLVideoCanvas
               videoRef={videoRef}
+              active={isPreviewVisible}
               contrast={webglGrade.contrast}
               brightness={webglGrade.brightness}
               saturation={webglGrade.saturation}
@@ -425,6 +432,7 @@ export function VideoPreview({
 
 function MattePreviewCanvas({
   videoRef,
+  active,
   matteSrc,
   objectFit,
   objectPosition,
@@ -432,6 +440,7 @@ function MattePreviewCanvas({
   transformOrigin,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  active: boolean;
   matteSrc: string;
   objectFit: React.CSSProperties["objectFit"];
   objectPosition: React.CSSProperties["objectPosition"];
@@ -442,6 +451,7 @@ function MattePreviewCanvas({
   const matteVideoRef = React.useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
+    if (!active) return;
     const sourceVideo = videoRef.current;
     const matteVideo = matteVideoRef.current;
     const canvas = canvasRef.current;
@@ -492,7 +502,7 @@ function MattePreviewCanvas({
       window.cancelAnimationFrame(rafId);
       events.forEach((eventName) => sourceVideo.removeEventListener(eventName, syncMatte));
     };
-  }, [matteSrc, videoRef]);
+  }, [active, matteSrc, videoRef]);
 
   return (
     <>
@@ -513,6 +523,23 @@ function MattePreviewCanvas({
       />
     </>
   );
+}
+
+function usePreviewVisibility(ref: React.RefObject<HTMLElement | null>) {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setVisible(Boolean(entry?.isIntersecting)),
+      { threshold: 0.05 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return visible;
 }
 
 function getWebGLGrade(look?: PreviewLookState | null) {

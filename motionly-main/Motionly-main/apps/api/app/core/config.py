@@ -166,6 +166,7 @@ class Settings(BaseSettings):
         default="motionly-gpu-render-worker",
         alias="LIGHTNING_RENDER_DEPLOYMENT",
     )
+    lightning_max_replicas: int | None = Field(default=None, alias="LIGHTNING_MAX_REPLICAS")
     otel_exporter_otlp_endpoint: str | None = Field(
         default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT"
     )

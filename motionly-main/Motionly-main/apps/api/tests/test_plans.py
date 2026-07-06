@@ -24,7 +24,7 @@ from app.api.plans import (
     create_plan as _create_plan_api,
 )
 from app.repositories.captions import InMemoryCaptionRepository
-from app.repositories.plans import InMemoryPlanRepository
+from app.repositories.plans import EDIT_PLAN_COLUMNS, InMemoryPlanRepository, SupabasePlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.repositories.visual import InMemoryVisualRepository
 from app.schemas.captions import CaptionPresetKey, LanguageHint, TranscriptWord
@@ -63,7 +63,11 @@ from app.services.edit_plan_validation import (
     validate_edit_plan,
     validate_generated_plan_payload,
 )
-from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
+from app.services.edit_planner import (
+    FixtureEditPlannerProvider,
+    HttpEditPlannerProvider,
+    summarize_plan,
+)
 from app.services.queue import PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
@@ -92,7 +96,7 @@ async def create_plan(
                 )
             )
         )
-    
+
     response = await _create_plan_api(
         project_id=project_id,
         payload=payload,
@@ -124,10 +128,9 @@ async def create_plan(
     return response.model_copy(
         update={
             "plan": record.to_response(),
-            "status": "ready"
+            "status": "ready",
         }
     )
-
 
 
 def make_plan_repository(
@@ -224,6 +227,87 @@ def assert_validation_error(errors: list[str], code: str, path: str | None = Non
         item.get("code") == code and (path is None or item.get("path") == path)
         for item in parsed
     ), errors
+
+
+def _edit_plan_row_from_rpc_payload(
+    payload: dict[str, object],
+    *,
+    version: int,
+) -> dict[str, object]:
+    return {
+        "id": str(uuid4()),
+        "workspace_id": payload["p_workspace_id"],
+        "project_id": payload["p_project_id"],
+        "transcript_id": payload["p_transcript_id"],
+        "version": version,
+        "schema_version": payload["p_schema_version"],
+        "status": payload["p_status"],
+        "is_active": True,
+        "style": payload["p_style"],
+        "target_duration_s": payload["p_target_duration_s"],
+        "broll_density": payload["p_broll_density"],
+        "prompt": payload["p_prompt"],
+        "feedback": payload["p_feedback"],
+        "provider": payload["p_provider"],
+        "model": payload["p_model"],
+        "planner_source": payload["p_planner_source"],
+        "model_name": payload["p_model_name"],
+        "prompt_version": payload["p_prompt_version"],
+        "retry_count": payload["p_retry_count"],
+        "fallback_reason": payload["p_fallback_reason"],
+        "cache_key": payload["p_cache_key"],
+        "schema_hash": payload["p_schema_hash"],
+        "latency_ms": payload["p_latency_ms"],
+        "cost_estimate_usd": payload["p_cost_estimate_usd"],
+        "validation_errors": payload["p_validation_errors"],
+        "summary": payload["p_summary"],
+        "plan": payload["p_plan"],
+        "created_at": "2026-07-05T00:00:00+00:00",
+        "updated_at": "2026-07-05T00:00:00+00:00",
+    }
+
+
+def _edit_plan_row_from_values(
+    *,
+    plan_id: UUID,
+    workspace_id: UUID,
+    project_id: UUID,
+    transcript_id: UUID,
+    version: int,
+    generated,
+    cache_key: str,
+) -> dict[str, object]:
+    return {
+        "id": str(plan_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "transcript_id": str(transcript_id),
+        "version": version,
+        "schema_version": generated.plan.schema_version,
+        "status": "ready",
+        "is_active": True,
+        "style": generated.plan.style.value,
+        "target_duration_s": generated.plan.target_duration_s,
+        "broll_density": "medium",
+        "prompt": "",
+        "feedback": None,
+        "provider": generated.provider,
+        "model": generated.model,
+        "planner_source": generated.planner_source,
+        "model_name": generated.model,
+        "prompt_version": generated.prompt_version,
+        "retry_count": generated.retry_count,
+        "fallback_reason": generated.fallback_reason,
+        "cache_key": cache_key,
+        "schema_hash": "hash",
+        "latency_ms": generated.latency_ms,
+        "cost_estimate_usd": generated.cost_estimate_usd,
+        "validation_errors": generated.validation_errors,
+        "summary": summarize_plan(generated.plan).model_dump(mode="json"),
+        "plan": generated.plan.model_dump(mode="json"),
+        "created_at": "2026-07-05T00:00:00+00:00",
+        "updated_at": "2026-07-05T00:00:00+00:00",
+    }
 
 
 def test_generated_plan_validation_rejects_malformed_json() -> None:
@@ -350,6 +434,373 @@ def test_deterministic_fixture_plan_validates_successfully() -> None:
 
     assert result.planner_source == "deterministic_fixture"
     assert validate_edit_plan(plan=result.plan, context=context) == result.plan
+
+
+def test_supabase_create_plan_uses_atomic_active_plan_rpc(monkeypatch) -> None:
+    memory_repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = memory_repository.latest_transcript(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    assert transcript is not None
+    repository = SupabasePlanRepository(
+        caption_repository=memory_repository.caption_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    generated = FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        payload = kwargs["json"]
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: [_edit_plan_row_from_rpc_payload(payload, version=1)],
+        )
+
+    monkeypatch.setattr("app.repositories.plans.SupabaseRestClient.request", fake_request)
+
+    record = repository.create_plan(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        transcript_id=transcript.id,
+        schema_version=generated.plan.schema_version,
+        status=EditPlanStatus.READY,
+        style=generated.plan.style,
+        target_duration_s=generated.plan.target_duration_s,
+        broll_density=BrollDensity.MEDIUM,
+        prompt="",
+        feedback=None,
+        provider=generated.provider,
+        model=generated.model,
+        planner_source=generated.planner_source,
+        model_name=generated.model,
+        prompt_version=generated.prompt_version,
+        retry_count=generated.retry_count,
+        fallback_reason=generated.fallback_reason,
+        cache_key="cache:rpc",
+        schema_hash="hash",
+        latency_ms=generated.latency_ms,
+        cost_estimate_usd=generated.cost_estimate_usd,
+        validation_errors=generated.validation_errors,
+        summary=summarize_plan(generated.plan),
+        plan=generated.plan,
+    )
+
+    assert record.version == 1
+    assert record.is_active is True
+    assert [call[:2] for call in calls] == [
+        ("POST", "/rpc/motionly_create_active_edit_plan")
+    ]
+    assert calls[0][2]["params"] == {"select": EDIT_PLAN_COLUMNS}
+    assert calls[0][2]["json"]["p_project_id"] == str(project_id)
+    assert calls[0][2]["json"]["p_plan"]["schema_version"] == generated.plan.schema_version
+
+
+def test_supabase_activate_plan_uses_atomic_activation_rpc(monkeypatch) -> None:
+    memory_repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = memory_repository.latest_transcript(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    assert transcript is not None
+    repository = SupabasePlanRepository(
+        caption_repository=memory_repository.caption_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    plan_id = uuid4()
+    generated = FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.TRAVEL, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+    row = _edit_plan_row_from_values(
+        plan_id=plan_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        transcript_id=transcript.id,
+        version=2,
+        generated=generated,
+        cache_key="cache:activate",
+    )
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: [row])
+
+    monkeypatch.setattr("app.repositories.plans.SupabaseRestClient.request", fake_request)
+
+    activated = repository.activate_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=plan_id,
+    )
+
+    assert activated.id == plan_id
+    assert activated.is_active is True
+    assert [call[:2] for call in calls] == [
+        ("POST", "/rpc/motionly_activate_edit_plan")
+    ]
+    assert calls[0][2]["params"] == {"select": EDIT_PLAN_COLUMNS}
+    assert calls[0][2]["json"] == {
+        "p_workspace_id": str(workspace_id),
+        "p_project_id": str(project_id),
+        "p_plan_id": str(plan_id),
+    }
+
+
+def test_supabase_find_latest_plan_for_transcript_uses_bounded_query(monkeypatch) -> None:
+    memory_repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = memory_repository.latest_transcript(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    assert transcript is not None
+    repository = SupabasePlanRepository(
+        caption_repository=memory_repository.caption_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    generated = FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.TRAVEL, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+    row = _edit_plan_row_from_values(
+        plan_id=uuid4(),
+        workspace_id=workspace_id,
+        project_id=project_id,
+        transcript_id=transcript.id,
+        version=3,
+        generated=generated,
+        cache_key="cache:latest-transcript",
+    )
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: [row])
+
+    monkeypatch.setattr("app.repositories.plans.SupabaseRestClient.request", fake_request)
+
+    found = repository.find_latest_plan_for_transcript(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        transcript_id=transcript.id,
+    )
+
+    assert found is not None
+    assert found.transcript_id == transcript.id
+    assert [call[:2] for call in calls] == [("GET", "/edit_plans")]
+    assert calls[0][2]["params"] == {
+        "workspace_id": f"eq.{workspace_id}",
+        "project_id": f"eq.{project_id}",
+        "transcript_id": f"eq.{transcript.id}",
+        "select": EDIT_PLAN_COLUMNS,
+        "order": "updated_at.desc",
+        "limit": "1",
+    }
+
+
+@pytest.mark.anyio
+async def test_supabase_plan_async_methods_use_bounded_queries_and_atomic_rpcs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory_repository, project_id, workspace_id, _user_id = make_plan_repository()
+    transcript = memory_repository.latest_transcript(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    assert transcript is not None
+    repository = SupabasePlanRepository(
+        caption_repository=memory_repository.caption_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    generated = FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.TRAVEL, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+    plan_id = uuid4()
+    row = _edit_plan_row_from_values(
+        plan_id=plan_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        transcript_id=transcript.id,
+        version=3,
+        generated=generated,
+        cache_key="cache:async",
+    )
+    calls = []
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if method == "POST" and path == "/rpc/motionly_create_active_edit_plan":
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: [_edit_plan_row_from_rpc_payload(kwargs["json"], version=4)],
+            )
+        return SimpleNamespace(status_code=200, json=lambda: [row])
+
+    monkeypatch.setattr(
+        "app.repositories.plans.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    plans = await repository.list_plans_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        limit=25,
+    )
+    latest = await repository.find_latest_plan_for_transcript_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        transcript_id=transcript.id,
+    )
+    created = await repository.create_plan_async(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        transcript_id=transcript.id,
+        schema_version=generated.plan.schema_version,
+        status=EditPlanStatus.READY,
+        style=generated.plan.style,
+        target_duration_s=generated.plan.target_duration_s,
+        broll_density=BrollDensity.MEDIUM,
+        prompt="",
+        feedback=None,
+        provider=generated.provider,
+        model=generated.model,
+        planner_source=generated.planner_source,
+        model_name=generated.model,
+        prompt_version=generated.prompt_version,
+        retry_count=generated.retry_count,
+        fallback_reason=generated.fallback_reason,
+        cache_key="cache:async-create",
+        schema_hash="hash",
+        latency_ms=generated.latency_ms,
+        cost_estimate_usd=generated.cost_estimate_usd,
+        validation_errors=generated.validation_errors,
+        summary=summarize_plan(generated.plan),
+        plan=generated.plan,
+    )
+    activated = await repository.activate_plan_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=plan_id,
+    )
+
+    assert plans[0].id == plan_id
+    assert latest is not None
+    assert created.version == 4
+    assert activated.id == plan_id
+    assert [call[:2] for call in calls] == [
+        ("GET", "/edit_plans"),
+        ("GET", "/edit_plans"),
+        ("POST", "/rpc/motionly_create_active_edit_plan"),
+        ("POST", "/rpc/motionly_activate_edit_plan"),
+    ]
+    assert calls[0][2]["params"] == {
+        "workspace_id": f"eq.{workspace_id}",
+        "project_id": f"eq.{project_id}",
+        "select": EDIT_PLAN_COLUMNS,
+        "order": "version.desc",
+        "limit": "25",
+    }
+    assert calls[1][2]["params"]["limit"] == "1"
+    assert calls[1][2]["params"]["select"] == EDIT_PLAN_COLUMNS
+    assert calls[2][2]["params"] == {"select": EDIT_PLAN_COLUMNS}
+    assert calls[3][2]["json"]["p_plan_id"] == str(plan_id)
+
+
+def test_plan_api_prefers_async_repository_methods() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
+    assert transcript is not None
+    generated = FixtureEditPlannerProvider().create_plan(
+        transcript=transcript,
+        payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
+        video_duration_ms=12_000,
+    )
+
+    class AsyncPlanRepository(InMemoryPlanRepository):
+        def __init__(self, caption_repository):
+            super().__init__(caption_repository)
+            self.async_calls: list[str] = []
+
+        async def list_plans_async(self, **kwargs):
+            self.async_calls.append("list")
+            return self.list_plans(**kwargs)
+
+        async def get_plan_async(self, **kwargs):
+            self.async_calls.append("get")
+            return self.get_plan(**kwargs)
+
+        async def activate_plan_async(self, **kwargs):
+            self.async_calls.append("activate")
+            return self.activate_plan(**kwargs)
+
+        async def update_plan_cuts_async(self, **kwargs):
+            self.async_calls.append("update")
+            return self.update_plan_cuts(**kwargs)
+
+    async_repository = AsyncPlanRepository(repository.caption_repository)
+    record = async_repository.create_plan(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        transcript_id=transcript.id,
+        schema_version=generated.plan.schema_version,
+        status=EditPlanStatus.READY,
+        style=generated.plan.style,
+        target_duration_s=generated.plan.target_duration_s,
+        broll_density=BrollDensity.MEDIUM,
+        prompt="",
+        feedback=None,
+        provider=generated.provider,
+        model=generated.model,
+        cache_key="cache:api-async",
+        schema_hash="hash",
+        summary=summarize_plan(generated.plan),
+        plan=generated.plan,
+    )
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    listed = asyncio.run(
+        list_plans(
+            project_id=project_id,
+            actor=actor,
+            repository=async_repository,
+        )
+    )
+    activated = asyncio.run(
+        activate_plan(
+            project_id=project_id,
+            plan_id=record.id,
+            actor=actor,
+            repository=async_repository,
+        )
+    )
+    updated = asyncio.run(
+        update_plan_cuts(
+            project_id=project_id,
+            plan_id=record.id,
+            payload=PlanCutsUpdateRequest(cuts=record.plan.cuts),
+            actor=actor,
+            repository=async_repository,
+        )
+    )
+
+    assert listed.plans[0].id == record.id
+    assert activated.plan.id == record.id
+    assert updated.plan.id == record.id
+    assert async_repository.async_calls == ["list", "activate", "get", "update"]
 
 
 def test_invalid_plan_does_not_persist_to_repository() -> None:
@@ -950,6 +1401,39 @@ def test_activate_plan_restores_previous_version() -> None:
     assert listed.active_plan_id == first.plan.id
 
 
+def test_list_plans_applies_limit() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    first = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.PODCAST),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    second = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.TRAVEL, force=True),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+
+    listed = asyncio.run(
+        list_plans(project_id=project_id, actor=actor, repository=repository, limit=1)
+    )
+
+    assert [plan.id for plan in listed.plans] == [second.plan.id]
+    assert listed.active_plan_id == second.plan.id
+    assert first.plan.version == 1
+
+
 def test_plan_snapshot_save_list_and_restore_creates_new_active_plan() -> None:
     repository, project_id, workspace_id, user_id = make_plan_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
@@ -1013,6 +1497,44 @@ def test_plan_snapshot_save_list_and_restore_creates_new_active_plan() -> None:
     assert restored.plan.version == created.plan.version + 1
     assert restored.plan.plan.cuts[0].reason == updated.plan.plan.cuts[0].reason
     assert restored.plan.provider == "motionly_snapshot"
+
+
+def test_list_plan_snapshots_applies_limit() -> None:
+    repository, project_id, workspace_id, user_id = make_plan_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    created = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    first = asyncio.run(
+        create_plan_snapshot(
+            project_id=project_id,
+            payload=PlanSnapshotCreateRequest(plan_id=created.plan.id, name="First"),
+            actor=actor,
+            repository=repository,
+        )
+    )
+    second = asyncio.run(
+        create_plan_snapshot(
+            project_id=project_id,
+            payload=PlanSnapshotCreateRequest(plan_id=created.plan.id, name="Second"),
+            actor=actor,
+            repository=repository,
+        )
+    )
+
+    listed = asyncio.run(
+        list_plan_snapshots(project_id=project_id, actor=actor, repository=repository, limit=1)
+    )
+
+    assert [snapshot.id for snapshot in listed.snapshots] == [second.snapshot.id]
+    assert first.snapshot.id != second.snapshot.id
 
 
 def test_update_plan_cuts_persists_trim_split_delete_and_reorder() -> None:

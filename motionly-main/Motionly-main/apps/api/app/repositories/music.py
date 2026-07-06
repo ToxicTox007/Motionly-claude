@@ -13,6 +13,16 @@ from app.schemas.music import (
     MusicSelectionStatus,
     MusicTrackResponse,
 )
+from app.services.supabase import SupabaseRestClient
+
+MUSIC_TRACK_COLUMNS = (
+    "id,workspace_id,project_id,provider,provider_track_id,title,license,duration_ms,"
+    "mood_tags,bpm,energy,vocals,loopable,beat_map,raw_metadata,created_at"
+)
+MUSIC_SELECTION_COLUMNS = (
+    "id,workspace_id,project_id,edit_plan_id,version,schema_version,status,music_track_id,"
+    "music_volume,sfx_intensity,rights_confirmed,cache_key,regions,created_at,updated_at"
+)
 
 
 @dataclass
@@ -268,23 +278,40 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         plan_repository: InMemoryPlanRepository,
         supabase_url: str,
         service_role_key: str,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__(plan_repository)
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="music",
+            metrics_registry=metrics_registry,
+        )
 
     def upsert_track(self, **values: object) -> MusicTrackRecord:
-        response = httpx.post(
-            f"{self.rest_url}/music_tracks",
-            headers={**self.headers, "prefer": "resolution=merge-duplicates,return=representation"},
-            params={"on_conflict": "workspace_id,project_id,provider,provider_track_id"},
+        response = self.client.request(
+            "POST",
+            "/music_tracks",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
+            params={
+                "on_conflict": "workspace_id,project_id,provider,provider_track_id",
+                "select": MUSIC_TRACK_COLUMNS,
+            },
             json=self._json_safe(values),
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._track_from_row(response.json()[0])
+
+    async def upsert_track_async(self, **values: object) -> MusicTrackRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/music_tracks",
+            headers={"prefer": "resolution=merge-duplicates,return=representation"},
+            params={
+                "on_conflict": "workspace_id,project_id,provider,provider_track_id",
+                "select": MUSIC_TRACK_COLUMNS,
+            },
+            json=self._json_safe(values),
         )
         self._raise_for_supabase(response)
         return self._track_from_row(response.json()[0])
@@ -296,17 +323,40 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         workspace_id: UUID,
         track_id: UUID,
     ) -> MusicTrackRecord:
-        response = httpx.get(
-            f"{self.rest_url}/music_tracks",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/music_tracks",
             params={
                 "id": f"eq.{track_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": MUSIC_TRACK_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "music_track_not_found", "Music track was not found.")
+        return self._track_from_row(rows[0])
+
+    async def get_track_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        track_id: UUID,
+    ) -> MusicTrackRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/music_tracks",
+            params={
+                "id": f"eq.{track_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_TRACK_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -343,11 +393,52 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
             "cache_key": cache_key,
             "regions": [region.model_dump(mode="json") for region in (regions or [])],
         }
-        response = httpx.post(
-            f"{self.rest_url}/project_music_selections",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/project_music_selections",
+            params={"select": MUSIC_SELECTION_COLUMNS},
             json=[self._json_safe(payload)],
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return self._selection_from_row(response.json()[0])
+
+    async def create_selection_async(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        edit_plan_id: UUID,
+        status: MusicSelectionStatus,
+        music_track_id: UUID | None,
+        music_volume: float,
+        sfx_intensity: float,
+        rights_confirmed: bool,
+        cache_key: str | None,
+        regions: list[MusicRegion] | None = None,
+    ) -> MusicSelectionRecord:
+        version = await self._next_selection_version_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+        payload = {
+            "workspace_id": str(workspace_id),
+            "project_id": str(project_id),
+            "edit_plan_id": str(edit_plan_id),
+            "version": version,
+            "schema_version": 1,
+            "status": status.value,
+            "music_track_id": str(music_track_id) if music_track_id else None,
+            "music_volume": music_volume,
+            "sfx_intensity": sfx_intensity,
+            "rights_confirmed": rights_confirmed,
+            "cache_key": cache_key,
+            "regions": [region.model_dump(mode="json") for region in (regions or [])],
+        }
+        response = await self.client.async_request(
+            "POST",
+            "/project_music_selections",
+            params={"select": MUSIC_SELECTION_COLUMNS},
+            json=[self._json_safe(payload)],
         )
         self._raise_for_supabase(response)
         return self._selection_from_row(response.json()[0])
@@ -359,17 +450,40 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         workspace_id: UUID,
         selection_id: UUID,
     ) -> MusicSelectionRecord:
-        response = httpx.get(
-            f"{self.rest_url}/project_music_selections",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/project_music_selections",
             params={
                 "id": f"eq.{selection_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": MUSIC_SELECTION_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "music_selection_not_found", "Music selection was not found.")
+        return self._selection_from_row(rows[0])
+
+    async def get_selection_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        selection_id: UUID,
+    ) -> MusicSelectionRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/project_music_selections",
+            params={
+                "id": f"eq.{selection_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_SELECTION_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -384,18 +498,40 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         workspace_id: UUID,
         cache_key: str,
     ) -> MusicSelectionRecord | None:
-        response = httpx.get(
-            f"{self.rest_url}/project_music_selections",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/project_music_selections",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
                 "cache_key": f"eq.{cache_key}",
-                "select": "*",
+                "select": MUSIC_SELECTION_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._selection_from_row(rows[0]) if rows else None
+
+    async def find_cached_selection_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        cache_key: str,
+    ) -> MusicSelectionRecord | None:
+        response = await self.client.async_request(
+            "GET",
+            "/project_music_selections",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "cache_key": f"eq.{cache_key}",
+                "select": MUSIC_SELECTION_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -407,17 +543,37 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         project_id: UUID,
         workspace_id: UUID,
     ) -> MusicSelectionRecord | None:
-        response = httpx.get(
-            f"{self.rest_url}/project_music_selections",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/project_music_selections",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": MUSIC_SELECTION_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._selection_from_row(rows[0]) if rows else None
+
+    async def latest_selection_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> MusicSelectionRecord | None:
+        response = await self.client.async_request(
+            "GET",
+            "/project_music_selections",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_SELECTION_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -435,6 +591,21 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         )
         return selection.to_response(track)
 
+    async def response_for_selection_async(
+        self,
+        selection: MusicSelectionRecord,
+    ) -> MusicSelectionResponse:
+        track = (
+            await self.get_track_async(
+                project_id=selection.project_id,
+                workspace_id=selection.workspace_id,
+                track_id=selection.music_track_id,
+            )
+            if selection.music_track_id
+            else None
+        )
+        return selection.to_response(track)
+
     def update_regions(
         self,
         *,
@@ -443,16 +614,41 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         selection_id: UUID,
         regions: list[MusicRegion],
     ) -> MusicSelectionRecord:
-        response = httpx.patch(
-            f"{self.rest_url}/project_music_selections",
-            headers=self.headers,
+        response = self.client.request(
+            "PATCH",
+            "/project_music_selections",
             params={
                 "id": f"eq.{selection_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
+                "select": MUSIC_SELECTION_COLUMNS,
             },
             json={"regions": [region.model_dump(mode="json") for region in regions]},
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "music_selection_not_found", "Music selection was not found.")
+        return self._selection_from_row(rows[0])
+
+    async def update_regions_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        selection_id: UUID,
+        regions: list[MusicRegion],
+    ) -> MusicSelectionRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/project_music_selections",
+            params={
+                "id": f"eq.{selection_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_SELECTION_COLUMNS,
+            },
+            json={"regions": [region.model_dump(mode="json") for region in regions]},
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -461,9 +657,9 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         return self._selection_from_row(rows[0])
 
     def _next_selection_version(self, *, project_id: UUID, workspace_id: UUID) -> int:
-        response = httpx.get(
-            f"{self.rest_url}/project_music_selections",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/project_music_selections",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
@@ -471,7 +667,22 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
                 "order": "version.desc",
                 "limit": "1",
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return int(rows[0]["version"]) + 1 if rows else 1
+
+    async def _next_selection_version_async(self, *, project_id: UUID, workspace_id: UUID) -> int:
+        response = await self.client.async_request(
+            "GET",
+            "/project_music_selections",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": "version",
+                "order": "version.desc",
+                "limit": "1",
+            },
         )
         self._raise_for_supabase(response)
         rows = response.json()

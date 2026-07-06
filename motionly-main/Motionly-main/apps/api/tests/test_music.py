@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import httpx
@@ -6,19 +7,27 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.music import list_music_tracks, select_music, update_music_regions
-from app.api.plans import create_plan
+from app.api.music import (
+    get_music_selection,
+    list_music_tracks,
+    select_music,
+    update_music_regions,
+)
 from app.repositories.captions import InMemoryCaptionRepository
-from app.repositories.music import InMemoryMusicRepository
+from app.repositories.music import (
+    MUSIC_SELECTION_COLUMNS,
+    MUSIC_TRACK_COLUMNS,
+    InMemoryMusicRepository,
+    SupabaseMusicRepository,
+)
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.captions import LanguageHint
 from app.schemas.music import MusicRegion, MusicRegionsUpdateRequest, MusicSelectRequest
 from app.schemas.plans import BrollDensity, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
-from app.services.edit_planner import FixtureEditPlannerProvider
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
-from app.services.queue import MusicQueue, PlanQueue
+from app.services.queue import MusicQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
 
@@ -60,6 +69,7 @@ def make_music_repository() -> tuple[InMemoryMusicRepository, UUID, UUID, UUID]:
     )
     plan_repository = InMemoryPlanRepository(caption_repository)
     from tests.worker_job_test_helpers import seed_active_plan
+
     seed_active_plan(
         plan_repository=plan_repository,
         project_id=project_id,
@@ -78,9 +88,13 @@ def run_select_music(
     repository: InMemoryMusicRepository,
     providers: list[FixtureMusicProvider],
 ) -> object:
-    from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, DummyResponse
-    from app.services.queue import QueueRegistry
     from app.schemas.music import MusicSelectResponse
+    from app.services.queue import QueueRegistry
+    from tests.worker_job_test_helpers import (
+        DummyResponse,
+        build_queue_request_state,
+        run_enqueued_job,
+    )
 
     registry = QueueRegistry()
     request = build_queue_request_state(
@@ -103,10 +117,11 @@ def run_select_music(
         )
     )
     if getattr(music_response, "status", None) == "queued":
-        asyncio.run(
-            run_enqueued_job(job_id=music_response.job_id, request=request)
+        asyncio.run(run_enqueued_job(job_id=music_response.job_id, request=request))
+        selection = repository.latest_selection(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
         )
-        selection = repository.latest_selection(project_id=project_id, workspace_id=actor.workspace_id)
         music_response = MusicSelectResponse(
             selection=repository.response_for_selection(selection),
             job_id=music_response.job_id,
@@ -134,6 +149,294 @@ def test_select_music_creates_selection() -> None:
     assert len(response.selection.regions) == 1
     assert response.selection.regions[0].start_ms == 0
     assert response.selection.regions[0].end_ms > 0
+
+
+def test_supabase_music_repository_reads_with_explicit_projections(monkeypatch) -> None:
+    upload_repository = InMemoryUploadRepository()
+    caption_repository = InMemoryCaptionRepository(upload_repository)
+    plan_repository = InMemoryPlanRepository(caption_repository)
+    repository = SupabaseMusicRepository(
+        plan_repository=plan_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    track_id = uuid4()
+    now = "2026-07-05T00:00:00+00:00"
+    track_row = {
+        "id": str(track_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "provider": "fixture",
+        "provider_track_id": "ambient-1",
+        "title": "Ambient Bed",
+        "license": "royalty_free",
+        "duration_ms": 12000,
+        "mood_tags": ["ambient"],
+        "bpm": 92,
+        "energy": 0.4,
+        "vocals": False,
+        "loopable": True,
+        "beat_map": [0.0, 1.0],
+        "raw_metadata": {},
+        "created_at": now,
+    }
+    responses = [[], [track_row]]
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(is_success=True, json=lambda: responses.pop(0))
+
+    monkeypatch.setattr("app.repositories.music.SupabaseRestClient.request", fake_request)
+
+    assert repository.latest_selection(project_id=project_id, workspace_id=workspace_id) is None
+    track = repository.get_track(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        track_id=track_id,
+    )
+
+    assert track.id == track_id
+    assert calls[0] == (
+        "GET",
+        "/project_music_selections",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_SELECTION_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            }
+        },
+    )
+    assert calls[1] == (
+        "GET",
+        "/music_tracks",
+        {
+            "params": {
+                "id": f"eq.{track_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_TRACK_COLUMNS,
+                "limit": "1",
+            }
+        },
+    )
+
+
+def test_supabase_music_async_reads_use_bounded_projections(monkeypatch) -> None:
+    upload_repository = InMemoryUploadRepository()
+    caption_repository = InMemoryCaptionRepository(upload_repository)
+    plan_repository = InMemoryPlanRepository(caption_repository)
+    repository = SupabaseMusicRepository(
+        plan_repository=plan_repository,
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    workspace_id = uuid4()
+    project_id = uuid4()
+    track_id = uuid4()
+    selection_id = uuid4()
+    plan_id = uuid4()
+    now = "2026-07-06T00:00:00+00:00"
+    track_row = {
+        "id": str(track_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "provider": "fixture",
+        "provider_track_id": "ambient-1",
+        "title": "Ambient Bed",
+        "license": "royalty_free",
+        "duration_ms": 12000,
+        "mood_tags": ["ambient"],
+        "bpm": 92,
+        "energy": 0.4,
+        "vocals": False,
+        "loopable": True,
+        "beat_map": [0.0, 1.0],
+        "raw_metadata": {},
+        "created_at": now,
+    }
+    selection_row = {
+        "id": str(selection_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "edit_plan_id": str(plan_id),
+        "version": 1,
+        "schema_version": 1,
+        "status": "ready",
+        "music_track_id": str(track_id),
+        "music_volume": 0.25,
+        "sfx_intensity": 0.25,
+        "rights_confirmed": True,
+        "cache_key": "music-cache-key",
+        "regions": [],
+        "created_at": now,
+        "updated_at": now,
+    }
+    responses = [[selection_row], [selection_row], [track_row]]
+    calls = []
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(is_success=True, json=lambda: responses.pop(0))
+
+    monkeypatch.setattr(
+        "app.repositories.music.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    latest = asyncio.run(
+        repository.latest_selection_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        )
+    )
+    cached = asyncio.run(
+        repository.find_cached_selection_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            cache_key="music-cache-key",
+        )
+    )
+    track = asyncio.run(
+        repository.get_track_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            track_id=track_id,
+        )
+    )
+
+    assert latest is not None
+    assert cached is not None
+    assert track.id == track_id
+    assert calls[0] == (
+        "GET",
+        "/project_music_selections",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_SELECTION_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            }
+        },
+    )
+    assert calls[1] == (
+        "GET",
+        "/project_music_selections",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "cache_key": "eq.music-cache-key",
+                "select": MUSIC_SELECTION_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            }
+        },
+    )
+    assert calls[2] == (
+        "GET",
+        "/music_tracks",
+        {
+            "params": {
+                "id": f"eq.{track_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": MUSIC_TRACK_COLUMNS,
+                "limit": "1",
+            }
+        },
+    )
+
+
+def test_music_api_prefers_async_repository_methods() -> None:
+    base_repository, project_id, workspace_id, user_id = make_music_repository()
+
+    class AsyncMusicRepository(InMemoryMusicRepository):
+        def __init__(self, plan_repository):
+            super().__init__(plan_repository)
+            self.async_calls: list[str] = []
+
+        async def latest_selection_async(self, **kwargs):
+            self.async_calls.append("latest-selection")
+            return self.latest_selection(**kwargs)
+
+        async def find_cached_selection_async(self, **kwargs):
+            self.async_calls.append("find-cache")
+            return self.find_cached_selection(**kwargs)
+
+        async def update_regions_async(self, **kwargs):
+            self.async_calls.append("update-regions")
+            return self.update_regions(**kwargs)
+
+        async def upsert_track_async(self, **kwargs):
+            self.async_calls.append("upsert-track")
+            return self.upsert_track(**kwargs)
+
+        async def response_for_selection_async(self, selection):
+            self.async_calls.append("response-for-selection")
+            return self.response_for_selection(selection)
+
+    repository = AsyncMusicRepository(base_repository.plan_repository)
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    first = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(),
+        actor=actor,
+        repository=repository,
+        providers=[FixtureMusicProvider()],
+    )
+    cached = run_select_music(
+        project_id=project_id,
+        payload=MusicSelectRequest(),
+        actor=actor,
+        repository=repository,
+        providers=[FixtureMusicProvider()],
+    )
+    asyncio.run(
+        get_music_selection(
+            project_id=project_id,
+            actor=actor,
+            repository=repository,
+        )
+    )
+    asyncio.run(
+        update_music_regions(
+            project_id=project_id,
+            payload=MusicRegionsUpdateRequest(regions=first.selection.regions),
+            actor=actor,
+            repository=repository,
+        )
+    )
+    asyncio.run(
+        list_music_tracks(
+            project_id=project_id,
+            actor=actor,
+            repository=repository,
+            plan_repository=repository.plan_repository,
+            providers=[FixtureMusicProvider()],
+            mood="clean confident",
+        )
+    )
+
+    assert cached.cached is True
+    assert repository.async_calls == [
+        "find-cache",
+        "find-cache",
+        "response-for-selection",
+        "latest-selection",
+        "response-for-selection",
+        "latest-selection",
+        "update-regions",
+        "response-for-selection",
+        "upsert-track",
+    ]
 
 
 def test_update_music_regions_splits_and_deletes_region() -> None:

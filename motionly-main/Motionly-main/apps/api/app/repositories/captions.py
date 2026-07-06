@@ -19,8 +19,26 @@ from app.schemas.captions import (
     TranscriptWord,
 )
 from app.services.caption_presets import get_caption_preset
+from app.services.supabase import SupabaseRestClient
 
 logger = logging.getLogger(__name__)
+
+TRANSCRIPT_COLUMNS = (
+    "id,workspace_id,project_id,uploaded_video_id,status,language,language_hint,provider,model,"
+    "confidence,duration_ms,quality_status,quality_reasons,raw_payload,error_code,error_message,"
+    "created_at,updated_at"
+)
+TRANSCRIPT_WORD_COLUMNS = "id,word_index,text,start_ms,end_ms,confidence"
+CAPTION_TRACK_COLUMNS = (
+    "id,workspace_id,project_id,transcript_id,preset,schema_version,style,hide_filler_words,"
+    "created_at,updated_at"
+)
+CAPTION_SEGMENT_COLUMNS = (
+    "id,segment_index,start_ms,end_ms,text,line_count,words,highlight_words"
+)
+DEFAULT_CAPTION_TRACK_LIMIT = 100
+MAX_TRANSCRIPT_WORDS = 5000
+MAX_CAPTION_SEGMENTS = 1000
 
 
 @dataclass
@@ -188,8 +206,9 @@ class InMemoryCaptionRepository:
         *,
         project_id: UUID,
         workspace_id: UUID,
+        limit: int = DEFAULT_CAPTION_TRACK_LIMIT,
     ) -> list[CaptionTrackRecord]:
-        return sorted(
+        tracks = sorted(
             [
                 track
                 for track in self.caption_tracks.values()
@@ -198,6 +217,7 @@ class InMemoryCaptionRepository:
             key=lambda track: track.updated_at,
             reverse=True,
         )
+        return tracks[:limit]
 
     def get_caption_track(
         self,
@@ -253,31 +273,32 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         upload_repository: InMemoryUploadRepository,
         supabase_url: str,
         service_role_key: str,
+        metrics_registry: object | None = None,
     ) -> None:
         super().__init__(upload_repository)
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="captions",
+            metrics_registry=metrics_registry,
+        )
 
     def create_transcript(self, **values: object) -> TranscriptRecord:
         transcript_id = uuid4()
-        words = values.pop("words")
-        response = httpx.post(
-            f"{self.rest_url}/transcripts",
-            headers=self.headers,
+        words = list(values.pop("words"))
+        response = self.client.request(
+            "POST",
+            "/transcripts",
+            params={"select": TRANSCRIPT_COLUMNS},
             json={**self._json_safe(values), "id": str(transcript_id)},
-            timeout=10,
         )
         self._raise_for_supabase(response)
-        transcript = self._transcript_from_row(response.json()[0], words=list(words))
+        transcript = self._transcript_from_row(response.json()[0], words=words)
         if transcript.words:
-            httpx.post(
-                f"{self.rest_url}/transcript_words",
-                headers=self.headers,
+            words_response = self.client.request(
+                "POST",
+                "/transcript_words",
+                headers={"prefer": "return=minimal"},
                 json=[
                     {
                         "workspace_id": str(transcript.workspace_id),
@@ -291,8 +312,8 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                     }
                     for word in transcript.words
                 ],
-                timeout=10,
             )
+            self._raise_for_supabase(words_response)
         return transcript
 
     def update_transcript(
@@ -303,26 +324,26 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
     ) -> TranscriptRecord:
         words = values.pop("words", transcript.words)
         payload = self._json_safe({**values, "updated_at": datetime.now(UTC).isoformat()})
-        response = httpx.patch(
-            f"{self.rest_url}/transcripts",
-            headers=self.headers,
-            params={"id": f"eq.{transcript.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/transcripts",
+            params={"id": f"eq.{transcript.id}", "select": TRANSCRIPT_COLUMNS},
             json=payload,
-            timeout=10,
         )
         self._raise_for_supabase(response)
-        delete_response = httpx.delete(
-            f"{self.rest_url}/transcript_words",
-            headers=self.headers,
+        delete_response = self.client.request(
+            "DELETE",
+            "/transcript_words",
+            headers={"prefer": "return=minimal"},
             params={"transcript_id": f"eq.{transcript.id}"},
-            timeout=10,
         )
         self._raise_for_supabase(delete_response)
         next_words = list(words)
         if next_words:
-            insert_response = httpx.post(
-                f"{self.rest_url}/transcript_words",
-                headers=self.headers,
+            insert_response = self.client.request(
+                "POST",
+                "/transcript_words",
+                headers={"prefer": "return=minimal"},
                 json=[
                     {
                         "workspace_id": str(transcript.workspace_id),
@@ -336,7 +357,6 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                     }
                     for word in next_words
                 ],
-                timeout=10,
             )
             self._raise_for_supabase(insert_response)
         return self._transcript_from_row(response.json()[0], words=next_words)
@@ -347,17 +367,16 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         project_id: UUID,
         workspace_id: UUID,
     ) -> TranscriptRecord | None:
-        response = httpx.get(
-            f"{self.rest_url}/transcripts",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/transcripts",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": TRANSCRIPT_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -368,6 +387,32 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             words=self._words_for_transcript(UUID(rows[0]["id"])),
         )
 
+    async def latest_transcript_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> TranscriptRecord | None:
+        response = await self.client.async_request(
+            "GET",
+            "/transcripts",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": TRANSCRIPT_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            return None
+        return self._transcript_from_row(
+            rows[0],
+            words=await self._words_for_transcript_async(UUID(rows[0]["id"])),
+        )
+
     def get_transcript(
         self,
         *,
@@ -375,17 +420,16 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         transcript_id: UUID,
         workspace_id: UUID,
     ) -> TranscriptRecord:
-        response = httpx.get(
-            f"{self.rest_url}/transcripts",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/transcripts",
             params={
                 "id": f"eq.{transcript_id}",
                 "project_id": f"eq.{project_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": TRANSCRIPT_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         rows = response.json()
@@ -393,14 +437,41 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             raise ApiError(404, "transcript_not_found", "Transcript was not found.")
         return self._transcript_from_row(rows[0], words=self._words_for_transcript(transcript_id))
 
+    async def get_transcript_async(
+        self,
+        *,
+        project_id: UUID,
+        transcript_id: UUID,
+        workspace_id: UUID,
+    ) -> TranscriptRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/transcripts",
+            params={
+                "id": f"eq.{transcript_id}",
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": TRANSCRIPT_COLUMNS,
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "transcript_not_found", "Transcript was not found.")
+        return self._transcript_from_row(
+            rows[0],
+            words=await self._words_for_transcript_async(transcript_id),
+        )
+
     def create_caption_track(self, **values: object) -> CaptionTrackRecord:
         segments = values.pop("segments")
         track_id = uuid4()
-        response = httpx.post(
-            f"{self.rest_url}/caption_tracks",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/caption_tracks",
+            params={"select": CAPTION_TRACK_COLUMNS},
             json={**self._json_safe(values), "id": str(track_id)},
-            timeout=10,
         )
         self._raise_for_supabase(response)
         track = self._track_from_row(response.json()[0], segments=list(segments))
@@ -412,21 +483,49 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         *,
         project_id: UUID,
         workspace_id: UUID,
+        limit: int = DEFAULT_CAPTION_TRACK_LIMIT,
     ) -> list[CaptionTrackRecord]:
-        response = httpx.get(
-            f"{self.rest_url}/caption_tracks",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/caption_tracks",
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": CAPTION_TRACK_COLUMNS,
                 "order": "updated_at.desc",
+                "limit": str(limit),
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         return [
             self._track_from_row(row, segments=self._segments_for_track(UUID(str(row["id"]))))
+            for row in response.json()
+        ]
+
+    async def list_caption_tracks_async(
+        self,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+        limit: int = DEFAULT_CAPTION_TRACK_LIMIT,
+    ) -> list[CaptionTrackRecord]:
+        response = await self.client.async_request(
+            "GET",
+            "/caption_tracks",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": CAPTION_TRACK_COLUMNS,
+                "order": "updated_at.desc",
+                "limit": str(limit),
+            },
+        )
+        self._raise_for_supabase(response)
+        return [
+            self._track_from_row(
+                row,
+                segments=await self._segments_for_track_async(UUID(str(row["id"]))),
+            )
             for row in response.json()
         ]
 
@@ -437,23 +536,49 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         track_id: UUID,
         workspace_id: UUID,
     ) -> CaptionTrackRecord:
-        response = httpx.get(
-            f"{self.rest_url}/caption_tracks",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/caption_tracks",
             params={
                 "id": f"eq.{track_id}",
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": "*",
+                "select": CAPTION_TRACK_COLUMNS,
                 "limit": "1",
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         rows = response.json()
         if not rows:
             raise ApiError(404, "caption_track_not_found", "Caption track was not found.")
         return self._track_from_row(rows[0], segments=self._segments_for_track(track_id))
+
+    async def get_caption_track_async(
+        self,
+        *,
+        project_id: UUID,
+        track_id: UUID,
+        workspace_id: UUID,
+    ) -> CaptionTrackRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/caption_tracks",
+            params={
+                "id": f"eq.{track_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": CAPTION_TRACK_COLUMNS,
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "caption_track_not_found", "Caption track was not found.")
+        return self._track_from_row(
+            rows[0],
+            segments=await self._segments_for_track_async(track_id),
+        )
 
     def update_caption_track(
         self,
@@ -464,28 +589,59 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         hide_filler_words: bool,
         segments: list[CaptionSegment],
     ) -> CaptionTrackRecord:
-        response = httpx.patch(
-            f"{self.rest_url}/caption_tracks",
-            headers=self.headers,
-            params={"id": f"eq.{track.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/caption_tracks",
+            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
             json={
                 "preset": preset.value,
                 "style": style.model_dump(mode="json"),
                 "hide_filler_words": hide_filler_words,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
-            timeout=10,
         )
         self._raise_for_supabase(response)
         updated = self._track_from_row(response.json()[0], segments=segments)
-        delete_response = httpx.delete(
-            f"{self.rest_url}/caption_segments",
-            headers=self.headers,
+        delete_response = self.client.request(
+            "DELETE",
+            "/caption_segments",
+            headers={"prefer": "return=minimal"},
             params={"caption_track_id": f"eq.{track.id}"},
-            timeout=10,
         )
         self._raise_for_supabase(delete_response)
         self._write_caption_segments(updated)
+        return updated
+
+    async def update_caption_track_async(
+        self,
+        *,
+        track: CaptionTrackRecord,
+        preset: CaptionPresetKey,
+        style: CaptionStyle,
+        hide_filler_words: bool,
+        segments: list[CaptionSegment],
+    ) -> CaptionTrackRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/caption_tracks",
+            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
+            json={
+                "preset": preset.value,
+                "style": style.model_dump(mode="json"),
+                "hide_filler_words": hide_filler_words,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        updated = self._track_from_row(response.json()[0], segments=segments)
+        delete_response = await self.client.async_request(
+            "DELETE",
+            "/caption_segments",
+            headers={"prefer": "return=minimal"},
+            params={"caption_track_id": f"eq.{track.id}"},
+        )
+        self._raise_for_supabase(delete_response)
+        await self._write_caption_segments_async(updated)
         return updated
 
     def replace_caption_segments(
@@ -497,35 +653,85 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         next_segments = [
             segment.model_copy(update={"index": index}) for index, segment in enumerate(segments)
         ]
-        response = httpx.patch(
-            f"{self.rest_url}/caption_tracks",
-            headers=self.headers,
-            params={"id": f"eq.{track.id}", "select": "*"},
+        response = self.client.request(
+            "PATCH",
+            "/caption_tracks",
+            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
             json={"updated_at": datetime.now(UTC).isoformat()},
-            timeout=10,
         )
         self._raise_for_supabase(response)
         updated = self._track_from_row(response.json()[0], segments=next_segments)
-        delete_response = httpx.delete(
-            f"{self.rest_url}/caption_segments",
-            headers=self.headers,
+        delete_response = self.client.request(
+            "DELETE",
+            "/caption_segments",
+            headers={"prefer": "return=minimal"},
             params={"caption_track_id": f"eq.{track.id}"},
-            timeout=10,
         )
         self._raise_for_supabase(delete_response)
         self._write_caption_segments(updated)
         return updated
 
+    async def replace_caption_segments_async(
+        self,
+        *,
+        track: CaptionTrackRecord,
+        segments: list[CaptionSegment],
+    ) -> CaptionTrackRecord:
+        next_segments = [
+            segment.model_copy(update={"index": index}) for index, segment in enumerate(segments)
+        ]
+        response = await self.client.async_request(
+            "PATCH",
+            "/caption_tracks",
+            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
+            json={"updated_at": datetime.now(UTC).isoformat()},
+        )
+        self._raise_for_supabase(response)
+        updated = self._track_from_row(response.json()[0], segments=next_segments)
+        delete_response = await self.client.async_request(
+            "DELETE",
+            "/caption_segments",
+            headers={"prefer": "return=minimal"},
+            params={"caption_track_id": f"eq.{track.id}"},
+        )
+        self._raise_for_supabase(delete_response)
+        await self._write_caption_segments_async(updated)
+        return updated
+
     def _words_for_transcript(self, transcript_id: UUID) -> list[TranscriptWord]:
-        response = httpx.get(
-            f"{self.rest_url}/transcript_words",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/transcript_words",
             params={
                 "transcript_id": f"eq.{transcript_id}",
-                "select": "*",
+                "select": TRANSCRIPT_WORD_COLUMNS,
                 "order": "word_index.asc",
+                "limit": str(MAX_TRANSCRIPT_WORDS),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [
+            TranscriptWord(
+                id=UUID(row["id"]),
+                index=int(row["word_index"]),
+                text=row["text"],
+                start_ms=int(row["start_ms"]),
+                end_ms=int(row["end_ms"]),
+                confidence=row.get("confidence"),
+            )
+            for row in response.json()
+        ]
+
+    async def _words_for_transcript_async(self, transcript_id: UUID) -> list[TranscriptWord]:
+        response = await self.client.async_request(
+            "GET",
+            "/transcript_words",
+            params={
+                "transcript_id": f"eq.{transcript_id}",
+                "select": TRANSCRIPT_WORD_COLUMNS,
+                "order": "word_index.asc",
+                "limit": str(MAX_TRANSCRIPT_WORDS),
+            },
         )
         self._raise_for_supabase(response)
         return [
@@ -541,15 +747,47 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         ]
 
     def _segments_for_track(self, track_id: UUID) -> list[CaptionSegment]:
-        response = httpx.get(
-            f"{self.rest_url}/caption_segments",
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/caption_segments",
             params={
                 "caption_track_id": f"eq.{track_id}",
-                "select": "*",
+                "select": CAPTION_SEGMENT_COLUMNS,
                 "order": "segment_index.asc",
+                "limit": str(MAX_CAPTION_SEGMENTS),
             },
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+        return [
+            CaptionSegment(
+                id=UUID(str(row["id"])),
+                index=int(row["segment_index"]),
+                start_ms=int(row["start_ms"]),
+                end_ms=int(row["end_ms"]),
+                text=str(row["text"]),
+                line_count=int(row["line_count"]),
+                words=[
+                    TranscriptWord.model_validate(word)
+                    for word in row.get("words", [])
+                    if isinstance(word, dict)
+                ],
+                highlight_words=[
+                    str(word) for word in row.get("highlight_words", []) if isinstance(word, str)
+                ],
+            )
+            for row in response.json()
+        ]
+
+    async def _segments_for_track_async(self, track_id: UUID) -> list[CaptionSegment]:
+        response = await self.client.async_request(
+            "GET",
+            "/caption_segments",
+            params={
+                "caption_track_id": f"eq.{track_id}",
+                "select": CAPTION_SEGMENT_COLUMNS,
+                "order": "segment_index.asc",
+                "limit": str(MAX_CAPTION_SEGMENTS),
+            },
         )
         self._raise_for_supabase(response)
         return [
@@ -575,9 +813,10 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
     def _write_caption_segments(self, track: CaptionTrackRecord) -> None:
         if not track.segments:
             return
-        response = httpx.post(
-            f"{self.rest_url}/caption_segments",
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/caption_segments",
+            headers={"prefer": "return=minimal"},
             json=[
                 {
                     "workspace_id": str(track.workspace_id),
@@ -593,7 +832,31 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                 }
                 for segment in track.segments
             ],
-            timeout=10,
+        )
+        self._raise_for_supabase(response)
+
+    async def _write_caption_segments_async(self, track: CaptionTrackRecord) -> None:
+        if not track.segments:
+            return
+        response = await self.client.async_request(
+            "POST",
+            "/caption_segments",
+            headers={"prefer": "return=minimal"},
+            json=[
+                {
+                    "workspace_id": str(track.workspace_id),
+                    "project_id": str(track.project_id),
+                    "caption_track_id": str(track.id),
+                    "segment_index": segment.index,
+                    "start_ms": segment.start_ms,
+                    "end_ms": segment.end_ms,
+                    "text": segment.text,
+                    "words": [word.model_dump(mode="json") for word in segment.words],
+                    "line_count": segment.line_count,
+                    "highlight_words": segment.highlight_words,
+                }
+                for segment in track.segments
+            ],
         )
         self._raise_for_supabase(response)
 

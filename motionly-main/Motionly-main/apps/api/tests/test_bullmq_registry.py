@@ -84,3 +84,31 @@ def test_bullmq_stuck_jobs_transition_to_dead_letter(monkeypatch) -> None:
     request = json.loads(process.stdin.lines[0])
     assert request["command"] == "mark-stuck-dead-letter"
     assert request["payload"] == {"timeout_seconds": 60}
+
+
+def test_bullmq_snapshots_use_count_bridge_command(monkeypatch) -> None:
+    process = _Process(
+        [
+            [
+                {
+                    "queue_name": "render_gpu",
+                    "queued": 750,
+                    "running": 3,
+                    "succeeded": 1000,
+                    "failed": 0,
+                    "dead_letter": 2,
+                    "canceled": 0,
+                    "oldest_queued_seconds": 180,
+                }
+            ]
+        ]
+    )
+    monkeypatch.setattr("app.services.queue.subprocess.Popen", lambda *args, **kwargs: process)
+
+    snapshots = BullMQQueueRegistry(redis_url="redis://queue.test").snapshots()
+
+    assert snapshots[0].queue_name == "render_gpu"
+    assert snapshots[0].queued == 750
+    assert snapshots[0].dead_letter == 2
+    request = json.loads(process.stdin.lines[0])
+    assert request["command"] == "snapshots"

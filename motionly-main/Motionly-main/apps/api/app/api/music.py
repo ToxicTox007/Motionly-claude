@@ -14,17 +14,13 @@ from app.api.dependencies import (
 from app.api.errors import ApiError
 from app.repositories.music import InMemoryMusicRepository
 from app.repositories.plans import InMemoryPlanRepository
-from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.music import (
-    MusicRegion,
     MusicRegionsUpdateRequest,
     MusicSelectionResponse,
-    MusicSelectionStatus,
     MusicSelectRequest,
     MusicSelectResponse,
     MusicTrackListResponse,
 )
-from app.services.ai_feedback import record_ai_feedback
 from app.services.layer_job_enqueue import (
     build_queued_layer_response_fields,
     prepare_heavy_job_enqueue,
@@ -42,14 +38,37 @@ MusicProvidersDep = Annotated[list[MusicProvider], Depends(get_music_providers)]
 MusicQueueDep = Annotated[MusicQueue, Depends(get_music_queue)]
 
 
+async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
+    async_method = getattr(repository, async_name, None)
+    if async_method is not None:
+        return await async_method(**kwargs)
+    return getattr(repository, sync_name)(**kwargs)
+
+
+async def _response_for_selection(
+    repository: InMemoryMusicRepository,
+    selection,
+) -> MusicSelectionResponse:
+    async_method = getattr(repository, "response_for_selection_async", None)
+    if async_method is not None:
+        return await async_method(selection)
+    return repository.response_for_selection(selection)
+
+
 @router.get("/selection", response_model=MusicSelectionResponse | None)
 async def get_music_selection(
     project_id: UUID,
     actor: ActorDep,
     repository: MusicRepositoryDep,
 ) -> MusicSelectionResponse | None:
-    selection = repository.latest_selection(project_id=project_id, workspace_id=actor.workspace_id)
-    return repository.response_for_selection(selection) if selection else None
+    selection = await _repository_call(
+        repository,
+        "latest_selection_async",
+        "latest_selection",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    return await _response_for_selection(repository, selection) if selection else None
 
 
 def build_music_cache_key(
@@ -100,14 +119,17 @@ async def select_music(
         track_id=track_id,
     )
     if not payload.force:
-        cached = repository.find_cached_selection(
+        cached = await _repository_call(
+            repository,
+            "find_cached_selection_async",
+            "find_cached_selection",
             project_id=project_id,
             workspace_id=actor.workspace_id,
             cache_key=cache_key,
         )
         if cached:
             return MusicSelectResponse(
-                selection=repository.response_for_selection(cached),
+                selection=await _response_for_selection(repository, cached),
                 job_id=f"sync-complete--music--{project_id}--{plan.id}",
                 status="ready",
                 cached=True,
@@ -136,20 +158,29 @@ async def update_music_regions(
     actor: ActorDep,
     repository: MusicRepositoryDep,
 ) -> MusicSelectionResponse:
-    selection = repository.latest_selection(project_id=project_id, workspace_id=actor.workspace_id)
+    selection = await _repository_call(
+        repository,
+        "latest_selection_async",
+        "latest_selection",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
     if selection is None:
         raise ApiError(
             404,
             "music_selection_not_found",
             "No music selection exists for this project.",
         )
-    updated = repository.update_regions(
+    updated = await _repository_call(
+        repository,
+        "update_regions_async",
+        "update_regions",
         project_id=project_id,
         workspace_id=actor.workspace_id,
         selection_id=selection.id,
         regions=payload.regions,
     )
-    return repository.response_for_selection(updated)
+    return await _response_for_selection(repository, updated)
 
 
 @router.get("/tracks", response_model=MusicTrackListResponse)
@@ -178,7 +209,10 @@ async def list_music_tracks(
         if candidates:
             break
     tracks = [
-        repository.upsert_track(
+        await _repository_call(
+            repository,
+            "upsert_track_async",
+            "upsert_track",
             workspace_id=actor.workspace_id,
             project_id=project_id,
             provider=candidate.provider,

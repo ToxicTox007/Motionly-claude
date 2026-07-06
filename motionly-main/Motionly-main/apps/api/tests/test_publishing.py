@@ -6,8 +6,13 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.publishing import create_publish_job
-from app.repositories.publishing import InMemoryPublishingRepository
+from app.api.publishing import create_publish_job, list_connections, list_publish_jobs
+from app.repositories.publishing import (
+    PUBLISH_CONNECTION_COLUMNS,
+    PUBLISH_JOB_COLUMNS,
+    InMemoryPublishingRepository,
+    SupabasePublishingRepository,
+)
 from app.schemas.publishing import (
     PublishConnectionStatus,
     PublishCreateRequest,
@@ -148,6 +153,229 @@ def test_publish_api_wires_export_connection_and_worker_queue() -> None:
     queued = next(iter(registry.jobs.values()))
     assert queued.kind == "publish"
     assert queued.resource_id == response.id
+
+
+def test_publish_connection_and_job_lists_apply_limit() -> None:
+    workspace_id = uuid4()
+    user_id = uuid4()
+    project_id = uuid4()
+    export_id = uuid4()
+    repository = InMemoryPublishingRepository()
+    first_connection = repository.create_connection(
+        workspace_id=workspace_id,
+        platform=PublishPlatform.YOUTUBE,
+        access_token="youtube-token",
+        external_account_id="channel-1",
+        account_name="YouTube",
+    )
+    second_connection = repository.create_connection(
+        workspace_id=workspace_id,
+        platform=PublishPlatform.TIKTOK,
+        access_token="tiktok-token",
+        external_account_id="creator-1",
+        account_name="TikTok",
+    )
+    first_job = repository.create_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        export_id=export_id,
+        connection_id=first_connection.id,
+        platform=first_connection.platform,
+        status=PublishStatus.QUEUED,
+        title="First",
+        caption="",
+        privacy="private",
+    )
+    second_job = repository.create_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        export_id=export_id,
+        connection_id=second_connection.id,
+        platform=second_connection.platform,
+        status=PublishStatus.PUBLISHING,
+        title="Second",
+        caption="",
+        privacy="private",
+    )
+
+    class ProjectRepository:
+        def get_project(self, **_kwargs):
+            return SimpleNamespace(id=project_id)
+
+    state = SimpleNamespace(
+        project_repository=ProjectRepository(),
+        publishing_repository=repository,
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    connections = asyncio.run(list_connections(actor=actor, request=request, limit=1))
+    jobs = asyncio.run(
+        list_publish_jobs(project_id=project_id, actor=actor, request=request, limit=1)
+    )
+
+    assert [connection.id for connection in connections.connections] == [second_connection.id]
+    assert [job.id for job in jobs.jobs] == [second_job.id]
+    assert first_job.id != second_job.id
+
+
+@pytest.mark.anyio
+async def test_supabase_publishing_async_lists_use_bounded_projections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_id = uuid4()
+    project_id = uuid4()
+    export_id = uuid4()
+    connection_id = uuid4()
+    job_id = uuid4()
+    calls = []
+
+    class PlainCipher:
+        def encrypt(self, value):
+            return value
+
+        def decrypt(self, value):
+            return value
+
+        def is_encrypted(self, _value):
+            return True
+
+    repository = SupabasePublishingRepository(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+        token_cipher=PlainCipher(),
+    )
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/publish_connections":
+            return _supabase_response([_connection_row(connection_id, workspace_id)])
+        if path == "/publish_jobs":
+            return _supabase_response(
+                [_publish_job_row(job_id, workspace_id, project_id, export_id, connection_id)]
+            )
+        raise AssertionError(f"unexpected Supabase call: {method} {path}")
+
+    monkeypatch.setattr(
+        "app.repositories.publishing.SupabaseRestClient.async_request",
+        fake_async_request,
+    )
+
+    connections = await repository.list_connections_async(workspace_id=workspace_id, limit=25)
+    jobs = await repository.list_jobs_async(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        limit=10,
+    )
+    active = await repository.find_active_job_async(
+        workspace_id=workspace_id,
+        export_id=export_id,
+        connection_id=connection_id,
+    )
+
+    assert connections[0].id == connection_id
+    assert jobs[0].id == job_id
+    assert active is not None
+    assert calls[0][2]["params"] == {
+        "workspace_id": f"eq.{workspace_id}",
+        "select": PUBLISH_CONNECTION_COLUMNS,
+        "order": "created_at.desc",
+        "limit": "25",
+    }
+    assert calls[1][2]["params"] == {
+        "project_id": f"eq.{project_id}",
+        "workspace_id": f"eq.{workspace_id}",
+        "select": PUBLISH_JOB_COLUMNS,
+        "order": "created_at.desc",
+        "limit": "10",
+    }
+    assert calls[2][2]["params"]["select"] == PUBLISH_JOB_COLUMNS
+    assert calls[2][2]["params"]["limit"] == "1"
+
+
+def test_publishing_api_prefers_async_repository_methods() -> None:
+    workspace_id = uuid4()
+    project_id = uuid4()
+    user_id = uuid4()
+    export_id = uuid4()
+
+    class AsyncPublishingRepository(InMemoryPublishingRepository):
+        def __init__(self):
+            super().__init__()
+            self.async_calls: list[str] = []
+
+        async def list_connections_async(self, **kwargs):
+            self.async_calls.append("list-connections")
+            return self.list_connections(**kwargs)
+
+        async def list_jobs_async(self, **kwargs):
+            self.async_calls.append("list-jobs")
+            return self.list_jobs(**kwargs)
+
+        async def get_connection_async(self, **kwargs):
+            self.async_calls.append("get-connection")
+            return self.get_connection(**kwargs)
+
+        async def find_active_job_async(self, **kwargs):
+            self.async_calls.append("find-active")
+            return self.find_active_job(**kwargs)
+
+        async def create_job_async(self, **kwargs):
+            self.async_calls.append("create-job")
+            return self.create_job(**kwargs)
+
+    repository = AsyncPublishingRepository()
+    connection = repository.create_connection(
+        workspace_id=workspace_id,
+        platform=PublishPlatform.YOUTUBE,
+        access_token="token",
+        external_account_id="channel",
+        account_name="Channel",
+    )
+
+    class ProjectRepository:
+        def get_project(self, **_kwargs):
+            return SimpleNamespace(id=project_id)
+
+    class RenderRepository:
+        def get_export(self, **_kwargs):
+            return SimpleNamespace(id=export_id, project_id=project_id)
+
+    state = SimpleNamespace(
+        project_repository=ProjectRepository(),
+        render_repository=RenderRepository(),
+        publishing_repository=repository,
+        publish_queue=SimpleNamespace(enqueue_publish=lambda **_kwargs: None),
+        settings=SimpleNamespace(publish_sync_completion=False, app_env="test"),
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    asyncio.run(list_connections(actor=actor, request=request, limit=5))
+    asyncio.run(list_publish_jobs(project_id=project_id, actor=actor, request=request, limit=5))
+    created = asyncio.run(
+        create_publish_job(
+            project_id=project_id,
+            payload=PublishCreateRequest(
+                export_id=export_id,
+                connection_id=connection.id,
+                title="Title",
+                caption="Caption",
+                privacy="private",
+            ),
+            actor=actor,
+            request=request,
+        )
+    )
+
+    assert created.status == PublishStatus.QUEUED
+    assert repository.async_calls == [
+        "list-connections",
+        "list-jobs",
+        "get-connection",
+        "find-active",
+        "create-job",
+    ]
 
 
 def test_publish_oauth_state_is_signed_and_scoped_to_workspace() -> None:
@@ -447,3 +675,56 @@ def test_social_publishing_client_maps_insufficient_scope_to_reconnect() -> None
 
     assert exc.value.code == "insufficient_scope"
     assert exc.value.details["reconnect_required"] is True
+
+
+def _supabase_response(rows):
+    return SimpleNamespace(status_code=200, content=b"[]", json=lambda: rows)
+
+
+def _connection_row(connection_id, workspace_id):
+    return {
+        "id": str(connection_id),
+        "workspace_id": str(workspace_id),
+        "platform": "youtube",
+        "access_token": "token",
+        "refresh_token": None,
+        "token_expires_at": None,
+        "refresh_token_expires_at": None,
+        "scopes": [],
+        "connection_status": "active",
+        "last_refresh_at": None,
+        "last_refresh_failure_reason": None,
+        "external_account_id": "channel",
+        "account_name": "Channel",
+        "created_at": "2026-07-06T00:00:00+00:00",
+    }
+
+
+def _publish_job_row(job_id, workspace_id, project_id, export_id, connection_id):
+    now = "2026-07-06T00:00:00+00:00"
+    return {
+        "id": str(job_id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+        "export_id": str(export_id),
+        "connection_id": str(connection_id),
+        "platform": "youtube",
+        "status": "queued",
+        "title": "Title",
+        "caption": "Caption",
+        "privacy": "private",
+        "external_post_id": None,
+        "external_url": None,
+        "provider_operation_id": None,
+        "error_message": None,
+        "error_code": None,
+        "error_category": None,
+        "user_message": None,
+        "retryable": None,
+        "reconnect_required": False,
+        "retry_after_seconds": None,
+        "retry_count": 0,
+        "duplicate_publish_risk": False,
+        "created_at": now,
+        "updated_at": now,
+    }

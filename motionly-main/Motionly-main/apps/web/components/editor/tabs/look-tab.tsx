@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Input, Label, Select, Slider, PanelSection } from "../ui";
 import { Button } from "../../button";
 import {
@@ -174,7 +173,6 @@ export function LookTab({
   onConfigUpdated,
   onPreviewLookUpdated,
 }: LookTabProps) {
-  const router = useRouter();
   const { pushHistory } = useEditorHistory();
   const [preset, setPreset] = useState<VisualPresetKey>(
     initialConfig?.preset ?? suggestedPreset ?? "clean_founder",
@@ -358,7 +356,6 @@ export function LookTab({
       setGradientRamp(payload.config.gradient_ramp);
       setResetToDefaults(false);
       setMessage("Look applied.");
-      router.refresh();
       return payload.config;
     } catch (error) {
       console.error(error);

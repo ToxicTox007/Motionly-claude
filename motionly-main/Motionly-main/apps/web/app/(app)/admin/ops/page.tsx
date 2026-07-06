@@ -53,6 +53,42 @@ type QueueJob = {
   resource_id?: string | null;
 };
 
+type ProviderSloSummary = {
+  provider: string;
+  operation: string;
+  total: number;
+  successes: number;
+  errors: number;
+  success_rate: number | null;
+  avg_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  last_error_code: string | null;
+};
+
+type ProviderCostSummary = {
+  currency?: string;
+  total_usd?: number;
+  by_category?: Record<string, number>;
+  by_provider?: Record<string, number>;
+  approved_exports?: number;
+  cost_per_approved_export_usd?: number | null;
+};
+
+type OpsDashboard = {
+  api_p95_ms?: number | null;
+  api_p99_ms?: number | null;
+  route_errors_5xx?: number;
+  route_errors_by_route?: Record<string, number>;
+  supabase_p95_ms?: number | null;
+  slow_supabase_calls?: number;
+  max_queue_age_seconds?: number | null;
+  gpu_backlog?: number;
+  fresh_worker_count?: number;
+  stale_worker_count?: number;
+  render_latency_p95_ms?: number | null;
+  export_latency_p95_ms?: number | null;
+};
+
 type OpsOverview = {
   environment: string;
   request_id: string;
@@ -65,7 +101,9 @@ type OpsOverview = {
     recent_render_completions?: number;
     render_success_rate?: number | null;
   };
-  provider_costs?: Record<string, number | string>;
+  operations_dashboard?: OpsDashboard;
+  provider_costs?: ProviderCostSummary;
+  provider_slos?: ProviderSloSummary[];
   render_failure_diagnostics?: Array<Record<string, unknown>>;
   health?: Record<string, unknown>;
 };
@@ -78,6 +116,9 @@ export default async function LaunchOpsPage() {
     fetchQueues(context.headers),
     fetchDependencyHealth(context.headers),
   ]);
+  const providerCostEntries = sanitizeProviderCostEntries(
+    overview?.provider_costs?.by_provider,
+  );
 
   return (
     <AppShell title="Launch Ops">
@@ -107,6 +148,149 @@ export default async function LaunchOpsPage() {
           value={formatProviderCosts(overview?.provider_costs)}
         />
       </div>
+
+      <section className="mb-8">
+        <h2 className="mb-3 text-base font-bold">Runtime signals</h2>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            icon={Gauge}
+            label="API p95"
+            value={formatLatency(overview?.operations_dashboard?.api_p95_ms ?? null)}
+          />
+          <MetricCard
+            icon={Gauge}
+            label="API p99"
+            value={formatLatency(overview?.operations_dashboard?.api_p99_ms ?? null)}
+          />
+          <MetricCard
+            icon={AlertTriangle}
+            label="Route errors"
+            value={String(overview?.operations_dashboard?.route_errors_5xx ?? 0)}
+          />
+          <MetricCard
+            icon={Activity}
+            label="Supabase p95"
+            value={formatLatency(overview?.operations_dashboard?.supabase_p95_ms ?? null)}
+          />
+          <MetricCard
+            icon={AlertTriangle}
+            label="Slow Supabase"
+            value={String(overview?.operations_dashboard?.slow_supabase_calls ?? 0)}
+          />
+          <MetricCard
+            icon={Activity}
+            label="Max queue age"
+            value={formatAge(overview?.operations_dashboard?.max_queue_age_seconds ?? null)}
+          />
+          <MetricCard
+            icon={Gauge}
+            label="GPU backlog"
+            value={String(overview?.operations_dashboard?.gpu_backlog ?? 0)}
+          />
+          <MetricCard
+            icon={Activity}
+            label="Worker freshness"
+            value={formatWorkerFreshness(overview?.operations_dashboard)}
+          />
+          <MetricCard
+            icon={Gauge}
+            label="Render p95"
+            value={formatLatency(
+              overview?.operations_dashboard?.render_latency_p95_ms ?? null,
+            )}
+          />
+          <MetricCard
+            icon={Gauge}
+            label="Export p95"
+            value={formatLatency(
+              overview?.operations_dashboard?.export_latency_p95_ms ?? null,
+            )}
+          />
+        </div>
+      </section>
+
+      <section className="mb-8 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div>
+          <h2 className="mb-3 text-base font-bold">Provider SLOs</h2>
+          <div className="pixel-panel overflow-x-auto">
+            <table className="min-w-[760px] w-full text-left text-sm">
+              <thead className="bg-muted text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3">Provider</th>
+                  <th className="px-4 py-3">Operation</th>
+                  <th className="px-4 py-3">Success</th>
+                  <th className="px-4 py-3">Errors</th>
+                  <th className="px-4 py-3">P95</th>
+                  <th className="px-4 py-3">Last error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(overview?.provider_slos ?? []).map((slo) => (
+                  <tr
+                    key={`${slo.provider}:${slo.operation}`}
+                    className="border-t border-border"
+                  >
+                    <td className="px-4 py-3 font-semibold">{slo.provider}</td>
+                    <td className="px-4 py-3">{slo.operation}</td>
+                    <td className="px-4 py-3">
+                      {formatPercent(slo.success_rate)}
+                    </td>
+                    <td className="px-4 py-3">{slo.errors}</td>
+                    <td className="px-4 py-3">
+                      {formatLatency(slo.p95_latency_ms)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {slo.last_error_code ?? "None"}
+                    </td>
+                  </tr>
+                ))}
+                {!overview?.provider_slos?.length ? (
+                  <tr>
+                    <td
+                      className="px-4 py-8 text-center text-muted-foreground"
+                      colSpan={6}
+                    >
+                      No provider SLO samples reported.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <h2 className="mb-3 text-base font-bold">Provider costs</h2>
+          <div className="pixel-panel p-4">
+            <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+              Total tracked
+            </p>
+            <p className="mt-2 text-2xl font-black">
+              {formatUsd(overview?.provider_costs?.total_usd)}
+            </p>
+            <p className="mt-1 text-xs font-semibold text-muted-foreground">
+              Cost per approved export:{" "}
+              {formatUsd(overview?.provider_costs?.cost_per_approved_export_usd)}
+            </p>
+            <div className="mt-4 grid gap-2">
+              {providerCostEntries.map(([provider, amount]) => (
+                  <div
+                    key={provider}
+                    className="flex items-center justify-between gap-3 border-t border-border pt-2 text-sm"
+                  >
+                    <span className="font-semibold">{provider}</span>
+                    <span>{formatUsd(amount)}</span>
+                  </div>
+                ))}
+              {!providerCostEntries.length ? (
+                <p className="border-t border-border pt-3 text-sm text-muted-foreground">
+                  No provider costs reported.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between gap-3">
@@ -163,6 +347,8 @@ export default async function LaunchOpsPage() {
         <h2 className="mb-3 text-base font-bold">Queue jobs</h2>
         <AdminJobsList
           jobs={queues?.jobs ?? []}
+          totalJobs={queues?.total_jobs ?? 0}
+          limit={queues?.limit ?? 50}
           onRetry={retryQueueJob}
           onCancel={cancelQueueJob}
         />
@@ -293,7 +479,7 @@ async function fetchOpsOverview(headers: Record<string, string>) {
 
 async function fetchQueues(headers: Record<string, string>) {
   try {
-    const response = await fetch(`${env.apiBaseUrl}/admin/queues`, {
+    const response = await fetch(`${env.apiBaseUrl}/admin/queues?limit=50`, {
       cache: "no-store",
       headers: {
         ...headers,
@@ -306,6 +492,8 @@ async function fetchQueues(headers: Record<string, string>) {
     return (await response.json()) as {
       queues: QueueSnapshot[];
       jobs: QueueJob[];
+      total_jobs?: number;
+      limit?: number;
     };
   } catch {
     return null;
@@ -378,37 +566,40 @@ function formatAge(seconds: number | null) {
   return `${Math.round(seconds / 60)}m`;
 }
 
-function formatProviderCosts(
-  costs: Record<string, number | string> | undefined,
-): string {
-  if (!costs) return "No cost data yet";
+function formatProviderCosts(costs: ProviderCostSummary | undefined): string {
+  if (!costs || costs.total_usd == null) return "No cost data yet";
+  return formatUsd(costs.total_usd);
+}
 
-  const filteredCosts = Object.entries(costs).filter(([k, v]) => {
-    const keyLower = k.toLowerCase();
-    const valString = String(v ?? "").toLowerCase();
+function sanitizeProviderCostEntries(
+  byProvider: Record<string, number> | undefined,
+): Array<[string, number]> {
+  return Object.entries(byProvider ?? {}).filter(([key, value]) => {
+    const keyLower = key.toLowerCase();
+    const valString = String(value).toLowerCase();
     return !keyLower.includes("placeholder") && !valString.includes("placeholder");
   });
+}
 
-  if (filteredCosts.length === 0) return "No cost data yet";
+function formatUsd(value: number | null | undefined): string {
+  if (value == null) return "No data";
+  return `$${value.toFixed(2)}`;
+}
 
-  let total = 0;
-  let hasNumericCost = false;
-  const costLines: string[] = [];
+function formatPercent(value: number | null): string {
+  if (value == null) return "No data";
+  return `${Math.round(value * 100)}%`;
+}
 
-  for (const [k, v] of filteredCosts) {
-    const num = Number(v);
-    if (!isNaN(num) && v !== "" && v !== null) {
-      total += num;
-      hasNumericCost = true;
-      costLines.push(`${k}: $${num.toFixed(2)}`);
-    } else {
-      costLines.push(`${k}: ${v}`);
-    }
-  }
+function formatLatency(value: number | null): string {
+  if (value == null) return "No data";
+  if (value < 1000) return `${value}ms`;
+  return `${(value / 1000).toFixed(1)}s`;
+}
 
-  if (hasNumericCost) {
-    return `$${total.toFixed(2)}`;
-  }
-
-  return costLines.join(", ");
+function formatWorkerFreshness(dashboard: OpsDashboard | undefined): string {
+  if (!dashboard) return "No data";
+  return `${dashboard.fresh_worker_count ?? 0} fresh / ${
+    dashboard.stale_worker_count ?? 0
+  } stale`;
 }

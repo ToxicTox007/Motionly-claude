@@ -6,7 +6,11 @@ import { Input, Label, Select, TextArea, Slider } from "./ui";
 import { Button } from "../button";
 import { AlertCircle, CheckCircle2, Eye, History, Loader2, RefreshCw, Save, Sparkles } from "lucide-react";
 import { env } from "@/lib/env";
-import { editorApiRequest, pollPlanJob } from "@/lib/client-api";
+import {
+  editorApiRequest,
+  pollPlanJob,
+  startAdaptivePolling,
+} from "@/lib/client-api";
 import type {
   BrollSlotSummary,
   BrollDensity,
@@ -138,11 +142,14 @@ export function AIStep({
         if (!canceled) console.error(error);
       }
     };
-    const timer = window.setInterval(() => void poll(), 5000);
+    const stopPolling = startAdaptivePolling(() => poll(), {
+      intervalMs: 5000,
+      maxIntervalMs: 15000,
+    });
     return () => {
       canceled = true;
       abortController.abort();
-      window.clearInterval(timer);
+      stopPolling();
     };
   }, [apiAccessToken, projectId, userId, visualStatus.status, workspaceId]);
 

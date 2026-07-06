@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -7,6 +9,12 @@ import httpx
 
 from app.api.errors import ApiError
 from app.schemas.scale import ScaleResourceResponse, ScaleResourceStatus
+from app.services.supabase import SupabaseRestClient
+
+SCALE_RESOURCE_COLUMNS = (
+    "id,workspace_id,project_id,kind,name,status,payload,result,revision,error_message,"
+    "created_at,updated_at"
+)
 
 
 @dataclass
@@ -97,37 +105,69 @@ class InMemoryScaleRepository:
 
 
 class SupabaseScaleRepository(InMemoryScaleRepository):
-    def __init__(self, *, supabase_url: str, service_role_key: str) -> None:
+    def __init__(
+        self,
+        *,
+        supabase_url: str,
+        service_role_key: str,
+        metrics_registry: object | None = None,
+    ) -> None:
         super().__init__()
-        self.rest_url = f"{supabase_url.rstrip('/')}/rest/v1/phase5_resources"
-        self.headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "content-type": "application/json",
-            "prefer": "return=representation",
-        }
+        self.client = SupabaseRestClient(
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            repository="scale",
+            metrics_registry=metrics_registry,
+            timeout_seconds=15,
+        )
 
     def create(self, **values: Any) -> ScaleResourceRecord:
-        response = httpx.post(
-            self.rest_url,
-            headers=self.headers,
+        response = self.client.request(
+            "POST",
+            "/phase5_resources",
+            params={"select": SCALE_RESOURCE_COLUMNS},
             json=self._json(values),
-            timeout=15,
+        )
+        self._raise(response)
+        return self._from_row(response.json()[0])
+
+    async def create_async(self, **values: Any) -> ScaleResourceRecord:
+        response = await self.client.async_request(
+            "POST",
+            "/phase5_resources",
+            params={"select": SCALE_RESOURCE_COLUMNS},
+            json=self._json(values),
         )
         self._raise(response)
         return self._from_row(response.json()[0])
 
     def get(self, *, resource_id: UUID, workspace_id: UUID) -> ScaleResourceRecord:
-        response = httpx.get(
-            self.rest_url,
-            headers=self.headers,
+        response = self.client.request(
+            "GET",
+            "/phase5_resources",
             params={
                 "id": f"eq.{resource_id}",
                 "workspace_id": f"eq.{workspace_id}",
-                "select": "*",
+                "select": SCALE_RESOURCE_COLUMNS,
                 "limit": "1",
             },
-            timeout=15,
+        )
+        self._raise(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "scale_resource_not_found", "Phase 5 resource was not found.")
+        return self._from_row(rows[0])
+
+    async def get_async(self, *, resource_id: UUID, workspace_id: UUID) -> ScaleResourceRecord:
+        response = await self.client.async_request(
+            "GET",
+            "/phase5_resources",
+            params={
+                "id": f"eq.{resource_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "select": SCALE_RESOURCE_COLUMNS,
+                "limit": "1",
+            },
         )
         self._raise(response)
         rows = response.json()
@@ -145,7 +185,7 @@ class SupabaseScaleRepository(InMemoryScaleRepository):
     ) -> list[ScaleResourceRecord]:
         params = {
             "workspace_id": f"eq.{workspace_id}",
-            "select": "*",
+            "select": SCALE_RESOURCE_COLUMNS,
             "order": "updated_at.desc",
             "limit": str(limit),
         }
@@ -153,17 +193,69 @@ class SupabaseScaleRepository(InMemoryScaleRepository):
             params["kind"] = f"eq.{kind}"
         if project_id:
             params["project_id"] = f"eq.{project_id}"
-        response = httpx.get(self.rest_url, headers=self.headers, params=params, timeout=15)
+        response = self.client.request("GET", "/phase5_resources", params=params)
         self._raise(response)
         return [self._from_row(row) for row in response.json()]
 
+    async def list_async(
+        self,
+        *,
+        workspace_id: UUID,
+        kind: str | None = None,
+        project_id: UUID | None = None,
+        limit: int = 100,
+    ) -> list[ScaleResourceRecord]:
+        params = {
+            "workspace_id": f"eq.{workspace_id}",
+            "select": SCALE_RESOURCE_COLUMNS,
+            "order": "updated_at.desc",
+            "limit": str(limit),
+        }
+        if kind:
+            params["kind"] = f"eq.{kind}"
+        if project_id:
+            params["project_id"] = f"eq.{project_id}"
+        response = await self.client.async_request("GET", "/phase5_resources", params=params)
+        self._raise(response)
+        return [self._from_row(row) for row in response.json()]
+
+    async def latest_async(
+        self,
+        *,
+        workspace_id: UUID,
+        kind: str,
+        project_id: UUID | None = None,
+        status: ScaleResourceStatus | None = None,
+    ) -> ScaleResourceRecord | None:
+        records = await self.list_async(
+            workspace_id=workspace_id,
+            kind=kind,
+            project_id=project_id,
+            limit=100,
+        )
+        return next((item for item in records if status is None or item.status == status), None)
+
     def update(self, *, record: ScaleResourceRecord, **values: Any) -> ScaleResourceRecord:
-        response = httpx.patch(
-            self.rest_url,
-            headers=self.headers,
-            params={"id": f"eq.{record.id}"},
+        response = self.client.request(
+            "PATCH",
+            "/phase5_resources",
+            params={"id": f"eq.{record.id}", "select": SCALE_RESOURCE_COLUMNS},
             json=self._json({**values, "updated_at": datetime.now(UTC)}),
-            timeout=15,
+        )
+        self._raise(response)
+        return self._from_row(response.json()[0])
+
+    async def update_async(
+        self,
+        *,
+        record: ScaleResourceRecord,
+        **values: Any,
+    ) -> ScaleResourceRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/phase5_resources",
+            params={"id": f"eq.{record.id}", "select": SCALE_RESOURCE_COLUMNS},
+            json=self._json({**values, "updated_at": datetime.now(UTC)}),
         )
         self._raise(response)
         return self._from_row(response.json()[0])
@@ -171,12 +263,34 @@ class SupabaseScaleRepository(InMemoryScaleRepository):
     def update_if_revision(
         self, *, record: ScaleResourceRecord, expected_revision: int, **values: Any
     ) -> ScaleResourceRecord:
-        response = httpx.patch(
-            self.rest_url,
-            headers=self.headers,
-            params={"id": f"eq.{record.id}", "revision": f"eq.{expected_revision}"},
+        response = self.client.request(
+            "PATCH",
+            "/phase5_resources",
+            params={
+                "id": f"eq.{record.id}",
+                "revision": f"eq.{expected_revision}",
+                "select": SCALE_RESOURCE_COLUMNS,
+            },
             json=self._json({**values, "updated_at": datetime.now(UTC)}),
-            timeout=15,
+        )
+        self._raise(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(409, "collaboration_revision_conflict", "Reload the shared edit.")
+        return self._from_row(rows[0])
+
+    async def update_if_revision_async(
+        self, *, record: ScaleResourceRecord, expected_revision: int, **values: Any
+    ) -> ScaleResourceRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/phase5_resources",
+            params={
+                "id": f"eq.{record.id}",
+                "revision": f"eq.{expected_revision}",
+                "select": SCALE_RESOURCE_COLUMNS,
+            },
+            json=self._json({**values, "updated_at": datetime.now(UTC)}),
         )
         self._raise(response)
         rows = response.json()
@@ -186,11 +300,21 @@ class SupabaseScaleRepository(InMemoryScaleRepository):
 
     def delete(self, *, resource_id: UUID, workspace_id: UUID) -> None:
         self.get(resource_id=resource_id, workspace_id=workspace_id)
-        response = httpx.delete(
-            self.rest_url,
-            headers=self.headers,
+        response = self.client.request(
+            "DELETE",
+            "/phase5_resources",
+            headers={"prefer": "return=minimal"},
             params={"id": f"eq.{resource_id}"},
-            timeout=15,
+        )
+        self._raise(response)
+
+    async def delete_async(self, *, resource_id: UUID, workspace_id: UUID) -> None:
+        await self.get_async(resource_id=resource_id, workspace_id=workspace_id)
+        response = await self.client.async_request(
+            "DELETE",
+            "/phase5_resources",
+            headers={"prefer": "return=minimal"},
+            params={"id": f"eq.{resource_id}"},
         )
         self._raise(response)
 
