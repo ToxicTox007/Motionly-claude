@@ -52,12 +52,6 @@ export default defineRailway(() => {
       PEXELS_API_KEY: preserve(),
       PIXABAY_API_KEY: preserve(),
       SENTRY_DSN: preserve(),
-      LIGHTNING_USER_ID: preserve(),
-      LIGHTNING_API_KEY: preserve(),
-      LIGHTNING_TEAMSPACE: preserve(),
-      LIGHTNING_VISUAL_DEPLOYMENT: "motionly-visual-worker",
-      LIGHTNING_MATTE_DEPLOYMENT: "motionly-matte-worker",
-      LIGHTNING_RENDER_DEPLOYMENT: "motionly-gpu-render-worker",
     },
   });
 

@@ -151,22 +151,6 @@ class Settings(BaseSettings):
         alias="BILLING_PORTAL_RETURN_URL",
     )
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
-    lightning_user_id: str | None = Field(default=None, alias="LIGHTNING_USER_ID")
-    lightning_api_key: str | None = Field(default=None, alias="LIGHTNING_API_KEY")
-    lightning_teamspace: str | None = Field(default=None, alias="LIGHTNING_TEAMSPACE")
-    lightning_visual_deployment: str = Field(
-        default="motionly-visual-worker",
-        alias="LIGHTNING_VISUAL_DEPLOYMENT",
-    )
-    lightning_matte_deployment: str = Field(
-        default="motionly-matte-worker",
-        alias="LIGHTNING_MATTE_DEPLOYMENT",
-    )
-    lightning_render_deployment: str = Field(
-        default="motionly-gpu-render-worker",
-        alias="LIGHTNING_RENDER_DEPLOYMENT",
-    )
-    lightning_max_replicas: int | None = Field(default=None, alias="LIGHTNING_MAX_REPLICAS")
     otel_exporter_otlp_endpoint: str | None = Field(
         default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT"
     )
