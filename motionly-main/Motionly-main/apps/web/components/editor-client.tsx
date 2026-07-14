@@ -46,9 +46,13 @@ import {
   pollPlanJob,
   resolveQueuedLayer,
   startAdaptivePolling,
+  RevisionConflictError,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
+import { useRevisionTracking } from "@/hooks/useRevisionTracking";
+import type { ConflictState } from "@/hooks/useRevisionTracking";
+import { ConflictDialog } from "./editor/ConflictDialog";
 import {
   PRODUCT_FLOW_STAGES,
   productFlowStageIndex,
@@ -429,13 +433,21 @@ export function EditorClient(props: EditorClientProps) {
     [setInspectorTab],
   );
 
+  const revisionTracking = useRevisionTracking(projectId, localActivePlanId);
+  const { updateRevision, handleConflict, clearConflict, conflictState, getExpectedRevision } =
+    revisionTracking;
+
   const handlePlanUpdated = useCallback((plan: EditPlanRecordSummary) => {
     setLocalEditPlans((prev) => {
       const without = prev.filter((p) => p.id !== plan.id);
       return [plan, ...without];
     });
     setLocalActivePlanId(plan.id);
-  }, []);
+    // Track revision from API response (backward compatible — ignores null)
+    if ((plan as any).revision != null) {
+      updateRevision((plan as any).revision, "plan");
+    }
+  }, [updateRevision]);
 
   const synchronizeCanonicalTimeline = useCallback(async () => {
     if (!localActivePlanId) return;
@@ -514,6 +526,7 @@ export function EditorClient(props: EditorClientProps) {
 
   const executeHistoryAction = useCallback(
     async (action: DurableHistoryAction) => {
+      const expectedRev = action.resultKind === "plan" ? getExpectedRevision() : undefined;
       const payload = await editorApiRequest<Record<string, any>>(
         `${env.apiBaseUrl}${action.path}`,
         {
@@ -523,7 +536,10 @@ export function EditorClient(props: EditorClientProps) {
           accessToken: apiAccessToken,
           friendlyError:
             "The saved editor history action could not be applied.",
-          body: action.body,
+          body: {
+            ...action.body,
+            ...(expectedRev != null ? { expected_revision: expectedRev } : {}),
+          },
         },
       );
       if (action.resultKind === "plan" && payload.plan)
@@ -541,6 +557,7 @@ export function EditorClient(props: EditorClientProps) {
     },
     [
       apiAccessToken,
+      getExpectedRevision,
       handleBrollSlotUpdated,
       handleCaptionTrackUpdated,
       handleMusicSelectionUpdated,
@@ -598,6 +615,36 @@ export function EditorClient(props: EditorClientProps) {
     ],
   );
 
+  // ── Conflict resolution handlers ──────────────────────────────────────────
+  const refetchActivePlan = useCallback(async () => {
+    if (!localActivePlanId) return;
+    try {
+      const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+        `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}`,
+        {
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+          friendlyError: "Could not reload the plan.",
+        },
+      );
+      handlePlanUpdated(payload.plan);
+      clearConflict();
+      router.refresh();
+    } catch (error) {
+      console.error("Failed to refetch plan after conflict:", error);
+    }
+  }, [
+    apiAccessToken,
+    clearConflict,
+    handlePlanUpdated,
+    localActivePlanId,
+    projectId,
+    router,
+    userId,
+    workspaceId,
+  ]);
+
   // The server route renders lightweight upload/processing clients before this
   // ready-only editor entry is referenced.
   return (
@@ -652,6 +699,13 @@ export function EditorClient(props: EditorClientProps) {
         handleMusicSelectionUpdated={handleMusicSelectionUpdated}
         handleEffectsConfigUpdated={handleEffectsConfigUpdated}
         saveProjectTitle={saveProjectTitle}
+        conflictState={conflictState}
+        onConflictReload={refetchActivePlan}
+        onConflictForceSave={clearConflict}
+        onConflictDismiss={clearConflict}
+        getExpectedRevision={getExpectedRevision}
+        onConflictDetected={handleConflict}
+        planRevision={revisionTracking.planRevision}
       />
     </EditorHistoryProvider>
   );
@@ -721,6 +775,13 @@ interface EditorClientEditorProps extends EditorClientProps {
   handleMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
   handleEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
   saveProjectTitle: (nextTitle: string) => Promise<void>;
+  conflictState: ConflictState | null;
+  onConflictReload: () => Promise<void>;
+  onConflictForceSave: () => void;
+  onConflictDismiss: () => void;
+  getExpectedRevision: () => number | undefined;
+  onConflictDetected: (error: unknown, source: string) => boolean;
+  planRevision: number | null;
 }
 
 function EditorClientEditor(props: EditorClientEditorProps) {
@@ -786,6 +847,13 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     handleMusicSelectionUpdated,
     handleEffectsConfigUpdated,
     saveProjectTitle,
+    conflictState,
+    onConflictReload,
+    onConflictForceSave,
+    onConflictDismiss,
+    getExpectedRevision,
+    onConflictDetected,
+    planRevision,
   } = props;
   const router = useRouter();
   const { toast } = useToast();
@@ -916,6 +984,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     async (elements: ManualElement[]) => {
       if (!activePlan)
         throw new Error("Generate an AI edit before placing elements.");
+      const expectedRev = getExpectedRevision();
       const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
         `${env.apiBaseUrl}/projects/${projectId}/plans/${activePlan.id}/manual-elements`,
         {
@@ -924,7 +993,10 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           userId,
           accessToken: apiAccessToken,
           friendlyError: "Element changes could not be saved.",
-          body: { manual_elements: elements },
+          body: {
+            manual_elements: elements,
+            ...(expectedRev != null ? { expected_revision: expectedRev } : {}),
+          },
         },
       );
       handlePlanUpdated(payload.plan);
@@ -933,6 +1005,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     [
       activePlan,
       apiAccessToken,
+      getExpectedRevision,
       handlePlanUpdated,
       projectId,
       userId,
@@ -972,6 +1045,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         });
         setDropMessage(`${label} saved.`);
       } catch (error) {
+        if (onConflictDetected(error, "manual_elements")) return;
         setDropMessage((error as Error).message);
         toast({
           title: "Action Failed",
@@ -985,6 +1059,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     [
       activePlan,
       manualElements,
+      onConflictDetected,
       persistManualElements,
       projectId,
       pushHistory,
@@ -1620,6 +1695,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               onEffectsConfigUpdated={handleEffectsConfigUpdated}
               onPreviewLookUpdated={setPreviewLook}
               onPreviewExportUpdated={setPreviewExport}
+              planRevision={planRevision}
             />
           ),
 
@@ -1647,6 +1723,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               brollSlots={localBrollSlots}
               onBrollSlotUpdated={handleBrollSlotUpdated}
               onMusicSelectionUpdated={handleMusicSelectionUpdated}
+              getExpectedRevision={getExpectedRevision}
+              onConflictDetected={onConflictDetected}
             />
           ),
         }}
@@ -1669,6 +1747,14 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           {dropMessage}
         </div>
       ) : null}
+      {conflictState && (
+        <ConflictDialog
+          conflict={conflictState}
+          onReload={onConflictReload}
+          onForceSave={async () => onConflictForceSave()}
+          onDismiss={onConflictDismiss}
+        />
+      )}
     </DndContext>
   );
 }
@@ -1710,6 +1796,7 @@ interface InspectorPanelProps {
   onEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
   onPreviewLookUpdated: (state: PreviewLookState | null) => void;
   onPreviewExportUpdated: (state: PreviewExportState | null) => void;
+  planRevision?: number | null;
 }
 
 const INSPECTOR_TABS: Array<{
@@ -1763,6 +1850,7 @@ function InspectorPanel({
   onEffectsConfigUpdated,
   onPreviewLookUpdated,
   onPreviewExportUpdated,
+  planRevision,
 }: InspectorPanelProps) {
   const brollDensity = activePlan?.broll_density ?? null;
   const musicMood = activePlan?.summary?.music_mood ?? null;
@@ -1948,6 +2036,7 @@ function InspectorPanel({
             sourceHeight={upload.height}
             maxExportResolution={maxExportResolution}
             onPreviewExportUpdated={onPreviewExportUpdated}
+            planRevision={planRevision}
           />
         )}
         {tab === "history" && (

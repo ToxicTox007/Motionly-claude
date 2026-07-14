@@ -26,6 +26,8 @@ from app.services.storage import StorageSigner
 
 EMBEDDING_DOWNLOAD_TIMEOUT_SECONDS = 6.0
 EMBEDDING_DOWNLOAD_MAX_ATTEMPTS = 2
+EMBEDDING_DOWNLOAD_MAX_BYTES = 8 * 1024 * 1024
+_ALLOWED_THUMBNAIL_CONTENT_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
 COMPATIBLE_CLIP_MODEL_VERSION = "compatible-hash-clip-v1"
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,6 @@ def ensure_owned_stock_asset(
         with safe_http_stream(
             source_url,
             timeout=180,
-            stream_factory=httpx.stream,
         ) as source:
             source.raise_for_status()
             content_type = source.headers.get("content-type", "video/mp4")
@@ -755,6 +756,35 @@ def ensure_candidate_semantic_embedding(
     )
 
 
+def _read_bounded_thumbnail(response: httpx.Response) -> bytes:
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in _ALLOWED_THUMBNAIL_CONTENT_TYPES:
+        raise MediaUrlPolicyError("Thumbnail response content type is not supported.")
+    raw_length = response.headers.get("content-length")
+    if raw_length is not None:
+        try:
+            content_length = int(raw_length)
+        except ValueError as exc:
+            raise MediaUrlPolicyError("Thumbnail response length is invalid.") from exc
+        if content_length < 0 or content_length > EMBEDDING_DOWNLOAD_MAX_BYTES:
+            raise MediaUrlPolicyError("Thumbnail response exceeds the allowed size.")
+
+    content = bytearray()
+    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+        content.extend(chunk)
+        if len(content) > EMBEDDING_DOWNLOAD_MAX_BYTES:
+            raise MediaUrlPolicyError("Thumbnail response exceeds the allowed size.")
+    image = bytes(content)
+    if not (
+        image.startswith(b"\xff\xd8\xff")
+        or image.startswith(b"\x89PNG\r\n\x1a\n")
+        or image.startswith((b"GIF87a", b"GIF89a"))
+        or (image.startswith(b"RIFF") and image[8:12] == b"WEBP")
+    ):
+        raise MediaUrlPolicyError("Thumbnail response is not a supported image.")
+    return image
+
+
 def enrich_stock_asset(
     *,
     asset,
@@ -829,14 +859,11 @@ def enrich_stock_asset(
     last_reason = "embedding_unavailable"
     for attempt in range(1, max(1, max_attempts) + 1):
         try:
-            response = httpx.get(
-                thumbnail_url,
-                timeout=timeout_seconds,
-                follow_redirects=True,
-            )
-            response.raise_for_status()
+            with safe_http_stream(thumbnail_url, timeout=timeout_seconds) as response:
+                response.raise_for_status()
+                image_bytes = _read_bounded_thumbnail(response)
             embedding = provider.embed_image(
-                image_bytes=response.content,
+                image_bytes=image_bytes,
                 source_hint=thumbnail_url,
             )
             if not embedding:
@@ -867,9 +894,13 @@ def enrich_stock_asset(
                 },
             )
             return enriched
+        except MediaUrlPolicyError:
+            last_reason = "thumbnail_download_rejected"
         except httpx.TimeoutException:
             last_reason = "thumbnail_download_timeout"
         except httpx.HTTPStatusError:
+            last_reason = "thumbnail_download_failed"
+        except httpx.RequestError:
             last_reason = "thumbnail_download_failed"
         except Exception:
             last_reason = "embedding_generation_failed"

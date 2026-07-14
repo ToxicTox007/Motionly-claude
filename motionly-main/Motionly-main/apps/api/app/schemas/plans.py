@@ -305,6 +305,7 @@ class EditPlanResponse(BaseModel):
     validation_errors: list[str] = Field(default_factory=list)
     summary: PlanSummary
     plan: EditPlan
+    revision: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -332,11 +333,13 @@ class PlanListResponse(BaseModel):
 
 class PlanActivateResponse(BaseModel):
     plan: EditPlanResponse
+    revision: int | None = None
     status: Literal["active"] = "active"
 
 
 class PlanCutsUpdateRequest(JsonStringBodyMixin, BaseModel):
     cuts: list[EditPlanCut] = Field(min_length=1, max_length=24)
+    expected_revision: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -346,11 +349,13 @@ class PlanCutsUpdateRequest(JsonStringBodyMixin, BaseModel):
 
 class PlanCutsUpdateResponse(BaseModel):
     plan: EditPlanResponse
+    revision: int | None = None
     status: Literal["updated"] = "updated"
 
 
 class PlanCaptionHighlightsUpdateRequest(JsonStringBodyMixin, BaseModel):
     caption_highlights: list[CaptionHighlight] = Field(default_factory=list, max_length=12)
+    expected_revision: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -360,11 +365,13 @@ class PlanCaptionHighlightsUpdateRequest(JsonStringBodyMixin, BaseModel):
 
 class PlanCaptionHighlightsUpdateResponse(BaseModel):
     plan: EditPlanResponse
+    revision: int | None = None
     status: Literal["updated"] = "updated"
 
 
 class PlanManualElementsUpdateRequest(JsonStringBodyMixin, BaseModel):
     manual_elements: list[ManualElement] = Field(default_factory=list, max_length=200)
+    expected_revision: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -374,10 +381,12 @@ class PlanManualElementsUpdateRequest(JsonStringBodyMixin, BaseModel):
 
 class PlanManualElementsUpdateResponse(BaseModel):
     plan: EditPlanResponse
+    revision: int | None = None
 
 
 class TimelineUpdateRequest(JsonStringBodyMixin, BaseModel):
     timeline: TimelineDocument
+    expected_revision: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -387,6 +396,7 @@ class TimelineUpdateRequest(JsonStringBodyMixin, BaseModel):
 
 class TimelineUpdateResponse(BaseModel):
     plan: EditPlanResponse
+    revision: int | None = None
     status: Literal["updated"] = "updated"
 
 

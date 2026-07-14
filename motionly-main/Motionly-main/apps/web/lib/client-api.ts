@@ -108,6 +108,33 @@ export class EditorApiError extends Error {
   }
 }
 
+export class RevisionConflictError extends EditorApiError {
+  expectedRevision: number;
+  currentRevision: number;
+
+  constructor({
+    expectedRevision,
+    currentRevision,
+    requestId,
+  }: {
+    expectedRevision: number;
+    currentRevision: number;
+    requestId?: string;
+  }) {
+    super({
+      message:
+        "Your changes conflict with a newer version. Please reload or force save.",
+      status: 409,
+      code: "revision_conflict",
+      requestId,
+      technicalMessage: `Expected revision ${expectedRevision}, server is at ${currentRevision}`,
+    });
+    this.name = "RevisionConflictError";
+    this.expectedRevision = expectedRevision;
+    this.currentRevision = currentRevision;
+  }
+}
+
 export async function editorApiRequest<T>(
   path: string,
   {
@@ -170,6 +197,16 @@ export async function editorApiRequest<T>(
     const error = payload?.error as
       | { code?: string; message?: string; request_id?: string }
       | undefined;
+
+    // Handle 409 revision conflict specifically
+    if (response.status === 409 && (payload as any)?.error === "revision_conflict") {
+      throw new RevisionConflictError({
+        expectedRevision: (payload as any)?.expected_revision ?? 0,
+        currentRevision: (payload as any)?.current_revision ?? 0,
+        requestId: error?.request_id,
+      });
+    }
+
     const technicalMessage = error?.message ?? response.statusText;
     const shouldHideTechnical =
       error?.code === "request_validation_failed" ||

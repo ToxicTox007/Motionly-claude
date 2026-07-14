@@ -138,14 +138,39 @@ def test_api_security_headers_are_applied_at_runtime() -> None:
 
 
 def test_worker_credentials_are_structurally_separated_in_runtime_config() -> None:
-    for relative in (
-        "apps/api/app/api/internal_jobs.py",
-        "apps/api/app/api/internal_renders.py",
-    ):
-        source = (ROOT / relative).read_text(encoding="utf-8")
+    internal_route_paths = list((ROOT / "apps/api/app/api").glob("internal_*.py"))
+    internal_route_paths.append(ROOT / "apps/api/app/api/operations.py")
+    internal_route_sources = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in internal_route_paths
+        if "APIRouter" in path.read_text(encoding="utf-8")
+    }
+    assert set(internal_route_sources) == {
+        "internal_batches.py",
+        "internal_jobs.py",
+        "internal_renders.py",
+        "internal_retention.py",
+        "operations.py",
+    }
+    for relative, source in internal_route_sources.items():
+        assert "require_worker_token" in source, relative
+        assert "admin_api_token" not in source, relative
+
+    worker_auth_sources = [
+        source
+        for source in internal_route_sources.values()
+        if "async def require_worker_token" in source
+        or "async def _require_worker_token" in source
+    ]
+    assert worker_auth_sources
+    for source in worker_auth_sources:
         assert "worker_api_token" in source
-        assert "admin_api_token" not in source
         assert "constant_time_token_matches" in source
+
+    admin_source = (ROOT / "apps/api/app/api/admin.py").read_text(encoding="utf-8")
+    assert "require_admin" in admin_source
+    assert "admin_api_token" in admin_source
+    assert "constant_time_token_matches" in admin_source
 
     for relative in (
         "apps/worker/src/queue-common.mjs",
@@ -169,9 +194,47 @@ def test_worker_credentials_are_structurally_separated_in_runtime_config() -> No
     assert "publish_oauth_state_secret" in compose
 
 
+def test_registered_internal_and_admin_routes_remain_separately_authorized() -> None:
+    import inspect
+
+    from app.api.admin import require_admin
+    from app.main import app
+
+    internal_routes = []
+    admin_routes = []
+    for route in app.routes:
+        if hasattr(route, "path") and route.path.startswith("/internal"):
+            internal_routes.append(route)
+        elif hasattr(route, "path") and route.path.startswith("/admin"):
+            admin_routes.append(route)
+        elif hasattr(route, "original_router"):
+            for subroute in route.original_router.routes:
+                if hasattr(subroute, "path") and subroute.path.startswith("/internal"):
+                    internal_routes.append(subroute)
+                elif hasattr(subroute, "path") and subroute.path.startswith("/admin"):
+                    admin_routes.append(subroute)
+
+    assert internal_routes
+    assert {
+        "/internal/operations/heartbeat",
+        "/internal/operations/provider-slo",
+        "/internal/operations/gpu-autoscaling/run",
+    }.issubset({route.path for route in internal_routes})
+    for route in internal_routes:
+        endpoint_source = inspect.getsource(route.endpoint)
+        assert "require_worker_token" in endpoint_source, f"{route.path} was not protected"
+        assert "require_admin" not in endpoint_source, route.path
+
+    assert admin_routes
+    for route in admin_routes:
+        dependencies = {dependency.call for dependency in route.dependant.dependencies}
+        assert require_admin in dependencies, f"{route.path} was not admin-authorized"
+
+
 def test_runtime_containers_drop_root_and_own_writable_paths() -> None:
     dockerfiles = (
         "apps/web/Dockerfile",
+        "apps/api/Dockerfile",
         "apps/worker/Dockerfile",
         "apps/worker/Dockerfile.python",
         "apps/worker/Dockerfile.python.demucs",
@@ -189,6 +252,64 @@ def test_runtime_containers_drop_root_and_own_writable_paths() -> None:
         assert "--uid 10001" in source, f"{relative} must use the shared runtime UID"
         for path in ("/var/cache/motionly", "/var/data/motionly", "/tmp/motionly"):
             assert path in source, f"{relative} does not provision {path}"
+
+
+def test_gpu_compose_initializes_shared_volume_ownership_without_worker_admin_secrets() -> None:
+    compose = (ROOT / "infra/docker-compose.gpu.yml").read_text(encoding="utf-8")
+    initializer = re.search(
+        r"(?ms)^  volume-permissions:\n(.*?)(?=^  postgres:\n)", compose
+    )
+    assert initializer is not None
+    initializer_source = initializer.group(1)
+    assert "image: alpine:3.21.3" in initializer_source
+    assert "network_mode: none" in initializer_source
+    assert "restart: \"no\"" in initializer_source
+    assert "user: \"0:0\"" in initializer_source
+    assert "read_only: true" in initializer_source
+    assert "chown -R 10001:10001" in initializer_source
+    assert "/var/data/motionly" in initializer_source
+    assert "/var/cache/motionly" in initializer_source
+
+    worker_dependencies = compose.split("x-worker-depends-on:", 1)[1].split(
+        "x-media-environment:", 1
+    )[0]
+    assert "api: { condition: service_started }" in worker_dependencies
+    assert (
+        "volume-permissions: { condition: service_completed_successfully }"
+        in worker_dependencies
+    )
+
+    api_service = re.search(r"(?ms)^  api:\n(.*?)(?=^  web:\n)", compose)
+    assert api_service is not None
+    assert "volume-permissions: { condition: service_completed_successfully }" in (
+        api_service.group(1)
+    )
+
+    worker_services = (
+        "cpu-ffmpeg-worker",
+        "gpu-inference-worker",
+        "matte-worker",
+        "gpu-ffmpeg-worker",
+        "demucs-worker",
+        "provider-worker",
+        "planning-worker",
+        "remotion-worker",
+        "publishing-worker",
+    )
+    for service in worker_services:
+        service_block = re.search(
+            rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            compose,
+        )
+        assert service_block is not None, service
+        source = service_block.group(1)
+        assert "depends_on: *worker-depends-on" in source, service
+        assert "admin_api_token" not in source, service
+        assert "publish_oauth_state_secret" not in source, service
+
+    worker_secrets = compose.split("secrets: &worker-secrets", 1)[1].split("\n\n", 1)[0]
+    assert "admin_api_token" not in worker_secrets
+    assert "publish_oauth_state_secret" not in worker_secrets
 
 
 def test_environment_templates_contain_only_distinct_placeholders() -> None:

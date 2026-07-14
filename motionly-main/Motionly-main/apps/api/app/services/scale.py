@@ -422,7 +422,6 @@ def _generate_broll(
             stream_context = safe_http_stream(
                 generated.video_url,
                 timeout=180,
-                stream_factory=httpx.stream,
             )
             with stream_context as response:
                 if response.status_code >= 400:

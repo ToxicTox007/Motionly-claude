@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import httpx
 
 from app.api.errors import ApiError
+from app.api.revision_errors import RevisionConflictError
 from app.repositories.captions import InMemoryCaptionRepository, TranscriptRecord
 from app.repositories.uploads import UploadRecord
 from app.schemas.plans import (
@@ -24,7 +25,7 @@ EDIT_PLAN_COLUMNS = (
     "id,workspace_id,project_id,transcript_id,version,schema_version,status,is_active,style,"
     "target_duration_s,broll_density,prompt,feedback,provider,model,planner_source,model_name,"
     "prompt_version,retry_count,fallback_reason,cache_key,schema_hash,latency_ms,"
-    "cost_estimate_usd,validation_errors,summary,plan,created_at,updated_at"
+    "cost_estimate_usd,validation_errors,summary,plan,revision,created_at,updated_at"
 )
 EDIT_PLAN_SNAPSHOT_COLUMNS = (
     "id,workspace_id,project_id,source_plan_id,source_plan_version,transcript_id,"
@@ -64,6 +65,7 @@ class EditPlanRecord:
     latency_ms: int | None = None
     cost_estimate_usd: float | None = None
     validation_errors: list[str] = field(default_factory=list)
+    revision: int = 1
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -96,6 +98,7 @@ class EditPlanRecord:
             validation_errors=self.validation_errors,
             summary=self.summary,
             plan=self.plan,
+            revision=self.revision,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -315,6 +318,41 @@ class InMemoryPlanRepository:
         record.schema_version = record.plan.schema_version
         record.target_duration_s = record.plan.target_duration_s
         record.prompt_version = record.plan.prompt_version
+        record.updated_at = datetime.now(UTC)
+        return record
+
+    def update_plan_with_revision(
+        self,
+        *,
+        plan_id: UUID,
+        expected_revision: int,
+        new_plan: EditPlan,
+        project_id: UUID,
+        workspace_id: UUID,
+        summary: PlanSummary,
+        target_duration_s: int,
+        change_type: str = "manual_edit",
+    ) -> EditPlanRecord:
+        """Atomic CAS update: only succeeds if current revision matches expected_revision."""
+        record = self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+        if record.revision != expected_revision:
+            raise RevisionConflictError(
+                plan_id=str(plan_id),
+                expected=expected_revision,
+                actual=record.revision,
+            )
+        record.plan = self._validate_plan_for_write(
+            plan=new_plan,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            transcript_id=record.transcript_id,
+            plan_id=plan_id,
+        )
+        record.summary = summary
+        record.schema_version = record.plan.schema_version
+        record.target_duration_s = record.plan.target_duration_s
+        record.prompt_version = record.plan.prompt_version
+        record.revision += 1
         record.updated_at = datetime.now(UTC)
         return record
 
@@ -1086,6 +1124,132 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         self._raise_for_supabase(response)
         return self._plan_from_row(response.json()[0])
 
+    def update_plan_with_revision(
+        self,
+        *,
+        plan_id: UUID,
+        expected_revision: int,
+        new_plan: EditPlan,
+        project_id: UUID,
+        workspace_id: UUID,
+        summary: PlanSummary,
+        target_duration_s: int,
+        change_type: str = "manual_edit",
+    ) -> EditPlanRecord:
+        """Atomic CAS update via motionly_update_plan_with_revision RPC."""
+        existing = self.get_plan(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=plan_id,
+        )
+        validated_plan = self._validate_plan_for_write(
+            plan=new_plan,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            transcript_id=existing.transcript_id,
+            plan_id=plan_id,
+        )
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_update_plan_with_revision",
+            json={
+                "p_plan_id": str(plan_id),
+                "p_expected_revision": expected_revision,
+                "p_new_plan": self._json_safe({"plan": validated_plan})["plan"],
+            },
+        )
+        if response.status_code >= 400:
+            body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            pg_code = body.get("code") or ""
+            message = body.get("message") or ""
+            if pg_code == "P0002" or "REVISION_CONFLICT" in message:
+                raise RevisionConflictError(
+                    plan_id=str(plan_id),
+                    expected=expected_revision,
+                    actual=self._extract_actual_revision(message, plan_id, workspace_id, project_id),
+                )
+            self._raise_for_supabase(response)
+        # Re-fetch the updated plan to get the new revision and all fields
+        return self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+
+    async def update_plan_with_revision_async(
+        self,
+        *,
+        plan_id: UUID,
+        expected_revision: int,
+        new_plan: EditPlan,
+        project_id: UUID,
+        workspace_id: UUID,
+        summary: PlanSummary,
+        target_duration_s: int,
+        change_type: str = "manual_edit",
+    ) -> EditPlanRecord:
+        """Async atomic CAS update via motionly_update_plan_with_revision RPC."""
+        existing = await self.get_plan_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=plan_id,
+        )
+        validated_plan = self._validate_plan_for_write(
+            plan=new_plan,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            transcript_id=existing.transcript_id,
+            plan_id=plan_id,
+        )
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_update_plan_with_revision",
+            json={
+                "p_plan_id": str(plan_id),
+                "p_expected_revision": expected_revision,
+                "p_new_plan": self._json_safe({"plan": validated_plan})["plan"],
+            },
+        )
+        if response.status_code >= 400:
+            body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            pg_code = body.get("code") or ""
+            message = body.get("message") or ""
+            if pg_code == "P0002" or "REVISION_CONFLICT" in message:
+                raise RevisionConflictError(
+                    plan_id=str(plan_id),
+                    expected=expected_revision,
+                    actual=await self._extract_actual_revision_async(message, plan_id, workspace_id, project_id),
+                )
+            self._raise_for_supabase(response)
+        # Re-fetch the updated plan to get the new revision and all fields
+        return await self.get_plan_async(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+
+    def _extract_actual_revision(
+        self, message: str, plan_id: UUID, workspace_id: UUID, project_id: UUID
+    ) -> int:
+        """Try to extract actual revision from error message or re-fetch."""
+        import re
+        match = re.search(r"actual (\d+)", message)
+        if match:
+            return int(match.group(1))
+        # Fallback: re-fetch
+        try:
+            record = self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+            return record.revision
+        except Exception:
+            return -1
+
+    async def _extract_actual_revision_async(
+        self, message: str, plan_id: UUID, workspace_id: UUID, project_id: UUID
+    ) -> int:
+        """Try to extract actual revision from error message or re-fetch (async)."""
+        import re
+        match = re.search(r"actual (\d+)", message)
+        if match:
+            return int(match.group(1))
+        # Fallback: re-fetch
+        try:
+            record = await self.get_plan_async(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+            return record.revision
+        except Exception:
+            return -1
+
     def _create_active_plan_rpc_payload(self, values: dict[str, object]) -> dict[str, object]:
         safe = self._json_safe(values)
         return {
@@ -1146,6 +1310,7 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             ],
             summary=PlanSummary.model_validate(row.get("summary") or {}),
             plan=EditPlan.model_validate(row.get("plan") or {}),
+            revision=int(row.get("revision") or 1),
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),
         )

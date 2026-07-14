@@ -51,11 +51,14 @@ from app.schemas.visual import (
     VideoManifest,
 )
 from app.services.broll_intelligence import apply_stage4_broll_rules
+from app.services.media_url_policy import MediaUrlPolicyError
 from app.services.queue import BrollQueue, QueueRegistry, StockAssetEnrichmentQueue
 from app.services.stock_video import (
+    EMBEDDING_DOWNLOAD_MAX_BYTES,
     FixtureStockVideoProvider,
     StockVideoCandidate,
     StockVideoProvider,
+    _read_bounded_thumbnail,
     build_stock_asset_embedding_cache_key,
     build_stock_asset_raw_metadata,
     enrich_stock_asset,
@@ -983,6 +986,18 @@ def test_bad_embedding_dimensions_do_not_crash_ranking() -> None:
     assert "embedding_dimension_mismatch" in score.reasons
 
 
+def test_stock_thumbnail_reader_rejects_oversized_stream() -> None:
+    class _OversizedResponse:
+        headers = {"content-type": "image/jpeg"}
+
+        def iter_bytes(self, **_kwargs):
+            yield b"\xff\xd8\xff"
+            yield b"x" * EMBEDDING_DOWNLOAD_MAX_BYTES
+
+    with pytest.raises(MediaUrlPolicyError, match="allowed size"):
+        _read_bounded_thumbnail(_OversizedResponse())
+
+
 def test_enrich_stock_asset_downloads_thumbnail_and_caches_embedding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1029,12 +1044,24 @@ def test_enrich_stock_asset_downloads_thumbnail_and_caches_embedding(
     )
 
     class _Response:
-        content = b"fake-image"
+        headers = {"content-length": "13", "content-type": "image/jpeg"}
 
         def raise_for_status(self) -> None:
             return None
 
-    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _Response())
+        def iter_bytes(self, **_kwargs):
+            yield b"\xff\xd8\xfffake-image"
+
+    class _Stream:
+        def __enter__(self):
+            return _Response()
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.stock_video.safe_http_stream", lambda *_args, **_kwargs: _Stream()
+    )
 
     enriched = enrich_stock_asset(
         asset=asset,
@@ -1105,7 +1132,7 @@ def test_enrich_stock_asset_failed_download_falls_back_safely(
     def _raise_timeout(*args, **kwargs):
         raise httpx.TimeoutException("timed out")
 
-    monkeypatch.setattr(httpx, "get", _raise_timeout)
+    monkeypatch.setattr("app.services.stock_video.safe_http_stream", _raise_timeout)
 
     failed = enrich_stock_asset(
         asset=asset,
@@ -1161,12 +1188,24 @@ def test_stock_asset_enrichment_queue_executes_without_duplicate_rows(
     )
 
     class _Response:
-        content = b"queued-image"
+        headers = {"content-length": "15", "content-type": "image/jpeg"}
 
         def raise_for_status(self) -> None:
             return None
 
-    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _Response())
+        def iter_bytes(self, **_kwargs):
+            yield b"\xff\xd8\xffqueued-image"
+
+    class _Stream:
+        def __enter__(self):
+            return _Response()
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.stock_video.safe_http_stream", lambda *_args, **_kwargs: _Stream()
+    )
     queue = StockAssetEnrichmentQueue(registry)
     job = queue.enqueue_asset_enrichment(
         project_id=project_id,

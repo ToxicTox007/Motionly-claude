@@ -63,6 +63,8 @@ interface TimelinePanelProps {
   onCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
   onBrollSlotUpdated: (slot: BrollSlotSummary) => void;
   onMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
+  getExpectedRevision?: () => number | undefined;
+  onConflictDetected?: (error: unknown, source: string) => boolean;
 }
 
 type ReorderDirection = -1 | 1;
@@ -99,6 +101,8 @@ export function TimelinePanel({
   onCaptionTrackUpdated,
   onBrollSlotUpdated,
   onMusicSelectionUpdated,
+  getExpectedRevision,
+  onConflictDetected,
 }: TimelinePanelProps) {
   const { toast } = useToast();
   const { totalDurationMs, tracks } = state;
@@ -262,16 +266,20 @@ export function TimelinePanel({
 
   const request = useCallback(
     async (path: string, body: object) => {
+      const expectedRev = getExpectedRevision?.();
       return editorApiRequest<Record<string, any>>(`${env.apiBaseUrl}${path}`, {
         method: "PATCH",
         workspaceId,
         userId,
         accessToken: apiAccessToken,
         friendlyError: "Timeline changes could not be saved. Please try again.",
-        body: body as Record<string, unknown>,
+        body: {
+          ...(body as Record<string, unknown>),
+          ...(expectedRev != null ? { expected_revision: expectedRev } : {}),
+        },
       });
     },
-    [apiAccessToken, userId, workspaceId],
+    [apiAccessToken, getExpectedRevision, userId, workspaceId],
   );
 
   const saveCuts = useCallback(
@@ -351,6 +359,7 @@ export function TimelinePanel({
             if (historyEntry) pushHistory(historyEntry);
             setMessage(nextMessage);
           } catch (error) {
+            if (onConflictDetected?.(error, "timeline")) return;
             console.error(error);
             const errMsg = (error as Error).message;
             setMessage(errMsg);

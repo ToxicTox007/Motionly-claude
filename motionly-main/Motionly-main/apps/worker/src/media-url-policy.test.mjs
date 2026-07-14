@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import {
@@ -16,8 +18,14 @@ test("media URL policy rejects non-public IPv4 and IPv6 literals", async () => {
     "http://169.254.169.254/latest/meta-data/",
     "http://192.0.2.1/media.mp4",
     "http://224.0.0.1/media.mp4",
+    "http://2130706433/media.mp4",
+    "http://0177.0.0.1/media.mp4",
+    "http://127.1/media.mp4",
+    "http://0x7f000001/media.mp4",
     "http://[::1]/media.mp4",
+    "http://[::ffff:127.0.0.1]/media.mp4",
     "http://[fc00::1]/media.mp4",
+    "http://[fec0::1]/media.mp4",
     "http://[fe80::1]/media.mp4",
     "http://[ff02::1]/media.mp4",
     "http://[2001:db8::1]/media.mp4",
@@ -59,6 +67,21 @@ test("media URL policy checks DNS results and accepts public HTTPS", async () =>
     }),
     MediaUrlPolicyError,
   );
+  await assert.rejects(
+    assertSafeOutboundMediaUrl("https://media.example.com/video.mp4", {
+      lookup: async () => [{ address: "fec0::1234", family: 6 }],
+    }),
+    MediaUrlPolicyError,
+  );
+  await assert.rejects(
+    assertSafeOutboundMediaUrl("https://media.example.com/video.mp4", {
+      lookup: async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "fec0::1234", family: 6 },
+      ],
+    }),
+    MediaUrlPolicyError,
+  );
   assert.equal(
     (await assertSafeOutboundMediaUrl(
       "https://media.example.com/video.mp4?signature=secret",
@@ -68,6 +91,12 @@ test("media URL policy checks DNS results and accepts public HTTPS", async () =>
   );
   assert.equal(
     (await assertSafeOutboundMediaUrl("https://[2606:4700:4700::1111]/video.mp4")).kind,
+    "http",
+  );
+  assert.equal(
+    (await assertSafeOutboundMediaUrl("http://0x08080808/video.mp4", {
+      resolveDns: false,
+    })).kind,
     "http",
   );
 });
@@ -119,6 +148,58 @@ test("render manifest validation covers manual video/audio and provider URLs", a
     validateRenderMediaManifest(props, { lookup: publicLookup }),
     MediaUrlPolicyError,
   );
+});
+
+test("safe media fetch pins each validated address without a second DNS resolution", async () => {
+  const safeAnswers = new Map([
+    ["media.example.com", { address: "93.184.216.34", family: 4 }],
+    ["cdn.example.com", { address: "2606:4700:4700::1111", family: 6 }],
+  ]);
+  const resolutionCalls = new Map();
+  const lookup = async (hostname) => {
+    const count = (resolutionCalls.get(hostname) ?? 0) + 1;
+    resolutionCalls.set(hostname, count);
+    if (count > 1) return [{ address: "127.0.0.1", family: 4 }];
+    return [safeAnswers.get(hostname)];
+  };
+
+  const connectedAddresses = [];
+  let requestCount = 0;
+  const requestImpl = (url, options, onResponse) => {
+    const request = new EventEmitter();
+    request.end = () => {};
+    const expected = safeAnswers.get(url.hostname);
+    assert.equal(options.headers.host, url.host);
+    assert.equal(options.servername, url.hostname);
+    assert.equal(options.family, expected.family);
+    options.lookup("attacker-controlled.invalid", { all: true }, (error, records) => {
+      assert.ifError(error);
+      assert.deepEqual(records, [expected]);
+      connectedAddresses.push(records[0]);
+
+      const isRedirect = requestCount === 0;
+      requestCount += 1;
+      const incoming = Readable.from([]);
+      incoming.statusCode = isRedirect ? 302 : 200;
+      incoming.statusMessage = isRedirect ? "Found" : "OK";
+      incoming.rawHeaders = isRedirect
+        ? ["Location", "https://cdn.example.com/final.mp4?token=still-secret"]
+        : ["Content-Type", "video/mp4"];
+      onResponse(incoming);
+    });
+    return request;
+  };
+
+  const response = await safeFetchMedia(
+    "https://media.example.com/start.mp4?token=secret",
+    { lookup, requestImpl },
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(connectedAddresses, [...safeAnswers.values()]);
+  assert.deepEqual(Object.fromEntries(resolutionCalls), {
+    "media.example.com": 1,
+    "cdn.example.com": 1,
+  });
 });
 
 test("safe media fetch revalidates redirects and bounds redirect count", async () => {

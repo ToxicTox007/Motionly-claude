@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from test_renders import make_render_repository
 
 from app.api.admin import (
     cancel_queue_job,
@@ -20,6 +19,8 @@ from app.schemas.admin import QueueDeadLetterRequest
 from app.schemas.renders import RenderJobStatus
 from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.queue import QueueJobStatus, QueueRegistry, RenderQueue
+
+from .test_renders import make_render_repository
 
 
 def make_admin_request(workspace_id):

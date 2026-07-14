@@ -40,6 +40,7 @@ import {
 import { createClient } from "@/lib/supabase/browser";
 import type { PreviewExportState } from "./preview/VideoPreview";
 import { useToast } from "../toast";
+import { StaleIndicator } from "./StaleIndicator";
 
 interface ExportStepProps {
   projectId: string;
@@ -54,6 +55,10 @@ interface ExportStepProps {
   sourceHeight?: number | null;
   maxExportResolution: ExportResolution;
   onPreviewExportUpdated?: (state: PreviewExportState | null) => void;
+  /** Current plan revision for stale detection; null if unknown */
+  planRevision?: number | null;
+  /** Callback to trigger a re-render when the render is stale */
+  onRerender?: () => void;
 }
 
 const platforms: { value: PlatformPreset; label: string }[] = [
@@ -136,6 +141,8 @@ export function ExportStep({
   sourceHeight,
   maxExportResolution,
   onPreviewExportUpdated,
+  planRevision,
+  onRerender,
 }: ExportStepProps) {
   const { toast } = useToast();
   const [templateId, setTemplateId] =
@@ -1121,6 +1128,17 @@ export function ExportStep({
         )}
         Queue Selected Formats
       </button>
+
+      {latestJob && latestJob.status === "complete" && (
+        (latestJob as any).stale === true ||
+        (planRevision != null && (latestJob as any).source_plan_revision != null && (latestJob as any).source_plan_revision < planRevision)
+      ) && (
+        <StaleIndicator
+          message="Render is outdated — timeline has been modified since last render"
+          actionLabel="Re-render"
+          onAction={onRerender ?? primaryRenderAction.onClick}
+        />
+      )}
 
       {latestJob ? (
         <div

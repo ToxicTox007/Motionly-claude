@@ -2,7 +2,6 @@ import asyncio
 from uuid import UUID, uuid4
 
 import pytest
-from test_renders import make_render_repository
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
@@ -17,6 +16,8 @@ from app.schemas.regeneration import (
     UserControlSettings,
 )
 from app.services.queue import RegenerationQueue
+
+from .test_renders import make_render_repository
 
 
 def run_regenerate_project_layers(

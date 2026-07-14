@@ -6,7 +6,7 @@ import ipaddress
 import re
 import socket
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote, urljoin, urlsplit
@@ -208,6 +208,13 @@ def validate_render_media_manifest(
             check(f"supabase://{bucket}/{path}")
 
 
+@dataclass(frozen=True)
+class _PinnedMediaTarget:
+    request_url: str
+    host_header: str
+    sni_hostname: str | None
+
+
 @contextmanager
 def safe_http_stream(
     url: str,
@@ -218,35 +225,106 @@ def safe_http_stream(
     resolver: Resolver | None = None,
     stream_factory: Callable[..., Any] | None = None,
 ) -> Iterator[httpx.Response]:
-    """Open a validated media stream with explicit, revalidated redirects."""
+    """Open a media stream pinned to prevalidated addresses for every hop."""
     if max_redirects < 0 or max_redirects > 10:
         raise MediaUrlPolicyError("Media redirect limit is invalid.")
-    factory = stream_factory or httpx.stream
+    factory = stream_factory or _httpx_pinned_stream
     current = url
     for redirect_count in range(max_redirects + 1):
-        validate_outbound_media_url(
-            current,
-            resolve_dns=True,
-            require_dns=True,
-            resolver=resolver,
-        )
-        with factory(
-            "GET",
-            current,
-            headers=headers,
-            timeout=timeout,
-            follow_redirects=False,
-        ) as response:
-            if getattr(response, "status_code", 200) not in _REDIRECT_STATUSES:
-                yield response
-                return
-            location = response.headers.get("location")
-            if not location:
-                raise MediaUrlPolicyError("Media redirect is missing a destination.")
-            if redirect_count >= max_redirects:
-                raise MediaUrlPolicyError("Media redirect limit exceeded.")
-            current = urljoin(current, location)
+        targets = _pin_media_targets(current, resolver=resolver)
+        last_transport_error: httpx.TransportError | None = None
+        redirected = False
+        for target in targets:
+            request_headers = {
+                key: value for key, value in (headers or {}).items() if key.lower() != "host"
+            }
+            request_headers["Host"] = target.host_header
+            extensions = (
+                {"sni_hostname": target.sni_hostname}
+                if target.sni_hostname is not None
+                else None
+            )
+            stack = ExitStack()
+            try:
+                response = stack.enter_context(
+                    factory(
+                        "GET",
+                        target.request_url,
+                        headers=request_headers,
+                        timeout=timeout,
+                        follow_redirects=False,
+                        extensions=extensions,
+                    )
+                )
+            except httpx.TransportError as exc:
+                stack.close()
+                last_transport_error = exc
+                continue
+
+            with stack:
+                if getattr(response, "status_code", 200) not in _REDIRECT_STATUSES:
+                    yield response
+                    return
+                location = response.headers.get("location")
+                if not location:
+                    raise MediaUrlPolicyError("Media redirect is missing a destination.")
+                if redirect_count >= max_redirects:
+                    raise MediaUrlPolicyError("Media redirect limit exceeded.")
+                current = urljoin(current, location)
+                redirected = True
+            break
+
+        if redirected:
+            continue
+        if last_transport_error is not None:
+            raise last_transport_error
+        raise MediaUrlPolicyError("Media URL host could not be reached.")
     raise MediaUrlPolicyError("Media redirect limit exceeded.")
+
+
+@contextmanager
+def _httpx_pinned_stream(method: str, url: str, **kwargs: Any) -> Iterator[httpx.Response]:
+    extensions = kwargs.pop("extensions", None)
+    with httpx.Client(trust_env=False) as client:
+        with client.stream(method, url, extensions=extensions, **kwargs) as response:
+            yield response
+
+
+def _pin_media_targets(
+    value: str,
+    *,
+    resolver: Resolver | None,
+) -> tuple[_PinnedMediaTarget, ...]:
+    validate_outbound_media_url(value, resolve_dns=False)
+    parsed = urlsplit(value)
+    hostname = parsed.hostname.rstrip(".").lower() if parsed.hostname else ""
+    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    literal = _ip_address(hostname)
+    if literal is not None:
+        _validate_public_ip(literal)
+        addresses = (literal,)
+        sni_hostname = None
+    else:
+        _validate_hostname(hostname)
+        addresses = _validate_dns(hostname, port, resolver, require_dns=True)
+        sni_hostname = hostname
+
+    original_host = f"[{hostname}]" if ":" in hostname else hostname
+    host_header = f"{original_host}:{parsed.port}" if parsed.port is not None else original_host
+    targets: list[_PinnedMediaTarget] = []
+    for address in addresses:
+        address_host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+        request_netloc = (
+            f"{address_host}:{parsed.port}" if parsed.port is not None else address_host
+        )
+        targets.append(
+            _PinnedMediaTarget(
+                request_url=parsed._replace(netloc=request_netloc).geturl(),
+                host_header=host_header,
+                sni_hostname=sni_hostname,
+            )
+        )
+    return tuple(targets)
 
 
 def decode_bounded_audio_data_url(value: str) -> bytes:
@@ -258,6 +336,8 @@ def _validate_hostname(hostname: str) -> None:
         raise MediaUrlPolicyError("Media URL host is invalid.")
     if hostname in _LOCAL_HOST_NAMES or hostname.endswith(_LOCAL_HOST_SUFFIXES):
         raise MediaUrlPolicyError("Local media hosts are not allowed.")
+    if _looks_like_legacy_ipv4_hostname(hostname):
+        raise MediaUrlPolicyError("Media URL host is an invalid numeric address.")
     if "." not in hostname and _ip_address(hostname) is None:
         raise MediaUrlPolicyError("Single-label media hosts are not allowed.")
     labels = hostname.split(".")
@@ -277,35 +357,81 @@ def _validate_dns(
     port: int,
     resolver: Resolver | None,
     require_dns: bool,
-) -> None:
+) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
     lookup = resolver or socket.getaddrinfo
     try:
         records = lookup(hostname, port, type=socket.SOCK_STREAM)
     except (OSError, socket.gaierror) as exc:
         if require_dns:
             raise MediaUrlPolicyError("Media URL host could not be resolved.") from exc
-        return
-    addresses = {
-        record[4][0]
+        return ()
+    raw_addresses = [
+        str(record[4][0]).split("%", 1)[0]
         for record in records
         if len(record) >= 5 and isinstance(record[4], tuple) and record[4]
-    }
-    if not addresses:
+    ]
+    if not raw_addresses:
         if require_dns:
             raise MediaUrlPolicyError("Media URL host could not be resolved.")
-        return
-    for address in addresses:
-        parsed = _ip_address(str(address).split("%", 1)[0])
+        return ()
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for raw_address in raw_addresses:
+        parsed = _ip_address(raw_address)
         if parsed is None:
             raise MediaUrlPolicyError("Media URL resolved to an invalid address.")
         _validate_public_ip(parsed)
+        if parsed not in addresses:
+            addresses.append(parsed)
+    return tuple(addresses)
 
 
 def _ip_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     try:
         return ipaddress.ip_address(value)
     except ValueError:
+        return _legacy_ipv4_address(value)
+
+
+def _legacy_ipv4_address(value: str) -> ipaddress.IPv4Address | None:
+    parts = value.split(".")
+    if not 1 <= len(parts) <= 4 or any(not part for part in parts):
         return None
+    numbers: list[int] = []
+    try:
+        for part in parts:
+            lowered = part.lower()
+            if lowered.startswith("0x"):
+                digits, base = part[2:], 16
+            elif len(part) > 1 and part.startswith("0"):
+                digits, base = part[1:], 8
+            else:
+                digits, base = part, 10
+            if not digits:
+                return None
+            numbers.append(int(digits, base))
+    except ValueError:
+        return None
+    if any(number > 255 for number in numbers[:-1]):
+        return None
+    if numbers[-1] >= 256 ** (5 - len(numbers)):
+        return None
+    numeric = numbers[-1]
+    for index, number in enumerate(numbers[:-1]):
+        numeric += number * 256 ** (3 - index)
+    return ipaddress.IPv4Address(numeric)
+
+
+def _looks_like_legacy_ipv4_hostname(hostname: str) -> bool:
+    parts = hostname.split(".")
+    return all(
+        part.isdigit()
+        or (
+            part.lower().startswith("0x")
+            and len(part) > 2
+            and all(character in "0123456789abcdef" for character in part[2:].lower())
+        )
+        for part in parts
+    )
 
 
 def _validate_public_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
@@ -317,6 +443,7 @@ def _validate_public_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) 
         or address.is_link_local
         or address.is_multicast
         or address.is_reserved
+        or (isinstance(address, ipaddress.IPv6Address) and address.is_site_local)
     ):
         raise MediaUrlPolicyError("Media URL address is not publicly routable.")
 

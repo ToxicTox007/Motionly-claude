@@ -57,8 +57,9 @@ COPY packages/shared/package.json ./packages/shared/
 COPY apps/worker/package.json ./apps/worker/
 COPY apps/renderer/package.json ./apps/renderer/
 
-# Install pnpm and all workspace dependencies
-RUN npm install -g pnpm@9.15.4 --quiet && \
+# Install pnpm and all workspace dependencies. TMPDIR must exist before pnpm runs.
+RUN mkdir -p /tmp/motionly && \
+    npm install -g pnpm@9.15.4 --quiet && \
     pnpm install --frozen-lockfile --prefer-offline --prod=false
 
 # Copy source after deps (avoids reinstalling when only source changes)

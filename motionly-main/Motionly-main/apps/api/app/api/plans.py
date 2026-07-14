@@ -11,6 +11,8 @@ from app.api.dependencies import (
     get_plan_repository,
 )
 from app.api.errors import ApiError
+from app.api.revision_errors import RevisionConflictError
+from app.core.logging import get_logger
 from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.captions import TranscriptStatus
@@ -60,6 +62,8 @@ ActorDep = Annotated[Actor, Depends(get_actor)]
 PlanRepositoryDep = Annotated[InMemoryPlanRepository, Depends(get_plan_repository)]
 EditPlannerProviderDep = Annotated[EditPlannerProvider, Depends(get_edit_planner_provider)]
 PlanQueueDep = Annotated[PlanQueue, Depends(get_plan_queue)]
+
+logger = get_logger(__name__)
 
 
 async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
@@ -120,6 +124,34 @@ async def _update_plan_cuts(
         plan=plan,
         summary=summary,
         target_duration_s=target_duration_s,
+    )
+
+
+async def _update_plan_with_revision(
+    repository,
+    *,
+    plan_id: UUID,
+    expected_revision: int,
+    new_plan,
+    project_id: UUID,
+    workspace_id: UUID,
+    summary,
+    target_duration_s: int,
+    change_type: str = "manual_edit",
+):
+    """Revision-enforced plan update. Raises RevisionConflictError on mismatch."""
+    return await _repository_call(
+        repository,
+        "update_plan_with_revision_async",
+        "update_plan_with_revision",
+        plan_id=plan_id,
+        expected_revision=expected_revision,
+        new_plan=new_plan,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        summary=summary,
+        target_duration_s=target_duration_s,
+        change_type=change_type,
     )
 
 
@@ -547,7 +579,7 @@ async def activate_plan(
         workspace_id=actor.workspace_id,
         plan_id=plan_id,
     )
-    return PlanActivateResponse(plan=plan.to_response())
+    return PlanActivateResponse(plan=plan.to_response(), revision=plan.revision)
 
 
 @router.patch("/{plan_id}/cuts", response_model=PlanCutsUpdateResponse)
@@ -599,18 +631,36 @@ async def update_plan_cuts(
             preserve_layers_from=record.plan.timeline,
         ),
     )
-    updated = await _update_plan_cuts(
-        repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        plan_id=plan_id,
-        plan=plan,
-        summary=summarize_plan(
-            plan,
-            style_classification=record.summary.style_classification,
-        ),
-        target_duration_s=target_duration_s,
+    summary = summarize_plan(
+        plan,
+        style_classification=record.summary.style_classification,
     )
+    if payload.expected_revision is not None:
+        updated = await _update_plan_with_revision(
+            repository,
+            plan_id=plan_id,
+            expected_revision=payload.expected_revision,
+            new_plan=plan,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            summary=summary,
+            target_duration_s=target_duration_s,
+            change_type="cuts_update",
+        )
+    else:
+        logger.warning(
+            "plan_mutation_without_revision",
+            extra={"plan_id": str(plan_id), "endpoint": "cuts", "project_id": str(project_id)},
+        )
+        updated = await _update_plan_cuts(
+            repository,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            plan_id=plan_id,
+            plan=plan,
+            summary=summary,
+            target_duration_s=target_duration_s,
+        )
     record_ai_feedback(
         request=request,
         workspace_id=actor.workspace_id,
@@ -626,7 +676,7 @@ async def update_plan_cuts(
         user_payload={"cuts": [cut.model_dump(mode="json") for cut in payload.cuts]},
         metadata={"previous_version": record.version, "target_duration_s": target_duration_s},
     )
-    return PlanCutsUpdateResponse(plan=updated.to_response())
+    return PlanCutsUpdateResponse(plan=updated.to_response(), revision=updated.revision)
 
 
 @router.patch("/{plan_id}/caption-highlights", response_model=PlanCaptionHighlightsUpdateResponse)
@@ -647,18 +697,36 @@ async def update_plan_caption_highlights(
     plan = record.plan.model_copy(
         update={"caption_highlights": payload.caption_highlights},
     )
-    updated = await _update_plan_cuts(
-        repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        plan_id=plan_id,
-        plan=plan,
-        summary=summarize_plan(
-            plan,
-            style_classification=record.summary.style_classification,
-        ),
-        target_duration_s=record.target_duration_s,
+    summary = summarize_plan(
+        plan,
+        style_classification=record.summary.style_classification,
     )
+    if payload.expected_revision is not None:
+        updated = await _update_plan_with_revision(
+            repository,
+            plan_id=plan_id,
+            expected_revision=payload.expected_revision,
+            new_plan=plan,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            summary=summary,
+            target_duration_s=record.target_duration_s,
+            change_type="caption_highlights_update",
+        )
+    else:
+        logger.warning(
+            "plan_mutation_without_revision",
+            extra={"plan_id": str(plan_id), "endpoint": "caption_highlights", "project_id": str(project_id)},
+        )
+        updated = await _update_plan_cuts(
+            repository,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            plan_id=plan_id,
+            plan=plan,
+            summary=summary,
+            target_duration_s=record.target_duration_s,
+        )
     record_ai_feedback(
         request=request,
         workspace_id=actor.workspace_id,
@@ -682,7 +750,7 @@ async def update_plan_caption_highlights(
         },
         metadata={"previous_version": record.version},
     )
-    return PlanCaptionHighlightsUpdateResponse(plan=updated.to_response())
+    return PlanCaptionHighlightsUpdateResponse(plan=updated.to_response(), revision=updated.revision)
 
 
 @router.patch("/{plan_id}/manual-elements", response_model=PlanManualElementsUpdateResponse)
@@ -715,18 +783,36 @@ async def update_plan_manual_elements(
             preserve_layers_from=record.plan.timeline,
         ),
     )
-    updated = await _update_plan_cuts(
-        repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        plan_id=plan_id,
-        plan=plan,
-        summary=summarize_plan(
-            plan,
-            style_classification=record.summary.style_classification,
-        ),
-        target_duration_s=record.target_duration_s,
+    summary = summarize_plan(
+        plan,
+        style_classification=record.summary.style_classification,
     )
+    if payload.expected_revision is not None:
+        updated = await _update_plan_with_revision(
+            repository,
+            plan_id=plan_id,
+            expected_revision=payload.expected_revision,
+            new_plan=plan,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            summary=summary,
+            target_duration_s=record.target_duration_s,
+            change_type="manual_elements_update",
+        )
+    else:
+        logger.warning(
+            "plan_mutation_without_revision",
+            extra={"plan_id": str(plan_id), "endpoint": "manual_elements", "project_id": str(project_id)},
+        )
+        updated = await _update_plan_cuts(
+            repository,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            plan_id=plan_id,
+            plan=plan,
+            summary=summary,
+            target_duration_s=record.target_duration_s,
+        )
     record_ai_feedback(
         request=request,
         workspace_id=actor.workspace_id,
@@ -750,7 +836,7 @@ async def update_plan_manual_elements(
         },
         metadata={"previous_version": record.version},
     )
-    return PlanManualElementsUpdateResponse(plan=updated.to_response())
+    return PlanManualElementsUpdateResponse(plan=updated.to_response(), revision=updated.revision)
 
 
 @router.patch("/{plan_id}/timeline", response_model=TimelineUpdateResponse)
@@ -772,18 +858,36 @@ async def update_project_timeline(
         plan=record.plan,
         timeline=payload.timeline,
     )
-    updated = await _update_plan_cuts(
-        repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        plan_id=plan_id,
-        plan=plan,
-        summary=summarize_plan(
-            plan,
-            style_classification=record.summary.style_classification,
-        ),
-        target_duration_s=plan.target_duration_s,
+    summary = summarize_plan(
+        plan,
+        style_classification=record.summary.style_classification,
     )
+    if payload.expected_revision is not None:
+        updated = await _update_plan_with_revision(
+            repository,
+            plan_id=plan_id,
+            expected_revision=payload.expected_revision,
+            new_plan=plan,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            summary=summary,
+            target_duration_s=plan.target_duration_s,
+            change_type="timeline_update",
+        )
+    else:
+        logger.warning(
+            "plan_mutation_without_revision",
+            extra={"plan_id": str(plan_id), "endpoint": "timeline", "project_id": str(project_id)},
+        )
+        updated = await _update_plan_cuts(
+            repository,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            plan_id=plan_id,
+            plan=plan,
+            summary=summary,
+            target_duration_s=plan.target_duration_s,
+        )
     record_ai_feedback(
         request=request,
         workspace_id=actor.workspace_id,
@@ -803,7 +907,7 @@ async def update_project_timeline(
         user_payload={"timeline": payload.timeline.model_dump(mode="json")},
         metadata={"previous_version": record.version},
     )
-    return TimelineUpdateResponse(plan=updated.to_response())
+    return TimelineUpdateResponse(plan=updated.to_response(), revision=updated.revision)
 
 
 @router.post("/{plan_id}/compile-timeline", response_model=TimelineUpdateResponse)
@@ -813,6 +917,7 @@ async def compile_project_timeline(
     actor: ActorDep,
     repository: PlanRepositoryDep,
     request: Request,
+    expected_revision: Annotated[int | None, Query()] = None,
 ) -> TimelineUpdateResponse:
     record = await _get_plan(
         repository,
@@ -884,19 +989,37 @@ async def compile_project_timeline(
         preserve_layers_from=record.plan.timeline,
     )
     plan = project_timeline_to_legacy_plan(plan=record.plan, timeline=timeline)
-    updated = await _update_plan_cuts(
-        repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        plan_id=plan_id,
-        plan=plan,
-        summary=summarize_plan(
-            plan,
-            style_classification=record.summary.style_classification,
-        ),
-        target_duration_s=plan.target_duration_s,
+    summary = summarize_plan(
+        plan,
+        style_classification=record.summary.style_classification,
     )
-    return TimelineUpdateResponse(plan=updated.to_response())
+    if expected_revision is not None:
+        updated = await _update_plan_with_revision(
+            repository,
+            plan_id=plan_id,
+            expected_revision=expected_revision,
+            new_plan=plan,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            summary=summary,
+            target_duration_s=plan.target_duration_s,
+            change_type="compile_timeline",
+        )
+    else:
+        logger.warning(
+            "plan_mutation_without_revision",
+            extra={"plan_id": str(plan_id), "endpoint": "compile_timeline", "project_id": str(project_id)},
+        )
+        updated = await _update_plan_cuts(
+            repository,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            plan_id=plan_id,
+            plan=plan,
+            summary=summary,
+            target_duration_s=plan.target_duration_s,
+        )
+    return TimelineUpdateResponse(plan=updated.to_response(), revision=updated.revision)
 
 
 def _visual_context(

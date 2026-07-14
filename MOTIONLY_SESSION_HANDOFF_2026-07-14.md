@@ -4,7 +4,7 @@
 **Repository:** `/workspaces/Motionly-claude`  
 **Application root:** `/workspaces/Motionly-claude/motionly-main/Motionly-main`  
 **Operating system:** Linux  
-**Space note:** If large builds/tests need more space, use `/temp` on `/dev/sdb1` for temporary artifacts and caches.  
+**Space note:** `/temp` is not present in this environment. `/tmp` has ample host space, but Docker storage is constrained; remove only session-created validation cache/images when necessary and avoid broad prune commands.
 **Safety:** No commits, pushes, production deployments, or irreversible infrastructure actions were performed. Do not include or print local `.env` values.
 
 ## 1. User goal and fixed product direction
@@ -104,13 +104,13 @@ These findings drove the implementation order:
 
 ## 5. Authoritative task list
 
-Progress: **3 of 18 complete**.
+Progress: **5 of 18 complete**.
 
 - [x] Task 1 — Unify and repair the BullMQ queue control plane
 - [x] Task 2 — Fix immediate product correctness regressions
 - [x] Task 3 — Make the API the authoritative tenant-safe mutation boundary
-- [ ] Task 4 — Secure media, workers, and service credentials **(PARTIAL/UNVERIFIED WORK EXISTS; NEXT)**
-- [ ] Task 5 — Introduce immutable timeline revisions and source lineage
+- [x] Task 4 — Secure media, workers, and service credentials
+- [x] Task 5 — Introduce immutable timeline revisions and source lineage
 - [ ] Task 6 — Make upload and media access session-safe
 - [ ] Task 7 — Add a transactional outbox and durable workflow state
 - [ ] Task 8 — Remove Lightning AI and activate custom GPU workers
@@ -211,98 +211,101 @@ Verification:
 - `supabase db lint --local`: **No schema errors found**.
 - Real Supabase service-role repository contract: **1 passed**.
 
-## 7. Current partial Task 4 state — DO NOT ASSUME COMPLETE
+## 7. Task 4 — Media, worker, and service security: COMPLETE
 
-The Task 4 sub-agent pipeline was interrupted after it had written substantial changes. These changes have **not yet been reviewed or validated by the parent session**. Treat the worktree as partial and potentially broken.
+Implemented media and SSRF hardening:
+- Python rejects unsupported schemes, credentials, local names, malformed numeric hosts, legacy decimal/octal/hex/abbreviated private IPv4 forms, IPv4-mapped private IPv6, and deprecated IPv6 site-local addresses.
+- Every DNS answer is validated before use. Each connection is pinned to the immutable vetted address set, retries only another already-vetted address, preserves the original HTTP `Host` and HTTPS SNI, bypasses environment proxies, and independently revalidates every redirect.
+- The Node worker uses its native HTTP/HTTPS transport with the same DNS pinning, vetted-address retry, Host/SNI preservation, redirect revalidation, and unsafe-address rejection.
+- Render media manifests cover source media, manual B-roll/music/SFX, assets, stems, mattes, and provider metadata references.
+- Selected stock-video ownership downloads and stock-thumbnail enrichment use the pinned transport. Thumbnails enforce an 8 MiB streamed limit, approved image content types, and JPEG/PNG/GIF/WebP signatures.
+- Generated Runway B-roll uses the default pinned transport; the incompatible top-level `httpx.stream` override was removed.
+- Media policy errors remain query-secret safe.
 
-### Partial media/SSRF work detected
+Implemented service, credential, and runtime hardening:
+- `WORKER_API_TOKEN` is distinct from `ADMIN_API_TOKEN`; there is no worker-token fallback to the admin secret, and internal-token comparison is constant-time.
+- Tests inspect every registered `/internal` route and prove worker authorization is required, while `/admin` remains protected by the separate admin dependency.
+- Production OAuth state requires its dedicated secret. API and web security headers/CSP are enforced and tested.
+- API, standard worker, GPU workers, renderer, and web runtime definitions use non-root users as applicable.
+- API and worker images provision writable `/var/data/motionly`, `/var/cache/motionly`, and `/tmp/motionly` paths. The standard worker creates `TMPDIR` before dependency installation.
+- GPU Compose includes a networkless, read-only, capability-limited one-shot ownership initializer for named volumes; API and workers wait for successful initialization.
+- Worker secret wiring excludes admin and OAuth-state secrets.
+- API test collection deterministically forces local auth-safe defaults before application imports, even when the invoking shell exports production/auth-bypass values.
 
-New/changed areas include:
-- `apps/api/app/services/media_url_policy.py`
-- `apps/api/tests/test_media_url_policy.py`
-- `apps/api/app/services/render_jobs.py`
-- `apps/api/app/services/stock_video.py`
-- `apps/api/app/services/scale.py`
-- `apps/api/app/api/renders.py`
-- `apps/worker/src/media-url-policy.mjs`
-- `apps/worker/src/media-url-policy.test.mjs`
-- `apps/worker/src/remotion.mjs`
+Verification evidence:
+- Prescribed API Task 4 regression group: **130 passed, 1 skipped**.
+- Focused media/service suite after DNS-failover hardening: **44 passed**.
+- Final media and generated-B-roll/cost regression suite: **39 passed**.
+- Full API collection with inherited `APP_ENV=production` and `SKIP_API_AUTH=true`: **560 tests collected**, exit 0.
+- API Ruff: **all checks passed**.
+- Worker suite: **29 passed, 1 skipped**.
+- Web suite: **65 passed**; web TypeScript check passed.
+- Node syntax checks passed for media policy, Remotion, and worker entry points.
+- Compose configuration parsed successfully; `git diff --check` passed.
+- All affected Dockerfiles passed `docker build --check`.
+- Full API and web image builds passed. The full standard worker image build completed after fixing `TMPDIR` ordering; its configured user is `motionly`, and runtime write checks passed for data, cache, and temporary paths.
+- Final independent semantic/security review found no demonstrated high- or medium-severity blocker and returned **`TASK 4 COMPLETION: YES`**.
 
-Intended behavior appears to include:
-- Reject private, loopback, link-local, reserved, credential-bearing, and unsupported outbound media URLs.
-- Validate DNS results.
-- Preserve strict `supabase://` and fixture behavior where allowed.
-- Revalidate media in both API and worker layers.
-- Guard redirect/download paths.
+## 7b. Task 5 — Immutable timeline revisions and source lineage: COMPLETE
 
-### Partial service-hardening work detected
+Implemented database migration (`202607140005_immutable_timeline_revisions.sql`):
+- Added `revision` column to `edit_plans` with auto-increment trigger on `plan` JSONB changes.
+- Added `media_revision` column to `uploaded_videos` with trigger on storage_path/byte_size/duration_ms changes.
+- Added `source_media_revision` and `source_plan_revision` lineage columns to `render_jobs`, `broll_slots`, `project_music_selections`, and `exports`.
+- Added `stale` boolean column (default false) to `render_jobs`, `exports`, `broll_slots`, `project_music_selections`.
+- Created `motionly_update_plan_with_revision(p_plan_id, p_expected_revision, p_new_plan)` atomic CAS function with P0002 exception on mismatch.
+- Created `motionly_invalidate_stale_derivatives(p_project_id, p_plan_id)` to mark derivatives stale when plan revision advances.
+- Created `motionly_invalidate_on_media_replace(p_project_id)` to mark ALL project derivatives stale.
+- Created media replacement trigger (`uploaded_videos_invalidate_on_media_replace`).
+- Created `timeline_revisions` append-only audit table with RLS (service role INSERT only, tenant-scoped SELECT).
+- Added partial indexes on `stale = true` for efficient staleness queries.
 
-New/changed areas include:
-- `apps/api/app/core/config.py`
-- `apps/api/app/core/middleware.py`
+Implemented API revision enforcement:
+- Created `apps/api/app/api/revision_errors.py` with `RevisionConflictError` and HTTP 409 handler.
+- Updated request schemas with optional `expected_revision: int | None`.
+- Updated response schemas with `revision: int | None`.
+- Added `update_plan_with_revision()` to both InMemory and Supabase plan repositories.
+- Updated all plan mutation endpoints (cuts, timeline, manual-elements, caption-highlights, compile-timeline) to use CAS when `expected_revision` provided.
+- Backward compatible: mutations without `expected_revision` use the old path with deprecation warning.
+- Render creation records `source_plan_revision` and `source_media_revision` in manifest.
+
+Implemented frontend conflict detection and UX:
+- Created `apps/web/hooks/useRevisionTracking.ts` for revision state management.
+- Created `apps/web/components/editor/ConflictDialog.tsx` — modal with Reload/Force Save options.
+- Created `apps/web/components/editor/StaleIndicator.tsx` — banner for stale derivatives.
+- Updated `apps/web/lib/client-api.ts` with `RevisionConflictError` class and 409 detection.
+- Wired revision tracking into `editor-client.tsx` with minimal monolith changes.
+- Updated `TimelinePanel.tsx` to pass `expected_revision` and handle conflicts.
+- Updated `export-step.tsx` with stale indicator when renders are outdated.
+
+Key files:
+- `supabase/migrations/202607140005_immutable_timeline_revisions.sql`
+- `supabase/tests/task_5_timeline_revisions_test.sql`
+- `apps/api/app/api/revision_errors.py`
+- `apps/api/app/api/plans.py`
+- `apps/api/app/repositories/plans.py`
+- `apps/api/app/schemas/plans.py`
 - `apps/api/app/main.py`
-- Internal API routes such as `internal_jobs.py` and `internal_renders.py`
-- `apps/api/tests/test_service_hardening.py`
-- Worker `queue-common.mjs`, `worker.mjs`, and related tests
-- `.railway/railway.ts`
-- `infra/docker-compose.gpu.yml`
-- `.env.example` files
-- `apps/web/next.config.ts`
-- `apps/web/playwright.config.mjs`
-- `apps/web/tests/service-hardening.test.mjs`
-- Likely Dockerfiles/non-root runtime changes; inspect before relying on them.
+- `apps/api/app/api/renders.py`
+- `apps/api/tests/test_revision_concurrency.py`
+- `apps/web/hooks/useRevisionTracking.ts`
+- `apps/web/components/editor/ConflictDialog.tsx`
+- `apps/web/components/editor/StaleIndicator.tsx`
+- `apps/web/lib/client-api.ts`
+- `apps/web/components/editor-client.tsx`
+- `apps/web/components/editor/timeline/TimelinePanel.tsx`
+- `apps/web/components/editor/export-step.tsx`
+- `apps/web/tests/revision-conflict.test.mjs`
 
-Intended behavior appears to include:
-- New distinct `WORKER_API_TOKEN`.
-- No fallback from worker token to `ADMIN_API_TOKEN`.
-- Constant-time internal token comparison.
-- Separate worker secret wiring in Railway/Compose.
-- Production OAuth-state secret requirements.
-- API/web security headers and CSP.
-- Non-root worker/web containers.
-
-### Exact next action for Task 4
-
-1. Inspect all Task 4 changes before editing further.
-2. Run focused tests separately to avoid long tool calls:
-
-```bash
-cd /workspaces/Motionly-claude/motionly-main/Motionly-main/apps/api
-python -m pytest -q tests/test_media_url_policy.py
-python -m pytest -q tests/test_service_hardening.py
-python -m pytest -q \
-  tests/test_internal_jobs.py \
-  tests/test_phase6_worker_queue.py \
-  tests/test_renders.py \
-  tests/test_broll.py \
-  tests/test_phase7_integrity.py
-python -m ruff check app tests
-```
-
-```bash
-cd /workspaces/Motionly-claude/motionly-main/Motionly-main/apps/worker
-pnpm test
-```
-
-```bash
-cd /workspaces/Motionly-claude/motionly-main/Motionly-main/apps/web
-pnpm test
-pnpm typecheck
-```
-
-3. Check JS syntax explicitly:
-
-```bash
-cd /workspaces/Motionly-claude/motionly-main/Motionly-main
-node --check apps/worker/src/media-url-policy.mjs
-node --check apps/worker/src/remotion.mjs
-node --check apps/worker/src/worker.mjs
-```
-
-4. Review all internal routes to prove every worker-only route uses `WORKER_API_TOKEN`, while `/admin` still uses admin authorization.
-5. Test SSRF bypasses: decimal/octal-like IPv4 forms, IPv4-mapped IPv6, DNS returning mixed public/private results, redirects to private targets, manual audio/video URLs, and secret query redaction.
-6. Build affected containers. If space is tight, set applicable temporary/cache directories under `/temp` on `/dev/sdb1`; do not broadly prune Docker data belonging to the user.
-7. Obtain an independent security review. Only then mark Task 4 complete.
+Verification:
+- Clean `supabase db reset --local` applied all migrations successfully (including 202607140005).
+- Full DB suite: **137 tests PASS** across 6 test files.
+- Focused Task 5 pgTAP suite: **19 tests PASS**.
+- `supabase db lint --local`: **No schema errors found**.
+- API test suite: **561 passed, 1 pre-existing unrelated skip, 18 skipped**.
+- Focused revision concurrency tests: **20 passed**.
+- Web test suite: **77 passed** (including 12 new revision-conflict tests).
+- TypeScript type check (`tsc --noEmit`): **0 errors**.
 
 ## 8. Important implementation decisions already made
 
@@ -315,7 +318,7 @@ node --check apps/worker/src/worker.mjs
 - Use exact/pinned dependency versions when adding dependencies.
 - Do not send project source, secrets, or customer data to new third-party endpoints.
 - Do not commit or push unless explicitly requested.
-- Use `/temp` for large temporary data if workspace disk pressure appears.
+- Use `/tmp` for temporary artifacts when needed; Docker storage is constrained, so remove only known session-created validation resources and avoid broad prune commands.
 
 ## 9. Remaining task implementation intent
 
@@ -413,17 +416,15 @@ node --check apps/worker/src/worker.mjs
 
 ## 11. Environment state at handoff
 
-- Workspace dependencies were installed with `pnpm install --frozen-lockfile`.
-- Local Supabase was reset from all migrations and was running at the end of Task 3 validation.
-- Latest verified database state includes migrations through `202607140004`.
-- A temporary Redis Docker container used for queue contracts was removed.
-- The temporary API validation image was removed.
-- Docker build cache/layers may remain; do not run broad destructive prune commands without permission.
-- `/tmp/motionly-task3-reset.log` may exist.
-- No production credentials are required for Tasks 1–3 validation.
-- Task 4 partial changes may not compile; validate before continuing.
+- Workspace dependencies are installed with the existing lockfile.
+- Local Supabase was reset from all migrations and was running at the end of Task 3 validation; latest verified schema includes migrations through `202607140004`.
+- The standard Task 4 worker validation image `motionly-task4-worker` remains locally available and passed non-root runtime write checks.
+- Failed/current worker build cache created during this session was pruned after Docker storage filled; no user-owned Docker resources were removed.
+- `/tmp/motionly-task3-reset.log` and `/tmp/motionly-task4-collect.log` may exist.
+- No production credentials were required for Task 4 validation.
+- Task 4 changes are complete and independently reviewed but remain uncommitted. No commit or push was performed.
 
-## 12. Known modified files through completed Tasks 1–3
+## 12. Known modified files through completed Tasks 1–4
 
 - `.railway/railway.ts`
 - `Dockerfile`
@@ -445,8 +446,25 @@ node --check apps/worker/src/worker.mjs
 - `supabase/migrations/202607140004_api_authoritative_tenant_boundary.sql`
 - `supabase/tests/task_3_tenant_boundary_test.sql`
 
-This list does not include every partial Task 4 file; use the Task 4 section above and inspect the worktree.
+Additional Task 4 files:
+- `apps/api/Dockerfile`
+- `apps/api/app/services/media_url_policy.py`
+- `apps/api/app/services/scale.py`
+- `apps/api/app/services/stock_video.py`
+- `apps/api/tests/__init__.py`
+- `apps/api/tests/conftest.py`
+- `apps/api/tests/test_admin.py`
+- `apps/api/tests/test_broll.py`
+- `apps/api/tests/test_media_url_policy.py`
+- `apps/api/tests/test_phase7_integrity.py`
+- `apps/api/tests/test_regeneration.py`
+- `apps/api/tests/test_renders.py`
+- `apps/api/tests/test_service_hardening.py`
+- `apps/worker/Dockerfile`
+- `apps/worker/src/media-url-policy.mjs`
+- `apps/worker/src/media-url-policy.test.mjs`
+- `infra/docker-compose.gpu.yml`
 
 ## 13. Suggested prompt for the next AI session
 
-> Continue implementing the Motionly AI-centered rebuild from this handoff. Treat Tasks 1–3 as complete only because their cited tests passed. Task 4 has substantial interrupted, unverified changes: inspect and validate them first, fix all failures/security-review findings, and only then mark Task 4 complete. Preserve forward-only migrations, existing user changes, and the API-authoritative tenant boundary. Use `/temp` on `/dev/sdb1` for large temporary artifacts if needed. Work in small validated increments, update the task list immediately after each completed task, do not commit/push without explicit permission, and do not claim overall completion until all 18 tasks have concrete verification evidence.
+> Continue implementing the Motionly AI-centered rebuild from this handoff. Treat Tasks 1–4 as complete only because their cited validation and review evidence passed. Start with Task 5: immutable timeline revisions and source lineage. Do not start later tasks until Task 5 success criteria are implemented and verified. Preserve forward-only migrations, existing user changes, the API-authoritative tenant boundary, and the Task 4 SSRF/credential/container hardening. Use `/tmp` for temporary artifacts, account for constrained Docker storage, and do not broadly prune user resources. Work in small validated increments, update the task list immediately after each completed task, and do not commit or push without explicit permission.

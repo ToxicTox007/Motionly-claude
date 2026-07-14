@@ -1,5 +1,6 @@
 import socket
 
+import httpx
 import pytest
 
 from app.services.media_url_policy import (
@@ -24,17 +25,23 @@ def _public_lookup(*_args, **_kwargs):
         "http://192.0.2.20/media.mp4",
         "http://224.0.0.1/media.mp4",
         "http://240.0.0.1/media.mp4",
+        "http://2130706433/media.mp4",
+        "http://0177.0.0.1/media.mp4",
+        "http://127.1/media.mp4",
+        "http://0x7f000001/media.mp4",
         "http://[::]/media.mp4",
         "http://[::1]/media.mp4",
+        "http://[::ffff:127.0.0.1]/media.mp4",
         "http://[fc00::1]/media.mp4",
         "http://[fe80::1]/media.mp4",
+        "http://[fec0::1]/media.mp4",
         "http://[ff02::1]/media.mp4",
         "http://[2001:db8::1]/media.mp4",
     ],
 )
 def test_media_url_policy_rejects_non_public_literal_addresses(url: str) -> None:
     with pytest.raises(MediaUrlPolicyError):
-        validate_outbound_media_url(url)
+        validate_outbound_media_url(url, resolve_dns=False)
 
 
 @pytest.mark.parametrize(
@@ -72,6 +79,13 @@ def test_media_url_policy_checks_every_dns_result(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(MediaUrlPolicyError):
         validate_outbound_media_url("https://media.example.com/video.mp4")
 
+    def site_local_lookup(*_args, **_kwargs):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fec0::1", 443, 0, 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", site_local_lookup)
+    with pytest.raises(MediaUrlPolicyError):
+        validate_outbound_media_url("https://media.example.com/video.mp4")
+
 
 def test_media_url_policy_allows_public_https_and_ipv6() -> None:
     public_lookup = _public_lookup
@@ -80,6 +94,9 @@ def test_media_url_policy_allows_public_https_and_ipv6() -> None:
         resolver=public_lookup,
     ).kind == "http"
     assert validate_outbound_media_url("https://[2606:4700:4700::1111]/video.mp4").kind == "http"
+    assert validate_outbound_media_url(
+        "http://0x08080808/video.mp4", resolve_dns=False
+    ).kind == "http"
 
 
 def test_media_url_policy_preserves_strict_internal_and_bounded_audio_refs() -> None:
@@ -150,14 +167,55 @@ class _Response:
 
 
 class _StreamFactory:
-    def __init__(self, responses: list[_Response]) -> None:
+    def __init__(self, responses: list[_Response | httpx.TransportError]) -> None:
         self.responses = iter(responses)
         self.urls: list[str] = []
+        self.kwargs: list[dict] = []
 
     def __call__(self, _method, url, **kwargs):
         assert kwargs["follow_redirects"] is False
         self.urls.append(url)
-        return next(self.responses)
+        self.kwargs.append(kwargs)
+        response = next(self.responses)
+        if isinstance(response, httpx.TransportError):
+            raise response
+        return response
+
+
+def test_safe_http_stream_pins_validated_dns_answers_and_fails_over() -> None:
+    calls = 0
+
+    def rebinding_lookup(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))]
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.35", 443)),
+        ]
+
+    factory = _StreamFactory(
+        [httpx.ConnectError("first vetted address unavailable"), _Response(200)]
+    )
+    with safe_http_stream(
+        "https://media.example.com/video.mp4?token=secret",
+        timeout=1,
+        resolver=rebinding_lookup,
+        stream_factory=factory,
+    ) as response:
+        assert response.status_code == 200
+
+    assert calls == 1
+    assert factory.urls == [
+        "https://93.184.216.34/video.mp4?token=secret",
+        "https://93.184.216.35/video.mp4?token=secret",
+    ]
+    assert all(item["headers"]["Host"] == "media.example.com" for item in factory.kwargs)
+    assert all(
+        item["extensions"] == {"sni_hostname": "media.example.com"}
+        for item in factory.kwargs
+    )
 
 
 def test_safe_http_stream_revalidates_redirect_destination() -> None:
@@ -171,7 +229,7 @@ def test_safe_http_stream_revalidates_redirect_destination() -> None:
             stream_factory=factory,
         ):
             pass
-    assert factory.urls == ["https://media.example.com/start.mp4?token=do-not-log"]
+    assert factory.urls == ["https://93.184.216.34/start.mp4?token=do-not-log"]
 
 
 def test_safe_http_stream_bounds_redirects_without_leaking_query() -> None:

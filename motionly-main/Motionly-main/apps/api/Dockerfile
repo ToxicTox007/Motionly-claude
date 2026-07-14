@@ -22,7 +22,9 @@ RUN cd apps/api/worker-bridge \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir . \
     && useradd --create-home --uid 10001 motionly \
-    && chown -R motionly:motionly /app
+    && mkdir -p /var/data/motionly /var/cache/motionly /tmp/motionly \
+    && chown -R motionly:motionly \
+        /app /var/data/motionly /var/cache/motionly /tmp/motionly
 
 USER motionly
 

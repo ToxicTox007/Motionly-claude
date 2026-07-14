@@ -817,6 +817,8 @@ async def create_render(
         "include_broll": payload.include_broll,
         "adjustment_action": payload.adjustment_action.value if payload.adjustment_action else None,
         "edit_plan_id": str(edit_plan_record.id) if edit_plan_record else None,
+        "source_plan_revision": edit_plan_record.revision if edit_plan_record else None,
+        "source_media_revision": getattr(upload, "media_revision", None),
         "music_selection_id": str(music_selection.id) if music_selection else None,
         "effects_config_id": str(effects_config.id) if effects_config else None,
         "motion_design": motion_design_manifest,

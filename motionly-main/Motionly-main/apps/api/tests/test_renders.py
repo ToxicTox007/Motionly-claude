@@ -944,6 +944,11 @@ def test_render_completion_falls_back_to_720p_after_ffmpeg_failure(
         return 123, 3
 
     monkeypatch.setattr(FFmpegCaptionRenderer, "render", fake_render)
+    monkeypatch.setattr("app.services.render_jobs.which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        "app.services.render_jobs.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
 
     queued_job = repository.get_render_job(
         project_id=project_id,
@@ -1021,6 +1026,11 @@ def test_render_completion_passes_effects_config_to_ffmpeg(
         return 42, 3
 
     monkeypatch.setattr(FFmpegCaptionRenderer, "render", fake_render)
+    monkeypatch.setattr("app.services.render_jobs.which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        "app.services.render_jobs.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
     queued_job = repository.get_render_job(
         project_id=project_id,
         render_job_id=response.job_id,
@@ -1115,6 +1125,7 @@ def test_render_preflight_catches_invalid_ass_before_render(
     def fake_run(*_args, **_kwargs):
         return SimpleNamespace(returncode=1, stderr="bad ass", stdout="")
 
+    monkeypatch.setattr("app.services.render_jobs.which", lambda _name: "/usr/bin/ffmpeg")
     monkeypatch.setattr("app.services.render_jobs.subprocess.run", fake_run)
 
     job = complete_render_job(

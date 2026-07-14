@@ -245,7 +245,9 @@ def test_selected_stock_video_is_streamed_into_owned_storage(monkeypatch, tmp_pa
             assert chunk_size == 1024 * 1024
             yield b"owned-video"
 
-    monkeypatch.setattr("app.services.stock_video.httpx.stream", lambda *_a, **_k: Stream())
+    monkeypatch.setattr(
+        "app.services.stock_video.safe_http_stream", lambda *_a, **_k: Stream()
+    )
     repository = InMemoryBrollRepository(SimpleNamespace())
     asset = repository.upsert_asset(
         workspace_id=uuid4(),

@@ -1,5 +1,8 @@
 import { lookup as dnsLookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { BlockList, isIP } from "node:net";
+import { Readable } from "node:stream";
 
 const MAX_DATA_AUDIO_BYTES = 1_048_576;
 const MAX_URL_LENGTH = 8_192;
@@ -39,6 +42,7 @@ for (const [network, prefix] of [
   ["3fff::", 20],
   ["5f00::", 16],
   ["fc00::", 7],
+  ["fec0::", 10],
   ["fe80::", 10],
   ["ff00::", 8],
 ]) forbiddenIpv6.addSubnet(network, prefix, "ipv6");
@@ -100,10 +104,13 @@ export async function assertSafeOutboundMediaUrl(
 
   const hostname = parsed.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
   const family = isIP(hostname);
+  let addresses;
   if (family) {
     assertPublicAddress(hostname, family);
+    addresses = [{ address: hostname, family }];
   } else {
     validateHostname(hostname);
+    addresses = [];
     if (resolveDns) {
       let records;
       try {
@@ -112,17 +119,14 @@ export async function assertSafeOutboundMediaUrl(
         if (requireDns) throw new MediaUrlPolicyError("Media URL host could not be resolved.");
         records = [];
       }
-      if (!records.length && requireDns) {
+      if (!Array.isArray(records) || (!records.length && requireDns)) {
         throw new MediaUrlPolicyError("Media URL host could not be resolved.");
       }
-      for (const record of records) {
-        const recordFamily = Number(record.family) || isIP(record.address);
-        if (!recordFamily) throw new MediaUrlPolicyError("Media URL resolved to an invalid address.");
-        assertPublicAddress(record.address.split("%", 1)[0], recordFamily);
-      }
+      addresses = records.map(normalizeLookupRecord);
+      for (const record of addresses) assertPublicAddress(record.address, record.family);
     }
   }
-  return { value, kind: "http" };
+  return { value, kind: "http", addresses };
 }
 
 export async function validateRenderMediaManifest(renderProps, options = {}) {
@@ -190,12 +194,13 @@ export async function validateRenderMediaManifest(renderProps, options = {}) {
 export async function safeFetchMedia(
   url,
   {
-    fetchImpl = fetch,
+    fetchImpl,
     lookup = dnsLookup,
     maxRedirects = MAX_MEDIA_REDIRECTS,
     signal,
     headers,
     trustedInternal = false,
+    requestImpl,
   } = {},
 ) {
   if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 10) {
@@ -203,14 +208,17 @@ export async function safeFetchMedia(
   }
   let current = url;
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-    if (!(trustedInternal && redirectCount === 0)) {
-      await assertSafeOutboundMediaUrl(current, { lookup, requireDns: true });
-    }
-    const response = await fetchImpl(current, {
-      signal,
-      headers,
-      redirect: "manual",
-    });
+    const validation = trustedInternal && redirectCount === 0
+      ? await resolveTrustedInternalTarget(current, lookup)
+      : await assertSafeOutboundMediaUrl(current, { lookup, requireDns: true });
+    const response = fetchImpl
+      ? await fetchImpl(current, { signal, headers, redirect: "manual" })
+      : await pinnedFetch(current, {
+        signal,
+        headers,
+        pinnedAddresses: validation.addresses,
+        requestImpl,
+      });
     if (!REDIRECT_STATUSES.has(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) throw new MediaUrlPolicyError("Media redirect is missing a destination.");
@@ -222,6 +230,108 @@ export async function safeFetchMedia(
     current = new URL(location, current).toString();
   }
   throw new MediaUrlPolicyError("Media redirect limit exceeded.");
+}
+
+async function resolveTrustedInternalTarget(value, lookup) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new MediaUrlPolicyError("Media URL is malformed.");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) {
+    throw new MediaUrlPolicyError("Media URL scheme is not supported.");
+  }
+  if (parsed.username || parsed.password) {
+    throw new MediaUrlPolicyError("Credential-bearing media URLs are not allowed.");
+  }
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+  const family = isIP(hostname);
+  if (family) return { addresses: [{ address: hostname, family }] };
+
+  let records;
+  try {
+    records = await lookup(hostname, { all: true, verbatim: true });
+  } catch {
+    throw new MediaUrlPolicyError("Media URL host could not be resolved.");
+  }
+  if (!Array.isArray(records) || !records.length) {
+    throw new MediaUrlPolicyError("Media URL host could not be resolved.");
+  }
+  return { addresses: records.map(normalizeLookupRecord) };
+}
+
+function normalizeLookupRecord(record) {
+  const address = typeof record?.address === "string" ? record.address.split("%", 1)[0] : "";
+  const actualFamily = isIP(address);
+  const declaredFamily = Number(record?.family) || actualFamily;
+  if (!actualFamily || declaredFamily !== actualFamily) {
+    throw new MediaUrlPolicyError("Media URL resolved to an invalid address.");
+  }
+  return { address, family: actualFamily };
+}
+
+async function pinnedFetch(value, { signal, headers, pinnedAddresses, requestImpl }) {
+  let lastError;
+  for (const pinnedAddress of pinnedAddresses) {
+    try {
+      return await pinnedFetchAddress(value, { signal, headers, pinnedAddress, requestImpl });
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new MediaUrlPolicyError("Media URL host could not be resolved.");
+}
+
+function pinnedFetchAddress(value, { signal, headers, pinnedAddress, requestImpl }) {
+  const parsed = new URL(value);
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const requester = requestImpl ?? (parsed.protocol === "https:" ? httpsRequest : httpRequest);
+  const requestHeaders = Object.fromEntries(new Headers(headers));
+  requestHeaders.host = parsed.host;
+
+  return new Promise((resolve, reject) => {
+    const request = requester(parsed, {
+      headers: requestHeaders,
+      signal,
+      family: pinnedAddress.family,
+      lookup(_hostname, options, callback) {
+        const record = { address: pinnedAddress.address, family: pinnedAddress.family };
+        queueMicrotask(() => {
+          if (typeof options === "object" && options?.all) callback(null, [record]);
+          else callback(null, record.address, record.family);
+        });
+      },
+      ...(parsed.protocol === "https:" && !isIP(hostname) ? { servername: hostname } : {}),
+    }, (incoming) => {
+      try {
+        const status = incoming.statusCode ?? 0;
+        if (status < 200 || status > 599) {
+          throw new MediaUrlPolicyError("Media response status is not supported.");
+        }
+        const responseHeaders = new Headers();
+        for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+          responseHeaders.append(incoming.rawHeaders[index], incoming.rawHeaders[index + 1]);
+        }
+        const hasBody = ![204, 205, 304].includes(status);
+        resolve(new Response(hasBody ? Readable.toWeb(incoming) : null, {
+          status,
+          statusText: incoming.statusMessage,
+          headers: responseHeaders,
+        }));
+      } catch (error) {
+        incoming.destroy();
+        reject(error);
+      }
+    });
+    request.on("upgrade", (_incoming, socket) => {
+      socket.destroy();
+      reject(new MediaUrlPolicyError("Media response protocol is not supported."));
+    });
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 function validateHostname(hostname) {

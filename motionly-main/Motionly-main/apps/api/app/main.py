@@ -9,6 +9,7 @@ from app.api.broll import router as broll_router
 from app.api.captions import router as captions_router
 from app.api.effects import router as effects_router
 from app.api.errors import ApiError, api_error_handler, request_validation_error_handler
+from app.api.revision_errors import RevisionConflictError, revision_conflict_error_handler
 from app.api.feedback import router as feedback_router
 from app.api.health import router as health_router
 from app.api.internal_batches import router as internal_batches_router
@@ -402,6 +403,7 @@ def create_app() -> FastAPI:
     app.middleware("http")(rate_limit_middleware)
     app.add_exception_handler(ApiError, api_error_handler)
     app.add_exception_handler(RequestValidationError, request_validation_error_handler)
+    app.add_exception_handler(RevisionConflictError, revision_conflict_error_handler)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,

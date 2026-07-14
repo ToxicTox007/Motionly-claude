@@ -1,3 +1,7 @@
+x-worker-depends-on: &worker-depends-on
+  api: { condition: service_started }
+  volume-permissions: { condition: service_completed_successfully }
+
 x-media-environment: &media-environment
   REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
   SUPABASE_URL: http://supabase-gateway:8000
@@ -27,6 +31,23 @@ x-media-volumes: &media-volumes
   - motionly-model-cache:/var/cache/motionly
 
 services:
+  volume-permissions:
+    image: alpine:3.21.3
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    command:
+      - sh
+      - -ec
+      - |
+        mkdir -p /var/data/motionly /var/cache/motionly
+        chown -R 10001:10001 /var/data/motionly /var/cache/motionly
+    volumes: *media-volumes
+
   postgres:
     image: supabase/postgres:15.8.1.060
     restart: unless-stopped
@@ -116,6 +137,7 @@ services:
     secrets:
       [supabase_service_role_key, supabase_jwt_secret, worker_api_token, admin_api_token, publish_token_encryption_key, publish_oauth_state_secret]
     depends_on:
+      volume-permissions: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       postgres: { condition: service_healthy }
     volumes: *media-volumes
@@ -155,6 +177,7 @@ services:
       WORKER_QUEUES: upload_preprocess,render
       WORKER_CONCURRENCY: "2"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: &worker-secrets
       [supabase_service_role_key, supabase_jwt_secret, worker_api_token, publish_token_encryption_key]
@@ -171,6 +194,7 @@ services:
       VISUAL_ANALYSIS_WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
@@ -186,6 +210,7 @@ services:
       MATTE_WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
@@ -201,6 +226,7 @@ services:
       FFMPEG_GPU_ENABLED: "true"
       FFMPEG_GPU_ENCODER: h264_nvenc
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
@@ -216,6 +242,7 @@ services:
       WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
@@ -228,6 +255,7 @@ services:
       WORKER_QUEUES: provider_calls
       WORKER_CONCURRENCY: "4"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
@@ -240,6 +268,7 @@ services:
       WORKER_QUEUES: planning,stock_search,stock_asset_enrichment,audio,intelligence,maintenance
       WORKER_CONCURRENCY: "3"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
@@ -253,6 +282,7 @@ services:
       REMOTION_ENABLED: "true"
       WORKER_CONCURRENCY: "1"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
@@ -265,6 +295,7 @@ services:
       WORKER_QUEUES: publish
       WORKER_CONCURRENCY: "3"
     restart: unless-stopped
+    depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
 
