@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
+from app.core.security import constant_time_token_matches
 from app.schemas.renders import RenderJobStatus
 from app.services.matte_jobs import run_matte_for_upload
 from app.services.outcomes import record_render_success_outcome
@@ -39,9 +40,9 @@ async def require_worker_token(
     x_motionly_worker_token: str | None = Header(default=None),
 ) -> None:
     settings = request.app.state.settings
-    if not settings.admin_api_token:
+    if not settings.worker_api_token:
         raise ApiError(500, "worker_token_not_configured", "Worker token is not configured.")
-    if x_motionly_worker_token != settings.admin_api_token:
+    if not constant_time_token_matches(x_motionly_worker_token, settings.worker_api_token):
         raise ApiError(403, "worker_access_denied", "Worker access is required.")
 
 

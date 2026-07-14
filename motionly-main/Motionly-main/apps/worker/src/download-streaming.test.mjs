@@ -32,6 +32,7 @@ test("segmentation downloads stream chunks to disk", async () => {
       await downloadToFile(url, destination, {
         maxBytes: 1024 * 1024,
         timeoutMs: 5_000,
+        trustedInternal: true,
       });
     });
     const result = await readFile(destination);
@@ -49,7 +50,11 @@ test("segmentation downloads enforce byte limits and remove partial files", asyn
   try {
     await assert.rejects(
       withChunkServer([Buffer.alloc(2048, 7)], (url) =>
-        downloadToFile(url, destination, { maxBytes: 1024, timeoutMs: 5_000 }),
+        downloadToFile(url, destination, {
+          maxBytes: 1024,
+          timeoutMs: 5_000,
+          trustedInternal: true,
+        }),
       ),
       /exceeds the 1024-byte limit/,
     );

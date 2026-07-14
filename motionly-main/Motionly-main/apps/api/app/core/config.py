@@ -121,6 +121,7 @@ class Settings(BaseSettings):
         default=None, alias="PUBLISH_TOKEN_ENCRYPTION_KEY"
     )
     admin_api_token: str | None = Field(default=None, alias="ADMIN_API_TOKEN")
+    worker_api_token: str | None = Field(default=None, alias="WORKER_API_TOKEN")
     admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
     admin_workspace_ids: str = Field(default="", alias="ADMIN_WORKSPACE_IDS")
     transcription_provider: str = Field(default="groq", alias="TRANSCRIPTION_PROVIDER")
@@ -311,7 +312,9 @@ def get_settings() -> Settings:
         "SUPABASE_SERVICE_ROLE_KEY",
         "SUPABASE_JWT_SECRET",
         "ADMIN_API_TOKEN",
+        "WORKER_API_TOKEN",
         "PUBLISH_TOKEN_ENCRYPTION_KEY",
+        "PUBLISH_OAUTH_STATE_SECRET",
         "REDIS_URL",
         "METRICS_BEARER_TOKEN",
         "LIGHTNING_API_KEY",

@@ -3,7 +3,7 @@ x-media-environment: &media-environment
   SUPABASE_URL: http://supabase-gateway:8000
   SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
   SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
-  ADMIN_API_TOKEN_FILE: /run/secrets/admin_api_token
+  WORKER_API_TOKEN_FILE: /run/secrets/worker_api_token
   PUBLISH_TOKEN_ENCRYPTION_KEY_FILE: /run/secrets/publish_token_encryption_key
   APP_ENV: production
   PROCESS_ROLE: worker
@@ -107,12 +107,14 @@ services:
     environment:
       <<: *media-environment
       PROCESS_ROLE: api
+      ADMIN_API_TOKEN_FILE: /run/secrets/admin_api_token
+      PUBLISH_OAUTH_STATE_SECRET_FILE: /run/secrets/publish_oauth_state_secret
       API_PUBLIC_BASE_URL: https://${API_DOMAIN}
       API_CORS_ORIGINS: https://${APP_DOMAIN}
       SENTRY_DSN: ${SENTRY_DSN}
       WORKER_API_BASE_URL: http://api:8000
-    secrets: &app-secrets
-      [supabase_service_role_key, supabase_jwt_secret, admin_api_token, publish_token_encryption_key]
+    secrets:
+      [supabase_service_role_key, supabase_jwt_secret, worker_api_token, admin_api_token, publish_token_encryption_key, publish_oauth_state_secret]
     depends_on:
       redis: { condition: service_healthy }
       postgres: { condition: service_healthy }
@@ -154,7 +156,8 @@ services:
       WORKER_CONCURRENCY: "2"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: &worker-secrets
+      [supabase_service_role_key, supabase_jwt_secret, worker_api_token, publish_token_encryption_key]
 
   gpu-inference-worker:
     build:
@@ -169,7 +172,7 @@ services:
       MODEL_PREFETCH: "true"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
   matte-worker:
     build:
@@ -184,7 +187,7 @@ services:
       MODEL_PREFETCH: "true"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
   gpu-ffmpeg-worker:
     build:
@@ -199,7 +202,7 @@ services:
       FFMPEG_GPU_ENCODER: h264_nvenc
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
   demucs-worker:
     build:
@@ -214,7 +217,7 @@ services:
       MODEL_PREFETCH: "true"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
   provider-worker:
     build:
@@ -226,7 +229,7 @@ services:
       WORKER_CONCURRENCY: "4"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
   planning-worker:
     build:
@@ -238,7 +241,7 @@ services:
       WORKER_CONCURRENCY: "3"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
   remotion-worker:
     build:
@@ -251,7 +254,7 @@ services:
       WORKER_CONCURRENCY: "1"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
   publishing-worker:
     build:
@@ -263,7 +266,7 @@ services:
       WORKER_CONCURRENCY: "3"
     restart: unless-stopped
     volumes: *media-volumes
-    secrets: *app-secrets
+    secrets: *worker-secrets
 
 volumes:
   motionly-media:
@@ -283,5 +286,9 @@ secrets:
     file: ./secrets/supabase_jwt_secret
   admin_api_token:
     file: ./secrets/admin_api_token
+  worker_api_token:
+    file: ./secrets/worker_api_token
   publish_token_encryption_key:
     file: ./secrets/publish_token_encryption_key
+  publish_oauth_state_secret:
+    file: ./secrets/publish_oauth_state_secret

@@ -26,7 +26,7 @@ def build_queue_request_state(
         app_env="test",
         billing_enabled=False,
         redis_url=None,
-        admin_api_token="worker-secret",
+        worker_api_token="worker-secret",
     )
     state = {"settings": settings, "queue_registry": registry, **repositories}
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state)))

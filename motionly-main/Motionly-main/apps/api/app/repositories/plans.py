@@ -230,6 +230,7 @@ class InMemoryPlanRepository:
             if plan.project_id == project_id
             and plan.workspace_id == workspace_id
             and plan.cache_key == cache_key
+            and plan.status == EditPlanStatus.READY
         ]
         if not matches:
             return None
@@ -266,13 +267,15 @@ class InMemoryPlanRepository:
             )
             + 1
         )
-        for plan in self.plans.values():
-            if (
-                plan.project_id == values["project_id"]
-                and plan.workspace_id == values["workspace_id"]
-            ):
-                plan.is_active = False
-        record = EditPlanRecord(id=uuid4(), version=version, is_active=True, **values)
+        activate = values["status"] == EditPlanStatus.READY
+        if activate:
+            for plan in self.plans.values():
+                if (
+                    plan.project_id == values["project_id"]
+                    and plan.workspace_id == values["workspace_id"]
+                ):
+                    plan.is_active = False
+        record = EditPlanRecord(id=uuid4(), version=version, is_active=activate, **values)
         self.plans[record.id] = record
         return record
 
@@ -629,6 +632,7 @@ class SupabasePlanRepository(InMemoryPlanRepository):
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
                 "cache_key": f"eq.{cache_key}",
+                "status": f"eq.{EditPlanStatus.READY.value}",
                 "select": EDIT_PLAN_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",
@@ -652,6 +656,7 @@ class SupabasePlanRepository(InMemoryPlanRepository):
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
                 "cache_key": f"eq.{cache_key}",
+                "status": f"eq.{EditPlanStatus.READY.value}",
                 "select": EDIT_PLAN_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": "1",

@@ -1051,7 +1051,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               accessToken: apiAccessToken,
               signal,
               friendlyError: "Smart B-roll fill failed.",
-              body: { density: "from_plan", force: true },
+              body: { density: "from_plan" },
             },
           );
           const slots = await resolveQueuedLayer({
@@ -1093,7 +1093,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               music_volume: 0.25,
               sfx_intensity: 0.25,
               rights_confirmed: true,
-              force: true,
             },
           });
           const selection = await resolveQueuedLayer({
@@ -1135,7 +1134,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
                   ? 45
                   : (activePlan?.target_duration_s ?? 35),
               broll_density: activePlan?.broll_density ?? "medium",
-              force: true,
             },
           });
 

@@ -521,7 +521,7 @@ def _make_visual_context(tmp_path) -> SimpleNamespace:
     user_id = uuid4()
     upload_repository.seed_project(project_id=project_id, workspace_id=workspace_id)
     settings = SimpleNamespace(
-        admin_api_token="worker-secret",
+        worker_api_token="worker-secret",
         media_work_dir=str(tmp_path),
         supabase_url=None,
         supabase_service_role_key=None,

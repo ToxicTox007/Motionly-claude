@@ -852,7 +852,7 @@ export interface RenderTemplateMetadata {
 export interface PremiumRenderManifest {
   schema_version: number;
   source_video_id: string;
-  caption_track_id: string;
+  caption_track_id: string | null;
   edit_plan_id?: string | null;
   music_selection_id?: string | null;
   effects_config_id?: string | null;
@@ -893,7 +893,7 @@ export interface RenderJobSummary {
   id: string;
   status: RenderJobStatus;
   uploaded_video_id: string;
-  caption_track_id: string;
+  caption_track_id: string | null;
   planner_version: string;
   manifest?: Record<string, any>;
   keep_segments: CutSegment[];

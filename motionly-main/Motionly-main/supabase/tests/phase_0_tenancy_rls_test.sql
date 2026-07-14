@@ -46,26 +46,23 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub', '11000000-0000-4000-8000-000000000001', true);
 select is((select count(*)::integer from public.projects), 1, 'member can read own workspace project');
 select is((select count(*)::integer from public.uploaded_videos), 1, 'member can read own workspace upload');
-select lives_ok(
+select throws_ok(
   $$update public.projects
     set title = 'Phase 0 RLS project updated'
     where id = '41000000-0000-4000-8000-000000000001'$$,
-  'member can update own workspace project'
+  '42501', null,
+  'member must use the API rather than directly updating a project'
 );
 
 select set_config('request.jwt.claim.sub', '11000000-0000-4000-8000-000000000002', true);
 select is((select count(*)::integer from public.projects), 0, 'outsider cannot read foreign workspace project');
 select is((select count(*)::integer from public.uploaded_videos), 0, 'outsider cannot read foreign workspace upload');
-with updated as (
-  update public.projects
-  set title = 'forged update'
-  where id = '41000000-0000-4000-8000-000000000001'
-  returning 1
-)
-select is(
-  (select count(*)::integer from updated),
-  0,
-  'outsider update matches no foreign workspace project rows'
+select throws_ok(
+  $$update public.projects
+    set title = 'forged update'
+    where id = '41000000-0000-4000-8000-000000000001'$$,
+  '42501', null,
+  'outsider cannot directly update a foreign workspace project'
 );
 
 select * from finish();

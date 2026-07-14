@@ -58,7 +58,7 @@ from app.schemas.effects import (
     VisualPresetKey,
 )
 from app.schemas.music import MusicProviderKey, MusicSelectionStatus
-from app.schemas.plans import BrollDensity, EditPlanCut, PlanCreateRequest
+from app.schemas.plans import BrollDensity, EditPlanCut, ManualElement, PlanCreateRequest
 from app.schemas.renders import (
     CutSegment,
     ExportFraming,
@@ -863,6 +863,46 @@ def test_render_create_can_hide_caption_burn_in() -> None:
     assert response.job.manifest["render_props"]["captions"] == []
     assert response.job.manifest["render_props"]["words"]
     assert "include_captions=False" in response.job.logs
+
+
+@pytest.mark.parametrize("track_state", ["missing", "empty"])
+def test_render_without_captions_does_not_require_caption_track(track_state: str) -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    track = repository.latest_caption_track(project_id=project_id, workspace_id=workspace_id)
+    caption_track_id = track.id
+    if track_state == "missing":
+        repository.caption_repository.caption_tracks.clear()
+        caption_track_id = None
+    else:
+        track.segments = []
+
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(
+                caption_track_id=caption_track_id,
+                include_captions=False,
+            ),
+            request=make_request(),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+
+    assert response.status == RenderJobStatus.COMPLETE
+    assert response.job.caption_track_id == caption_track_id
+    assert response.job.manifest["caption_track_id"] == (
+        str(caption_track_id) if caption_track_id else None
+    )
+    assert response.job.manifest["include_captions"] is False
+    assert response.job.manifest["caption_ass"] is None
+    assert response.job.manifest["render_props"]["captions"] == []
+    assert response.job.manifest["render_props"]["captionStyle"]["font_family"]
+    assert response.job.manifest["render_props"]["words"]
+    assert response.job.manifest["timeline"]["captions"] == []
 
 
 def test_render_completion_falls_back_to_720p_after_ffmpeg_failure(
@@ -1876,6 +1916,89 @@ def test_render_manifest_includes_selected_broll_assets() -> None:
     assert manifest["render_props"]["assets"][0]["source_start_ms"] == slot.start_ms
     assert manifest["render_props"]["assets"][0]["start_ms"] <= slot.start_ms
     assert manifest["render_props"]["assets"][0]["license"] == "pexels_license"
+
+
+def test_render_manifest_rejects_private_stock_asset_url() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    plan_repository = InMemoryPlanRepository(repository.caption_repository)
+    broll_repository = InMemoryBrollRepository(plan_repository)
+    slot = seed_broll_slot(
+        broll_repository=broll_repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    asset = broll_repository.get_asset(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        asset_id=slot.selected_asset_id,
+    )
+    asset.download_url = "http://169.254.169.254/latest/meta-data/"
+    asset.preview_video_url = asset.download_url
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            create_render(
+                project_id=project_id,
+                payload=RenderCreateRequest(),
+                request=make_request(complete_locally=False),
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                billing_repository=InMemoryBillingRepository(),
+                plan_repository=plan_repository,
+                render_queue=RenderQueue(),
+                broll_repository=broll_repository,
+            )
+        )
+
+    assert exc_info.value.code == "unsafe_media_url"
+    assert "169.254" not in exc_info.value.message
+
+
+def test_render_manifest_rejects_private_manual_audio_url() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    plan_repository = InMemoryPlanRepository(repository.caption_repository)
+    from tests.worker_job_test_helpers import seed_active_plan
+
+    seed_active_plan(
+        plan_repository=plan_repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        payload=PlanCreateRequest(target_duration_s=10, broll_density=BrollDensity.NONE),
+    )
+    plan = plan_repository.active_plan(project_id=project_id, workspace_id=workspace_id)
+    plan.plan = plan.plan.model_copy(
+        update={
+            "manual_elements": [
+                ManualElement(
+                    id="unsafe-sfx",
+                    type="sfx",
+                    name="Unsafe SFX",
+                    zone="timeline",
+                    start_ms=0,
+                    end_ms=7000,
+                    properties={"assetUrl": "http://127.0.0.1/private.wav"},
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            create_render(
+                project_id=project_id,
+                payload=RenderCreateRequest(edit_plan_id=plan.id),
+                request=make_request(complete_locally=False),
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                billing_repository=InMemoryBillingRepository(),
+                plan_repository=plan_repository,
+                render_queue=RenderQueue(),
+            )
+        )
+
+    assert exc_info.value.code == "unsafe_media_url"
+    assert "127.0.0.1" not in exc_info.value.message
 
 
 def test_render_manifest_can_exclude_broll_assets() -> None:

@@ -577,6 +577,6 @@ def _request(*, billing_enabled: bool = True):
             app_env="test",
             billing_enabled=billing_enabled,
             redis_url=None,
-            admin_api_token="worker-secret",
+            worker_api_token="worker-secret",
         ),
     )

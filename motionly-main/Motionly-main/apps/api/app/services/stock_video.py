@@ -21,6 +21,7 @@ from app.schemas.broll import (
     StockProviderKey,
 )
 from app.schemas.plans import BrollRequest, EditPlan
+from app.services.media_url_policy import MediaUrlPolicyError, safe_http_stream
 from app.services.storage import StorageSigner
 
 EMBEDDING_DOWNLOAD_TIMEOUT_SECONDS = 6.0
@@ -48,7 +49,11 @@ def ensure_owned_stock_asset(
         f"broll/stock/{asset.provider.value}-{object_id}.mp4"
     )
     try:
-        with httpx.stream("GET", source_url, timeout=180, follow_redirects=True) as source:
+        with safe_http_stream(
+            source_url,
+            timeout=180,
+            stream_factory=httpx.stream,
+        ) as source:
             source.raise_for_status()
             content_type = source.headers.get("content-type", "video/mp4")
             if storage_signer.supabase_url and storage_signer.service_role_key:
@@ -72,7 +77,7 @@ def ensure_owned_stock_asset(
                 with target.open("wb") as output:
                     for chunk in source.iter_bytes(chunk_size=1024 * 1024):
                         output.write(chunk)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, MediaUrlPolicyError) as exc:
         raise ApiError(502, "stock_asset_ingest_failed", "Stock video copy failed.") from exc
     signed = storage_signer.create_signed_download(
         bucket=bucket,

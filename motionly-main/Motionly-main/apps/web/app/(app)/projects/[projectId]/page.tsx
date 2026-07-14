@@ -59,10 +59,16 @@ export default async function ProjectDetailsPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const context = await getApiContext(projectId);
-  const project = await apiGet<ProjectResponse>(`/projects/${projectId}`, context.headers);
+  const contexts = await getApiContexts(projectId);
+  const projectMatches = await Promise.all(
+    contexts.map(async (context) => ({
+      context,
+      project: await apiGet<ProjectResponse>(`/projects/${projectId}`, context.headers),
+    })),
+  );
+  const projectMatch = projectMatches.find((candidate) => candidate.project !== null);
 
-  if (!project) {
+  if (!projectMatch?.project) {
     return (
       <AppShell title="Project not found">
         <p className="text-sm text-muted-foreground">
@@ -71,6 +77,8 @@ export default async function ProjectDetailsPage({
       </AppShell>
     );
   }
+
+  const { context, project } = projectMatch;
 
   const workspaceId = project.workspace_id || context.workspaceId;
   const headers = {
@@ -180,7 +188,7 @@ function toExportResolution(value: string | undefined): ExportResolution {
   return value === "4k" || value === "1080p" ? value : "720p";
 }
 
-async function getApiContext(projectId: string): Promise<ApiContext> {
+async function getApiContexts(projectId: string): Promise<ApiContext[]> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -192,28 +200,28 @@ async function getApiContext(projectId: string): Promise<ApiContext> {
   if (!user || !session?.access_token) {
     redirect(`/login?next=${encodeURIComponent(`/projects/${projectId}`)}`);
   }
-  const { data: membership } = await supabase
+  const { data: memberships } = await supabase
     .from("workspace_members")
     .select("workspace_id")
     .eq("user_id", user.id)
-    .eq("status", "active")
-    .limit(1)
-    .maybeSingle();
-  if (!membership?.workspace_id) {
+    .eq("status", "active");
+  if (!memberships?.length) {
     redirect("/dashboard?error=workspace_missing");
   }
-  const workspaceId = membership.workspace_id as string;
 
-  return {
-    userId: user.id,
-    workspaceId,
-    apiAccessToken: session.access_token,
-    headers: {
-      authorization: `Bearer ${session.access_token}`,
-      "x-motionly-user-id": user.id,
-      "x-motionly-workspace-id": workspaceId,
-    },
-  };
+  return memberships.map((membership) => {
+    const workspaceId = membership.workspace_id as string;
+    return {
+      userId: user.id,
+      workspaceId,
+      apiAccessToken: session.access_token,
+      headers: {
+        authorization: `Bearer ${session.access_token}`,
+        "x-motionly-user-id": user.id,
+        "x-motionly-workspace-id": workspaceId,
+      },
+    };
+  });
 }
 
 async function apiGet<T>(path: string, headers: Record<string, string>): Promise<T | null> {

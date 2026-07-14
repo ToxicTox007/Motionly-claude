@@ -2165,8 +2165,19 @@ def test_async_planner_fast_path_and_polling() -> None:
 def test_async_planner_failed_job() -> None:
     repository, project_id, workspace_id, user_id = make_plan_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    ready_response = asyncio.run(
+        create_plan(
+            project_id=project_id,
+            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY),
+            actor=actor,
+            repository=repository,
+            planner_provider=FixtureEditPlannerProvider(),
+            plan_queue=PlanQueue(),
+        )
+    )
+    ready_plan_id = ready_response.plan.id
     plan_queue = PlanQueue()
-    
+
     class BrokenPlanner:
         provider_name = "broken"
         def create_plan(self, *args, **kwargs):
@@ -2228,6 +2239,18 @@ def test_async_planner_failed_job() -> None:
     )
     assert status_response.status == "failed"
     assert "OpenRouter failed!" in status_response.failure_reason
+
+    plans = repository.list_plans(project_id=project_id, workspace_id=workspace_id)
+    failed_plan = next(plan for plan in plans if plan.status == EditPlanStatus.FAILED)
+    active_plan = repository.active_plan(project_id=project_id, workspace_id=workspace_id)
+    assert failed_plan.is_active is False
+    assert active_plan.id == ready_plan_id
+    assert active_plan.status == EditPlanStatus.READY
+    assert repository.find_cached_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        cache_key=failed_plan.cache_key,
+    ) is None
 
 
 def test_phase9_cache_keys() -> None:

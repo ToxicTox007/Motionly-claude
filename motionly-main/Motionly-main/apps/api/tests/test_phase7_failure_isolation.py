@@ -231,7 +231,7 @@ def test_health_dependencies_endpoint_with_audio_ml(monkeypatch) -> None:
                 supabase_url=None,
                 supabase_service_role_key=None,
                 remotion_enabled=False,
-                admin_api_token=None,
+                worker_api_token=None,
                 render_execute_ffmpeg=False
             )
             self.queue_registry = SimpleNamespace(

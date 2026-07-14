@@ -16,6 +16,7 @@ from app.schemas.broll import StockOrientation, StockProviderKey
 from app.schemas.scale import ScaleResourceStatus
 from app.services.local_storage import create_object_storage
 from app.services.media_probe import probe_video
+from app.services.media_url_policy import MediaUrlPolicyError, safe_http_stream
 
 
 class DemucsStemSeparator:
@@ -417,14 +418,24 @@ def _generate_broll(
         )
         target = storage.object_path(bucket="tmp", path=f"runway-{record.id}.mp4")
         target.parent.mkdir(parents=True, exist_ok=True)
-        with httpx.stream("GET", generated.video_url, timeout=180) as response:
-            if response.status_code >= 400:
-                raise ApiError(
-                    502, "runway_asset_download_failed", "Generated B-roll could not be saved."
-                )
-            with target.open("wb") as output:
-                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
-                    output.write(chunk)
+        try:
+            stream_context = safe_http_stream(
+                generated.video_url,
+                timeout=180,
+                stream_factory=httpx.stream,
+            )
+            with stream_context as response:
+                if response.status_code >= 400:
+                    raise ApiError(
+                        502, "runway_asset_download_failed", "Generated B-roll could not be saved."
+                    )
+                with target.open("wb") as output:
+                    for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                        output.write(chunk)
+        except (httpx.HTTPError, MediaUrlPolicyError) as exc:
+            raise ApiError(
+                502, "runway_asset_download_failed", "Generated B-roll could not be saved."
+            ) from exc
         storage_path = (
             f"workspaces/{record.workspace_id}/projects/{record.project_id}/"
             f"generated-broll/{record.id}.mp4"

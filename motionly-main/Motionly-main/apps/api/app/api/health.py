@@ -292,7 +292,7 @@ def _worker_health(settings) -> DependencyHealth:
 def _renderer_health(settings) -> DependencyHealth:
     if not settings.remotion_enabled:
         return DependencyHealth(status="ok", message="Remotion renderer is disabled.")
-    if settings.redis_url and settings.admin_api_token:
+    if settings.redis_url and settings.worker_api_token:
         return DependencyHealth(
             status="ok",
             message="Worker-backed Remotion renderer is enabled.",
@@ -363,10 +363,10 @@ async def deep(request: Request) -> DeepHealthResponse:
     components = {
         "api": ComponentHealth(status="ok", message="API process is accepting requests."),
         "worker": ComponentHealth(
-            status="ok" if settings.admin_api_token else "degraded",
+            status="ok" if settings.worker_api_token else "degraded",
             message=(
                 "Worker token is configured."
-                if settings.admin_api_token
+                if settings.worker_api_token
                 else "Worker token is not configured."
             ),
         ),

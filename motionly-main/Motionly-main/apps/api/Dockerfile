@@ -13,7 +13,8 @@ WORKDIR /app
 
 COPY apps/api/pyproject.toml ./pyproject.toml
 COPY apps/api/app ./app
-COPY apps/api/worker-bridge ./apps/api/worker-bridge
+COPY apps/worker/src/queue-bridge.mjs ./apps/api/worker-bridge/queue-bridge.mjs
+COPY apps/worker/src/queue-common.mjs ./apps/api/worker-bridge/queue-common.mjs
 
 RUN cd apps/api/worker-bridge \
     && npm install --omit=dev --no-audit --no-fund --no-save bullmq@5.78.0 ioredis@5.11.1 \

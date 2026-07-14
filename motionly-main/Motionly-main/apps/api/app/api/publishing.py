@@ -249,7 +249,7 @@ async def create_publish_job(
 
 
 def _oauth_state_secret(settings) -> str:
-    secret = settings.publish_oauth_state_secret or settings.admin_api_token
+    secret = settings.publish_oauth_state_secret
     if not secret:
         raise ApiError(503, "publish_oauth_not_configured", "Publishing OAuth is not configured.")
     return secret

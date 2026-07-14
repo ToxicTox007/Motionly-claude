@@ -169,7 +169,7 @@ class RenderJobResponse(BaseModel):
     workspace_id: UUID
     project_id: UUID
     uploaded_video_id: UUID
-    caption_track_id: UUID
+    caption_track_id: UUID | None = None
     status: RenderJobStatus
     planner_version: str
     manifest: dict[str, Any]

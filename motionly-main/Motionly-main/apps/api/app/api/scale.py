@@ -610,8 +610,9 @@ async def cancel_batch(
     if record.status in {ScaleResourceStatus.COMPLETED, ScaleResourceStatus.PARTIAL}:
         raise ApiError(409, "batch_already_finished", "This batch has already finished.")
     job_id = f"phase5--{batch_id}"
-    if job_id in request.app.state.queue_registry.jobs:
-        request.app.state.queue_registry.cancel(job_id)
+    queue_registry = request.app.state.queue_registry
+    if queue_registry.get_job(job_id) is not None:
+        queue_registry.cancel(job_id)
     return request.app.state.scale_repository.update(
         record=record,
         status=ScaleResourceStatus.CANCELED,

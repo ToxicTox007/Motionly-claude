@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request
 
 from app.api.dependencies import Actor, get_actor, get_render_repository
 from app.api.errors import ApiError
+from app.core.security import constant_time_token_matches
 from app.repositories.renders import InMemoryRenderRepository
 from app.schemas.admin import (
     AdminOverviewResponse,
@@ -33,7 +34,7 @@ async def require_admin(
     x_motionly_admin_token: str | None = Header(default=None),
 ) -> Actor:
     settings = request.app.state.settings
-    if settings.admin_api_token and x_motionly_admin_token == settings.admin_api_token:
+    if constant_time_token_matches(x_motionly_admin_token, settings.admin_api_token):
         return actor
     if str(actor.user_id).lower() in settings.admin_user_id_list:
         return actor
@@ -109,7 +110,7 @@ async def ops_overview(
         ][:10],
         health={
             "api": "ok",
-            "worker": "ok" if getattr(settings, "admin_api_token", None) else "degraded",
+            "worker": "ok" if getattr(settings, "worker_api_token", None) else "degraded",
             "renderer": (
                 "ok"
                 if getattr(settings, "render_execute_ffmpeg", True)

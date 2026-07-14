@@ -25,7 +25,7 @@ def test_production_api_refuses_media_job_execution() -> None:
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                settings=SimpleNamespace(app_env="production", admin_api_token="worker-secret"),
+                settings=SimpleNamespace(app_env="production", worker_api_token="worker-secret"),
                 queue_registry=QueueRegistry(),
             )
         )
@@ -90,7 +90,7 @@ def test_worker_runs_upload_preprocessing_job(tmp_path, monkeypatch) -> None:
         app=SimpleNamespace(
             state=SimpleNamespace(
                 settings=SimpleNamespace(
-                    admin_api_token="worker-secret",
+                    worker_api_token="worker-secret",
                     media_work_dir=str(tmp_path),
                     supabase_url=None,
                     supabase_service_role_key=None,
@@ -127,7 +127,7 @@ def test_worker_runs_render_job_to_export() -> None:
     registry = QueueRegistry()
     metrics_registry = MetricsRegistry()
     settings = SimpleNamespace(
-        admin_api_token="worker-secret",
+        worker_api_token="worker-secret",
         export_storage_bucket="exports",
         export_signed_url_ttl_seconds=300,
         should_complete_renders_synchronously=False,
@@ -203,7 +203,7 @@ def test_worker_progress_callback_updates_render_job() -> None:
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                settings=SimpleNamespace(admin_api_token="worker-secret"),
+                settings=SimpleNamespace(worker_api_token="worker-secret"),
                 render_repository=repository,
             ),
         ),
@@ -253,7 +253,7 @@ def test_worker_failure_callback_marks_terminal_failure() -> None:
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                settings=SimpleNamespace(admin_api_token="worker-secret"),
+                settings=SimpleNamespace(worker_api_token="worker-secret"),
                 render_repository=repository,
             ),
         ),

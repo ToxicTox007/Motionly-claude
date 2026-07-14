@@ -34,6 +34,7 @@ export default defineRailway(() => {
       SUPABASE_ANON_KEY: preserve(),
       REDIS_URL: cache.env.REDIS_URL,
       ADMIN_API_TOKEN: preserve(),
+      WORKER_API_TOKEN: preserve(),
       PUBLISH_TOKEN_ENCRYPTION_KEY: preserve(),
       PUBLISH_OAUTH_STATE_SECRET: preserve(),
       METRICS_BEARER_TOKEN: preserve(),
@@ -64,13 +65,13 @@ export default defineRailway(() => {
 
   const workerEnv = {
     APP_ENV: api.env.APP_ENV,
+    PROCESS_ROLE: "worker",
     SUPABASE_URL: api.env.SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY: api.env.SUPABASE_SERVICE_ROLE_KEY,
     SUPABASE_JWT_SECRET: api.env.SUPABASE_JWT_SECRET,
     REDIS_URL: cache.env.REDIS_URL,
-    ADMIN_API_TOKEN: api.env.ADMIN_API_TOKEN,
     WORKER_API_BASE_URL: api.env.API_PUBLIC_BASE_URL,
-    WORKER_API_TOKEN: api.env.ADMIN_API_TOKEN,
+    WORKER_API_TOKEN: api.env.WORKER_API_TOKEN,
     PUBLISH_TOKEN_ENCRYPTION_KEY: api.env.PUBLISH_TOKEN_ENCRYPTION_KEY,
     UPLOAD_STORAGE_BUCKET: api.env.UPLOAD_STORAGE_BUCKET,
     EXPORT_STORAGE_BUCKET: api.env.EXPORT_STORAGE_BUCKET,

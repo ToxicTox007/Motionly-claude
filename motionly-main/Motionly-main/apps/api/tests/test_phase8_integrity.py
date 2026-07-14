@@ -125,7 +125,7 @@ def test_batch_worker_persists_item_progress(monkeypatch) -> None:
 
     monkeypatch.setattr("app.api.internal_batches.create_plan", fake_create_plan)
     state = SimpleNamespace(
-        settings=SimpleNamespace(admin_api_token="worker-secret"),
+        settings=SimpleNamespace(worker_api_token="worker-secret"),
         scale_repository=scale,
         plan_repository=object(),
         edit_planner_provider=object(),

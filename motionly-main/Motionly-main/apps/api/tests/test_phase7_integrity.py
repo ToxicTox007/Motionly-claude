@@ -224,6 +224,11 @@ def test_analytics_failures_enter_recoverable_queue() -> None:
 
 
 def test_selected_stock_video_is_streamed_into_owned_storage(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        "app.services.media_url_policy.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+
     class Stream:
         headers = {"content-type": "video/mp4"}
 
@@ -249,8 +254,8 @@ def test_selected_stock_video_is_streamed_into_owned_storage(monkeypatch, tmp_pa
         provider_asset_id="123",
         title="Stock",
         thumbnail_url=None,
-        preview_video_url="https://provider/preview.mp4",
-        download_url="https://provider/video.mp4",
+        preview_video_url="https://media.example.com/preview.mp4",
+        download_url="https://media.example.com/video.mp4",
         license="pexels_license",
         width=1080,
         height=1920,

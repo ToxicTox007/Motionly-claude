@@ -216,3 +216,34 @@ def _verified_identity(request: Request) -> str | None:
     if env_flag_enabled(os.getenv("SKIP_API_AUTH")) and settings.app_env in LOCAL_AUTH_BYPASS_ENVS:
         return "user:local-development"
     return None
+
+
+API_CONTENT_SECURITY_POLICY = "; ".join(
+    (
+        "default-src 'self'",
+        "base-uri 'none'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+        "img-src 'self' data: https://fastapi.tiangolo.com",
+        "media-src 'self' blob:",
+        "script-src 'self' https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+        "connect-src 'self'",
+    )
+)
+
+
+async def security_headers_middleware(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    response = await call_next(request)
+    response.headers["content-security-policy"] = API_CONTENT_SECURITY_POLICY
+    response.headers["x-frame-options"] = "DENY"
+    response.headers["x-content-type-options"] = "nosniff"
+    response.headers["referrer-policy"] = "no-referrer"
+    response.headers["permissions-policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    )
+    return response

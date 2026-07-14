@@ -34,6 +34,7 @@ from app.core.middleware import (
     RedisRateLimiter,
     rate_limit_middleware,
     request_id_middleware,
+    security_headers_middleware,
 )
 from app.repositories.analytics import InMemoryAnalyticsRepository, SupabaseAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository, SupabaseBillingRepository
@@ -414,6 +415,7 @@ def create_app() -> FastAPI:
             "x-request-id",
         ],
     )
+    app.middleware("http")(security_headers_middleware)
     app.include_router(health_router)
     app.include_router(operations_router)
     app.include_router(feedback_router)
@@ -445,12 +447,66 @@ def _validate_production_settings(settings) -> None:
     if settings.app_env != "production":
         return
 
+    transcription_provider_key = settings.transcription_provider.strip().lower()
+    edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
+    visual_provider_key = settings.visual_intelligence_provider.strip().lower()
+    audio_ml_provider_key = settings.audio_ml_provider.strip().lower()
+    music_provider_key = settings.music_provider.strip().lower()
+    stock_video_provider_key = settings.stock_video_provider.strip().lower().replace(",", "_")
+
+    supported_providers = {
+        "TRANSCRIPTION_PROVIDER": (transcription_provider_key, {"groq", "openai_compatible"}),
+        "EDIT_PLANNER_PROVIDER": (
+            edit_planner_provider_key,
+            {"openrouter", "openai_compatible"},
+        ),
+        "VISUAL_PROVIDER": (visual_provider_key, {"local_ml"}),
+        "AUDIO_ML_PROVIDER": (
+            audio_ml_provider_key,
+            {"local_ml", "local", "full", "disabled", "none", "off"},
+        ),
+        "MUSIC_PROVIDER": (music_provider_key, {"licensed_catalog"}),
+        "STOCK_VIDEO_PROVIDER": (
+            stock_video_provider_key,
+            {"pexels", "pixabay", "pexels_pixabay"},
+        ),
+    }
+    for name, (configured, supported) in supported_providers.items():
+        if configured not in supported:
+            raise RuntimeError(
+                f"{name} has unsupported production value {configured!r}; "
+                f"expected one of {', '.join(sorted(supported))}"
+            )
+
+    if settings.allow_fixture_providers:
+        raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
+    if settings.stem_separation_provider != "demucs":
+        raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
+    if not settings.groq_api_key:
+        raise RuntimeError(
+            "GROQ_API_KEY is required when TRANSCRIPTION_PROVIDER uses the Groq-compatible path"
+        )
+    if not settings.openrouter_api_key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is required when EDIT_PLANNER_PROVIDER uses the OpenRouter path"
+        )
+    if music_provider_key == "licensed_catalog" and (
+        not settings.supabase_url or not settings.supabase_service_role_key
+    ):
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for licensed music catalog"
+        )
+    if stock_video_provider_key in {"pexels", "pexels_pixabay"} and not settings.pexels_api_key:
+        raise RuntimeError("PEXELS_API_KEY is required when STOCK_VIDEO_PROVIDER includes pexels")
+    if stock_video_provider_key in {"pixabay", "pexels_pixabay"} and not settings.pixabay_api_key:
+        raise RuntimeError("PIXABAY_API_KEY is required when STOCK_VIDEO_PROVIDER includes pixabay")
+
     if settings.process_role != "api":
         required_worker = {
             "SUPABASE_URL": settings.supabase_url,
             "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
             "REDIS_URL": settings.redis_url,
-            "ADMIN_API_TOKEN": settings.admin_api_token,
+            "WORKER_API_TOKEN": settings.worker_api_token,
         }
         missing_worker = [name for name, value in required_worker.items() if not value]
         if missing_worker:
@@ -463,6 +519,8 @@ def _validate_production_settings(settings) -> None:
         "SUPABASE_URL": settings.supabase_url,
         "SUPABASE_JWT_SECRET": settings.supabase_jwt_secret,
         "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
+        "WORKER_API_TOKEN": settings.worker_api_token,
+        "PUBLISH_OAUTH_STATE_SECRET": settings.publish_oauth_state_secret,
         "SENTRY_DSN": settings.sentry_dsn,
         "METRICS_BEARER_TOKEN": settings.metrics_bearer_token,
     }
@@ -476,8 +534,6 @@ def _validate_production_settings(settings) -> None:
     for origin in settings.cors_origin_list:
         _reject_local_url("API_CORS_ORIGINS", origin)
 
-    if not settings.admin_api_token:
-        raise RuntimeError("ADMIN_API_TOKEN is required in production for worker access")
     if not settings.redis_url:
         raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
 
@@ -490,49 +546,6 @@ def _validate_production_settings(settings) -> None:
         raise RuntimeError("PUBLISH_SYNC_COMPLETION must be false in production")
     if settings.force_local_media_storage:
         raise RuntimeError("FORCE_LOCAL_MEDIA_STORAGE must be false in production")
-    if settings.allow_fixture_providers:
-        raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
-    if settings.stem_separation_provider != "demucs":
-        raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
-
-    transcription_provider_key = settings.transcription_provider.strip().lower()
-    edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
-    audio_ml_provider_key = settings.audio_ml_provider.strip().lower()
-
-    if transcription_provider_key == "fixture":
-        raise RuntimeError("TRANSCRIPTION_PROVIDER cannot be fixture in production")
-    if transcription_provider_key in {"groq", "openai_compatible"} and not settings.groq_api_key:
-        raise RuntimeError(
-            "GROQ_API_KEY is required when TRANSCRIPTION_PROVIDER uses the Groq-compatible path"
-        )
-    if edit_planner_provider_key == "fixture":
-        raise RuntimeError("EDIT_PLANNER_PROVIDER cannot be fixture in production")
-    if (
-        edit_planner_provider_key in {"openrouter", "openai_compatible"}
-        and not settings.openrouter_api_key
-    ):
-        raise RuntimeError(
-            "OPENROUTER_API_KEY is required when EDIT_PLANNER_PROVIDER uses the OpenRouter path"
-        )
-    if settings.music_provider == "fixture":
-        raise RuntimeError("MUSIC_PROVIDER cannot be fixture in production")
-    if settings.visual_intelligence_provider.strip().lower() == "fixture":
-        raise RuntimeError("VISUAL_PROVIDER cannot be fixture in production")
-    if audio_ml_provider_key == "fixture":
-        raise RuntimeError("AUDIO_ML_PROVIDER cannot be fixture in production")
-    if settings.music_provider == "licensed_catalog" and (
-        not settings.supabase_url or not settings.supabase_service_role_key
-    ):
-        raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for licensed music catalog"
-        )
-    stock_video_provider = settings.stock_video_provider.replace(",", "_")
-    if stock_video_provider == "fixture":
-        raise RuntimeError("STOCK_VIDEO_PROVIDER cannot be fixture in production")
-    if stock_video_provider in {"pexels", "pexels_pixabay"} and not settings.pexels_api_key:
-        raise RuntimeError("PEXELS_API_KEY is required when STOCK_VIDEO_PROVIDER includes pexels")
-    if stock_video_provider in {"pixabay", "pexels_pixabay"} and not settings.pixabay_api_key:
-        raise RuntimeError("PIXABAY_API_KEY is required when STOCK_VIDEO_PROVIDER includes pixabay")
 
 
 def _reject_local_url(name: str, value: str) -> None:

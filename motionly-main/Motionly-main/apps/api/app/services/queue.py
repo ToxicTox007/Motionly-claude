@@ -391,14 +391,20 @@ class BullMQQueueRegistry:
         increment_queue_calls()
         return self._job_from_bridge(self._bridge("retry", {"id": job_id}))
 
+    def _required_job(self, job_id: str) -> EnqueuedJob:
+        record = self._bridge("job", {"id": job_id, "queue_name": None})
+        if record is None:
+            raise KeyError(job_id)
+        return self._job_from_bridge(record)
+
     def start(self, job_id: str) -> EnqueuedJob:
         increment_queue_calls()
-        job = self.jobs[job_id]
+        job = self._required_job(job_id)
         return self._copy_job(job, status=QueueJobStatus.RUNNING)
 
     def complete(self, job_id: str) -> EnqueuedJob:
         increment_queue_calls()
-        job = self.jobs[job_id]
+        job = self._required_job(job_id)
         return self._copy_job(job, status=QueueJobStatus.SUCCEEDED)
 
     def fail(
@@ -410,7 +416,7 @@ class BullMQQueueRegistry:
         backoff_seconds: int | None = None,
     ) -> EnqueuedJob:
         increment_queue_calls()
-        job = self.jobs[job_id]
+        job = self._required_job(job_id)
         status = (
             QueueJobStatus.DEAD_LETTER
             if job.attempts + 1 >= job.max_attempts
@@ -466,48 +472,26 @@ class BullMQQueueRegistry:
     def snapshots(self) -> list[QueueSnapshot]:
         increment_queue_calls()
         records = self._bridge("snapshots", {})
-        if isinstance(records, list):
-            snapshots = []
-            for record in records:
-                if not isinstance(record, dict):
-                    continue
-                snapshots.append(
-                    QueueSnapshot(
-                        queue_name=str(record.get("queue_name") or ""),
-                        queued=int(record.get("queued") or 0),
-                        running=int(record.get("running") or 0),
-                        succeeded=int(record.get("succeeded") or 0),
-                        failed=int(record.get("failed") or 0),
-                        dead_letter=int(record.get("dead_letter") or 0),
-                        canceled=int(record.get("canceled") or 0),
-                        oldest_queued_seconds=(
-                            int(record["oldest_queued_seconds"])
-                            if record.get("oldest_queued_seconds") is not None
-                            else None
-                        ),
-                    )
-                )
-            return snapshots
-
-        queue_names = sorted({job.queue_name for job in self.jobs.values()})
-        now = datetime.now(UTC)
+        if not isinstance(records, list):
+            raise RuntimeError("BullMQ bridge returned an invalid snapshots payload")
         snapshots = []
-        for queue_name in queue_names:
-            jobs = [job for job in self.jobs.values() if job.queue_name == queue_name]
-            queued_jobs = [job for job in jobs if job.status == QueueJobStatus.QUEUED]
-            oldest = min((job.enqueued_at for job in queued_jobs), default=None)
+        for record in records:
+            if not isinstance(record, dict):
+                raise RuntimeError("BullMQ bridge returned an invalid snapshot record")
             snapshots.append(
                 QueueSnapshot(
-                    queue_name=queue_name,
-                    queued=len(queued_jobs),
-                    running=len([job for job in jobs if job.status == QueueJobStatus.RUNNING]),
-                    succeeded=len([job for job in jobs if job.status == QueueJobStatus.SUCCEEDED]),
-                    failed=len([job for job in jobs if job.status == QueueJobStatus.FAILED]),
-                    dead_letter=len(
-                        [job for job in jobs if job.status == QueueJobStatus.DEAD_LETTER]
+                    queue_name=str(record.get("queue_name") or ""),
+                    queued=int(record.get("queued") or 0),
+                    running=int(record.get("running") or 0),
+                    succeeded=int(record.get("succeeded") or 0),
+                    failed=int(record.get("failed") or 0),
+                    dead_letter=int(record.get("dead_letter") or 0),
+                    canceled=int(record.get("canceled") or 0),
+                    oldest_queued_seconds=(
+                        int(record["oldest_queued_seconds"])
+                        if record.get("oldest_queued_seconds") is not None
+                        else None
                     ),
-                    canceled=len([job for job in jobs if job.status == QueueJobStatus.CANCELED]),
-                    oldest_queued_seconds=round((now - oldest).total_seconds()) if oldest else None,
                 )
             )
         return snapshots

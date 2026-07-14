@@ -76,7 +76,7 @@ class RenderJobRecord:
     workspace_id: UUID
     project_id: UUID
     uploaded_video_id: UUID
-    caption_track_id: UUID
+    caption_track_id: UUID | None
     status: RenderJobStatus
     planner_version: str
     manifest: dict[str, object]
@@ -1025,8 +1025,10 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             uploaded_video_id=UUID(
                 str(row.get("uploaded_video_id") or compat.get("uploaded_video_id") or UUID(int=0)),
             ),
-            caption_track_id=UUID(
-                str(row.get("caption_track_id") or compat.get("caption_track_id") or UUID(int=0)),
+            caption_track_id=(
+                UUID(str(row.get("caption_track_id") or compat.get("caption_track_id")))
+                if row.get("caption_track_id") or compat.get("caption_track_id")
+                else None
             ),
             status=self._app_status(row.get("status"), progress_pct=compat.get("progress_pct")),
             planner_version=str(
@@ -1163,7 +1165,9 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
                     "messages": values.get("logs") if isinstance(values.get("logs"), list) else [],
                     "compat": {
                         "uploaded_video_id": str(job.uploaded_video_id),
-                        "caption_track_id": str(job.caption_track_id),
+                        "caption_track_id": (
+                            str(job.caption_track_id) if job.caption_track_id else None
+                        ),
                         "planner_version": job.planner_version,
                         "manifest": job.manifest,
                         "keep_segments": [

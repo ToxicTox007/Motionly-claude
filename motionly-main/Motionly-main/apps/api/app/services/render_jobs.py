@@ -1,16 +1,26 @@
-import base64
 import hashlib
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 from shutil import which
+from urllib.parse import urlsplit
 from uuid import UUID
+
+import httpx
 
 from app.api.errors import ApiError
 from app.repositories.renders import ExportRecord, InMemoryRenderRepository, RenderJobRecord
 from app.schemas.renders import RenderJobStatus, RenderSpecs
 from app.services.ffmpeg_render import FFmpegCaptionRenderer
 from app.services.local_storage import LocalObjectStorage, create_object_storage
+from app.services.media_url_policy import (
+    MediaUrlPolicyError,
+    decode_bounded_audio_data_url,
+    safe_http_stream,
+    validate_outbound_media_url,
+    validate_render_media_manifest,
+)
 
 
 def complete_render_job(
@@ -475,6 +485,19 @@ def _validate_media_assets(
     render_props = manifest.get("render_props")
     if not isinstance(render_props, dict):
         return
+    try:
+        validate_render_media_manifest(
+            render_props,
+            allow_fixture=allow_fixture_media,
+            resolve_dns=True,
+            require_dns=True,
+        )
+    except MediaUrlPolicyError as exc:
+        raise ApiError(
+            409,
+            "unsafe_media_url",
+            "One or more media references are not allowed for rendering.",
+        ) from exc
     for asset in render_props.get("assets") or []:
         if not isinstance(asset, dict) or asset.get("kind") != "video":
             continue
@@ -708,10 +731,68 @@ def _video_source_for_asset(
                 int(asset.get("end_ms") or 0) - int(asset.get("start_ms") or 0),
             ),
         )
+    if storage is None:
+        return None
+    if src.startswith("supabase://"):
+        return _resolve_internal_storage_reference(src, storage=storage)
     if src.startswith(("http://", "https://")):
-        return src
-    local = Path(src).expanduser()
-    return local if local.exists() and local.is_file() else None
+        return _materialize_external_media(src, storage=storage, max_bytes=536_870_912)
+    return None
+
+
+def _resolve_internal_storage_reference(
+    value: str,
+    *,
+    storage: LocalObjectStorage,
+) -> Path | None:
+    try:
+        validate_outbound_media_url(value, allow_supabase=True, resolve_dns=False)
+        reference = value.removeprefix("supabase://")
+        bucket, path = reference.split("/", 1)
+        return storage.ensure_object(bucket=bucket, path=path)
+    except (ApiError, MediaUrlPolicyError, ValueError):
+        return None
+
+
+def _materialize_external_media(
+    value: str,
+    *,
+    storage: LocalObjectStorage,
+    max_bytes: int,
+) -> Path | None:
+    try:
+        validate_outbound_media_url(value, resolve_dns=True, require_dns=True)
+    except MediaUrlPolicyError:
+        return None
+    suffix = Path(urlsplit(value).path).suffix.lower()
+    if suffix not in {".aac", ".flac", ".m4a", ".mp3", ".mp4", ".ogg", ".wav", ".webm"}:
+        suffix = ".media"
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
+    target = storage.object_path(bucket="tmp", path=f"outbound-media/{digest}{suffix}")
+    if target.exists() and target.is_file() and target.stat().st_size > 0:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".partial")
+    downloaded = 0
+    try:
+        with safe_http_stream(value, timeout=180) as response:
+            response.raise_for_status()
+            content_length = int(response.headers.get("content-length") or 0)
+            if content_length > max_bytes:
+                return None
+            with temporary.open("wb") as output:
+                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                    downloaded += len(chunk)
+                    if downloaded > max_bytes:
+                        raise MediaUrlPolicyError("Media download exceeds the allowed size.")
+                    output.write(chunk)
+        if downloaded <= 0:
+            return None
+        os.replace(temporary, target)
+        return target
+    except (httpx.HTTPError, OSError, MediaUrlPolicyError, ValueError):
+        temporary.unlink(missing_ok=True)
+        return None
 
 
 def _effects_config_from_manifest(manifest: dict) -> dict[str, object] | None:
@@ -813,7 +894,7 @@ def _audio_mix_from_manifest(
         source
         for item in metadata.get("sfx_urls", [])
         if isinstance(item, str)
-        for source in [_usable_external_source(item)]
+        for source in [_usable_external_source(item, storage=storage)]
         if source is not None
     ]
     catalog_sfx_count = len(sfx_sources)
@@ -875,7 +956,7 @@ def _manual_sfx_from_render_props(
             continue
         source = _materialize_audio_data_url(value, storage=storage)
         if source is None:
-            source = _usable_external_source(value)
+            source = _usable_external_source(value, storage=storage)
         if source is None:
             continue
         sources.append(source)
@@ -884,15 +965,11 @@ def _manual_sfx_from_render_props(
 
 
 def _materialize_audio_data_url(value: str, *, storage: LocalObjectStorage) -> Path | None:
-    prefix = "data:audio/wav;base64,"
-    if not value.startswith(prefix):
-        return None
-    encoded = value.removeprefix(prefix)
-    if len(encoded) > 1_500_000:
+    if not value.startswith("data:"):
         return None
     try:
-        content = base64.b64decode(encoded, validate=True)
-    except (ValueError, TypeError):
+        content = decode_bounded_audio_data_url(value)
+    except MediaUrlPolicyError:
         return None
     target = storage.object_path(
         bucket="tmp",
@@ -950,7 +1027,7 @@ def _audio_source_from_metadata(
     for key in ("audio_url", "download_url", "src"):
         value = metadata.get(key)
         if isinstance(value, str):
-            source = _usable_external_source(value)
+            source = _usable_external_source(value, storage=storage)
             if source is not None:
                 return source
     bucket = (
@@ -967,13 +1044,18 @@ def _audio_source_from_metadata(
     return None
 
 
-def _usable_external_source(value: str) -> str | None:
+def _usable_external_source(
+    value: str,
+    *,
+    storage: LocalObjectStorage,
+) -> Path | None:
     if not value or value.startswith("fixture://"):
         return None
+    if value.startswith("supabase://"):
+        return _resolve_internal_storage_reference(value, storage=storage)
     if value.startswith(("http://", "https://")):
-        return value
-    local = Path(value).expanduser()
-    return str(local) if local.exists() and local.is_file() else None
+        return _materialize_external_media(value, storage=storage, max_bytes=67_108_864)
+    return None
 
 
 def _audio_mix_log(manifest: dict) -> str:

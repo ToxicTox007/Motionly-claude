@@ -38,10 +38,10 @@ select has_trigger(
   'export deletion queues storage cleanup'
 );
 select ok(
-  (select is_nullable = 'NO' from information_schema.columns
+  (select is_nullable = 'YES' from information_schema.columns
    where table_schema = 'public' and table_name = 'render_jobs'
      and column_name = 'caption_track_id'),
-  'fresh render jobs require caption_track_id'
+  'caption-free render jobs may omit caption_track_id'
 );
 select ok(
   (select is_nullable = 'NO' from information_schema.columns

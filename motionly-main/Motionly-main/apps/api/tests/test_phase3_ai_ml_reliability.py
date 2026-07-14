@@ -215,7 +215,7 @@ def test_empty_transcript_is_visible_and_blocks_automatic_planning(tmp_path) -> 
                 settings=SimpleNamespace(
                     app_env="test",
                     billing_enabled=False,
-                    admin_api_token="worker-secret",
+                    worker_api_token="worker-secret",
                 ),
                 queue_registry=registry,
                 plan_repository=plan_repository,
@@ -475,7 +475,7 @@ def _make_visual_context(tmp_path) -> SimpleNamespace:
             state=SimpleNamespace(
                 settings=SimpleNamespace(
                     app_env="test",
-                    admin_api_token="worker-secret",
+                    worker_api_token="worker-secret",
                     media_work_dir=str(tmp_path),
                     supabase_url=None,
                     supabase_service_role_key=None,

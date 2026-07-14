@@ -40,7 +40,13 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
     REMOTION_DISABLE_SANDBOX=false \
     NODE_ENV=production \
-    WORKER_QUEUES=render_remotion
+    WORKER_QUEUES=render_remotion \
+    HOME=/home/motionly \
+    HF_HOME=/var/cache/motionly/huggingface \
+    XDG_CACHE_HOME=/var/cache/motionly \
+    MEDIA_WORK_DIR=/var/data/motionly/storage \
+    RENDER_TEMP_DIR=/var/data/motionly/render-tmp \
+    TMPDIR=/tmp/motionly
 
 # ── Source code ───────────────────────────────────────────────────────────────
 WORKDIR /app
@@ -77,7 +83,12 @@ WORKDIR /app/apps/worker
 # Expose the renderer base path so remotion.mjs can find it
 ENV RENDERER_BASE_PATH=/app/apps/renderer
 
-RUN chown -R node:node /app
-USER node
+RUN useradd --create-home --uid 10001 motionly \
+    && mkdir -p /var/cache/motionly/huggingface \
+        /var/data/motionly/storage \
+        /var/data/motionly/render-tmp \
+        /tmp/motionly \
+    && chown -R motionly:motionly /app /var/cache/motionly /var/data/motionly /tmp/motionly
+USER motionly
 
 CMD ["node", "src/worker.mjs", "--loop"]

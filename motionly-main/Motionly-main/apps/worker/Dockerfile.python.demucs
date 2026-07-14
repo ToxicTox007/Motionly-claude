@@ -10,7 +10,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEMUCS_MODEL=htdemucs \
     HF_HOME=/var/cache/motionly/huggingface \
     TORCH_HOME=/var/cache/motionly/torch \
-    XDG_CACHE_HOME=/var/cache/motionly
+    XDG_CACHE_HOME=/var/cache/motionly \
+    MEDIA_WORK_DIR=/var/data/motionly/storage \
+    RENDER_TEMP_DIR=/var/data/motionly/render-tmp \
+    TMPDIR=/tmp/motionly \
+    HOME=/home/motionly
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg nodejs npm libgl1 libglib2.0-0 \
@@ -26,6 +30,13 @@ RUN cd apps/worker && npm install --omit=dev --no-audit --no-fund \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir "/app[demucs]"
 
-RUN mkdir -p /var/cache/motionly/huggingface /var/cache/motionly/torch
+RUN useradd --create-home --uid 10001 motionly \
+    && mkdir -p /var/cache/motionly/huggingface \
+        /var/cache/motionly/torch \
+        /var/data/motionly/storage \
+        /var/data/motionly/render-tmp \
+        /tmp/motionly \
+    && chown -R motionly:motionly /app /var/cache/motionly /var/data/motionly /tmp/motionly
 WORKDIR /app/apps/worker
+USER motionly
 CMD ["sh", "-c", "cd /app && python -m app.workers.prefetch_models && cd /app/apps/worker && node src/worker.mjs --loop"]

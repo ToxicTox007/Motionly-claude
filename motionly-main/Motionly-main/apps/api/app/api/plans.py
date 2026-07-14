@@ -284,7 +284,13 @@ async def get_plan_job_status(
     )
 
     queue_registry = request.app.state.queue_registry
-    job = queue_registry.jobs.get(job_id)
+    job = queue_registry.get_job(job_id, queue_name="planning")
+    if job is not None and (
+        job.kind != "edit_plan"
+        or job.workspace_id != actor.workspace_id
+        or job.project_id != project_id
+    ):
+        job = None
 
     transcript_id = None
     try:

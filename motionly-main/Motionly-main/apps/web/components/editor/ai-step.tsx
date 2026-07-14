@@ -123,16 +123,6 @@ export function AIStep({
     };
   }, []);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const statusUrl = window.sessionStorage.getItem(pendingPlanStorageKey);
-      if (statusUrl) void resumePendingPlan(statusUrl);
-    }, 0);
-    return () => window.clearTimeout(timer);
-    // Resume only when this project identity changes; the operation owns current props.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingPlanStorageKey]);
-
   const densityMap: Record<BrollDensity, number> = {
     none: 0,
     low: 33,
@@ -229,7 +219,6 @@ export function AIStep({
             ...(style === "auto" ? {} : { style }),
             broll_density: density,
             target_duration_s: 35,
-            force: true,
           },
         },
       );
@@ -359,6 +348,16 @@ export function AIStep({
     }
   }
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const statusUrl = window.sessionStorage.getItem(pendingPlanStorageKey);
+      if (statusUrl) void resumePendingPlan(statusUrl);
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // Resume only when this project identity changes; the operation owns current props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPlanStorageKey]);
+
   async function ensureCaptions(signal: AbortSignal) {
     const payload = await editorApiRequest<{
       track?: CaptionTrackSummary | null;
@@ -415,7 +414,6 @@ export function AIStep({
         signal,
         body: {
           density,
-          force: true,
         },
       },
     );

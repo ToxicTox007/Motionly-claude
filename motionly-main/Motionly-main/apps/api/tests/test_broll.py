@@ -1200,7 +1200,7 @@ def _request(
             billing_enabled=billing_enabled,
             app_env="test",
             redis_url=None,
-            admin_api_token="worker-secret",
+            worker_api_token="worker-secret",
             visual_clip_model="fixture-clip-model",
         ),
         broll_repository=repository,

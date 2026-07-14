@@ -26,7 +26,7 @@ from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.renders import InMemoryRenderRepository
 from app.schemas.billing import BillingPlanKey
 from app.schemas.broll import BrollSlotStatus
-from app.schemas.captions import CaptionSegment, TranscriptWord
+from app.schemas.captions import CaptionPresetKey, CaptionSegment, TranscriptWord
 from app.schemas.plans import EditPlan
 from app.schemas.renders import (
     CutSegment,
@@ -47,6 +47,7 @@ from app.schemas.renders import (
 from app.schemas.uploads import UploadStatus
 from app.services.ass_captions import caption_track_to_ass
 from app.services.billing import PLAN_DEFINITIONS
+from app.services.caption_presets import get_caption_preset
 from app.services.cut_planning import PLANNER_VERSION, build_crop_warnings, plan_keep_segments
 from app.services.edit_plan_validation import (
     EditPlanValidationContext,
@@ -54,6 +55,7 @@ from app.services.edit_plan_validation import (
     validate_edit_plan_for_render,
 )
 from app.services.matte_jobs import matte_availability
+from app.services.media_url_policy import MediaUrlPolicyError, validate_render_media_manifest
 from app.services.queue import RenderQueue
 from app.services.render_templates import (
     build_props_hash,
@@ -358,18 +360,34 @@ async def create_render(
     readiness = assert_video_render_ready(upload.metadata)
     upload.metadata.warnings = readiness.warning_codes
 
-    track = (
-        repository.get_caption_track(
+    track = None
+    if payload.caption_track_id:
+        track = repository.get_caption_track(
             project_id=project_id,
             caption_track_id=payload.caption_track_id,
             workspace_id=actor.workspace_id,
         )
-        if payload.caption_track_id
-        else repository.latest_caption_track(project_id=project_id, workspace_id=actor.workspace_id)
-    )
-    if not track.segments:
+    elif payload.include_captions:
+        track = repository.latest_caption_track(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
+    if payload.include_captions and (track is None or not track.segments):
         raise ApiError(422, "caption_segments_empty", "Generate captions before rendering.")
-    caption_words = [word for segment in track.segments for word in segment.words]
+
+    caption_segments = track.segments if track else []
+    caption_style = (
+        track.style
+        if track
+        else get_caption_preset(CaptionPresetKey.BOLD_INFLUENCER).style
+    )
+    caption_words = [word for segment in caption_segments for word in segment.words]
+    if not caption_words:
+        transcript = repository.caption_repository.latest_transcript(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
+        caption_words = transcript.words if transcript else []
 
     edit_plan_record = None
     if payload.edit_plan_id:
@@ -408,7 +426,7 @@ async def create_render(
         if edit_plan_record and edit_plan_record.plan.cuts
         else plan_keep_segments(
             words=caption_words,
-            caption_segments=track.segments,
+            caption_segments=caption_segments,
             metadata=upload.metadata,
         )
     )
@@ -417,12 +435,22 @@ async def create_render(
         duration_preset=effective_duration_preset,
     )
     retimed_caption_segments = retime_caption_segments_for_keep_segments(
-        segments=track.segments,
+        segments=caption_segments,
         keep_segments=keep_segments,
     )
     caption_segments_for_render = retimed_caption_segments if payload.include_captions else []
     caption_words_for_render = [
-        word for segment in retimed_caption_segments for word in segment.words
+        retimed_word
+        for output_start, keep in _keep_segments_with_output_starts(keep_segments)
+        for word in caption_words
+        for retimed_word in [
+            retime_word_for_overlap(
+                word=word,
+                keep=keep,
+                output_start_ms=output_start,
+            )
+        ]
+        if retimed_word is not None
     ]
     specs, applied_resolution = render_specs_for_options(
         options=payload.export_options,
@@ -481,11 +509,7 @@ async def create_render(
         storage_path = asset.raw_metadata.get("storage_path")
         storage_bucket = asset.raw_metadata.get("storage_bucket")
         if storage_path and storage_bucket:
-            asset_source = request.app.state.storage_signer.create_signed_download(
-                bucket=str(storage_bucket),
-                path=str(storage_path),
-                expires_in_seconds=3600,
-            ).url
+            asset_source = f"supabase://{storage_bucket}/{storage_path}"
         active_broll_assets.append(
             {
                 "id": str(asset.id),
@@ -676,8 +700,8 @@ async def create_render(
         plan=EditPlan.model_validate(render_edit_plan),
         source_video_id=upload.id,
         source_duration_ms=upload.metadata.duration_ms or 1,
-        captions=track.segments if payload.include_captions else [],
-        caption_style=track.style.model_dump(mode="json"),
+        captions=caption_segments if payload.include_captions else [],
+        caption_style=caption_style.model_dump(mode="json"),
         broll=active_broll_assets,
         music=music_props,
         source_stems=source_stems,
@@ -724,7 +748,7 @@ async def create_render(
         "editPlan": render_edit_plan,
         "captions": [segment.model_dump(mode="json") for segment in caption_segments_for_render],
         "words": [word.model_dump(mode="json") for word in caption_words_for_render],
-        "captionStyle": track.style.model_dump(mode="json"),
+        "captionStyle": caption_style.model_dump(mode="json"),
         "assets": active_broll_assets,
         "templateId": template.id.value,
         "exportSettings": render_props_export_settings,
@@ -736,6 +760,24 @@ async def create_render(
         "segmentationMatte": segmentation_matte,
         "segmentationMatteStatus": matte_status,
     }
+    settings = request.app.state.settings
+    allow_fixture_media = bool(
+        getattr(settings, "allow_fixture_providers", False)
+        or getattr(settings, "app_env", "local") != "production"
+    )
+    try:
+        validate_render_media_manifest(
+            render_props,
+            allow_fixture=allow_fixture_media,
+            resolve_dns=True,
+            require_dns=False,
+        )
+    except MediaUrlPolicyError as exc:
+        raise ApiError(
+            422,
+            "unsafe_media_url",
+            "One or more media references are not allowed for rendering.",
+        ) from exc
     props_hash = build_props_hash(render_props)
     manual_element_types = {
         element.type
@@ -770,7 +812,7 @@ async def create_render(
         "creator_user_id": str(actor.user_id),
         "billing_plan": billing_status.current_plan.key.value,
         "source_video_id": str(upload.id),
-        "caption_track_id": str(track.id),
+        "caption_track_id": str(track.id) if track else None,
         "include_captions": payload.include_captions,
         "include_broll": payload.include_broll,
         "adjustment_action": payload.adjustment_action.value if payload.adjustment_action else None,
@@ -826,8 +868,8 @@ async def create_render(
             "path": upload.storage_path,
         },
         "caption_ass": (
-            caption_track_to_ass(segments=caption_segments_for_render, style=track.style)
-            if payload.include_captions
+            caption_track_to_ass(segments=caption_segments_for_render, style=caption_style)
+            if payload.include_captions and track
             else None
         ),
         "render_props": render_props,
@@ -867,7 +909,7 @@ async def create_render(
         workspace_id=actor.workspace_id,
         project_id=project_id,
         uploaded_video_id=upload.id,
-        caption_track_id=track.id,
+        caption_track_id=track.id if track else None,
         status=RenderJobStatus.QUEUED,
         planner_version=PLANNER_VERSION,
         manifest=manifest,

@@ -97,7 +97,7 @@ def test_internal_worker_route_rejects_missing_worker_token() -> None:
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                settings=SimpleNamespace(app_env="local", admin_api_token="worker-secret"),
+                settings=SimpleNamespace(app_env="local", worker_api_token="worker-secret"),
                 queue_registry=QueueRegistry(),
             )
         )
@@ -357,7 +357,7 @@ def test_worker_payload_cannot_update_render_in_another_workspace() -> None:
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                settings=SimpleNamespace(admin_api_token="worker-secret"),
+                settings=SimpleNamespace(worker_api_token="worker-secret"),
                 render_repository=repository,
             ),
         ),
@@ -388,7 +388,7 @@ def test_worker_route_rejects_wrong_worker_token() -> None:
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                settings=SimpleNamespace(app_env="local", admin_api_token="worker-secret"),
+                settings=SimpleNamespace(app_env="local", worker_api_token="worker-secret"),
                 queue_registry=QueueRegistry(),
             )
         )

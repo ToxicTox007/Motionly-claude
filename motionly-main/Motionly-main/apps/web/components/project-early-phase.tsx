@@ -64,7 +64,7 @@ export function ProcessingProjectScreen({
   useEffect(() => {
     if (status === "ready" || status === "failed") return;
 
-    let stopPolling = () => undefined;
+    let stopPolling: () => void = () => undefined;
     stopPolling = startAdaptivePolling(
       async (signal) => {
         const response = await fetch(

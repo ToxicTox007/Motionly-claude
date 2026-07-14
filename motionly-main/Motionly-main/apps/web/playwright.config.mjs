@@ -46,7 +46,7 @@ export default defineConfig({
         SUPABASE_ANON_KEY: supabaseAnonKey,
         SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
         SUPABASE_JWT_SECRET: jwtSecret,
-        ADMIN_API_TOKEN: "e2e-worker-token",
+        WORKER_API_TOKEN: "e2e-worker-token",
         PUBLISH_TOKEN_ENCRYPTION_KEY:
           "e2e-publish-token-key-at-least-32-characters",
         ALLOW_FIXTURE_PROVIDERS: "true",

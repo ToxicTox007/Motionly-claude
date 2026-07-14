@@ -23,6 +23,11 @@ import { join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createClient } from "@supabase/supabase-js";
+import {
+  assertSafeOutboundMediaUrl,
+  safeFetchMedia,
+  validateRenderMediaManifest,
+} from "./media-url-policy.mjs";
 
 // ---------------------------------------------------------------------------
 // Environment helpers
@@ -260,14 +265,27 @@ async function uploadToStorage(localPath, storageBucket, storagePath) {
  *   - https://     → pass through (Pexels, Pixabay, etc.)
  *   - fixture://   → allowed only in non-production/demo mode
  */
-async function resolveSrc(src) {
+async function resolveSrc(src, { mediaProxy = null, allowDataAudio = false } = {}) {
   if (!src) return null;
   if (src.startsWith("fixture://")) {
     if (fixtureMediaAllowed()) return null;
     throw new Error("Fixture media is not allowed for production rendering.");
   }
-  if (src.startsWith("supabase://")) return signSupabaseSrc(src);
-  return src; // already a real HTTP(S) URL
+  if (src.startsWith("supabase://")) {
+    await assertSafeOutboundMediaUrl(src, {
+      allowSupabase: true,
+      resolveDns: false,
+    });
+    const signed = await signSupabaseSrc(src);
+    return mediaProxy ? mediaProxy.register(signed, { trustedInternal: true }) : signed;
+  }
+  const validated = await assertSafeOutboundMediaUrl(src, {
+    allowDataAudio,
+    requireDns: true,
+  });
+  if (validated.kind === "data_audio") return src;
+  if (!mediaProxy) return src;
+  return mediaProxy.register(src);
 }
 
 function fixtureMediaAllowed() {
@@ -343,67 +361,86 @@ function validateResolvedProps(props) {
  * All fixture:// references are dropped. supabase:// references are converted
  * to short-lived signed URLs. Real https:// references are passed through.
  */
-async function assembleRenderProps(renderProps) {
-  // --- Source video ---
-  const sourceUrl = await resolveSrc(renderProps.sourceVideo?.src);
+async function assembleRenderProps(renderProps, mediaProxy) {
+  const sourceUrl = await resolveSrc(renderProps.sourceVideo?.src, { mediaProxy });
   if (!sourceUrl) {
     throw new Error(
       "sourceVideo.src is a fixture:// reference — cannot render in production.",
     );
   }
 
-  // --- B-roll assets ---
   const resolvedAssets = (
     await Promise.all(
       (renderProps.assets ?? []).map(async (asset) => {
-        const src = await resolveSrc(asset.src);
-        if (!src) return null; // development/demo fixture asset
+        const src = await resolveSrc(asset.src, { mediaProxy });
+        if (!src) return null;
         return { ...asset, src };
       }),
     )
   ).filter(Boolean);
 
-  // --- Music selection ---
-  // Resolve production catalog music from response fields or raw metadata.
+  const editPlan = renderProps.editPlan ?? { schema_version: 1, cuts: [] };
+  const resolvedManualElements = await Promise.all(
+    (editPlan.manual_elements ?? []).map(async (element) => {
+      if (!["broll", "music", "sfx"].includes(element?.type)) return element;
+      const properties = { ...(element.properties ?? {}) };
+      for (const key of ["assetUrl", "src"]) {
+        if (typeof properties[key] !== "string") continue;
+        const resolved = await resolveSrc(properties[key], {
+          mediaProxy,
+          allowDataAudio: ["music", "sfx"].includes(element.type),
+        });
+        if (resolved) properties[key] = resolved;
+        else delete properties[key];
+      }
+      return { ...element, properties };
+    }),
+  );
+  const resolvedEditPlan = { ...editPlan, manual_elements: resolvedManualElements };
+
   let resolvedMusic = renderProps.musicSelection ?? null;
   if (resolvedMusic?.track) {
+    const metadata = { ...(resolvedMusic.track.raw_metadata ?? {}) };
     const trackUrl =
-      resolvedMusic.track.raw_metadata?.audio_url ||
-      resolvedMusic.track.raw_metadata?.download_url ||
-      resolvedMusic.track.raw_metadata?.src ||
-      (resolvedMusic.track.raw_metadata?.audio_bucket &&
-      resolvedMusic.track.raw_metadata?.audio_path
-        ? `supabase://${resolvedMusic.track.raw_metadata.audio_bucket}/${resolvedMusic.track.raw_metadata.audio_path}`
+      metadata.audio_url ||
+      metadata.download_url ||
+      metadata.preview_url ||
+      metadata.src ||
+      (metadata.audio_bucket && metadata.audio_path
+        ? `supabase://${metadata.audio_bucket}/${metadata.audio_path}`
         : "") ||
       resolvedMusic.track.full_track_url ||
       resolvedMusic.track.preview_url ||
       "";
-    if (trackUrl.startsWith("fixture://")) {
-      if (!fixtureMediaAllowed()) {
-        throw new Error("Fixture music is not allowed for production rendering.");
-      }
+    if (!trackUrl) {
       resolvedMusic = null;
-    } else if (!trackUrl.startsWith("http")) {
-      if (trackUrl.startsWith("supabase://")) {
-        const signedTrackUrl = await resolveSrc(trackUrl);
-        resolvedMusic = {
-          ...resolvedMusic,
-          track: {
-            ...resolvedMusic.track,
-            full_track_url: signedTrackUrl,
-          },
-        };
-      } else {
-        resolvedMusic = null;
-      }
     } else {
-      resolvedMusic = {
-        ...resolvedMusic,
-        track: {
-          ...resolvedMusic.track,
-          full_track_url: trackUrl,
-        },
-      };
+      const fullTrackUrl = await resolveSrc(trackUrl, {
+        mediaProxy,
+        allowDataAudio: true,
+      });
+      const sfxUrls = (
+        await Promise.all(
+          (metadata.sfx_urls ?? []).map((src) =>
+            resolveSrc(src, { mediaProxy, allowDataAudio: true }),
+          ),
+        )
+      ).filter(Boolean);
+      const sanitizedMetadata = { ...metadata, sfx_urls: sfxUrls };
+      for (const key of ["audio_url", "download_url", "preview_url", "src"]) {
+        delete sanitizedMetadata[key];
+      }
+      resolvedMusic = fullTrackUrl
+        ? {
+            ...resolvedMusic,
+            track: {
+              ...resolvedMusic.track,
+              full_track_url: fullTrackUrl,
+              preview_url: undefined,
+              raw_metadata: sanitizedMetadata,
+            },
+          }
+        : null;
     }
   }
 
@@ -415,7 +452,16 @@ async function assembleRenderProps(renderProps) {
         ...resolvedStems.vocals,
         src: await resolveSrc(
           `supabase://${resolvedStems.vocals.bucket}/${resolvedStems.vocals.path}`,
+          { mediaProxy },
         ),
+      },
+    };
+  } else if (resolvedStems?.vocals?.src) {
+    resolvedStems = {
+      ...resolvedStems,
+      vocals: {
+        ...resolvedStems.vocals,
+        src: await resolveSrc(resolvedStems.vocals.src, { mediaProxy }),
       },
     };
   }
@@ -426,7 +472,7 @@ async function assembleRenderProps(renderProps) {
       src: sourceUrl,
     },
     timeline: renderProps.timeline,
-    editPlan: renderProps.editPlan ?? { schema_version: 1, cuts: [] },
+    editPlan: resolvedEditPlan,
     captions: renderProps.captions ?? [],
     words: renderProps.words ?? [],
     assets: resolvedAssets,
@@ -447,12 +493,16 @@ export async function downloadToFile(
   {
     maxBytes = Number(env("MEDIA_DOWNLOAD_MAX_BYTES", "536870912")),
     timeoutMs = Number(env("MEDIA_DOWNLOAD_TIMEOUT_MS", "120000")),
+    trustedInternal = false,
   } = {},
 ) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await safeFetchMedia(url, {
+      signal: controller.signal,
+      trustedInternal,
+    });
     if (!response.ok) {
       throw new Error(`Failed to download media (HTTP ${response.status})`);
     }
@@ -486,6 +536,54 @@ export async function downloadToFile(
   }
 }
 
+function startValidatedMediaProxy() {
+  const targets = new Map();
+  let nextId = 1;
+  return new Promise((resolveProxy, reject) => {
+    const server = createServer(async (request, response) => {
+      const target = targets.get(request.url ?? "");
+      if (!target || !["GET", "HEAD"].includes(request.method ?? "")) {
+        response.writeHead(404).end();
+        return;
+      }
+      try {
+        const headers = request.headers.range ? { range: request.headers.range } : undefined;
+        const upstream = await safeFetchMedia(target.url, {
+          headers,
+          trustedInternal: target.trustedInternal,
+        });
+        const responseHeaders = {};
+        for (const name of ["accept-ranges", "content-length", "content-range", "content-type"]) {
+          const value = upstream.headers.get(name);
+          if (value) responseHeaders[name] = value;
+        }
+        response.writeHead(upstream.status, responseHeaders);
+        if (request.method === "HEAD" || !upstream.body) {
+          response.end();
+          return;
+        }
+        await pipeline(Readable.fromWeb(upstream.body), response);
+      } catch {
+        if (!response.headersSent) response.writeHead(502);
+        response.end();
+      }
+    });
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      resolveProxy({
+        register(target, { trustedInternal = false } = {}) {
+          const path = `/media/${nextId++}`;
+          targets.set(path, { url: target, trustedInternal });
+          return `http://127.0.0.1:${port}${path}`;
+        },
+        close: () => new Promise((done) => server.close(done)),
+      });
+    });
+  });
+}
+
 function startLocalFileServer(filePath) {
   return new Promise((resolve, reject) => {
     const server = createServer((_req, res) => {
@@ -509,8 +607,8 @@ async function applySegmentationAlphaKey({ sourceUrl, matteUrl, featherPx, workD
   const sourcePath = join(workDir, "source.mp4");
   const mattePath = join(workDir, "matte.mp4");
   const keyedPath = join(workDir, "keyed.webm");
-  await downloadToFile(sourceUrl, sourcePath);
-  await downloadToFile(matteUrl, mattePath);
+  await downloadToFile(sourceUrl, sourcePath, { trustedInternal: true });
+  await downloadToFile(matteUrl, mattePath, { trustedInternal: true });
   const feather = Math.max(0, Math.min(20, Number(featherPx ?? 18) / 8));
   const result = spawnSync(
     "ffmpeg",
@@ -679,6 +777,7 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
 
   const started = Date.now();
   let keyedServer = null;
+  let mediaProxy = null;
   const progress = async (progressPct, message, eventType, metadata = {}) => {
     const payload = { progressPct, message, eventType, metadata };
     await persistProgressDirect(renderJobId, workspaceId, projectId, payload);
@@ -698,14 +797,19 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
       throw new StructuredRenderError("invalid_remotion_props", "Render job manifest is missing render props.");
     }
 
-    // 2. Resolve all media references to signed / real URLs
+    // 2. Revalidate and resolve all media references to signed / guarded URLs.
     await progress(25, "Resolving render media assets.", "render_progress");
-    const resolvedProps = await assembleRenderProps(renderProps);
+    await validateRenderMediaManifest(renderProps, {
+      allowFixture: fixtureMediaAllowed(),
+      requireDns: true,
+    });
+    mediaProxy = await startValidatedMediaProxy();
+    const resolvedProps = await assembleRenderProps(renderProps, mediaProxy);
     validateResolvedProps(resolvedProps);
     const backgroundRemoval = resolvedProps.effectsConfig?.background_removal;
     const segmentationMatte = renderProps.segmentationMatte;
     if (backgroundRemoval?.enabled && segmentationMatte?.src) {
-      const matteUrl = await resolveSrc(segmentationMatte.src);
+      const matteUrl = await resolveSrc(segmentationMatte.src, { mediaProxy });
       if (!matteUrl) {
         throw new Error("segmentation matte could not be resolved for premium render");
       }
@@ -771,6 +875,9 @@ export async function runRemotionJob(job, { onProgress = null } = {}) {
   } finally {
     if (keyedServer) {
       await keyedServer.close();
+    }
+    if (mediaProxy) {
+      await mediaProxy.close();
     }
     // 8. Clean up temp files (best-effort)
     await Promise.allSettled([

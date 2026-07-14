@@ -114,26 +114,36 @@ async function snapshots(connection) {
     const waiting = Number(counts.waiting || 0);
     const prioritized = Number(counts.prioritized || 0);
     const delayed = Number(counts.delayed || 0);
+    const paused = Number(counts.paused || 0);
     const active = Number(counts.active || 0);
     const completed = Number(counts.completed || 0);
     const failed = Number(counts.failed || 0);
-    const canceled = Number(counts.paused || 0);
     let oldestQueuedSeconds = null;
-    const oldest = await queue.getJobs(["waiting", "prioritized", "delayed"], 0, 0, true);
+    const oldest = await queue.getJobs(
+      ["waiting", "prioritized", "delayed", "paused"],
+      0,
+      0,
+      true,
+    );
     if (oldest.length > 0) {
-      const timestamp = Number(oldest[0].data?.enqueued_at ? Date.parse(oldest[0].data.enqueued_at) : oldest[0].timestamp);
+      const timestamp = Number(
+        oldest[0].data?.enqueued_at
+          ? Date.parse(oldest[0].data.enqueued_at)
+          : oldest[0].timestamp,
+      );
       if (Number.isFinite(timestamp)) {
         oldestQueuedSeconds = Math.max(0, Math.round((now - timestamp) / 1000));
       }
     }
     records.push({
       queue_name: queueName,
-      queued: waiting + prioritized + delayed,
+      queued: waiting + prioritized + delayed + paused,
       running: active,
       succeeded: completed,
       failed: 0,
       dead_letter: failed,
-      canceled,
+      // Canceled non-active jobs are removed, not represented by BullMQ's paused state.
+      canceled: 0,
       oldest_queued_seconds: oldestQueuedSeconds,
     });
   }
@@ -165,22 +175,50 @@ async function cancel(connection, payload) {
   return normalizeJobRecord(job, state);
 }
 
+const STALLED_CHECK_INTERVAL_MS = 25;
+
+async function runBullMqStalledCheck(connection, queueName) {
+  const { Worker } = await import("bullmq");
+  const checker = new Worker(queueName, null, {
+    connection,
+    autorun: false,
+    stalledInterval: STALLED_CHECK_INTERVAL_MS,
+  });
+  checker.on("error", () => undefined);
+  try {
+    await checker.startStalledCheckTimer();
+    // BullMQ marks candidates on one pass and moves lock-less jobs on the next.
+    await new Promise((resolve) => setTimeout(resolve, STALLED_CHECK_INTERVAL_MS * 3));
+  } finally {
+    await checker.close(true);
+  }
+}
+
+function stuckCandidates(active, cutoff) {
+  return active.filter((job) => {
+    const startedAt = Number(job.processedOn || job.timestamp || Date.now());
+    return startedAt <= cutoff;
+  });
+}
+
 async function markStuckDeadLetter(connection, payload) {
   const cutoff = Date.now() - Math.max(1, Number(payload.timeout_seconds || 1)) * 1000;
   const transitioned = [];
   for (const queueName of queueNames) {
     const queue = queueFor(queueName, connection);
-    const active = await getJobsPaged(queue, ["active"]);
-    for (const job of active) {
-      const startedAt = Number(job.processedOn || job.timestamp || Date.now());
-      if (startedAt > cutoff) continue;
+    const candidates = stuckCandidates(await getJobsPaged(queue, ["active"]), cutoff);
+    if (candidates.length === 0) continue;
+    await runBullMqStalledCheck(connection, queueName);
+    for (const candidate of candidates) {
+      const job = await findJob(connection, candidate.id, queueName);
+      if (!job || (await job.getState()) !== "failed") continue;
       await job.updateData({
         ...job.data,
         status: "dead_letter",
         dead_lettered_at: new Date().toISOString(),
         dead_letter_reason: "stuck_timeout",
       });
-      transitioned.push(normalizeJobRecord(job, "active"));
+      transitioned.push(normalizeJobRecord(job, "failed"));
     }
   }
   return transitioned;
@@ -192,24 +230,26 @@ async function recoverStuck(connection, payload) {
   const transitioned = [];
   for (const queueName of queueNames) {
     const queue = queueFor(queueName, connection);
-    const active = await getJobsPaged(queue, ["active"]);
-    for (const job of active) {
-      const startedAt = Number(job.processedOn || job.timestamp || Date.now());
-      if (startedAt > cutoff) continue;
-      const attemptsMade = Number(job.attemptsMade || 0);
-      const maxAttempts = Number(job.opts?.attempts || job.data.max_attempts || 3);
-      const exhausted = attemptsMade + 1 >= maxAttempts;
-      const status = exhausted ? "dead_letter" : "queued";
+    const candidates = stuckCandidates(await getJobsPaged(queue, ["active"]), cutoff);
+    if (candidates.length === 0) continue;
+    await runBullMqStalledCheck(connection, queueName);
+    for (const candidate of candidates) {
+      const job = await findJob(connection, candidate.id, queueName);
+      if (!job) continue;
+      const state = await job.getState();
+      if (state === "active") continue;
+      const exhausted = state === "failed";
       await job.updateData({
         ...job.data,
-        status,
-        enqueued_at: new Date(Date.now() + backoffSeconds * 1000).toISOString(),
+        status: exhausted ? "dead_letter" : "queued",
+        recovered_at: new Date().toISOString(),
+        retry_backoff_seconds: backoffSeconds,
         error_code: "stuck_timeout",
         error_message: exhausted
-          ? "Worker job exceeded the stuck timeout and hit the retry limit."
-          : "Worker job exceeded the stuck timeout and was requeued.",
+          ? "Worker job exceeded BullMQ's stalled retry limit."
+          : "BullMQ recovered a lock-less stalled job.",
       });
-      transitioned.push(normalizeJobRecord(job, status === "dead_letter" ? "failed" : "waiting"));
+      transitioned.push(normalizeJobRecord(job, state));
     }
   }
   return transitioned;
@@ -223,7 +263,8 @@ async function execute(command, connection, payload) {
   if (command === "retry") return retry(connection, payload);
   if (command === "cancel") return cancel(connection, payload);
   if (command === "recover-stuck") return recoverStuck(connection, payload);
-  return markStuckDeadLetter(connection, payload);
+  if (command === "mark-stuck-dead-letter") return markStuckDeadLetter(connection, payload);
+  throw new Error(`Unsupported queue bridge command: ${command}`);
 }
 
 async function serve(connection) {

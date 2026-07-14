@@ -179,7 +179,7 @@ export function ScalePanel(props: ScalePanelProps) {
       job_id?: string;
       status_url?: string;
     }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
-      ...auth(props, lifecycleController.signal), method: "POST", body: { saved_template_id: template.id, force: true },
+      ...auth(props, lifecycleController.signal), method: "POST", body: { saved_template_id: template.id },
     });
 
     let plan: EditPlanRecordSummary;
@@ -223,7 +223,7 @@ export function ScalePanel(props: ScalePanelProps) {
         status_url?: string | null;
       }>(
         `${env.apiBaseUrl}/projects/${projectId}/effects`,
-        { ...auth(props, lifecycleController.signal), method: "PATCH", body: { ...effectsSettings, force: true } },
+        { ...auth(props, lifecycleController.signal), method: "PATCH", body: effectsSettings },
       );
       const config = await resolveQueuedLayer({
         submission: effects,
@@ -249,7 +249,7 @@ export function ScalePanel(props: ScalePanelProps) {
       job_id?: string;
       status_url?: string;
     }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
-      ...auth(props, lifecycleController.signal), method: "POST", body: { style_profile_id: profile.id, force: true },
+      ...auth(props, lifecycleController.signal), method: "POST", body: { style_profile_id: profile.id },
     });
 
     let plan: EditPlanRecordSummary;

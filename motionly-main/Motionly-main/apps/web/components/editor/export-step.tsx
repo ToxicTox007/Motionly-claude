@@ -154,6 +154,7 @@ export function ExportStep({
   const [cropX, setCropX] = useState(50);
   const [cropY, setCropY] = useState(50);
   const [cropZoom, setCropZoom] = useState(100);
+  const [includeCaptions, setIncludeCaptions] = useState(Boolean(captionTrackId));
   const [loading, setLoading] = useState(false);
   const [jobs, setJobs] = useState(initialJobs);
   const [exports, setExports] = useState(initialExports);
@@ -200,6 +201,7 @@ export function ExportStep({
     isRendering: Boolean(isRendering),
     retryableJobId: retryableJob?.id ?? null,
     captionTrackId: captionTrackId ?? null,
+    includeCaptions,
     startRender,
     retryRender,
   });
@@ -272,11 +274,11 @@ export function ExportStep({
         accessToken: apiAccessToken,
         friendlyError: "Render could not be started. Please try again.",
         body: {
-          caption_track_id: captionTrackId ?? null,
+          caption_track_id: includeCaptions ? (captionTrackId ?? null) : null,
           edit_plan_id: activePlanId ?? null,
           template_id: templateId,
           duration_preset: "medium",
-          include_captions: true,
+          include_captions: includeCaptions,
           include_broll: true,
           export_options: {
             platform,
@@ -330,11 +332,11 @@ export function ExportStep({
         accessToken: apiAccessToken,
         friendlyError: "Bulk export could not be started. Please try again.",
         body: {
-          caption_track_id: captionTrackId ?? null,
+          caption_track_id: includeCaptions ? (captionTrackId ?? null) : null,
           edit_plan_id: activePlanId ?? null,
           template_id: templateId,
           duration_preset: "medium",
-          include_captions: true,
+          include_captions: includeCaptions,
           include_broll: true,
           export_targets: bulkPlatforms.map((targetPlatform) => ({
             platform: targetPlatform,
@@ -1062,6 +1064,22 @@ export function ExportStep({
         </ExportStepSection>
       </div>
 
+      <label className="flex min-h-12 items-center justify-between gap-4 rounded-md border-2 border-foreground bg-surface px-4 py-3 text-sm font-bold">
+        <span>
+          <span className="block">Burn captions into export</span>
+          <span className="block text-xs font-medium text-muted-foreground">
+            Turn this off to export without a caption track.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          aria-label="Burn captions into export"
+          checked={includeCaptions}
+          onChange={(event) => setIncludeCaptions(event.target.checked)}
+          className="size-5 accent-primary"
+        />
+      </label>
+
       <button
         onClick={primaryRenderAction.onClick}
         disabled={primaryRenderAction.disabled}
@@ -1069,7 +1087,7 @@ export function ExportStep({
         aria-describedby={
           message
             ? "export-message"
-            : !captionTrackId
+            : includeCaptions && !captionTrackId
               ? "export-missing-captions"
               : undefined
         }
@@ -1090,7 +1108,7 @@ export function ExportStep({
         disabled={
           loading ||
           Boolean(isRendering) ||
-          !captionTrackId ||
+          (includeCaptions && !captionTrackId) ||
           bulkPlatforms.length === 0
         }
         aria-busy={loading || Boolean(isRendering)}
@@ -1224,7 +1242,7 @@ export function ExportStep({
                 aria-label="Start render again"
                 className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-black uppercase rounded-md border-2 border-foreground bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50"
                 onClick={startRender}
-                disabled={loading || !captionTrackId}
+                disabled={loading || (includeCaptions && !captionTrackId)}
               >
                 <Video className="size-3.5" strokeWidth={2} />
                 Start again
@@ -1428,7 +1446,7 @@ export function ExportStep({
           </div>
         ) : null}
       </section>
-      {!captionTrackId ? (
+      {includeCaptions && !captionTrackId ? (
         <p
           id="export-missing-captions"
           role="alert"
@@ -1641,6 +1659,7 @@ function getPrimaryRenderAction({
   isRendering,
   retryableJobId,
   captionTrackId,
+  includeCaptions,
   startRender,
   retryRender,
 }: {
@@ -1649,6 +1668,7 @@ function getPrimaryRenderAction({
   isRendering: boolean;
   retryableJobId: string | null;
   captionTrackId: string | null;
+  includeCaptions: boolean;
   startRender: () => void;
   retryRender: (renderJobId: string) => void;
 }) {
@@ -1679,14 +1699,14 @@ function getPrimaryRenderAction({
   if (renderUiState === "canceled") {
     return {
       label: "Start Again",
-      disabled: !captionTrackId,
+      disabled: includeCaptions && !captionTrackId,
       icon: "video" as const,
       onClick: startRender,
     };
   }
   return {
     label: "Start Render",
-    disabled: !captionTrackId,
+    disabled: includeCaptions && !captionTrackId,
     icon: "video" as const,
     onClick: startRender,
   };

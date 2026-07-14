@@ -42,7 +42,7 @@ export function apiBaseUrl() {
 }
 
 export function workerToken() {
-  return env("WORKER_API_TOKEN", env("ADMIN_API_TOKEN"));
+  return env("WORKER_API_TOKEN");
 }
 
 export function hasApiConfig() {

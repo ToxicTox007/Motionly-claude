@@ -17,7 +17,7 @@ test("ai-step.tsx implements enqueued async plan polling correctly", async () =>
 
   // Verify plan fetching list fallback after polling
   assert.match(source, /editorApiRequest[\s\S]*projects\/\$\{projectId\}\/plans/);
-  assert.match(source, /\.find\(.*p\.id === planId\)/);
+  assert.match(source, /\.find\(\(item\) => item\.id === planId\)/);
 });
 
 test("pollPlanJob pauses polling when hidden or offline", async () => {
@@ -50,7 +50,7 @@ test("render progress uses a stream with visibility-aware polling fallback", asy
   assert.match(source, /renders\/\$\{renderJobId\}\/events/);
   assert.match(source, /response\.body\.getReader\(\)/);
   assert.match(source, /Render event stream unavailable; falling back to polling\./);
-  assert.match(source, /await pollRender\(renderJobId\)/);
+  assert.match(source, /await pollRender\(renderJobId, abortController\.signal\)/);
   assert.match(source, /waitForInteractivePollingTurn/);
   assert.match(source, /Math\.min\(8000, 2500 \+ attempt \* 250\)/);
   assert.doesNotMatch(source, /router\.refresh\(\)/);

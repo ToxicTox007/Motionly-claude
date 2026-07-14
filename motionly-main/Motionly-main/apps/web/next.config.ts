@@ -18,6 +18,83 @@ const serverActionAllowedOrigins = [
   "*.vercel.app",
 ];
 
+function originOf(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function websocketOrigin(value: string | undefined): string | undefined {
+  const origin = originOf(value);
+  if (!origin) return undefined;
+  return origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+}
+
+const configuredApiOrigin = originOf(apiUrl);
+const configuredSupabaseOrigin = originOf(supabaseUrl);
+const configuredSupabaseWebsocketOrigin = websocketOrigin(supabaseUrl);
+const connectSources = Array.from(
+  new Set(
+    [
+      "'self'",
+      configuredApiOrigin,
+      configuredSupabaseOrigin,
+      configuredSupabaseWebsocketOrigin,
+      "https:",
+      "wss:",
+      originOf(process.env.NEXT_PUBLIC_SENTRY_DSN),
+      originOf(process.env.NEXT_PUBLIC_GLITCHTIP_DSN),
+      "https://*.sentry.io",
+      "https://app.glitchtip.com",
+    ].filter((source): source is string => Boolean(source)),
+  ),
+);
+
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "frame-src 'none'",
+  "form-action 'self'",
+  `script-src 'self' 'unsafe-inline'${
+    process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"
+  }`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' blob: data: https:",
+  `media-src ${[
+    "'self'",
+    "blob:",
+    "data:",
+    "https:",
+    configuredApiOrigin,
+    configuredSupabaseOrigin,
+  ]
+    .filter(Boolean)
+    .join(" ")}`,
+  "font-src 'self' data:",
+  "worker-src 'self' blob:",
+  `connect-src ${connectSources.join(" ")}`,
+  "manifest-src 'self'",
+  process.env.NODE_ENV === "production" ? "upgrade-insecure-requests" : "",
+]
+  .filter(Boolean)
+  .join("; ");
+
+const securityHeaders = [
+  { key: "Content-Security-Policy", value: contentSecurityPolicy },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  },
+];
+
 if (appUrl) {
   try {
     serverActionAllowedOrigins.push(new URL(appUrl).host);
@@ -49,6 +126,10 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      {
+        source: "/:path*",
+        headers: securityHeaders,
+      },
       {
         source: "/_next/static/:path*",
         headers: [

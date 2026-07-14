@@ -81,7 +81,7 @@ def test_generate_broll_enqueues_and_worker_executes_stock_search() -> None:
                     app_env="test",
                     billing_enabled=True,
                     redis_url=None,
-                    admin_api_token="worker-secret",
+                    worker_api_token="worker-secret",
                 ),
                 queue_registry=registry,
                 broll_repository=repository,
@@ -122,7 +122,7 @@ def test_generate_broll_enqueues_and_worker_executes_stock_search() -> None:
                         settings=SimpleNamespace(
                             app_env="test",
                             billing_enabled=True,
-                            admin_api_token="worker-secret",
+                            worker_api_token="worker-secret",
                         ),
                         queue_registry=registry,
                         broll_repository=repository,
@@ -139,3 +139,85 @@ def test_generate_broll_enqueues_and_worker_executes_stock_search() -> None:
     assert provider.search_calls > 0
     slots = repository.list_slots(project_id=project_id, workspace_id=workspace_id)
     assert slots
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_name"),
+    [
+        ("transcription_provider", "mystery_whisper", "TRANSCRIPTION_PROVIDER"),
+        ("edit_planner_provider", "mystery_planner", "EDIT_PLANNER_PROVIDER"),
+        ("visual_intelligence_provider", "mystery_visual", "VISUAL_PROVIDER"),
+    ],
+)
+def test_production_worker_rejects_unknown_ai_provider(
+    field: str,
+    value: str,
+    expected_name: str,
+) -> None:
+    from app.main import _validate_production_settings
+
+    settings = get_settings().model_copy(
+        update={
+            "app_env": "production",
+            "process_role": "worker",
+            "supabase_url": "https://supabase.example.com",
+            "supabase_service_role_key": "service-role",
+            "redis_url": "redis://redis.example.com:6379",
+            "worker_api_token": "worker-secret",
+            "allow_fixture_providers": False,
+            "stem_separation_provider": "demucs",
+            "transcription_provider": "groq",
+            "groq_api_key": "groq-key",
+            "edit_planner_provider": "openrouter",
+            "openrouter_api_key": "openrouter-key",
+            "visual_intelligence_provider": "local_ml",
+            "audio_ml_provider": "disabled",
+            "music_provider": "licensed_catalog",
+            "stock_video_provider": "pixabay",
+            "pixabay_api_key": "pixabay-key",
+            field: value,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match=expected_name):
+        _validate_production_settings(settings)
+
+
+@pytest.mark.parametrize(
+    ("key_field", "expected_name"),
+    [
+        ("groq_api_key", "GROQ_API_KEY"),
+        ("openrouter_api_key", "OPENROUTER_API_KEY"),
+    ],
+)
+def test_production_worker_rejects_missing_ai_provider_credentials(
+    key_field: str,
+    expected_name: str,
+) -> None:
+    from app.main import _validate_production_settings
+
+    settings = get_settings().model_copy(
+        update={
+            "app_env": "production",
+            "process_role": "worker",
+            "supabase_url": "https://supabase.example.com",
+            "supabase_service_role_key": "service-role",
+            "redis_url": "redis://redis.example.com:6379",
+            "worker_api_token": "worker-secret",
+            "allow_fixture_providers": False,
+            "stem_separation_provider": "demucs",
+            "transcription_provider": "groq",
+            "groq_api_key": "groq-key",
+            "edit_planner_provider": "openrouter",
+            "openrouter_api_key": "openrouter-key",
+            "visual_intelligence_provider": "local_ml",
+            "audio_ml_provider": "disabled",
+            "music_provider": "licensed_catalog",
+            "stock_video_provider": "pixabay",
+            "pixabay_api_key": "pixabay-key",
+            key_field: None,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match=expected_name):
+        _validate_production_settings(settings)
