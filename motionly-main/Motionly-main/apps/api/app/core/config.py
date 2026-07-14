@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     bullmq_bridge_path: str | None = Field(default=None, alias="BULLMQ_BRIDGE_PATH")
     bullmq_node_command: str = Field(default="node", alias="BULLMQ_NODE_COMMAND")
+    bullmq_bridge_timeout_seconds: float = Field(
+        default=10.0,
+        alias="BULLMQ_BRIDGE_TIMEOUT_SECONDS",
+    )
     job_attempts: int = Field(default=3, alias="JOB_ATTEMPTS")
     job_backoff_ms: int = Field(default=30000, alias="JOB_BACKOFF_MS")
     worker_concurrency: int = Field(default=3, alias="WORKER_CONCURRENCY")
@@ -81,6 +85,32 @@ class Settings(BaseSettings):
         alias="GPU_AUTOSCALE_COOLDOWN_SECONDS",
     )
     gpu_max_worker_count: int = Field(default=4, alias="GPU_MAX_WORKER_COUNT")
+    lightning_user_id: str | None = Field(default=None, alias="LIGHTNING_USER_ID")
+    lightning_api_key: str | None = Field(default=None, alias="LIGHTNING_API_KEY")
+    lightning_teamspace: str | None = Field(default=None, alias="LIGHTNING_TEAMSPACE")
+    lightning_visual_deployment: str | None = Field(
+        default=None,
+        alias="LIGHTNING_VISUAL_DEPLOYMENT",
+    )
+    lightning_matte_deployment: str | None = Field(
+        default=None,
+        alias="LIGHTNING_MATTE_DEPLOYMENT",
+    )
+    lightning_render_deployment: str | None = Field(
+        default=None,
+        alias="LIGHTNING_RENDER_DEPLOYMENT",
+    )
+    lightning_scale_url_template: str = Field(
+        default=(
+            "https://lightning.ai/api/v1/teamspaces/"
+            "{teamspace}/deployments/{deployment}"
+        ),
+        alias="LIGHTNING_SCALE_URL_TEMPLATE",
+    )
+    lightning_max_replicas: int | None = Field(
+        default=None,
+        alias="LIGHTNING_MAX_REPLICAS",
+    )
     gpu_oom_alert_threshold: int = Field(default=2, alias="GPU_OOM_ALERT_THRESHOLD")
     gpu_long_job_timeout_seconds: int = Field(
         default=1800,
@@ -284,6 +314,7 @@ def get_settings() -> Settings:
         "PUBLISH_TOKEN_ENCRYPTION_KEY",
         "REDIS_URL",
         "METRICS_BEARER_TOKEN",
+        "LIGHTNING_API_KEY",
     ):
         secret_file = os.getenv(f"{name}_FILE")
         if secret_file and not os.getenv(name):

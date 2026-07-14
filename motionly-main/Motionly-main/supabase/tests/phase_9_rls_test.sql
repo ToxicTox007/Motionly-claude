@@ -1,5 +1,5 @@
 begin;
-select plan(12);
+select plan(14);
 
 insert into auth.users (id, email, raw_user_meta_data)
 values
@@ -46,6 +46,29 @@ select throws_ok(
 select set_config('request.jwt.claim.sub', '10000000-0000-4000-8000-000000000004', true);
 select is((select count(*)::integer from public.projects), 0, 'disabled member sees no projects');
 select is((select count(*)::integer from public.workspace_members), 1, 'disabled member sees only own active workspace membership');
+
+select is(
+  (
+    select bool_and(not has_function_privilege('authenticated', procedure.oid, 'EXECUTE'))
+    from pg_proc as procedure
+    join pg_namespace as namespace on namespace.oid = procedure.pronamespace
+    where namespace.nspname = 'public'
+      and procedure.proname in ('motionly_create_active_edit_plan', 'motionly_activate_edit_plan')
+  ),
+  true,
+  'authenticated clients cannot execute security-definer plan mutation RPCs'
+);
+select is(
+  (
+    select bool_and(has_function_privilege('service_role', procedure.oid, 'EXECUTE'))
+    from pg_proc as procedure
+    join pg_namespace as namespace on namespace.oid = procedure.pronamespace
+    where namespace.nspname = 'public'
+      and procedure.proname in ('motionly_create_active_edit_plan', 'motionly_activate_edit_plan')
+  ),
+  true,
+  'service role retains plan mutation RPC access'
+);
 
 set local role service_role;
 select is(

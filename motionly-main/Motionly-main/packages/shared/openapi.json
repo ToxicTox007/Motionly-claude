@@ -299,10 +299,23 @@
             "title": "Launch Metrics",
             "type": "object"
           },
+          "operations_dashboard": {
+            "additionalProperties": true,
+            "title": "Operations Dashboard",
+            "type": "object"
+          },
           "provider_costs": {
             "additionalProperties": true,
             "title": "Provider Costs",
             "type": "object"
+          },
+          "provider_slos": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Provider Slos",
+            "type": "array"
           },
           "queues": {
             "items": {
@@ -939,6 +952,17 @@
         "title": "BoundingBox",
         "type": "object"
       },
+      "BrollConfidenceLabel": {
+        "enum": [
+          "high",
+          "medium",
+          "low",
+          "lexical_fallback",
+          "enrichment_failed"
+        ],
+        "title": "BrollConfidenceLabel",
+        "type": "string"
+      },
       "BrollDensity": {
         "enum": [
           "none",
@@ -983,22 +1007,42 @@
             "type": "string"
           },
           "slots": {
-            "items": {
-              "$ref": "#/components/schemas/BrollSlotResponse"
-            },
-            "title": "Slots",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BrollSlotResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slots"
           },
           "status": {
-            "const": "ready",
-            "default": "ready",
+            "enum": [
+              "ready",
+              "queued"
+            ],
             "title": "Status",
             "type": "string"
+          },
+          "status_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Url"
           }
         },
         "required": [
-          "slots",
-          "job_id"
+          "job_id",
+          "status"
         ],
         "title": "BrollGenerateResponse",
         "type": "object"
@@ -1217,6 +1261,16 @@
             },
             "title": "Candidates",
             "type": "array"
+          },
+          "confidence_label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrollConfidenceLabel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "created_at": {
             "format": "date-time",
@@ -1502,18 +1556,38 @@
             "type": "string"
           },
           "status": {
-            "const": "ready",
-            "default": "ready",
+            "enum": [
+              "ready",
+              "queued"
+            ],
             "title": "Status",
             "type": "string"
           },
+          "status_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Url"
+          },
           "track": {
-            "$ref": "#/components/schemas/CaptionTrackReadResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptionTrackReadResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
-          "track",
-          "job_id"
+          "job_id",
+          "status"
         ],
         "title": "CaptionGenerateResponse",
         "type": "object"
@@ -2038,36 +2112,8 @@
       },
       "CheckoutSessionRequest": {
         "properties": {
-          "cancel_url": {
-            "anyOf": [
-              {
-                "format": "uri",
-                "maxLength": 2083,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cancel Url"
-          },
           "plan": {
             "$ref": "#/components/schemas/BillingPlanKey"
-          },
-          "success_url": {
-            "anyOf": [
-              {
-                "format": "uri",
-                "maxLength": 2083,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Url"
           }
         },
         "required": [
@@ -2382,6 +2428,17 @@
       },
       "EditPlan": {
         "properties": {
+          "aspect_ratio": {
+            "default": "9:16",
+            "enum": [
+              "9:16",
+              "16:9",
+              "1:1",
+              "4:5"
+            ],
+            "title": "Aspect Ratio",
+            "type": "string"
+          },
           "broll_requests": {
             "items": {
               "$ref": "#/components/schemas/BrollRequest"
@@ -2421,6 +2478,9 @@
             "title": "Effects",
             "type": "array"
           },
+          "layout": {
+            "$ref": "#/components/schemas/EditPlanLayoutMetadata"
+          },
           "manual_elements": {
             "items": {
               "$ref": "#/components/schemas/ManualElement"
@@ -2434,6 +2494,14 @@
             "minLength": 1,
             "title": "Music Mood",
             "type": "string"
+          },
+          "prompt_version": {
+            "default": "edit-planner-prompt-v2",
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "render_dimensions": {
+            "$ref": "#/components/schemas/RenderDimensions"
           },
           "risk_flags": {
             "items": {
@@ -2512,6 +2580,28 @@
         "title": "EditPlanCut",
         "type": "object"
       },
+      "EditPlanLayoutMetadata": {
+        "properties": {
+          "preset_key": {
+            "default": "short_form_vertical",
+            "enum": [
+              "short_form_vertical",
+              "landscape",
+              "square",
+              "portrait_4_5"
+            ],
+            "title": "Preset Key",
+            "type": "string"
+          },
+          "safe_area": {
+            "additionalProperties": true,
+            "title": "Safe Area",
+            "type": "object"
+          }
+        },
+        "title": "EditPlanLayoutMetadata",
+        "type": "object"
+      },
       "EditPlanResponse": {
         "properties": {
           "broll_density": {
@@ -2536,6 +2626,17 @@
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Reason"
           },
           "feedback": {
             "anyOf": [
@@ -2572,8 +2673,18 @@
             "title": "Model",
             "type": "string"
           },
+          "model_name": {
+            "default": "",
+            "title": "Model Name",
+            "type": "string"
+          },
           "plan": {
             "$ref": "#/components/schemas/EditPlan"
+          },
+          "planner_source": {
+            "default": "unknown",
+            "title": "Planner Source",
+            "type": "string"
           },
           "project_id": {
             "format": "uuid",
@@ -2584,9 +2695,19 @@
             "title": "Prompt",
             "type": "string"
           },
+          "prompt_version": {
+            "default": "edit-planner-prompt-v2",
+            "title": "Prompt Version",
+            "type": "string"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "retry_count": {
+            "default": 0,
+            "title": "Retry Count",
+            "type": "integer"
           },
           "schema_hash": {
             "title": "Schema Hash",
@@ -2993,22 +3114,42 @@
             "type": "boolean"
           },
           "config": {
-            "$ref": "#/components/schemas/EffectsConfigResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectsConfigResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "job_id": {
             "title": "Job Id",
             "type": "string"
           },
           "status": {
-            "const": "ready",
-            "default": "ready",
+            "enum": [
+              "ready",
+              "queued"
+            ],
             "title": "Status",
             "type": "string"
+          },
+          "status_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Url"
           }
         },
         "required": [
-          "config",
-          "job_id"
+          "job_id",
+          "status"
         ],
         "title": "EffectsUpdateResponse",
         "type": "object"
@@ -3945,6 +4086,35 @@
         "title": "LaunchFeedbackCreateResponse",
         "type": "object"
       },
+      "LayerJobStatusResponse": {
+        "properties": {
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "progress": {
+            "default": 0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "LayerJobStatusResponse",
+        "type": "object"
+      },
       "ManualElement": {
         "description": "A user-placed spatial or temporal editor element.\n\nThe typed envelope stays stable while ``properties`` carries the controls\nspecific to text, graphics, audio, transitions, grades, and AI actions.\nThis keeps saved plans forward compatible as the palette grows.",
         "properties": {
@@ -4091,6 +4261,111 @@
         ],
         "title": "ManualElement",
         "type": "object"
+      },
+      "MattePreviewResponse": {
+        "properties": {
+          "bucket": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bucket"
+          },
+          "cache_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Key"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Url"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "source": {
+            "default": "none",
+            "enum": [
+              "segmentation_matte",
+              "approximate_preview",
+              "none"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "default": "skipped",
+            "enum": [
+              "available",
+              "pending",
+              "failed",
+              "skipped",
+              "approximate"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "MattePreviewResponse",
+        "type": "object"
+      },
+      "MatteStatus": {
+        "enum": [
+          "pending",
+          "processing",
+          "completed",
+          "failed",
+          "skipped"
+        ],
+        "title": "MatteStatus",
+        "type": "string"
       },
       "ModelTrainingRequest": {
         "properties": {
@@ -4376,18 +4651,38 @@
             "type": "string"
           },
           "selection": {
-            "$ref": "#/components/schemas/MusicSelectionResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MusicSelectionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
-            "const": "ready",
-            "default": "ready",
+            "enum": [
+              "ready",
+              "queued"
+            ],
             "title": "Status",
             "type": "string"
+          },
+          "status_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Url"
           }
         },
         "required": [
-          "selection",
-          "job_id"
+          "job_id",
+          "status"
         ],
         "title": "MusicSelectResponse",
         "type": "object"
@@ -4835,17 +5130,45 @@
             "type": "string"
           },
           "plan": {
-            "$ref": "#/components/schemas/EditPlanResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EditPlanResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "status": {
-            "const": "ready",
             "default": "ready",
             "title": "Status",
             "type": "string"
+          },
+          "status_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Url"
           }
         },
         "required": [
-          "plan",
           "job_id"
         ],
         "title": "PlanCreateResponse",
@@ -4997,6 +5320,47 @@
           "broll"
         ],
         "title": "PlanEntitlements",
+        "type": "object"
+      },
+      "PlanJobStatusResponse": {
+        "properties": {
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "progress"
+        ],
+        "title": "PlanJobStatusResponse",
         "type": "object"
       },
       "PlanListResponse": {
@@ -5555,9 +5919,24 @@
       },
       "PublishConnectionResponse": {
         "properties": {
+          "access_token_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Token Expires At"
+          },
           "account_name": {
             "title": "Account Name",
             "type": "string"
+          },
+          "connection_status": {
+            "$ref": "#/components/schemas/PublishConnectionStatus"
           },
           "created_at": {
             "format": "date-time",
@@ -5573,8 +5952,50 @@
             "title": "Id",
             "type": "string"
           },
+          "last_refresh_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Refresh At"
+          },
+          "last_refresh_failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Refresh Failure Reason"
+          },
           "platform": {
             "$ref": "#/components/schemas/PublishPlatform"
+          },
+          "refresh_token_expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token Expires At"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
           },
           "workspace_id": {
             "format": "uuid",
@@ -5588,10 +6009,19 @@
           "platform",
           "external_account_id",
           "account_name",
+          "connection_status",
           "created_at"
         ],
         "title": "PublishConnectionResponse",
         "type": "object"
+      },
+      "PublishConnectionStatus": {
+        "enum": [
+          "active",
+          "reconnect_required"
+        ],
+        "title": "PublishConnectionStatus",
+        "type": "string"
       },
       "PublishCreateRequest": {
         "properties": {
@@ -5664,6 +6094,33 @@
             "title": "Created At",
             "type": "string"
           },
+          "duplicate_publish_risk": {
+            "default": false,
+            "title": "Duplicate Publish Risk",
+            "type": "boolean"
+          },
+          "error_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Category"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
           "error_message": {
             "anyOf": [
               {
@@ -5719,6 +6176,49 @@
             "title": "Project Id",
             "type": "string"
           },
+          "provider_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Operation Id"
+          },
+          "reconnect_required": {
+            "default": false,
+            "title": "Reconnect Required",
+            "type": "boolean"
+          },
+          "retry_after_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After Seconds"
+          },
+          "retry_count": {
+            "default": 0,
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "retryable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retryable"
+          },
           "status": {
             "$ref": "#/components/schemas/PublishStatus"
           },
@@ -5730,6 +6230,17 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "user_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Message"
           },
           "workspace_id": {
             "format": "uuid",
@@ -5794,9 +6305,16 @@
       "PublishStatus": {
         "enum": [
           "queued",
+          "refreshing_token",
           "publishing",
+          "uploading",
+          "processing",
           "published",
-          "failed"
+          "retry_scheduled",
+          "reconnect_required",
+          "duplicate_risk_needs_review",
+          "failed",
+          "cancelled"
         ],
         "title": "PublishStatus",
         "type": "string"
@@ -5813,6 +6331,35 @@
         "title": "QueueActionResponse",
         "type": "object"
       },
+      "QueueBulkActionResponse": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/QueueJobResponse"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "title": "QueueBulkActionResponse",
+        "type": "object"
+      },
+      "QueueDeadLetterRequest": {
+        "properties": {
+          "timeout_seconds": {
+            "default": 1800,
+            "maximum": 86400.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "QueueDeadLetterRequest",
+        "type": "object"
+      },
       "QueueJobResponse": {
         "properties": {
           "attempts": {
@@ -5823,6 +6370,28 @@
             "format": "date-time",
             "title": "Enqueued At",
             "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
           },
           "id": {
             "title": "Id",
@@ -5855,6 +6424,17 @@
             "title": "Queue Name",
             "type": "string"
           },
+          "render_engine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Render Engine"
+          },
           "resource_id": {
             "anyOf": [
               {
@@ -5868,6 +6448,17 @@
           },
           "status": {
             "$ref": "#/components/schemas/QueueJobStatus"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
           },
           "workspace_id": {
             "anyOf": [
@@ -5915,12 +6506,22 @@
             "title": "Jobs",
             "type": "array"
           },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
           "queues": {
             "items": {
               "$ref": "#/components/schemas/QueueSnapshotResponse"
             },
             "title": "Queues",
             "type": "array"
+          },
+          "total_jobs": {
+            "default": 0,
+            "title": "Total Jobs",
+            "type": "integer"
           }
         },
         "required": [
@@ -6439,6 +7040,26 @@
           "status"
         ],
         "title": "RenderCreateResponse",
+        "type": "object"
+      },
+      "RenderDimensions": {
+        "properties": {
+          "height": {
+            "default": 1920,
+            "maximum": 7680.0,
+            "minimum": 1.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "default": 1080,
+            "maximum": 7680.0,
+            "minimum": 1.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "title": "RenderDimensions",
         "type": "object"
       },
       "RenderEngine": {
@@ -7249,6 +7870,87 @@
         "title": "SceneType",
         "type": "string"
       },
+      "SegmentationMatte": {
+        "properties": {
+          "bucket": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Bucket",
+            "type": "string"
+          },
+          "cache_key": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Key"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "fps": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 120.0,
+            "title": "Fps",
+            "type": "number"
+          },
+          "frame_count": {
+            "exclusiveMinimum": 0.0,
+            "title": "Frame Count",
+            "type": "integer"
+          },
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "model": {
+            "default": "mediapipe-selfie-segmentation",
+            "maxLength": 120,
+            "title": "Model",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MatteStatus",
+            "default": "completed"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bucket",
+          "path",
+          "fps",
+          "width",
+          "height",
+          "frame_count"
+        ],
+        "title": "SegmentationMatte",
+        "type": "object"
+      },
       "SoundClassification": {
         "properties": {
           "background_sound": {
@@ -7516,6 +8218,17 @@
         "title": "StemSeparationRequest",
         "type": "object"
       },
+      "StockAssetEnrichmentStatus": {
+        "enum": [
+          "pending",
+          "processing",
+          "completed",
+          "failed",
+          "skipped"
+        ],
+        "title": "StockAssetEnrichmentStatus",
+        "type": "string"
+      },
       "StockOrientation": {
         "enum": [
           "portrait",
@@ -7538,6 +8251,16 @@
       },
       "StockVideoAssetResponse": {
         "properties": {
+          "confidence_label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrollConfidenceLabel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -7558,6 +8281,38 @@
             "minimum": 0.0,
             "title": "Duration Ms",
             "type": "integer"
+          },
+          "embedding_model_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model Version"
+          },
+          "enrichment_failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enrichment Failure Reason"
+          },
+          "enrichment_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StockAssetEnrichmentStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "height": {
             "minimum": 1.0,
@@ -8361,6 +9116,17 @@
         "title": "TimelineUpdateResponse",
         "type": "object"
       },
+      "TranscriptQualityStatus": {
+        "enum": [
+          "ok",
+          "low_confidence",
+          "empty",
+          "audio_failed",
+          "partial"
+        ],
+        "title": "TranscriptQualityStatus",
+        "type": "string"
+      },
       "TranscriptReadResponse": {
         "properties": {
           "confidence": {
@@ -8449,6 +9215,17 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "quality_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Quality Reasons",
+            "type": "array"
+          },
+          "quality_status": {
+            "$ref": "#/components/schemas/TranscriptQualityStatus",
+            "default": "ok"
           },
           "raw_payload": {
             "additionalProperties": true,
@@ -9247,6 +10024,16 @@
             "title": "Schema Version",
             "type": "integer"
           },
+          "segmentation_matte": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SegmentationMatte"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "summary": {
             "additionalProperties": true,
             "title": "Summary",
@@ -9261,6 +10048,17 @@
       },
       "VideoManifestResponse": {
         "properties": {
+          "cache_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Key"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -9584,6 +10382,9 @@
               }
             ]
           },
+          "matte_preview": {
+            "$ref": "#/components/schemas/MattePreviewResponse"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -9861,6 +10662,18 @@
         "operationId": "list_queues_admin_queues_get",
         "parameters": [
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "x-motionly-admin-token",
             "required": false,
@@ -9948,6 +10761,112 @@
           }
         },
         "summary": "List Queues",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/queues/jobs/{queue_job_id}": {
+      "get": {
+        "operationId": "inspect_queue_job_admin_queues_jobs__queue_job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "queue_job_id",
+            "required": true,
+            "schema": {
+              "title": "Queue Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Queue Job",
         "tags": [
           "admin"
         ]
@@ -10160,6 +11079,113 @@
           }
         },
         "summary": "Retry Queue Job",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/queues/stuck/dead-letter": {
+      "post": {
+        "operationId": "dead_letter_stuck_queue_jobs_admin_queues_stuck_dead_letter_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueDeadLetterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueBulkActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dead Letter Stuck Queue Jobs",
         "tags": [
           "admin"
         ]
@@ -11084,6 +12110,57 @@
         ]
       }
     },
+    "/internal/operations/gpu-autoscaling/run": {
+      "post": {
+        "operationId": "run_gpu_autoscaling_internal_operations_gpu_autoscaling_run_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-worker-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Worker-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Gpu Autoscaling Internal Operations Gpu Autoscaling Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Gpu Autoscaling",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
     "/internal/operations/heartbeat": {
       "post": {
         "operationId": "record_worker_heartbeat_internal_operations_heartbeat_post",
@@ -11874,6 +12951,18 @@
         "operationId": "list_saved_templates_phase5_templates_get",
         "parameters": [
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -12226,6 +13315,18 @@
       "get": {
         "operationId": "list_projects_projects_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "authorization",
@@ -13007,6 +14108,18 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -13196,6 +14309,18 @@
               "format": "uuid",
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           },
           {
@@ -13933,6 +15058,18 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -14083,7 +15220,7 @@
           "required": true
         },
         "responses": {
-          "201": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
@@ -14545,6 +15682,18 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -14719,6 +15868,106 @@
         "summary": "Restore Export Version",
         "tags": [
           "render and exports"
+        ]
+      }
+    },
+    "/projects/{project_id}/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_layer_job_status_projects__project_id__jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayerJobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Layer Job Status",
+        "tags": [
+          "layer jobs"
         ]
       }
     },
@@ -15646,6 +16895,18 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -16272,6 +17533,18 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -16447,6 +17720,106 @@
         ]
       }
     },
+    "/projects/{project_id}/plans/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_plan_job_status_projects__project_id__plans_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanJobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plan Job Status",
+        "tags": [
+          "AI plans"
+        ]
+      }
+    },
     "/projects/{project_id}/plans/snapshots": {
       "get": {
         "operationId": "list_plan_snapshots_projects__project_id__plans_snapshots_get",
@@ -16459,6 +17832,18 @@
               "format": "uuid",
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           },
           {
@@ -17399,6 +18784,18 @@
             }
           },
           {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -17687,6 +19084,18 @@
               "format": "uuid",
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           },
           {
@@ -19453,6 +20862,18 @@
       "get": {
         "operationId": "list_connections_publish_connections_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
           {
             "in": "header",
             "name": "authorization",

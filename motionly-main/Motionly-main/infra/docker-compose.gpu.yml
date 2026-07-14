@@ -152,6 +152,7 @@ services:
       <<: *media-environment
       WORKER_QUEUES: upload_preprocess,render
       WORKER_CONCURRENCY: "2"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -166,6 +167,7 @@ services:
       WORKER_CONCURRENCY: "1"
       VISUAL_ANALYSIS_WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -180,6 +182,7 @@ services:
       WORKER_CONCURRENCY: "1"
       MATTE_WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -194,6 +197,7 @@ services:
       WORKER_CONCURRENCY: "1"
       FFMPEG_GPU_ENABLED: "true"
       FFMPEG_GPU_ENCODER: h264_nvenc
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -208,6 +212,7 @@ services:
       WORKER_QUEUES: audio_demucs
       WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -219,6 +224,7 @@ services:
       <<: *media-environment
       WORKER_QUEUES: provider_calls
       WORKER_CONCURRENCY: "4"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -228,8 +234,9 @@ services:
       dockerfile: apps/worker/Dockerfile.python
     environment:
       <<: *media-environment
-      WORKER_QUEUES: planning,stock_search,audio,intelligence,maintenance
+      WORKER_QUEUES: planning,stock_search,stock_asset_enrichment,audio,intelligence,maintenance
       WORKER_CONCURRENCY: "3"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -242,6 +249,7 @@ services:
       WORKER_QUEUES: render_remotion
       REMOTION_ENABLED: "true"
       WORKER_CONCURRENCY: "1"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 
@@ -253,6 +261,7 @@ services:
       <<: *media-environment
       WORKER_QUEUES: publish
       WORKER_CONCURRENCY: "3"
+    restart: unless-stopped
     volumes: *media-volumes
     secrets: *app-secrets
 

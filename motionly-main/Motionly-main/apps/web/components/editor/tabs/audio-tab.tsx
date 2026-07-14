@@ -8,7 +8,11 @@ import type {
   MusicSelectionSummary,
   MusicTrackSummary,
 } from "@motionly/shared";
-import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
+import {
+  buildApiHeaders,
+  editorApiRequest,
+  resolveQueuedLayer,
+} from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 import type { PreviewAudioState } from "../preview/VideoPreview";
@@ -143,7 +147,9 @@ export function AudioTab({
     setMessage(null);
     try {
       const payload = await editorApiRequest<{
-        selection: MusicSelectionSummary;
+        selection?: MusicSelectionSummary | null;
+        status: "ready" | "queued";
+        status_url?: string | null;
       }>(`${env.apiBaseUrl}/projects/${projectId}/music/select`, {
         method: "POST",
         workspaceId,
@@ -161,13 +167,26 @@ export function AudioTab({
           force: nextTrackId ? false : nextMood !== mood,
         },
       });
+      const selection = await resolveQueuedLayer({
+        submission: payload,
+        immediate: payload.selection,
+        apiBaseUrl: env.apiBaseUrl,
+        options: { workspaceId, userId, accessToken: apiAccessToken },
+        load: () =>
+          editorApiRequest<MusicSelectionSummary | null>(
+            `${env.apiBaseUrl}/projects/${projectId}/music/selection`,
+            { workspaceId, userId, accessToken: apiAccessToken },
+          ),
+        resourceLabel: "Music selection",
+        onProgress: (progress) => setMessage(`Selecting music: ${progress}%`),
+      });
       setMood(nextMood);
-      setSelectedTrackId(payload.selection?.music_track_id ?? null);
-      setIncludeMusic(Boolean(payload.selection?.music_track_id));
-      onSelectionUpdated(payload.selection);
+      setSelectedTrackId(selection.music_track_id ?? null);
+      setIncludeMusic(Boolean(selection.music_track_id));
+      onSelectionUpdated(selection);
       setMessage(
-        payload.selection?.music_track?.title
-          ? `Selected ${payload.selection.music_track.title}.`
+        selection.music_track?.title
+          ? `Selected ${selection.music_track.title}.`
           : "Music disabled for this edit.",
       );
     } catch (error) {

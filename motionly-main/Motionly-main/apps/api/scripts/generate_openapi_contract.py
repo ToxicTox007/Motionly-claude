@@ -174,8 +174,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    os.environ.setdefault("APP_ENV", "test")
-    os.environ.setdefault("ALLOW_FIXTURE_PROVIDERS", "true")
+    os.environ["APP_ENV"] = "development"
+    os.environ["ALLOW_FIXTURE_PROVIDERS"] = "true"
+    os.environ["SETTINGS_ENV_FILE"] = "none"
     sys.path.insert(0, str(API_ROOT))
     from app.main import app
 

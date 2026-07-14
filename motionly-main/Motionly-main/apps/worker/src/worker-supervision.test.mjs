@@ -6,6 +6,7 @@ import {
   ensureUploadRecordExists,
   persistentPythonExecutor,
   resetPythonExecutorsForTest,
+  runJob,
 } from "./worker.mjs";
 
 class MockChild extends EventEmitter {
@@ -306,4 +307,35 @@ test("upload preflight accepts matching uploads", async () => {
   });
 
   assert.deepEqual(row, { id: "video-123", status: "ready" });
+});
+
+test("completed business work survives telemetry and terminal progress failures", async () => {
+  let executions = 0;
+  const progress = [];
+  const job = {
+    id: "job-observability",
+    queueName: "planning",
+    timestamp: Date.now(),
+    attemptsMade: 0,
+    data: { kind: "edit_plan", trace_id: null },
+    updateProgress: async (value) => {
+      progress.push(value);
+      if (value === 100) throw new Error("progress backend unavailable");
+    },
+    discard: () => assert.fail("successful work must not be discarded"),
+  };
+
+  const result = await runJob(job, {
+    executeJob: async () => {
+      executions += 1;
+      return { status: "ready" };
+    },
+    reportProviderSlo: async () => {
+      throw new Error("telemetry endpoint unavailable");
+    },
+  });
+
+  assert.deepEqual(result, { status: "ready" });
+  assert.equal(executions, 1);
+  assert.deepEqual(progress, [1, 100]);
 });

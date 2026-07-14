@@ -13,7 +13,7 @@ import type {
   EditPlanRecordSummary,
   TranscriptWord,
 } from "@motionly/shared";
-import { editorApiRequest } from "@/lib/client-api";
+import { editorApiRequest, resolveQueuedLayer } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -127,7 +127,11 @@ export function CaptionsTab({
       const endpoint = activeTrack
         ? `${env.apiBaseUrl}/projects/${projectId}/captions/${activeTrack.id}`
         : `${env.apiBaseUrl}/projects/${projectId}/captions/generate`;
-      const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(
+      const payload = await editorApiRequest<{
+        track?: CaptionTrackSummary | null;
+        status: "ready" | "queued";
+        status_url?: string | null;
+      }>(
         endpoint,
         {
           method: activeTrack ? "PATCH" : "POST",
@@ -144,7 +148,25 @@ export function CaptionsTab({
           },
         },
       );
-      applyTrack(payload.track);
+      const track = await resolveQueuedLayer({
+        submission: payload,
+        immediate: payload.track,
+        apiBaseUrl: env.apiBaseUrl,
+        options: { workspaceId, userId, accessToken: apiAccessToken },
+        load: async () => {
+          const result = await editorApiRequest<{
+            tracks: CaptionTrackSummary[];
+          }>(`${env.apiBaseUrl}/projects/${projectId}/captions`, {
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+          });
+          return result.tracks[0] ?? null;
+        },
+        resourceLabel: "Captions",
+        onProgress: (progress) => setMessage(`Generating captions: ${progress}%`),
+      });
+      applyTrack(track);
       setMessage("Caption style updated.");
     } catch (error) {
       console.error(error);

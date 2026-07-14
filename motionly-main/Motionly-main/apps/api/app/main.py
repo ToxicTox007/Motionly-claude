@@ -60,6 +60,7 @@ from app.services.audio_ml_providers import (
 )
 from app.services.billing import StripeBillingClient
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
+from app.services.lightning_scaling import LightningScalingService
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
 from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.publishing import PublishOAuthClient, SocialPublishingClient
@@ -178,17 +179,6 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryPublishingRepository()
     )
-    if isinstance(app.state.publishing_repository, SupabasePublishingRepository):
-        try:
-            app.state.publishing_repository.encrypt_legacy_tokens()
-        except ApiError as exc:
-            app.state.launch_feedback.append(
-                {
-                    "severity": "warning",
-                    "code": exc.code,
-                    "message": "Publishing token backfill skipped during startup.",
-                }
-            )
     app.state.plan_repository = (
         SupabasePlanRepository(
             caption_repository=app.state.caption_repository,
@@ -296,11 +286,17 @@ def create_app() -> FastAPI:
             bridge_path=settings.bullmq_bridge_path,
             node_command=settings.bullmq_node_command,
             job_attempts=settings.job_attempts,
+            bridge_timeout_seconds=settings.bullmq_bridge_timeout_seconds,
         )
     elif settings.app_env == "production":
         raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
     else:
         app.state.queue_registry = QueueRegistry()
+    app.state.gpu_scaling_service = (
+        LightningScalingService(settings)
+        if LightningScalingService.is_configured(settings)
+        else None
+    )
     app.state.preprocess_queue = PreprocessQueue(app.state.queue_registry)
     app.state.transcription_queue = TranscriptionQueue(app.state.queue_registry)
     app.state.visual_queue = VisualQueue(app.state.queue_registry)

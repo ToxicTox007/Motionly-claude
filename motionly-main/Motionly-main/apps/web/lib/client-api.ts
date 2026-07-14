@@ -219,7 +219,7 @@ export async function pollPlanJob(
 ): Promise<string> {
   const maxRetries = 120;
   for (let i = 0; i < maxRetries; i++) {
-    await waitForInteractivePollingTurn();
+    await waitForInteractivePollingTurn(options.signal);
     const response = await editorApiRequest<PlanJobStatusResponse>(
       statusUrl,
       {
@@ -240,7 +240,7 @@ export async function pollPlanJob(
     if (onProgress && response.progress !== undefined) {
       onProgress(response.progress);
     }
-    await delay(Math.min(3000, 1000 + i * 100));
+    await delay(Math.min(3000, 1000 + i * 100), options.signal);
   }
   throw new Error("Plan generation timed out.");
 }
@@ -252,8 +252,74 @@ type AdaptivePollingOptions = {
   immediate?: boolean;
 };
 
+export type LayerJobStatusResponse = {
+  status: "queued" | "running" | "succeeded" | "failed";
+  progress: number;
+  failure_reason?: string;
+};
+
+export async function pollLayerJob(
+  statusUrl: string,
+  options: EditorApiRequestOptions,
+  onProgress?: (progress: number) => void,
+): Promise<void> {
+  const maxRetries = 120;
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+    await waitForInteractivePollingTurn(options.signal);
+    const response = await editorApiRequest<LayerJobStatusResponse>(statusUrl, {
+      ...options,
+      method: "GET",
+      body: undefined,
+    });
+    if (response.status === "succeeded") return;
+    if (response.status === "failed") {
+      throw new Error(response.failure_reason || "Background processing failed.");
+    }
+    onProgress?.(response.progress);
+    await delay(Math.min(3000, 1000 + attempt * 100), options.signal);
+  }
+  throw new Error("Background processing timed out.");
+}
+
+export type QueuedLayerSubmission = {
+  status: "ready" | "queued";
+  status_url?: string | null;
+};
+
+export async function resolveQueuedLayer<T>({
+  submission,
+  immediate,
+  apiBaseUrl,
+  options,
+  load,
+  resourceLabel,
+  onProgress,
+}: {
+  submission: QueuedLayerSubmission;
+  immediate?: T | null;
+  apiBaseUrl: string;
+  options: EditorApiRequestOptions;
+  load: () => Promise<T | null | undefined>;
+  resourceLabel: string;
+  onProgress?: (progress: number) => void;
+}): Promise<T> {
+  if (submission.status === "queued") {
+    if (!submission.status_url) {
+      throw new Error(`${resourceLabel} was queued without a status URL.`);
+    }
+    const base = apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`;
+    const statusUrl = new URL(submission.status_url, base).toString();
+    await pollLayerJob(statusUrl, options, onProgress);
+  }
+  const resource = immediate ?? (await load());
+  if (resource == null) {
+    throw new Error(`${resourceLabel} completed but could not be loaded.`);
+  }
+  return resource;
+}
+
 export function startAdaptivePolling(
-  callback: () => void | Promise<void>,
+  callback: (signal: AbortSignal) => void | Promise<void>,
   {
     intervalMs = 3000,
     maxIntervalMs = 10_000,
@@ -264,6 +330,7 @@ export function startAdaptivePolling(
   let stopped = false;
   let timer: number | null = null;
   let turn = 0;
+  const controller = new AbortController();
 
   const clear = () => {
     if (timer !== null) window.clearTimeout(timer);
@@ -277,13 +344,20 @@ export function startAdaptivePolling(
   };
   const tick = async () => {
     if (stopped) return;
-    await waitForInteractivePollingTurn();
-    if (stopped) return;
     try {
-      await callback();
+      await waitForInteractivePollingTurn(controller.signal);
+      if (stopped) return;
+      await callback(controller.signal);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.warn("Adaptive polling turn failed; retrying.", error);
+      }
     } finally {
       if (!stopped) {
-        const nextDelay = Math.min(maxIntervalMs, intervalMs + turn * backoffStepMs);
+        const nextDelay = Math.min(
+          maxIntervalMs,
+          intervalMs + turn * backoffStepMs,
+        );
         turn += 1;
         schedule(nextDelay);
       }
@@ -298,32 +372,73 @@ export function startAdaptivePolling(
 
   return () => {
     stopped = true;
+    controller.abort();
     clear();
   };
 }
 
-export async function waitForInteractivePollingTurn(): Promise<void> {
+export async function waitForInteractivePollingTurn(
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
   if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-    await new Promise<void>((resolve) => {
-      const onVisible = () => {
-        if (document.visibilityState !== "visible") return;
-        document.removeEventListener("visibilitychange", onVisible);
-        resolve();
-      };
-      document.addEventListener("visibilitychange", onVisible);
-    });
+    await waitForBrowserEvent(
+      document,
+      "visibilitychange",
+      () => document.visibilityState === "visible",
+      signal,
+    );
   }
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    await new Promise<void>((resolve) => {
-      const onOnline = () => {
-        window.removeEventListener("online", onOnline);
-        resolve();
-      };
-      window.addEventListener("online", onOnline, { once: true });
-    });
+    await waitForBrowserEvent(window, "online", () => navigator.onLine, signal);
   }
+  throwIfAborted(signal);
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function waitForBrowserEvent(
+  target: EventTarget,
+  eventName: string,
+  isReady: () => boolean,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      target.removeEventListener(eventName, onEvent);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onEvent = () => {
+      if (!isReady()) return;
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    target.addEventListener(eventName, onEvent);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted.", "AbortError");
+  }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 
 interface WebGLVideoCanvasProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -40,16 +40,14 @@ void main() {
 
 export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, saturation, vignette }: WebGLVideoCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [available, setAvailable] = useState(false);
 
   useEffect(() => {
-    if (!active) {
-      setAvailable(false);
-      return;
-    }
     const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.style.opacity = "0";
+    if (!active) return;
     const video = videoRef.current;
-    if (!canvas || !video) return;
+    if (!video) return;
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: true });
     if (!gl) return;
     const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX);
@@ -100,9 +98,9 @@ export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, satur
           gl.uniform1f(uniforms.saturation, saturation);
           gl.uniform1f(uniforms.vignette, vignette);
           gl.drawArrays(gl.TRIANGLES, 0, 6);
-          setAvailable(true);
+          canvas.style.opacity = "1";
         } catch {
-          setAvailable(false);
+          canvas.style.opacity = "0";
         }
       }
       frame = window.requestAnimationFrame(render);
@@ -119,7 +117,13 @@ export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, satur
     };
   }, [active, brightness, contrast, saturation, videoRef, vignette]);
 
-  return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-[1] h-full w-full" style={{ opacity: available ? 1 : 0 }} aria-hidden="true" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className="pointer-events-none absolute inset-0 z-[1] h-full w-full opacity-0"
+      aria-hidden="true"
+    />
+  );
 }
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string) {

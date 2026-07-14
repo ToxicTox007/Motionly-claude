@@ -1,7 +1,7 @@
 from fastapi import Request
 
 from app.api.errors import ApiError
-from app.services.queue import BullMQQueueRegistry, QueueRegistry
+from app.services.queue import BullMQQueueRegistry
 
 
 def require_worker_queue(request: Request | None) -> None:

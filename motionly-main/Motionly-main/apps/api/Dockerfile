@@ -6,16 +6,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY apps/api/pyproject.toml ./pyproject.toml
 COPY apps/api/app ./app
+COPY apps/api/worker-bridge ./apps/api/worker-bridge
 
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir .
+RUN cd apps/api/worker-bridge \
+    && npm install --omit=dev --no-audit --no-fund --no-save bullmq@5.78.0 ioredis@5.11.1 \
+    && cd /app \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir . \
+    && useradd --create-home --uid 10001 motionly \
+    && chown -R motionly:motionly /app
+
+USER motionly
 
 EXPOSE 8000
 

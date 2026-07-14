@@ -9,7 +9,11 @@ import type {
   BrollSlotSummary,
   StockVideoAssetSummary,
 } from "@motionly/shared";
-import { buildApiHeaders, editorApiRequest } from "@/lib/client-api";
+import {
+  buildApiHeaders,
+  editorApiRequest,
+  resolveQueuedLayer,
+} from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 import type { PreviewBrollState } from "../preview/VideoPreview";
@@ -79,7 +83,11 @@ export function BrollTab({
     setLoading(true);
     setMessage(null);
     try {
-      const payload = await editorApiRequest<{ slots?: BrollSlotSummary[] }>(
+      const payload = await editorApiRequest<{
+        slots?: BrollSlotSummary[] | null;
+        status: "ready" | "queued";
+        status_url?: string | null;
+      }>(
         `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
         {
           method: "POST",
@@ -94,11 +102,27 @@ export function BrollTab({
           },
         },
       );
-      setMessage(`B-roll queued with ${payload.slots?.length ?? 0} slots.`);
-      onSlotsUpdated(payload.slots ?? []);
-      if (payload.slots?.length === 0) {
-        setMessage("No B-roll slots were created from the active timeline.");
-      }
+      const slots = await resolveQueuedLayer({
+        submission: payload,
+        immediate: payload.slots,
+        apiBaseUrl: env.apiBaseUrl,
+        options: { workspaceId, userId, accessToken: apiAccessToken },
+        load: async () => {
+          const result = await editorApiRequest<{ slots: BrollSlotSummary[] }>(
+            `${env.apiBaseUrl}/projects/${projectId}/broll`,
+            { workspaceId, userId, accessToken: apiAccessToken },
+          );
+          return result.slots;
+        },
+        resourceLabel: "B-roll",
+        onProgress: (progress) => setMessage(`Generating B-roll: ${progress}%`),
+      });
+      onSlotsUpdated(slots);
+      setMessage(
+        slots.length > 0
+          ? `Created ${slots.length} B-roll slot${slots.length === 1 ? "" : "s"}.`
+          : "No B-roll slots were created from the active timeline.",
+      );
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);

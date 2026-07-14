@@ -44,6 +44,7 @@ import {
   buildApiHeaders,
   editorApiRequest,
   pollPlanJob,
+  resolveQueuedLayer,
   startAdaptivePolling,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
@@ -100,7 +101,7 @@ interface EditorClientProps {
   userId: string;
   apiAccessToken: string;
   title: string;
-  upload: UploadedVideoSummary | null;
+  upload: UploadedVideoSummary;
   uploadAssetUrls: {
     source_video_url: string | null;
     thumbnail_url: string | null;
@@ -597,25 +598,8 @@ export function EditorClient(props: EditorClientProps) {
     ],
   );
 
-  // ── Phase 1: no upload yet ───────────────────────────────────────────────
-  if (!upload) {
-    return (
-      <UploadScreen
-        title={title}
-        projectId={projectId}
-        workspaceId={workspaceId}
-        userId={userId}
-        apiAccessToken={apiAccessToken}
-      />
-    );
-  }
-
-  // ── Phase 2: upload exists but still processing ──────────────────────────
-  if (upload.status !== "ready") {
-    return <ProcessingScreen title={title} status={upload.status} />;
-  }
-
-  // ── Phase 3: full 5-panel editor ─────────────────────────────────────────
+  // The server route renders lightweight upload/processing clients before this
+  // ready-only editor entry is referenced.
   return (
     <EditorHistoryProvider
       storageKey={`motionly:editor-history:${workspaceId}:${projectId}`}
@@ -807,6 +791,10 @@ function EditorClientEditor(props: EditorClientEditorProps) {
   const { toast } = useToast();
   const { undo, redo, canUndo, canRedo, pushHistory } = useEditorHistory();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const aiElementAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => aiElementAbortRef.current?.abort();
+  }, []);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(
     null,
   );
@@ -1007,42 +995,97 @@ function EditorClientEditor(props: EditorClientEditorProps) {
   const runAIElement = useCallback(
     async (entry: PaletteElement, clip: TimelineClip | null) => {
       if (!entry.aiAction) return;
+      aiElementAbortRef.current?.abort();
+      const operationController = new AbortController();
+      aiElementAbortRef.current = operationController;
+      const { signal } = operationController;
       setElementSaving(true);
       setDropMessage(`Running ${entry.name}…`);
       try {
         if (entry.aiAction === "auto_caption") {
           const payload = await editorApiRequest<{
-            track: CaptionTrackSummary;
+            track?: CaptionTrackSummary | null;
+            status: "ready" | "queued";
+            status_url?: string | null;
           }>(`${env.apiBaseUrl}/projects/${projectId}/captions/generate`, {
             method: "POST",
             workspaceId,
             userId,
             accessToken: apiAccessToken,
+            signal,
             friendlyError: "Auto-captioning failed.",
             body: { preset: "bold_influencer", hide_filler_words: false },
           });
-          handleCaptionTrackUpdated(payload.track);
+          const track = await resolveQueuedLayer({
+            submission: payload,
+            immediate: payload.track,
+            apiBaseUrl: env.apiBaseUrl,
+            options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+            load: async () => {
+              const result = await editorApiRequest<{
+                tracks: CaptionTrackSummary[];
+              }>(`${env.apiBaseUrl}/projects/${projectId}/captions`, {
+                workspaceId,
+                userId,
+                accessToken: apiAccessToken,
+                signal,
+              });
+              return result.tracks[0] ?? null;
+            },
+            resourceLabel: "Captions",
+            onProgress: (progress) =>
+              setDropMessage(`Running ${entry.name}: ${progress}%`),
+          });
+          handleCaptionTrackUpdated(track);
         } else if (entry.aiAction === "smart_broll") {
-          const payload = await editorApiRequest<{ slots: BrollSlotSummary[] }>(
+          const payload = await editorApiRequest<{
+            slots?: BrollSlotSummary[] | null;
+            status: "ready" | "queued";
+            status_url?: string | null;
+          }>(
             `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
             {
               method: "POST",
               workspaceId,
               userId,
               accessToken: apiAccessToken,
+              signal,
               friendlyError: "Smart B-roll fill failed.",
               body: { density: "from_plan", force: true },
             },
           );
-          handleBrollSlotsUpdated(payload.slots);
+          const slots = await resolveQueuedLayer({
+            submission: payload,
+            immediate: payload.slots,
+            apiBaseUrl: env.apiBaseUrl,
+            options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+            load: async () => {
+              const result = await editorApiRequest<{
+                slots: BrollSlotSummary[];
+              }>(`${env.apiBaseUrl}/projects/${projectId}/broll`, {
+                workspaceId,
+                userId,
+                accessToken: apiAccessToken,
+                signal,
+              });
+              return result.slots;
+            },
+            resourceLabel: "B-roll",
+            onProgress: (progress) =>
+              setDropMessage(`Running ${entry.name}: ${progress}%`),
+          });
+          handleBrollSlotsUpdated(slots);
         } else if (entry.aiAction === "music_match") {
           const payload = await editorApiRequest<{
-            selection: MusicSelectionSummary;
+            selection?: MusicSelectionSummary | null;
+            status: "ready" | "queued";
+            status_url?: string | null;
           }>(`${env.apiBaseUrl}/projects/${projectId}/music/select`, {
             method: "POST",
             workspaceId,
             userId,
             accessToken: apiAccessToken,
+            signal,
             friendlyError: "AI music matching failed.",
             body: {
               mood: activePlan?.plan.music_mood,
@@ -1053,7 +1096,21 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               force: true,
             },
           });
-          handleMusicSelectionUpdated(payload.selection);
+          const selection = await resolveQueuedLayer({
+            submission: payload,
+            immediate: payload.selection,
+            apiBaseUrl: env.apiBaseUrl,
+            options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+            load: () =>
+              editorApiRequest<MusicSelectionSummary | null>(
+                `${env.apiBaseUrl}/projects/${projectId}/music/selection`,
+                { workspaceId, userId, accessToken: apiAccessToken, signal },
+              ),
+            resourceLabel: "Music selection",
+            onProgress: (progress) =>
+              setDropMessage(`Running ${entry.name}: ${progress}%`),
+          });
+          handleMusicSelectionUpdated(selection);
         } else {
           const prompt =
             entry.aiAction === "highlight_reel"
@@ -1069,6 +1126,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             workspaceId,
             userId,
             accessToken: apiAccessToken,
+            signal,
             friendlyError: `${entry.name} failed.`,
             body: {
               prompt,
@@ -1090,6 +1148,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
                 workspaceId,
                 userId,
                 accessToken: apiAccessToken,
+                signal,
               },
               (progress) => {
                 setDropMessage(`Running ${entry.name}: ${progress}%`);
@@ -1101,6 +1160,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               workspaceId,
               userId,
               accessToken: apiAccessToken,
+              signal,
             });
             const foundPlan = planList.plans.find((p) => p.id === planId);
             if (!foundPlan) {
@@ -1115,8 +1175,17 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           handlePlanGenerated(plan);
         }
 
+        signal.throwIfAborted();
+        if (aiElementAbortRef.current !== operationController) return;
         setDropMessage(`${entry.name} complete.`);
       } catch (error) {
+        if (
+          signal.aborted ||
+          aiElementAbortRef.current !== operationController ||
+          (error as Error).name === "AbortError"
+        ) {
+          return;
+        }
         setDropMessage((error as Error).message);
         toast({
           title: "AI Action Failed",
@@ -1124,7 +1193,10 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           variant: "error",
         });
       } finally {
-        setElementSaving(false);
+        if (aiElementAbortRef.current === operationController) {
+          aiElementAbortRef.current = null;
+          setElementSaving(false);
+        }
       }
     },
     [
@@ -1171,7 +1243,9 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       setElementSaving(true);
       try {
         const payload = await editorApiRequest<{
-          config: EffectsConfigSummary;
+          config?: EffectsConfigSummary | null;
+          status: "ready" | "queued";
+          status_url?: string | null;
         }>(`${env.apiBaseUrl}/projects/${projectId}/effects`, {
           method: "PATCH",
           workspaceId,
@@ -1180,7 +1254,21 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           friendlyError: "Clip effect could not be applied.",
           body,
         });
-        handleEffectsConfigUpdated(payload.config);
+        const config = await resolveQueuedLayer({
+          submission: payload,
+          immediate: payload.config,
+          apiBaseUrl: env.apiBaseUrl,
+          options: { workspaceId, userId, accessToken: apiAccessToken },
+          load: () =>
+            editorApiRequest<EffectsConfigSummary | null>(
+              `${env.apiBaseUrl}/projects/${projectId}/effects`,
+              { workspaceId, userId, accessToken: apiAccessToken },
+            ),
+          resourceLabel: "Clip effect",
+          onProgress: (progress) =>
+            setDropMessage(`Applying ${entry.name}: ${progress}%`),
+        });
+        handleEffectsConfigUpdated(config);
         setSelectedClipIdWrapped(clip.id);
         setInspectorTabWrapped("look");
         setDropMessage(

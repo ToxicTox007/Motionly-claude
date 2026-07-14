@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
-    REMOTION_DISABLE_SANDBOX=true \
+    REMOTION_DISABLE_SANDBOX=false \
     NODE_ENV=production \
     WORKER_QUEUES=render_remotion
 
@@ -52,7 +52,7 @@ COPY apps/worker/package.json ./apps/worker/
 COPY apps/renderer/package.json ./apps/renderer/
 
 # Install pnpm and all workspace dependencies
-RUN npm install -g pnpm@9 --quiet && \
+RUN npm install -g pnpm@9.15.4 --quiet && \
     pnpm install --frozen-lockfile --prefer-offline --prod=false
 
 # Copy source after deps (avoids reinstalling when only source changes)
@@ -76,5 +76,8 @@ WORKDIR /app/apps/worker
 
 # Expose the renderer base path so remotion.mjs can find it
 ENV RENDERER_BASE_PATH=/app/apps/renderer
+
+RUN chown -R node:node /app
+USER node
 
 CMD ["node", "src/worker.mjs", "--loop"]

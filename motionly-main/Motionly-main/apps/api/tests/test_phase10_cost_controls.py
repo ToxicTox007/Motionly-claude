@@ -1,24 +1,24 @@
-import pytest
-from uuid import uuid4
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
 
 from app.api.errors import ApiError
-from app.schemas.billing import BillingPlanKey, SubscriptionStatus
-from app.repositories.billing import InMemoryBillingRepository, SubscriptionRecord
-from app.services.operations import OperationsRepository
-from app.services.billing import check_quota
-from app.services.scale import FixtureRunwayProvider, _generate_broll, execute_scale_resource
-from app.repositories.scale import InMemoryScaleRepository, ScaleResourceStatus, ScaleResourceRecord
+from app.api.internal_jobs import EnqueuedJob, _execute_job
+from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
+from app.repositories.captions import InMemoryCaptionRepository, TranscriptRecord
 from app.repositories.plans import InMemoryPlanRepository
-from app.schemas.broll import BrollGenerateRequest
-from app.services.edit_planner import PlannerProviderResult, FixtureEditPlannerProvider
-from app.schemas.captions import TranscriptStatus, TranscriptWord
-from app.repositories.captions import TranscriptRecord, InMemoryCaptionRepository
+from app.repositories.scale import InMemoryScaleRepository, ScaleResourceRecord, ScaleResourceStatus
 from app.repositories.uploads import InMemoryUploadRepository, UploadStatus
-from app.schemas.plans import PlanCreateRequest, EditPlan, PlanSummary, EditPlanStyle, EditPlanCut
-from app.api.internal_jobs import _execute_job, EnqueuedJob, QueueJobStatus
+from app.schemas.billing import BillingPlanKey, SubscriptionStatus
+from app.schemas.captions import TranscriptStatus, TranscriptWord
+from app.schemas.plans import EditPlan, EditPlanCut, EditPlanStyle, PlanCreateRequest
+from app.services.billing import check_quota
+from app.services.edit_planner import PlannerProviderResult
+from app.services.operations import OperationsRepository
+from app.services.scale import FixtureRunwayProvider, _generate_broll
 
 
 class SpyRunwayProvider(FixtureRunwayProvider):
@@ -93,7 +93,7 @@ def test_runway_over_quota_blocks_provider_call():
         status=SubscriptionStatus.ACTIVE,
     )
     operations_repo = OperationsRepository()
-    
+
     # Overlimit: Limit is 60s, record 60s of prior runway usage
     operations_repo.record_cost(
         workspace_id=workspace_id,
@@ -163,7 +163,7 @@ def test_runway_under_quota_calls_provider_and_records_usage():
         payload={"prompt": "test prompt", "duration_s": 5},
     )
 
-    res = _generate_broll(
+    _generate_broll(
         record=record,
         settings=settings,
         broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
@@ -208,10 +208,6 @@ def test_openrouter_over_quota_blocks_provider_call():
         created_at=datetime.now(UTC),
     )
 
-    settings = SimpleNamespace(
-        app_env="test",
-        quota_openrouter_creator_limit_tokens=500000.0,
-    )
     planner_provider = SpyPlannerProvider()
     transcript = TranscriptRecord(
         id=uuid4(),
@@ -251,11 +247,6 @@ def test_openrouter_under_quota_calls_provider_and_records_usage():
     )
     operations_repo = OperationsRepository()
 
-    settings = SimpleNamespace(
-        app_env="test",
-        quota_openrouter_creator_limit_tokens=500000.0,
-        max_paid_provider_attempts=1,
-    )
     planner_provider = SpyPlannerProvider()
     transcript = TranscriptRecord(
         id=uuid4(),
@@ -354,6 +345,11 @@ def test_planner_retry_attempts_cap():
         billing_repository=billing_repo,
     )
     request = SimpleNamespace(app=SimpleNamespace(state=app_state))
+    plan_request_payload = (
+        '{"prompt": "nice", "style": null, "target_duration_s": 35, '
+        '"broll_density": "medium", "feedback": "", "style_profile_id": null, '
+        '"saved_template_id": null, "user_id": null}'
+    )
 
     upload_repo = InMemoryUploadRepository()
     upload_repo.seed_project(project_id=project_id, workspace_id=workspace_id)
@@ -397,7 +393,7 @@ def test_planner_retry_attempts_cap():
         workspace_id=workspace_id,
         project_id=project_id,
         resource_id=transcript.id,
-        render_engine='{"prompt": "nice", "style": null, "target_duration_s": 35, "broll_density": "medium", "feedback": "", "style_profile_id": null, "saved_template_id": null, "user_id": null}',
+        render_engine=plan_request_payload,
     )
 
     res_0 = _execute_job(job=job_0, request=request)
@@ -412,7 +408,7 @@ def test_planner_retry_attempts_cap():
         workspace_id=workspace_id,
         project_id=project_id,
         resource_id=transcript.id,
-        render_engine='{"prompt": "nice", "style": null, "target_duration_s": 35, "broll_density": "medium", "feedback": "", "style_profile_id": null, "saved_template_id": null, "user_id": null}',
+        render_engine=plan_request_payload,
     )
 
     with pytest.raises(ApiError) as exc_info:

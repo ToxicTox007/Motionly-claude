@@ -73,8 +73,8 @@ async def create_checkout_session(
         "get_subscription",
         workspace_id=actor.workspace_id,
     )
-    success_url = str(payload.success_url or request.app.state.settings.billing_success_url or "")
-    cancel_url = str(payload.cancel_url or request.app.state.settings.billing_cancel_url or "")
+    success_url = str(request.app.state.settings.billing_success_url or "")
+    cancel_url = str(request.app.state.settings.billing_cancel_url or "")
     if not success_url or not cancel_url:
         raise ApiError(
             503,

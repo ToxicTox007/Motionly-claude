@@ -244,16 +244,31 @@ def run_matte_for_upload(
             local_matte = Path(temp_dir) / "matte.mp4"
             if not provider_models or "cv2" not in provider_models:
                 import subprocess
+
                 duration_sec = (upload.metadata.duration_ms or 6000) / 1000.0
                 width = upload.metadata.width or 1080
                 height = upload.metadata.height or 1920
                 fps = 30.0
                 frame_count = int(duration_sec * fps)
-                subprocess.run([
-                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                    "-f", "lavfi", "-i", f"color=c=black:s={width}x={height}:r={fps}:d={duration_sec}",
-                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(local_matte)
-                ], check=True)
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        f"color=c=black:s={width}x={height}:r={fps}:d={duration_sec}",
+                        "-c:v",
+                        "libx264",
+                        "-pix_fmt",
+                        "yuv420p",
+                        str(local_matte),
+                    ],
+                    check=True,
+                )
                 stats = {
                     "fps": fps,
                     "width": width,

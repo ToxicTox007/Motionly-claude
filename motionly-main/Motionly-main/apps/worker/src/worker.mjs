@@ -544,7 +544,11 @@ export async function ensureUploadRecordExists(job, { fetchImpl = globalThis.fet
   return rows[0];
 }
 
-async function runJob(job) {
+export async function runJob(job, testOverrides = {}) {
+  const overrides =
+    testOverrides && typeof testOverrides === "object" ? testOverrides : {};
+  const executeJob = overrides.executeJob;
+  const reportSlo = overrides.reportProviderSlo || reportProviderSlo;
   if (job.data.status === "canceled") {
     throw new Error(`Queue job ${job.id} was canceled`);
   }
@@ -568,8 +572,9 @@ async function runJob(job) {
   await job.updateProgress(1);
   let result;
   try {
-    result =
-      job.data.kind === "retention"
+    result = executeJob
+      ? await executeJob(job)
+      : job.data.kind === "retention"
         ? await runRetentionJob()
         : job.data.kind === "gpu_autoscaling"
         ? await runGpuAutoscalingJob()
@@ -584,7 +589,15 @@ async function runJob(job) {
           : job.data.kind === "matte_extraction"
           ? await runMatteJob(job)
           : await runDomainJob(job);
-    await reportProviderSlo(job, true, Date.now() - startedAt);
+    await reportSlo(job, true, Date.now() - startedAt).catch((error) => {
+      console.error(
+        JSON.stringify({
+          event: "provider_slo_report_failed",
+          queue_job_id: job.id,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    });
   } catch (error) {
     if (error instanceof Error && error.code === "upload_not_found") {
       job.discard();
@@ -599,7 +612,7 @@ async function runJob(job) {
         ...jobRuntimeTelemetry(job, { startedAt }),
       }),
     );
-    await reportProviderSlo(
+    await reportSlo(
       job,
       false,
       Date.now() - startedAt,
@@ -607,7 +620,15 @@ async function runJob(job) {
     ).catch(() => {});
     throw error;
   }
-  await job.updateProgress(100);
+  await job.updateProgress(100).catch((error) => {
+    console.error(
+      JSON.stringify({
+        event: "job_progress_report_failed",
+        queue_job_id: job.id,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  });
   console.log(
     JSON.stringify({
       event: "job_runtime_metrics",
@@ -796,7 +817,14 @@ async function main() {
     );
   }
   const workers = queueNames.map((queueName) => createWorker(queueName, connection));
-  await sendHeartbeat();
+  await sendHeartbeat().catch((error) => {
+    console.error(
+      JSON.stringify({
+        event: "worker_initial_heartbeat_failed",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  });
   console.log(
     JSON.stringify({
       event: "worker_ready",

@@ -27,9 +27,13 @@ def run_regenerate_project_layers(
     repository: InMemoryRegenerationRepository,
     regeneration_queue: RegenerationQueue,
 ) -> object:
-    from tests.worker_job_test_helpers import build_queue_request_state, run_enqueued_job, DummyResponse
+
     from app.services.queue import QueueRegistry
-    from uuid import UUID
+    from tests.worker_job_test_helpers import (
+        DummyResponse,
+        build_queue_request_state,
+        run_enqueued_job,
+    )
 
     registry = QueueRegistry()
     regeneration_queue = RegenerationQueue(registry=registry)

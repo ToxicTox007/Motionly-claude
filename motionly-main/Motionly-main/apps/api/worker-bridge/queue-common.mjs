@@ -9,6 +9,7 @@ export const allQueueNames = [
   "matte_extraction",
   "planning",
   "stock_search",
+  "stock_asset_enrichment",
   "audio",
   "render",
   "render_gpu",

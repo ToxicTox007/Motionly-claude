@@ -422,6 +422,8 @@ def test_supabase_caption_repository_reads_tracks_with_segments(monkeypatch) -> 
         {
             "params": {
                 "caption_track_id": f"eq.{track_id}",
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
                 "select": CAPTION_SEGMENT_COLUMNS,
                 "order": "segment_index.asc",
                 "limit": "1000",
@@ -542,6 +544,8 @@ async def test_supabase_caption_async_reads_use_bounded_projections(
     }
     assert calls[1][2]["params"] == {
         "transcript_id": f"eq.{transcript_id}",
+        "project_id": f"eq.{project_id}",
+        "workspace_id": f"eq.{workspace_id}",
         "select": TRANSCRIPT_WORD_COLUMNS,
         "order": "word_index.asc",
         "limit": "5000",
@@ -555,6 +559,8 @@ async def test_supabase_caption_async_reads_use_bounded_projections(
     }
     assert calls[3][2]["params"] == {
         "caption_track_id": f"eq.{track_id}",
+        "project_id": f"eq.{project_id}",
+        "workspace_id": f"eq.{workspace_id}",
         "select": CAPTION_SEGMENT_COLUMNS,
         "order": "segment_index.asc",
         "limit": "1000",

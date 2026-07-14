@@ -1,13 +1,9 @@
-import json
 from uuid import uuid4
-from types import SimpleNamespace
-import pytest
-from pydantic import ValidationError
 
-from app.schemas.captions import LanguageHint, TranscriptStatus, TranscriptWord
-from app.schemas.plans import BrollDensity, EditPlanStyle, PlanCreateRequest, EditPlan
 from app.repositories.captions import TranscriptRecord
-from app.services.edit_planner import _validate_or_repair_plan, _fallback_plan
+from app.schemas.captions import LanguageHint, TranscriptStatus, TranscriptWord
+from app.schemas.plans import EditPlan, EditPlanStyle, PlanCreateRequest
+from app.services.edit_planner import _fallback_plan, _validate_or_repair_plan
 
 
 def _dummy_transcript() -> TranscriptRecord:
@@ -190,7 +186,6 @@ def test_eval_invalid_broll_requests() -> None:
 
 def test_eval_json_decode_and_fallback_triggered() -> None:
     # Completely broken JSON payload that should fail parsing entirely and trigger fallback
-    from app.services.edit_planner import _extract_json_object, _extract_content
     
     # Simulate decoder error in HttpEditPlannerProvider logic
     transcript = _dummy_transcript()

@@ -500,10 +500,12 @@ export function ExportStep({
               .find((line) => line.startsWith("data: "));
             if (!dataLine) continue;
             const job = JSON.parse(dataLine.slice(6)) as RenderJobSummary;
+            if (abortController.signal.aborted || canceled) return;
             updateJob(job);
             setMessage(renderMessage(job));
             if (job.status === "complete") {
-              await refreshExports();
+              await refreshExports(abortController.signal);
+              if (abortController.signal.aborted || canceled) return;
               setStreamingJobId(null);
               if (shouldToast("short_action_feedback")) {
                 toast({
@@ -540,7 +542,13 @@ export function ExportStep({
           "Render event stream unavailable; falling back to polling.",
           error,
         );
-        await pollRender(renderJobId);
+        try {
+          await pollRender(renderJobId, abortController.signal);
+        } catch (pollError) {
+          if (abortController.signal.aborted || canceled) return;
+          console.warn("Render status polling stopped unexpectedly.", pollError);
+          setMessage("Render status updates are temporarily unavailable.");
+        }
       } finally {
         if (!canceled) setLoading(false);
       }
@@ -568,13 +576,14 @@ export function ExportStep({
     ]);
   }
 
-  async function pollRender(renderJobId: string) {
+  async function pollRender(renderJobId: string, signal: AbortSignal) {
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      if (attempt > 0) await sleep(Math.min(8000, 2500 + attempt * 250));
-      await waitForInteractivePollingTurn();
-      let response: Response;
       try {
-        response = await fetch(
+        if (attempt > 0) {
+          await sleep(Math.min(8000, 2500 + attempt * 250), signal);
+        }
+        await waitForInteractivePollingTurn(signal);
+        const response = await fetch(
           `${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}`,
           {
             cache: "no-store",
@@ -584,38 +593,48 @@ export function ExportStep({
               accessToken: apiAccessToken,
               json: false,
             }),
+            signal,
           },
         );
+        const payload = (await response.json()) as RenderJobSummary & {
+          error?: { message?: string };
+        };
+        if (!response.ok) {
+          console.warn(
+            "Render status poll returned an error; retrying.",
+            payload,
+          );
+          continue;
+        }
+        signal.throwIfAborted();
+        updateJob(payload);
+        setMessage(renderMessage(payload));
+        if (payload.status === "complete") {
+          await refreshExports(signal);
+          signal.throwIfAborted();
+          setMessage("Export is ready to download.");
+          setStreamingJobId((current) =>
+            current === renderJobId ? null : current,
+          );
+          return;
+        }
+        if (payload.status === "failed" || payload.status === "canceled") {
+          setStreamingJobId((current) =>
+            current === renderJobId ? null : current,
+          );
+          setMessage(
+            payload.status === "failed"
+              ? (payload.error_message ?? "Render failed.")
+              : "Render canceled.",
+          );
+          return;
+        }
       } catch (error) {
+        if (signal.aborted || (error as Error).name === "AbortError") throw error;
         console.warn("Render status poll failed; retrying.", error);
-        continue;
-      }
-      const payload = await response.json();
-      if (!response.ok) {
-        console.warn(
-          "Render status poll returned an error; retrying.",
-          payload,
-        );
-        continue;
-      }
-      updateJob(payload);
-      setMessage(renderMessage(payload));
-      if (payload.status === "complete") {
-        await refreshExports();
-        setMessage("Export is ready to download.");
-        setStreamingJobId(null);
-        return;
-      }
-      if (payload.status === "failed" || payload.status === "canceled") {
-        setStreamingJobId(null);
-        setMessage(
-          payload.status === "failed"
-            ? (payload.error_message ?? "Render failed.")
-            : "Render canceled.",
-        );
-        return;
       }
     }
+    signal.throwIfAborted();
     setMessage("Render is still running. Status updates are delayed.");
   }
 
@@ -671,7 +690,7 @@ export function ExportStep({
     }
   }
 
-  async function refreshExports() {
+  async function refreshExports(signal?: AbortSignal) {
     const response = await fetch(
       `${env.apiBaseUrl}/projects/${projectId}/exports`,
       {
@@ -681,9 +700,11 @@ export function ExportStep({
           accessToken: apiAccessToken,
           json: false,
         }),
+        signal,
       },
     );
     const payload = await response.json();
+    signal?.throwIfAborted();
     if (response.ok) setExports(payload.exports ?? []);
   }
 
@@ -1525,8 +1546,20 @@ function RenderStatusIcon({
   );
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function socialLabel(platform: PublishPlatform) {

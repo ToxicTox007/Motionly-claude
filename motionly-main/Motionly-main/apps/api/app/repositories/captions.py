@@ -384,7 +384,11 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             return None
         return self._transcript_from_row(
             rows[0],
-            words=self._words_for_transcript(UUID(rows[0]["id"])),
+            words=self._words_for_transcript(
+                UUID(rows[0]["id"]),
+                project_id=project_id,
+                workspace_id=workspace_id,
+            ),
         )
 
     async def latest_transcript_async(
@@ -410,7 +414,11 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             return None
         return self._transcript_from_row(
             rows[0],
-            words=await self._words_for_transcript_async(UUID(rows[0]["id"])),
+            words=await self._words_for_transcript_async(
+                UUID(rows[0]["id"]),
+                project_id=project_id,
+                workspace_id=workspace_id,
+            ),
         )
 
     def get_transcript(
@@ -435,7 +443,14 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         rows = response.json()
         if not rows:
             raise ApiError(404, "transcript_not_found", "Transcript was not found.")
-        return self._transcript_from_row(rows[0], words=self._words_for_transcript(transcript_id))
+        return self._transcript_from_row(
+            rows[0],
+            words=self._words_for_transcript(
+                transcript_id,
+                project_id=project_id,
+                workspace_id=workspace_id,
+            ),
+        )
 
     async def get_transcript_async(
         self,
@@ -461,7 +476,11 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             raise ApiError(404, "transcript_not_found", "Transcript was not found.")
         return self._transcript_from_row(
             rows[0],
-            words=await self._words_for_transcript_async(transcript_id),
+            words=await self._words_for_transcript_async(
+                transcript_id,
+                project_id=project_id,
+                workspace_id=workspace_id,
+            ),
         )
 
     def create_caption_track(self, **values: object) -> CaptionTrackRecord:
@@ -498,7 +517,14 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         )
         self._raise_for_supabase(response)
         return [
-            self._track_from_row(row, segments=self._segments_for_track(UUID(str(row["id"]))))
+            self._track_from_row(
+                row,
+                segments=self._segments_for_track(
+                    UUID(str(row["id"])),
+                    project_id=project_id,
+                    workspace_id=workspace_id,
+                ),
+            )
             for row in response.json()
         ]
 
@@ -524,7 +550,11 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         return [
             self._track_from_row(
                 row,
-                segments=await self._segments_for_track_async(UUID(str(row["id"]))),
+                segments=await self._segments_for_track_async(
+                    UUID(str(row["id"])),
+                    project_id=project_id,
+                    workspace_id=workspace_id,
+                ),
             )
             for row in response.json()
         ]
@@ -551,7 +581,14 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         rows = response.json()
         if not rows:
             raise ApiError(404, "caption_track_not_found", "Caption track was not found.")
-        return self._track_from_row(rows[0], segments=self._segments_for_track(track_id))
+        return self._track_from_row(
+            rows[0],
+            segments=self._segments_for_track(
+                track_id,
+                project_id=project_id,
+                workspace_id=workspace_id,
+            ),
+        )
 
     async def get_caption_track_async(
         self,
@@ -577,7 +614,11 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             raise ApiError(404, "caption_track_not_found", "Caption track was not found.")
         return self._track_from_row(
             rows[0],
-            segments=await self._segments_for_track_async(track_id),
+            segments=await self._segments_for_track_async(
+                track_id,
+                project_id=project_id,
+                workspace_id=workspace_id,
+            ),
         )
 
     def update_caption_track(
@@ -698,12 +739,20 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         await self._write_caption_segments_async(updated)
         return updated
 
-    def _words_for_transcript(self, transcript_id: UUID) -> list[TranscriptWord]:
+    def _words_for_transcript(
+        self,
+        transcript_id: UUID,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> list[TranscriptWord]:
         response = self.client.request(
             "GET",
             "/transcript_words",
             params={
                 "transcript_id": f"eq.{transcript_id}",
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
                 "select": TRANSCRIPT_WORD_COLUMNS,
                 "order": "word_index.asc",
                 "limit": str(MAX_TRANSCRIPT_WORDS),
@@ -722,12 +771,20 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             for row in response.json()
         ]
 
-    async def _words_for_transcript_async(self, transcript_id: UUID) -> list[TranscriptWord]:
+    async def _words_for_transcript_async(
+        self,
+        transcript_id: UUID,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> list[TranscriptWord]:
         response = await self.client.async_request(
             "GET",
             "/transcript_words",
             params={
                 "transcript_id": f"eq.{transcript_id}",
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
                 "select": TRANSCRIPT_WORD_COLUMNS,
                 "order": "word_index.asc",
                 "limit": str(MAX_TRANSCRIPT_WORDS),
@@ -746,12 +803,20 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             for row in response.json()
         ]
 
-    def _segments_for_track(self, track_id: UUID) -> list[CaptionSegment]:
+    def _segments_for_track(
+        self,
+        track_id: UUID,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> list[CaptionSegment]:
         response = self.client.request(
             "GET",
             "/caption_segments",
             params={
                 "caption_track_id": f"eq.{track_id}",
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
                 "select": CAPTION_SEGMENT_COLUMNS,
                 "order": "segment_index.asc",
                 "limit": str(MAX_CAPTION_SEGMENTS),
@@ -778,12 +843,20 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             for row in response.json()
         ]
 
-    async def _segments_for_track_async(self, track_id: UUID) -> list[CaptionSegment]:
+    async def _segments_for_track_async(
+        self,
+        track_id: UUID,
+        *,
+        project_id: UUID,
+        workspace_id: UUID,
+    ) -> list[CaptionSegment]:
         response = await self.client.async_request(
             "GET",
             "/caption_segments",
             params={
                 "caption_track_id": f"eq.{track_id}",
+                "project_id": f"eq.{project_id}",
+                "workspace_id": f"eq.{workspace_id}",
                 "select": CAPTION_SEGMENT_COLUMNS,
                 "order": "segment_index.asc",
                 "limit": str(MAX_CAPTION_SEGMENTS),

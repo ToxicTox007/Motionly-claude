@@ -5,6 +5,7 @@ import type {
   ReactNode,
   SelectHTMLAttributes,
 } from "react";
+import { useId } from "react";
 import { cn } from "@/lib/utils";
 import { Button, IconButton } from "@/components/button";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
@@ -200,6 +201,8 @@ export function Modal({
   onClose: () => void;
   contentRef?: Ref<HTMLDivElement>;
 }) {
+  const titleId = useId();
+  const descriptionId = useId();
   if (!open) return null;
   return (
     <>
@@ -213,15 +216,21 @@ export function Modal({
         ref={contentRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
         className="fixed left-1/2 top-1/2 z-50 w-[min(34rem,calc(100vw-1.5rem))] -translate-x-1/2 -translate-y-1/2 rounded border-4 border-foreground bg-surface p-5 shadow-brutal-lg"
       >
         <div className="flex items-start justify-between gap-4 border-b-2 border-foreground pb-3">
           <div className="min-w-0">
-            <h2 className="text-lg font-black uppercase text-foreground">
+            <h2 id={titleId} className="text-lg font-black uppercase text-foreground">
               {title}
             </h2>
             {description ? (
-              <p className="mt-1 text-sm font-bold text-muted-foreground">
+              <p
+                id={descriptionId}
+                className="mt-1 text-sm font-bold text-muted-foreground"
+              >
                 {description}
               </p>
             ) : null}

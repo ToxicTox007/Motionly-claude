@@ -8,6 +8,13 @@ from app.services.request_counters import increment_supabase_calls
 
 logger = get_logger(__name__)
 
+_RETRYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"})
+
+
+def _can_retry(method: str) -> bool:
+    """Avoid replaying non-idempotent creates after an ambiguous commit."""
+    return method.upper() in _RETRYABLE_METHODS
+
 
 class SupabaseRestClient:
     def __init__(
@@ -78,7 +85,7 @@ class SupabaseRestClient:
                         "error": type(exc).__name__,
                     },
                 )
-                if attempt <= self.max_retries:
+                if _can_retry(method) and attempt <= self.max_retries:
                     continue
                 raise
 
@@ -103,7 +110,11 @@ class SupabaseRestClient:
                     "attempt": attempt,
                 },
             )
-            if response.status_code >= 500 and attempt <= self.max_retries:
+            if (
+                response.status_code >= 500
+                and _can_retry(method)
+                and attempt <= self.max_retries
+            ):
                 continue
             return response
 
@@ -154,7 +165,7 @@ class SupabaseRestClient:
                         "async_client": True,
                     },
                 )
-                if attempt <= self.max_retries:
+                if _can_retry(method) and attempt <= self.max_retries:
                     continue
                 raise
 
@@ -180,7 +191,11 @@ class SupabaseRestClient:
                     "async_client": True,
                 },
             )
-            if response.status_code >= 500 and attempt <= self.max_retries:
+            if (
+                response.status_code >= 500
+                and _can_retry(method)
+                and attempt <= self.max_retries
+            ):
                 continue
             return response
 

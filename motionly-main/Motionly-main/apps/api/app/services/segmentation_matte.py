@@ -16,14 +16,18 @@ def generate_selfie_segmentation_matte(
 ) -> dict[str, float | int]:
     capture = cv2.VideoCapture(str(source_path))
     if not capture.isOpened():
-        raise ApiError(422, "segmentation_video_open_failed", "Video could not be opened for segmentation.")
+        raise ApiError(
+            422, "segmentation_video_open_failed", "Video could not be opened for segmentation."
+        )
 
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 30)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     if width <= 0 or height <= 0:
         capture.release()
-        raise ApiError(422, "segmentation_video_invalid", "Video dimensions are invalid for segmentation.")
+        raise ApiError(
+            422, "segmentation_video_invalid", "Video dimensions are invalid for segmentation."
+        )
 
     scale = min(1.0, max_dimension / max(width, height))
     out_width = max(2, int(round(width * scale)))
@@ -55,7 +59,9 @@ def generate_selfie_segmentation_matte(
         capture.release()
 
         if frame_index == 0:
-            raise ApiError(422, "segmentation_frames_empty", "No frames could be sampled for segmentation.")
+            raise ApiError(
+                422, "segmentation_frames_empty", "No frames could be sampled for segmentation."
+            )
 
         _encode_matte_video(frame_dir=frame_dir, output_path=output_path, fps=fps)
 

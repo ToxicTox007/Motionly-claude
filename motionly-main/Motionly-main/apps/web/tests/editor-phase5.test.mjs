@@ -77,8 +77,9 @@ test("video preview defers canvas work until visible", async () => {
   assert.match(preview, /active=\{isPreviewVisible\}/);
   assert.match(preview, /if \(!active\) return/);
   assert.match(webgl, /active: boolean/);
-  assert.match(webgl, /if \(!active\) \{/);
-  assert.match(webgl, /setAvailable\(false\)/);
+  assert.match(webgl, /if \(!active\) return/);
+  assert.match(webgl, /canvas\.style\.opacity = "0"/);
+  assert.doesNotMatch(webgl, /setAvailable/);
 });
 
 test("saved templates include and apply caption and effects settings", async () => {

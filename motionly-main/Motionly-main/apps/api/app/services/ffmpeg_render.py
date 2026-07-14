@@ -424,12 +424,12 @@ def _segmentation_video_filter_graph(
         f"[matte_raw]format=gray,scale={specs.width}:{specs.height}:flags=bilinear,"
         f"boxblur=luma_radius={feather:.1f}:luma_power=1[matte]"
     )
-    filters.append(f"[srcfx][matte]alphamerge[fg]")
+    filters.append("[srcfx][matte]alphamerge[fg]")
     filters.append(f"color={start_color}:s={specs.width}x{specs.height}:d=3600[bgbase]")
     filters.append(
         f"[bgbase]drawbox=x=0:y=ih*0.55:w=iw:h=ih*0.45:color={end_color}@0.65:t=fill[bg]"
     )
-    filters.append(f"[bg][fg]overlay=format=auto[seg0]")
+    filters.append("[bg][fg]overlay=format=auto[seg0]")
     current = "seg0"
 
     if not broll_assets:

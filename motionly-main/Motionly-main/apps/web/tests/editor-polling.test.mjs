@@ -27,7 +27,8 @@ test("pollPlanJob pauses polling when hidden or offline", async () => {
   assert.match(source, /document\.visibilityState !== "visible"/);
   assert.match(source, /visibilitychange/);
   assert.match(source, /navigator\.onLine === false/);
-  assert.match(source, /window\.addEventListener\("online"/);
+  assert.match(source, /waitForBrowserEvent\(window, "online"/);
+  assert.match(source, /signal\?\.addEventListener\("abort"/);
   assert.match(source, /Math\.min\(3000, 1000 \+ i \* 100\)/);
 });
 
@@ -59,22 +60,22 @@ test("locally-updated editor tabs do not force full route refreshes", async () =
   const tabs = [
     {
       path: "components/editor/tabs/audio-tab.tsx",
-      callbacks: [/onSelectionUpdated\(payload\.selection\)/],
+      callbacks: [/onSelectionUpdated\(selection\)/],
     },
     {
       path: "components/editor/tabs/look-tab.tsx",
-      callbacks: [/onConfigUpdated\(payload\.config\)/],
+      callbacks: [/onConfigUpdated\(config\)/],
     },
     {
       path: "components/editor/tabs/broll-tab.tsx",
       callbacks: [
-        /onSlotsUpdated\(payload\.slots \?\? \[\]\)/,
+        /onSlotsUpdated\(slots\)/,
         /onSlotUpdated\(payload\.slot\)/,
       ],
     },
     {
       path: "components/editor/tabs/captions-tab.tsx",
-      callbacks: [/applyTrack\(payload\.track\)/],
+      callbacks: [/applyTrack\(track\)/],
     },
   ];
 
@@ -82,6 +83,7 @@ test("locally-updated editor tabs do not force full route refreshes", async () =
     const source = await readFile(new URL(tab.path, root), "utf8");
     assert.doesNotMatch(source, /router\.refresh\(\)/, `${tab.path} should update local editor state`);
     assert.doesNotMatch(source, /useRouter/, `${tab.path} should not import the route router`);
+    assert.match(source, /resolveQueuedLayer\(/, `${tab.path} should resolve queued jobs`);
     for (const callback of tab.callbacks) {
       assert.match(source, callback);
     }
@@ -117,4 +119,16 @@ test("ScalePanel.tsx template and style applications implement enqueued async pl
   // Verify plans lookup list logic
   assert.match(source, /editorApiRequest[\s\S]*projects\/\$\{projectId\}\/plans/);
   assert.match(source, /\.find\(.*p\.id === planId\)/);
+});
+
+test("AI generation aborts plan and layer polling when the panel unmounts", async () => {
+  const source = await readFile(new URL("components/editor/ai-step.tsx", root), "utf8");
+
+  assert.match(source, /operationAbortRef = useRef<AbortController/);
+  assert.match(source, /operationAbortRef\.current\?\.abort\(\)/);
+  assert.match(source, /const \{ signal \} = operationController/);
+  assert.match(source, /ensureCaptions\(signal\)/);
+  assert.match(source, /ensureBroll\(signal\)/);
+  assert.match(source, /ensureMusic\(signal\)/);
+  assert.match(source, /operationAbortRef\.current !== operationController/);
 });

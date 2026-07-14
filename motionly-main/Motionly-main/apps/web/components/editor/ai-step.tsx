@@ -9,6 +9,7 @@ import { env } from "@/lib/env";
 import {
   editorApiRequest,
   pollPlanJob,
+  resolveQueuedLayer,
   startAdaptivePolling,
 } from "@/lib/client-api";
 import type {
@@ -109,9 +110,28 @@ export function AIStep({
   const isTranscribingRef = useRef(false);
   const isSnapshotSavingRef = useRef(false);
   const isSnapshotRestoringRef = useRef(false);
+  const operationAbortRef = useRef<AbortController | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [visualStatus, setVisualStatus] = useState(initialVisualStatus);
   const hasTranscript = transcript?.status === "ready" && Boolean(transcript.words?.length);
+  const pendingPlanStorageKey = `motionly:pending-plan:${workspaceId}:${projectId}`;
+
+  useEffect(() => {
+    return () => {
+      operationAbortRef.current?.abort();
+      operationAbortRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const statusUrl = window.sessionStorage.getItem(pendingPlanStorageKey);
+      if (statusUrl) void resumePendingPlan(statusUrl);
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // Resume only when this project identity changes; the operation owns current props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPlanStorageKey]);
 
   const densityMap: Record<BrollDensity, number> = {
     none: 0,
@@ -185,7 +205,8 @@ export function AIStep({
 
   async function generatePlan() {
     if (isGeneratingRef.current || loading || !hasTranscript) return;
-    isGeneratingRef.current = true;
+    const operationController = beginPlanOperation();
+    const { signal } = operationController;
     setLoading(true);
     setMessage(null);
     try {
@@ -202,6 +223,7 @@ export function AIStep({
           userId,
           accessToken: apiAccessToken,
           friendlyError: "AI edit could not be generated. Please try again.",
+          signal,
           body: {
             prompt,
             ...(style === "auto" ? {} : { style }),
@@ -213,82 +235,144 @@ export function AIStep({
       );
 
       let plan: EditPlanRecordSummary;
-
       if (payload.status === "queued" && payload.status_url) {
+        const statusUrl = new URL(payload.status_url, env.apiBaseUrl).toString();
+        window.sessionStorage.setItem(pendingPlanStorageKey, statusUrl);
         setMessage("Edit plan queued... generating timeline.");
-        const planId = await pollPlanJob(
-          `${env.apiBaseUrl}${payload.status_url}`,
-          {
-            workspaceId,
-            userId,
-            accessToken: apiAccessToken,
-          },
-          (progress) => {
-            setMessage(`Generating plan: ${progress}%`);
-          }
-        );
-        const planList = await editorApiRequest<{ plans: EditPlanRecordSummary[] }>(
-          `${env.apiBaseUrl}/projects/${projectId}/plans`,
-          {
-            workspaceId,
-            userId,
-            accessToken: apiAccessToken,
-          }
-        );
-        const foundPlan = planList.plans.find((p) => p.id === planId);
-        if (!foundPlan) {
-          throw new Error("Plan was generated successfully but could not be loaded.");
-        }
-        plan = foundPlan;
+        plan = await loadQueuedPlan(statusUrl, signal);
+      } else if (payload.plan) {
+        plan = payload.plan;
       } else {
-        plan = payload.plan as EditPlanRecordSummary;
+        throw new Error("Plan generation returned no plan or queued job.");
       }
 
-      onPlanGenerated(plan);
-
-      const followUpResults = await Promise.allSettled([
-        ensureCaptions(),
-        ensureBroll(),
-        ensureMusic(),
-      ]);
-      const compiled = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
-        `${env.apiBaseUrl}/projects/${projectId}/plans/${plan.id}/compile-timeline`,
-        {
-          method: "POST",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError: "The AI edit was created, but its media layers could not be synchronized.",
-          body: {},
-        },
-      );
-      onPlanGenerated(compiled.plan);
-      const failedFollowUps = followUpResults.filter((result) => result.status === "rejected");
-      setMessage(
-        failedFollowUps.length === 0
-          ? `AI edit v${plan.version} is ready on the timeline. Captions, B-roll, and music were prepared.`
-          : `AI edit v${plan.version} is ready on the timeline. Some media steps still need attention.`,
-      );
-      router.refresh();
+      await finalizeGeneratedPlan(plan, operationController);
+      window.sessionStorage.removeItem(pendingPlanStorageKey);
     } catch (error) {
+      if (operationAbortRef.current !== operationController || signal.aborted) return;
+      window.sessionStorage.removeItem(pendingPlanStorageKey);
       console.error(error);
       setMessage((error as Error).message);
-    }
-  finally {
-      isGeneratingRef.current = false;
-      setLoading(false);
+    } finally {
+      finishPlanOperation(operationController);
     }
   }
 
-  async function ensureCaptions() {
-    const payload = await editorApiRequest<{ track: CaptionTrackSummary }>(
+  function beginPlanOperation() {
+    isGeneratingRef.current = true;
+    operationAbortRef.current?.abort();
+    const controller = new AbortController();
+    operationAbortRef.current = controller;
+    return controller;
+  }
+
+  function finishPlanOperation(controller: AbortController) {
+    if (operationAbortRef.current !== controller) return;
+    operationAbortRef.current = null;
+    isGeneratingRef.current = false;
+    setLoading(false);
+  }
+
+  async function loadQueuedPlan(statusUrl: string, signal: AbortSignal) {
+    const planId = await pollPlanJob(
+      statusUrl,
+      {
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        signal,
+      },
+      (progress) => {
+        if (!signal.aborted) setMessage(`Generating plan: ${progress}%`);
+      },
+    );
+    const planList = await editorApiRequest<{ plans: EditPlanRecordSummary[] }>(
+      `${env.apiBaseUrl}/projects/${projectId}/plans`,
+      { workspaceId, userId, accessToken: apiAccessToken, signal },
+    );
+    const foundPlan = planList.plans.find((item) => item.id === planId);
+    if (!foundPlan) {
+      throw new Error("Plan was generated successfully but could not be loaded.");
+    }
+    return foundPlan;
+  }
+
+  async function finalizeGeneratedPlan(
+    plan: EditPlanRecordSummary,
+    operationController: AbortController,
+  ) {
+    const { signal } = operationController;
+    signal.throwIfAborted();
+    if (operationAbortRef.current !== operationController) return;
+    onPlanGenerated(plan);
+
+    const followUpResults = await Promise.allSettled([
+      ensureCaptions(signal),
+      ensureBroll(signal),
+      ensureMusic(signal),
+    ]);
+    signal.throwIfAborted();
+    const compiled = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+      `${env.apiBaseUrl}/projects/${projectId}/plans/${plan.id}/compile-timeline`,
+      {
+        method: "POST",
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError:
+          "The AI edit was created, but its media layers could not be synchronized.",
+        signal,
+        body: {},
+      },
+    );
+    signal.throwIfAborted();
+    if (operationAbortRef.current !== operationController) return;
+    onPlanGenerated(compiled.plan);
+    const failedFollowUps = followUpResults.filter(
+      (result) => result.status === "rejected",
+    );
+    setMessage(
+      failedFollowUps.length === 0
+        ? `AI edit v${plan.version} is ready on the timeline. Captions, B-roll, and music were prepared.`
+        : `AI edit v${plan.version} is ready on the timeline. Some media steps still need attention.`,
+    );
+    router.refresh();
+  }
+
+  async function resumePendingPlan(statusUrl: string) {
+    if (isGeneratingRef.current) return;
+    const operationController = beginPlanOperation();
+    const { signal } = operationController;
+    setLoading(true);
+    setMessage("Resuming the queued AI edit...");
+    try {
+      const plan = await loadQueuedPlan(statusUrl, signal);
+      await finalizeGeneratedPlan(plan, operationController);
+      window.sessionStorage.removeItem(pendingPlanStorageKey);
+    } catch (error) {
+      if (operationAbortRef.current !== operationController || signal.aborted) return;
+      window.sessionStorage.removeItem(pendingPlanStorageKey);
+      console.error(error);
+      setMessage((error as Error).message);
+    } finally {
+      finishPlanOperation(operationController);
+    }
+  }
+
+  async function ensureCaptions(signal: AbortSignal) {
+    const payload = await editorApiRequest<{
+      track?: CaptionTrackSummary | null;
+      status: "ready" | "queued";
+      status_url?: string | null;
+    }>(
       `${env.apiBaseUrl}/projects/${projectId}/captions/generate`,
       {
-      method: "POST",
+        method: "POST",
         workspaceId,
         userId,
         accessToken: apiAccessToken,
         friendlyError: "Captions could not be prepared yet.",
+        signal,
         body: {
           transcript_id: transcript?.id ?? null,
           preset: defaultCaptionPreset(style),
@@ -297,36 +381,76 @@ export function AIStep({
         },
       },
     );
-    onCaptionTrackUpdated(payload.track);
+    const track = await resolveQueuedLayer({
+      submission: payload,
+      immediate: payload.track,
+      apiBaseUrl: env.apiBaseUrl,
+      options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+      load: async () => {
+        const result = await editorApiRequest<{ tracks: CaptionTrackSummary[] }>(
+          `${env.apiBaseUrl}/projects/${projectId}/captions`,
+          { workspaceId, userId, accessToken: apiAccessToken, signal },
+        );
+        return result.tracks[0] ?? null;
+      },
+      resourceLabel: "Captions",
+      onProgress: (progress) => setMessage(`Preparing captions: ${progress}%`),
+    });
+    onCaptionTrackUpdated(track);
   }
 
-  async function ensureBroll() {
-    const payload = await editorApiRequest<{ slots?: BrollSlotSummary[] }>(
+  async function ensureBroll(signal: AbortSignal) {
+    const payload = await editorApiRequest<{
+      slots?: BrollSlotSummary[] | null;
+      status: "ready" | "queued";
+      status_url?: string | null;
+    }>(
       `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
       {
-      method: "POST",
+        method: "POST",
         workspaceId,
         userId,
         accessToken: apiAccessToken,
         friendlyError: "B-roll could not be generated for this edit.",
+        signal,
         body: {
           density,
           force: true,
         },
       },
     );
-    onBrollSlotsUpdated(payload.slots ?? []);
+    const slots = await resolveQueuedLayer({
+      submission: payload,
+      immediate: payload.slots,
+      apiBaseUrl: env.apiBaseUrl,
+      options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+      load: async () => {
+        const result = await editorApiRequest<{ slots: BrollSlotSummary[] }>(
+          `${env.apiBaseUrl}/projects/${projectId}/broll`,
+          { workspaceId, userId, accessToken: apiAccessToken, signal },
+        );
+        return result.slots;
+      },
+      resourceLabel: "B-roll",
+      onProgress: (progress) => setMessage(`Preparing B-roll: ${progress}%`),
+    });
+    onBrollSlotsUpdated(slots);
   }
 
-  async function ensureMusic() {
-    const payload = await editorApiRequest<{ selection: MusicSelectionSummary }>(
+  async function ensureMusic(signal: AbortSignal) {
+    const payload = await editorApiRequest<{
+      selection?: MusicSelectionSummary | null;
+      status: "ready" | "queued";
+      status_url?: string | null;
+    }>(
       `${env.apiBaseUrl}/projects/${projectId}/music/select`,
       {
-      method: "POST",
+        method: "POST",
         workspaceId,
         userId,
         accessToken: apiAccessToken,
         friendlyError: "No production music track is available for this edit yet.",
+        signal,
         body: {
           include_music: true,
           music_volume: 0.25,
@@ -336,7 +460,20 @@ export function AIStep({
         },
       },
     );
-    onMusicSelectionUpdated(payload.selection);
+    const selection = await resolveQueuedLayer({
+      submission: payload,
+      immediate: payload.selection,
+      apiBaseUrl: env.apiBaseUrl,
+      options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+      load: () =>
+        editorApiRequest<MusicSelectionSummary | null>(
+          `${env.apiBaseUrl}/projects/${projectId}/music/selection`,
+          { workspaceId, userId, accessToken: apiAccessToken, signal },
+        ),
+      resourceLabel: "Music selection",
+      onProgress: (progress) => setMessage(`Preparing music: ${progress}%`),
+    });
+    onMusicSelectionUpdated(selection);
   }
 
   async function requestTranscript(force = false) {

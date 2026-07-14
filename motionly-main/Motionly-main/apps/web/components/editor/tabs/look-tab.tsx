@@ -25,7 +25,7 @@ import type {
   TimelineClip,
   VisualPresetKey,
 } from "@motionly/shared";
-import { editorApiRequest } from "@/lib/client-api";
+import { editorApiRequest, resolveQueuedLayer } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 import { useEditorHistory } from "../history-context";
@@ -334,7 +334,11 @@ export function LookTab({
     setMessage(null);
     setPremiumBlockedMessage(null);
     try {
-      const payload = await editorApiRequest<{ config: EffectsConfigSummary }>(
+      const payload = await editorApiRequest<{
+        config?: EffectsConfigSummary | null;
+        status: "ready" | "queued";
+        status_url?: string | null;
+      }>(
         `${env.apiBaseUrl}/projects/${projectId}/effects`,
         {
           method: "PATCH",
@@ -346,17 +350,30 @@ export function LookTab({
           body,
         },
       );
-      onConfigUpdated(payload.config);
-      setPreset(payload.config.preset);
-      setIntensity(Math.round(payload.config.lut_intensity * 100));
-      setTexture(payload.config.texture);
-      setSelectedMotionEffects(payload.config.motion_effects);
-      setMotion(payload.config.motion ?? defaultMotionSettings());
-      setBackgroundRemoval(payload.config.background_removal);
-      setGradientRamp(payload.config.gradient_ramp);
+      const config = await resolveQueuedLayer({
+        submission: payload,
+        immediate: payload.config,
+        apiBaseUrl: env.apiBaseUrl,
+        options: { workspaceId, userId, accessToken: apiAccessToken },
+        load: () =>
+          editorApiRequest<EffectsConfigSummary | null>(
+            `${env.apiBaseUrl}/projects/${projectId}/effects`,
+            { workspaceId, userId, accessToken: apiAccessToken },
+          ),
+        resourceLabel: "Look settings",
+        onProgress: (progress) => setMessage(`Applying look: ${progress}%`),
+      });
+      onConfigUpdated(config);
+      setPreset(config.preset);
+      setIntensity(Math.round(config.lut_intensity * 100));
+      setTexture(config.texture);
+      setSelectedMotionEffects(config.motion_effects);
+      setMotion(config.motion ?? defaultMotionSettings());
+      setBackgroundRemoval(config.background_removal);
+      setGradientRamp(config.gradient_ramp);
       setResetToDefaults(false);
       setMessage("Look applied.");
-      return payload.config;
+      return config;
     } catch (error) {
       console.error(error);
       setMessage((error as Error).message);

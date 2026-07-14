@@ -15,6 +15,10 @@ import type {
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { EditorClient } from "@/components/editor-client";
+import {
+  ProcessingProjectScreen,
+  UploadProjectScreen,
+} from "@/components/project-early-phase";
 import { env, resolveProxiedUrl } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 
@@ -82,6 +86,28 @@ export default async function ProjectDetailsPage({
         ),
       )
     : null;
+
+  const phaseAuth = {
+    title: project.title,
+    projectId,
+    workspaceId,
+    userId: context.userId,
+    apiAccessToken: context.apiAccessToken,
+  };
+
+  if (!upload) {
+    return <UploadProjectScreen {...phaseAuth} />;
+  }
+
+  if (upload.status !== "ready") {
+    return (
+      <ProcessingProjectScreen
+        {...phaseAuth}
+        uploadId={upload.id}
+        initialStatus={upload.status}
+      />
+    );
+  }
 
   const [
     uploadAssetUrls,
@@ -196,7 +222,14 @@ async function apiGet<T>(path: string, headers: Record<string, string>): Promise
     cache: "no-store",
   });
   if (response.status === 404) return null;
-  if (!response.ok) return null;
+  if (!response.ok) {
+    const requestId = response.headers.get("x-request-id");
+    throw new Error(
+      `Motionly API request failed (${response.status})${
+        requestId ? ` [request ${requestId}]` : ""
+      }.`,
+    );
+  }
   return (await response.json()) as T;
 }
 

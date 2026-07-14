@@ -28,7 +28,7 @@ async def test_metrics_telemetry_rendering() -> None:
     queue_registry = QueueRegistry()
     ops_repo = OperationsRepository()
     metrics_reg = MetricsRegistry()
-    
+
     # Observe some sample metrics
     metrics_reg.observe("job_duration_ms", 120, kind="plan", status="succeeded")
     metrics_reg.observe("job_retry_count", 2, kind="plan")
@@ -71,15 +71,14 @@ async def test_metrics_telemetry_rendering() -> None:
     )
 
     output = await metrics(request=request)
-    
+
     # Assert Promethean formatted metric outputs
-    assert "motionly_job_duration_ms_count{kind=\"plan\",status=\"succeeded\"} 1" in output
-    assert "motionly_job_retry_count_count{kind=\"plan\"} 1" in output
-    assert "motionly_job_failure_count_count{error_code=\"ValueError\",kind=\"plan\"} 1" in output
+    assert 'motionly_job_duration_ms_count{kind="plan",status="succeeded"} 1' in output
+    assert 'motionly_job_retry_count_count{kind="plan"} 1' in output
+    assert 'motionly_job_failure_count_count{error_code="ValueError",kind="plan"} 1' in output
     assert (
         "motionly_fallback_degraded_mode_count_count"
-        '{model="openrouter/free",provider="openrouter",reason="edit_plan_fallback"} 1'
-        in output
+        '{model="openrouter/free",provider="openrouter",reason="edit_plan_fallback"} 1' in output
     )
     assert (
         f'motionly_cost_usd{{workspace_id="{workspace_id}",provider="openrouter"}} 0.010000'
@@ -110,9 +109,8 @@ async def test_request_middleware_records_event_loop_lag_metric() -> None:
 
     assert 'motionly_event_loop_lag_ms_count{route="/health/live"} 1' in output
     assert (
-        'motionly_http_request_duration_ms_count'
-        '{method="GET",route="/health/live",status="200"} 1'
-        in output
+        "motionly_http_request_duration_ms_count"
+        '{method="GET",route="/health/live",status="200"} 1' in output
     )
 
 
@@ -188,9 +186,8 @@ async def test_metrics_records_queue_snapshot_errors() -> None:
     output = await metrics(request=request)
 
     assert (
-        'motionly_queue_snapshot_error_count_count'
-        '{backend="in_memory",error="RuntimeError"} 1'
-        in output
+        "motionly_queue_snapshot_error_count_count"
+        '{backend="in_memory",error="RuntimeError"} 1' in output
     )
 
 
@@ -447,3 +444,62 @@ def test_supabase_rest_client_retries_and_counts_errors(
     )
     assert f"motionly_supabase_error_count_count{{{error_labels}}} 1" in rendered
     assert responses == []
+
+
+def test_supabase_rest_client_does_not_retry_unsafe_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503, json={"message": "ambiguous failure"})
+
+    monkeypatch.setattr("app.services.supabase.httpx.request", fake_request)
+    client = SupabaseRestClient(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+        repository="projects",
+        max_retries=3,
+    )
+
+    response = client.request("POST", "/projects", json={"title": "One write"})
+
+    assert response.status_code == 503
+    assert calls == 1
+
+
+@pytest.mark.anyio
+async def test_supabase_rest_client_async_does_not_retry_unsafe_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    class FakeAsyncClient:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def request(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(503, json={"message": "ambiguous failure"})
+
+    monkeypatch.setattr("app.services.supabase.httpx.AsyncClient", FakeAsyncClient)
+    client = SupabaseRestClient(
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+        repository="projects",
+        max_retries=3,
+    )
+
+    response = await client.async_request("POST", "/projects", json={"title": "One write"})
+
+    assert response.status_code == 503
+    assert calls == 1

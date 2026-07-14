@@ -51,6 +51,13 @@ export default defineRailway(() => {
       STOCK_VIDEO_PROVIDER: "pexels_pixabay",
       PEXELS_API_KEY: preserve(),
       PIXABAY_API_KEY: preserve(),
+      LIGHTNING_USER_ID: preserve(),
+      LIGHTNING_API_KEY: preserve(),
+      LIGHTNING_TEAMSPACE: preserve(),
+      LIGHTNING_VISUAL_DEPLOYMENT: preserve(),
+      LIGHTNING_MATTE_DEPLOYMENT: preserve(),
+      LIGHTNING_RENDER_DEPLOYMENT: preserve(),
+      LIGHTNING_MAX_REPLICAS: preserve(),
       SENTRY_DSN: preserve(),
     },
   });
@@ -137,7 +144,7 @@ export default defineRailway(() => {
         env: {
           ...workerEnv,
           GPU_AUTOSCALING_CRON: "*/2 * * * *",
-          WORKER_QUEUES: "planning,stock_search,audio,intelligence,maintenance",
+          WORKER_QUEUES: "planning,stock_search,stock_asset_enrichment,audio,intelligence,maintenance",
         },
       }),
       service("motionly-publishing-worker", {

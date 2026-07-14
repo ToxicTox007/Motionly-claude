@@ -16,10 +16,12 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { createClient } from "@supabase/supabase-js";
 
 // ---------------------------------------------------------------------------
@@ -439,12 +441,49 @@ async function assembleRenderProps(renderProps) {
   };
 }
 
-async function downloadToFile(url, destPath) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download media (${response.status}): ${url}`);
+export async function downloadToFile(
+  url,
+  destPath,
+  {
+    maxBytes = Number(env("MEDIA_DOWNLOAD_MAX_BYTES", "536870912")),
+    timeoutMs = Number(env("MEDIA_DOWNLOAD_TIMEOUT_MS", "120000")),
+  } = {},
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Failed to download media (HTTP ${response.status})`);
+    }
+    if (!response.body) throw new Error("Media download returned an empty body");
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > maxBytes) {
+      throw new Error(`Media download exceeds the ${maxBytes}-byte limit`);
+    }
+
+    let downloadedBytes = 0;
+    const limiter = new Transform({
+      transform(chunk, _encoding, callback) {
+        downloadedBytes += chunk.length;
+        if (downloadedBytes > maxBytes) {
+          callback(new Error(`Media download exceeds the ${maxBytes}-byte limit`));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(
+      Readable.fromWeb(response.body),
+      limiter,
+      createWriteStream(destPath, { flags: "wx" }),
+    );
+  } catch (error) {
+    await rm(destPath, { force: true }).catch(() => undefined);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  await writeFile(destPath, Buffer.from(await response.arrayBuffer()));
 }
 
 function startLocalFileServer(filePath) {

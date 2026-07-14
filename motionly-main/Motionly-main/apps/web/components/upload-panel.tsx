@@ -99,12 +99,20 @@ export function UploadPanel({
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const operationIdRef = useRef(0);
   const [file, setFile] = useState<File | null>(null);
   const [mediaProbe, setMediaProbe] = useState<BrowserMediaProbe>(idleProbe);
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [videoId, setVideoId] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      operationIdRef.current += 1;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const preflight = useMemo<Preflight | null>(() => {
     if (!file) return null;
@@ -215,7 +223,9 @@ export function UploadPanel({
   }, [file]);
 
   function selectFile(nextFile: File | null) {
-    if (phase === "uploading") abortRef.current?.abort();
+    if (isWorking) return;
+    operationIdRef.current += 1;
+    abortRef.current?.abort();
     setFile(nextFile);
     setMediaProbe(
       nextFile && canProbeBrowserMedia(nextFile)
@@ -236,7 +246,7 @@ export function UploadPanel({
   }
 
   async function startUpload() {
-    if (!file || !preflight) return;
+    if (!file || !preflight || abortRef.current) return;
     if (hasBlockingPreflightIssue || isCheckingMedia) {
       setPhase("preflight");
       setMessage(
@@ -247,6 +257,8 @@ export function UploadPanel({
       return;
     }
 
+    const operationId = ++operationIdRef.current;
+    const isCurrentOperation = () => operationIdRef.current === operationId;
     setPhase("uploading");
     setProgress(4);
     setMessage("Registering upload...");
@@ -292,6 +304,7 @@ export function UploadPanel({
         initPayload.upload_headers,
         controller.signal,
         (loaded, total) => {
+          if (!isCurrentOperation()) return;
           if (total > 0)
             setProgress(Math.min(78, Math.round(12 + (loaded / total) * 66)));
         },
@@ -325,6 +338,7 @@ export function UploadPanel({
           headers,
           controller.signal,
           (status) => {
+            if (!isCurrentOperation()) return;
             setProgress(status === "ready" ? 100 : 90);
             setMessage(
               status === "ready"
@@ -341,6 +355,7 @@ export function UploadPanel({
           controller.signal,
         );
       }
+      if (!isCurrentOperation()) return;
       setProgress(100);
       setPhase("complete");
       const completeMsg = serverValidationMessage(
@@ -349,6 +364,7 @@ export function UploadPanel({
       setMessage(completeMsg);
       router.refresh();
     } catch (error) {
+      if (!isCurrentOperation()) return;
       if ((error as Error).name === "AbortError") {
         if (registeredVideoId && requestHeaders) {
           await cancelUploadRegistration(
@@ -394,8 +410,11 @@ export function UploadPanel({
           "focus-within:ring-2 focus-within:ring-primary",
           isWorking && "opacity-80",
         )}
+        aria-disabled={isWorking}
         onDragOver={(event) => {
           event.preventDefault();
+          event.dataTransfer.dropEffect = isWorking ? "none" : "copy";
+          if (isWorking) return;
           event.currentTarget.classList.add("border-primary", "bg-primary/10");
         }}
         onDragLeave={(event) => {
@@ -404,6 +423,7 @@ export function UploadPanel({
         onDrop={(event) => {
           event.preventDefault();
           event.currentTarget.classList.remove("border-primary", "bg-primary/10");
+          if (isWorking) return;
           selectFile(event.dataTransfer.files.item(0));
         }}
       >
@@ -411,6 +431,7 @@ export function UploadPanel({
           ref={inputRef}
           type="file"
           accept="video/mp4,video/quicktime,video/webm"
+          disabled={isWorking}
           className="sr-only"
           onChange={(event) => selectFile(event.target.files?.item(0) ?? null)}
         />
@@ -769,6 +790,8 @@ function uploadToSignedUrl(
 ) {
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => xhr.abort();
     xhr.open("PUT", url);
     for (const [key, value] of Object.entries(headers))
       xhr.setRequestHeader(key, value);
@@ -776,6 +799,7 @@ function uploadToSignedUrl(
       if (event.lengthComputable) onProgress(event.loaded, event.total);
     };
     xhr.onload = () => {
+      cleanup();
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
         return;
@@ -784,15 +808,21 @@ function uploadToSignedUrl(
         new Error(storageUploadErrorMessage(xhr.status, xhr.responseText)),
       );
     };
-    xhr.onerror = () =>
+    xhr.onerror = () => {
+      cleanup();
       reject(
         new Error(
           "Storage upload failed. Check your connection and try again.",
         ),
       );
-    xhr.onabort = () => reject(new DOMException("Aborted", "AbortError"));
-    signal.addEventListener("abort", () => xhr.abort(), { once: true });
-    xhr.send(file);
+    };
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    else xhr.send(file);
   });
 }
 
@@ -861,16 +891,18 @@ async function fetchUpload(
 }
 
 function sleep(ms: number, signal: AbortSignal) {
+  signal.throwIfAborted();
   return new Promise<void>((resolve, reject) => {
-    const timeout = window.setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        window.clearTimeout(timeout);
-        reject(new DOMException("Aborted", "AbortError"));
-      },
-      { once: true },
-    );
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

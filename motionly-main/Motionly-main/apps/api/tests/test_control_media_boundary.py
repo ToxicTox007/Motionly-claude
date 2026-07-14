@@ -13,10 +13,11 @@ def test_api_image_contains_no_ffmpeg_or_ml_runtime() -> None:
     for dockerfile in dockerfiles:
         dockerfile_lower = dockerfile.read_text().lower()
         assert "ffmpeg" not in dockerfile_lower
-        assert "nodejs" not in dockerfile_lower
-        assert "npm" not in dockerfile_lower
         assert "lightning-sdk" not in dockerfile_lower
         assert "apps/worker" not in dockerfile_lower
+        assert "apps/api/worker-bridge" in dockerfile_lower
+        assert "nodejs" in dockerfile_lower
+        assert "bullmq@5.78.0" in dockerfile_lower
     for dependency in ("torch", "tensorflow", "transformers", "demucs", "pyannote"):
         assert dependency not in core_dependencies.lower()
 
@@ -85,3 +86,13 @@ def test_specialized_worker_pools_and_persistent_model_cache_are_declared() -> N
         assert service in compose
     assert "motionly-model-cache" in compose
     assert "/var/cache/motionly" in compose
+
+
+def test_contract_generation_has_no_runtime_database_migration() -> None:
+    generator = (ROOT / "apps/api/scripts/generate_openapi_contract.py").read_text()
+    app_main = (ROOT / "apps/api/app/main.py").read_text()
+    maintenance = (ROOT / "apps/api/scripts/encrypt_legacy_publish_tokens.py").read_text()
+
+    assert 'os.environ["SETTINGS_ENV_FILE"] = "none"' in generator
+    assert ".encrypt_legacy_tokens()" not in app_main
+    assert "repository.encrypt_legacy_tokens()" in maintenance

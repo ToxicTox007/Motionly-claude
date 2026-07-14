@@ -14,7 +14,7 @@ def resolve_layer_job_status(
     job_id: str,
 ) -> LayerJobStatusResponse:
     registry: QueueRegistry = request.app.state.queue_registry
-    job = registry.jobs.get(job_id)
+    job = registry.get_job(job_id)
 
     if job is not None:
         if job.project_id != project_id or job.workspace_id != workspace_id:

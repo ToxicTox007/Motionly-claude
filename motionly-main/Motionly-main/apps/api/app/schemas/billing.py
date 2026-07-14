@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 
 
 class BillingPlanKey(StrEnum):
@@ -91,8 +91,6 @@ class BillingStatusResponse(BaseModel):
 
 class CheckoutSessionRequest(BaseModel):
     plan: BillingPlanKey
-    success_url: HttpUrl | None = None
-    cancel_url: HttpUrl | None = None
 
 
 class CheckoutSessionResponse(BaseModel):

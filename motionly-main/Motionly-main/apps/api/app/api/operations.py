@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
 from app.api.internal_jobs import require_worker_token
+from app.services.offload import run_blocking
 from app.services.queue import BullMQQueueRegistry
 from app.services.queue_slo import queue_slo_state
 
@@ -161,4 +162,8 @@ async def run_gpu_autoscaling(
     x_motionly_worker_token: str | None = Header(default=None),
 ) -> dict[str, object]:
     await require_worker_token(request, x_motionly_worker_token)
-    return {"status": "disabled", "reason": "gpu_autoscaling_not_configured"}
+    service = getattr(request.app.state, "gpu_scaling_service", None)
+    if service is None:
+        return {"status": "disabled", "reason": "lightning_not_configured"}
+    snapshots = await run_blocking(request.app.state.queue_registry.snapshots)
+    return await run_blocking(service.run, snapshots)

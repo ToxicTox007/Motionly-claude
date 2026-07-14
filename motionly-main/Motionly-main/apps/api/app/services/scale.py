@@ -83,6 +83,7 @@ class RunwayGen3Provider:
                 "Runway Gen-3 requires a prompt image URL for image-to-video generation.",
             )
         import logging
+
         logger = logging.getLogger(__name__)
 
         try:
@@ -104,6 +105,7 @@ class RunwayGen3Provider:
             )
         except Exception as exc:
             from app.core.logging import redact_string
+
             err_msg = redact_string(str(exc))
             logger.error(
                 "runway_generation_post_failed",
@@ -112,12 +114,20 @@ class RunwayGen3Provider:
                     "duration_s": duration_s,
                     "error_type": type(exc).__name__,
                     "error_detail": err_msg,
-                }
+                },
             )
-            raise ApiError(502, "runway_generation_failed", f"Runway request failed: {type(exc).__name__}: {err_msg}") from None
+            raise ApiError(
+                502,
+                "runway_generation_failed",
+                f"Runway request failed: {type(exc).__name__}: {err_msg}",
+            ) from None
 
         if response.status_code >= 400:
-            raise ApiError(502, "runway_generation_failed", f"Runway rejected video generation with status {response.status_code}.")
+            raise ApiError(
+                502,
+                "runway_generation_failed",
+                f"Runway rejected video generation with status {response.status_code}.",
+            )
         task_id = str(response.json().get("id") or "")
         if not task_id:
             raise ApiError(502, "runway_generation_failed", "Runway did not return a task id.")
@@ -125,7 +135,7 @@ class RunwayGen3Provider:
 
     def poll_task(self, task_id: str) -> str:
         import logging
-        import time
+
         logger = logging.getLogger(__name__)
         for _ in range(300):
             try:
@@ -139,6 +149,7 @@ class RunwayGen3Provider:
                 )
             except Exception as exc:
                 from app.core.logging import redact_string
+
                 err_msg = redact_string(str(exc))
                 logger.error(
                     "runway_generation_poll_failed",
@@ -146,12 +157,20 @@ class RunwayGen3Provider:
                         "task_id": task_id,
                         "error_type": type(exc).__name__,
                         "error_detail": err_msg,
-                    }
+                    },
                 )
-                raise ApiError(502, "runway_generation_failed", f"Runway task polling failed: {type(exc).__name__}: {err_msg}") from None
+                raise ApiError(
+                    502,
+                    "runway_generation_failed",
+                    f"Runway task polling failed: {type(exc).__name__}: {err_msg}",
+                ) from None
 
             if task.status_code >= 400:
-                raise ApiError(502, "runway_generation_failed", f"Runway task polling failed with status {task.status_code}.")
+                raise ApiError(
+                    502,
+                    "runway_generation_failed",
+                    f"Runway task polling failed with status {task.status_code}.",
+                )
             data = task.json()
             if data.get("status") == "SUCCEEDED":
                 outputs = data.get("output") or []

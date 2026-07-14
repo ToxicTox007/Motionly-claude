@@ -127,6 +127,7 @@ def check_quota(
 
     # Get the usage limit from settings
     from app.core.config import get_settings
+
     settings = get_settings()
 
     limit = 0.0
@@ -164,7 +165,10 @@ def check_quota(
         raise ApiError(
             402,
             f"{provider}_quota_exceeded",
-            f"Quota exceeded for provider {provider}. Used: {used:.1f}, Limit: {limit:.1f}. Required: {estimated_quantity:.1f}",
+            (
+                f"Quota exceeded for provider {provider}. Used: {used:.1f}, "
+                f"Limit: {limit:.1f}. Required: {estimated_quantity:.1f}"
+            ),
         )
 
 

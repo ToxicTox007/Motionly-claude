@@ -123,9 +123,12 @@ class InMemoryRegenerationRepository:
     def get_control_settings(self, control_settings_id: UUID) -> ControlSettingsRecord | None:
         return self.control_settings.get(control_settings_id)
 
-    def get_artifact_versions_by_cache_key(self, project_id: UUID, cache_key: str) -> list[ArtifactVersionRecord]:
+    def get_artifact_versions_by_cache_key(
+        self, project_id: UUID, cache_key: str
+    ) -> list[ArtifactVersionRecord]:
         return [
-            art for art in self.artifact_versions.values()
+            art
+            for art in self.artifact_versions.values()
             if art.project_id == project_id and art.cache_key == cache_key
         ]
 
@@ -254,7 +257,9 @@ class SupabaseRegenerationRepository(InMemoryRegenerationRepository):
             return self._control_from_row(response.json()[0])
         return None
 
-    def get_artifact_versions_by_cache_key(self, project_id: UUID, cache_key: str) -> list[ArtifactVersionRecord]:
+    def get_artifact_versions_by_cache_key(
+        self, project_id: UUID, cache_key: str
+    ) -> list[ArtifactVersionRecord]:
         response = httpx.get(
             f"{self.rest_url}/artifact_versions",
             headers=self.headers,

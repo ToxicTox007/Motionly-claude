@@ -9,6 +9,7 @@ from app.api.billing import (
     apply_stripe_event,
     build_billing_status,
     build_billing_status_async,
+    create_checkout_session,
     enforce_render_entitlement,
     get_billing_status,
     handle_stripe_webhook,
@@ -21,7 +22,12 @@ from app.repositories.billing import (
     InMemoryBillingRepository,
     SupabaseBillingRepository,
 )
-from app.schemas.billing import BillingPlanKey, SubscriptionStatus, UsageEventType
+from app.schemas.billing import (
+    BillingPlanKey,
+    CheckoutSessionRequest,
+    SubscriptionStatus,
+    UsageEventType,
+)
 from app.services.billing import parse_verified_stripe_event, stripe_signature_header
 
 
@@ -194,6 +200,54 @@ def test_supabase_billing_async_reads_use_bounded_projections(monkeypatch) -> No
             }
         },
     )
+
+
+def test_checkout_uses_only_configured_return_urls() -> None:
+    workspace_id = uuid4()
+    repository = InMemoryBillingRepository()
+    captured: dict[str, object] = {}
+
+    class StripeClient:
+        def create_checkout_session(self, **kwargs):
+            captured.update(kwargs)
+            return "https://checkout.stripe.test/session", "cs_test"
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    billing_enabled=True,
+                    stripe_price_creator="price_creator",
+                    stripe_price_pro=None,
+                    stripe_price_agency=None,
+                    billing_success_url="https://app.motionly.test/billing?checkout=success",
+                    billing_cancel_url="https://app.motionly.test/billing?checkout=canceled",
+                )
+            )
+        )
+    )
+    payload = CheckoutSessionRequest.model_validate(
+        {
+            "plan": "creator",
+            "success_url": "https://attacker.example/success",
+            "cancel_url": "https://attacker.example/cancel",
+        }
+    )
+
+    response = asyncio.run(
+        create_checkout_session(
+            payload=payload,
+            request=request,
+            actor=Actor(user_id=uuid4(), workspace_id=workspace_id),
+            repository=repository,
+            stripe_client=StripeClient(),
+        )
+    )
+
+    assert response.session_id == "cs_test"
+    assert captured["success_url"] == request.app.state.settings.billing_success_url
+    assert captured["cancel_url"] == request.app.state.settings.billing_cancel_url
+    assert "attacker.example" not in str(captured)
 
 
 def test_billing_api_prefers_async_repository_methods() -> None:
@@ -374,8 +428,7 @@ def test_stripe_webhook_duplicate_event_does_not_duplicate_subscription_state() 
     assert len(repository.subscriptions) == 1
     assert len(repository.stripe_events) == 1
     assert (
-        repository.get_subscription(workspace_id=workspace_id).stripe_subscription_id
-        == "sub_123"
+        repository.get_subscription(workspace_id=workspace_id).stripe_subscription_id == "sub_123"
     )
 
 

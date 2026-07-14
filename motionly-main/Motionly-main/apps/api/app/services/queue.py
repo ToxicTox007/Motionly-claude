@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import select
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -309,11 +310,13 @@ class BullMQQueueRegistry:
         bridge_path: str | None = None,
         node_command: str = "node",
         job_attempts: int = 3,
+        bridge_timeout_seconds: float = 10.0,
     ) -> None:
         self.redis_url = redis_url
         self.bridge_path = bridge_path or str(self._default_bridge_path())
         self.node_command = node_command
         self.job_attempts = job_attempts
+        self.bridge_timeout_seconds = max(0.1, float(bridge_timeout_seconds))
         self._bridge_process: subprocess.Popen[str] | None = None
         self._bridge_lock = threading.Lock()
         self._bridge_request_id = 0
@@ -321,7 +324,14 @@ class BullMQQueueRegistry:
     @staticmethod
     def _default_bridge_path() -> Path:
         current = Path(__file__).resolve()
-        candidates = [Path("/app/apps/worker/src/queue-bridge.mjs")]
+        candidates = [
+            Path("/app/apps/api/worker-bridge/queue-bridge.mjs"),
+            Path("/app/apps/worker/src/queue-bridge.mjs"),
+        ]
+        candidates.extend(
+            parent / "apps" / "api" / "worker-bridge" / "queue-bridge.mjs"
+            for parent in current.parents
+        )
         candidates.extend(
             parent / "apps" / "worker" / "src" / "queue-bridge.mjs" for parent in current.parents
         )
@@ -518,7 +528,23 @@ class BullMQQueueRegistry:
                 json.dumps({"id": request_id, "command": command, "payload": payload}) + "\n"
             )
             process.stdin.flush()
-            line = process.stdout.readline()
+            try:
+                output_fd = process.stdout.fileno()
+            except (AttributeError, OSError, TypeError):
+                line = process.stdout.readline()
+            else:
+                ready, _, _ = select.select(
+                    [output_fd],
+                    [],
+                    [],
+                    self.bridge_timeout_seconds,
+                )
+                if not ready:
+                    self.close()
+                    raise TimeoutError(
+                        f"BullMQ bridge timed out handling {command!r}"
+                    )
+                line = process.stdout.readline()
             if not line:
                 stderr = process.stderr.read() if process.stderr else ""
                 self.close()

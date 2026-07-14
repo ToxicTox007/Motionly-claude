@@ -1,21 +1,18 @@
-import os
-import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-import pytest
-from datetime import UTC, datetime, timedelta
 
-from app.core.logging import redact_string, redact_data, RedactingJsonFormatter
+from app.core.logging import RedactingJsonFormatter, redact_data, redact_string
 from app.services.retention import RetentionService
-from app.api.errors import ApiError
+
 
 def test_redact_string_bearer_tokens() -> None:
     text = "Authorization: Bearer gsk_abc123xyz456"
     assert redact_string(text) == "Authorization: Bearer [REDACTED]"
-    
+
     text_lower = "authorization: bearer sk-or-v1-abc"
     assert redact_string(text_lower) == "authorization: bearer [REDACTED]"
+
 
 def test_redact_string_signed_urls() -> None:
     url = "https://supabase.co/bucket/file.mp4?token=secret123&expires=1780000000&signature=sig456"
@@ -24,6 +21,7 @@ def test_redact_string_signed_urls() -> None:
     assert "expires=[REDACTED]" in redacted
     assert "signature=[REDACTED]" in redacted
 
+
 def test_redact_data_nested() -> None:
     data = {
         "api_key": "gsk_123",
@@ -31,11 +29,9 @@ def test_redact_data_nested() -> None:
             "token": "sk-or-v1-456",
             "secret": "rwy_789",
             "access_token": "some-token",
-            "safe_field": "hello"
+            "safe_field": "hello",
         },
-        "list": [
-            {"password": "pw", "other": "world"}
-        ]
+        "list": [{"password": "pw", "other": "world"}],
     }
     redacted = redact_data(data)
     assert redacted["api_key"] == "[REDACTED]"
@@ -46,6 +42,7 @@ def test_redact_data_nested() -> None:
     assert redacted["list"][0]["password"] == "[REDACTED]"
     assert redacted["list"][0]["other"] == "world"
 
+
 def test_redacting_formatter() -> None:
     formatter = RedactingJsonFormatter("%(message)s")
     record = logging.LogRecord(
@@ -55,11 +52,12 @@ def test_redacting_formatter() -> None:
         lineno=10,
         msg="API call failed with Bearer sk-or-v1-abc123xyz",
         args=(),
-        exc_info=None
+        exc_info=None,
     )
     formatted = formatter.format(record)
     assert "sk-or-v1-abc123xyz" not in formatted
     assert "Bearer [REDACTED]" in formatted
+
 
 def test_provider_failures_redacted() -> None:
     # Test Groq whisper exception scrubbing simulated
@@ -69,6 +67,7 @@ def test_provider_failures_redacted() -> None:
         err_msg = redact_string(str(exc))
         assert "gsk_abc123" not in err_msg
         assert "Bearer [REDACTED]" in err_msg
+
 
 def test_worker_exception_redacted() -> None:
     # Test workers response exception serialization mock
@@ -80,6 +79,7 @@ def test_worker_exception_redacted() -> None:
         assert "tok456" not in err_msg
         assert "signature=[REDACTED]" in err_msg
         assert "token=[REDACTED]" in err_msg
+
 
 def test_retention_keeps_assets_expires_exports(tmp_path) -> None:
     calls = []
@@ -113,10 +113,18 @@ def test_retention_keeps_assets_expires_exports(tmp_path) -> None:
     assert ("row", "exports", "eq.export-1") in calls
 
     # Transcripts payloads should be patched/redacted
-    assert any(c[0] == "patch" and c[1] == "transcripts" and c[2] == {"raw_payload": {}} for c in calls)
+    assert any(
+        c[0] == "patch" and c[1] == "transcripts" and c[2] == {"raw_payload": {}} for c in calls
+    )
 
-    # DB sources, transcripts, and generated assets are NOT deleted by age in Python RetentionService
-    assert not any(c[0] == "row" and c[1] in ("uploaded_videos", "transcripts", "phase5_resources", "stock_assets") for c in calls)
+    # Database sources, transcripts, and generated assets are not deleted by age
+    # in the Python retention service.
+    assert not any(
+        c[0] == "row"
+        and c[1] in ("uploaded_videos", "transcripts", "phase5_resources", "stock_assets")
+        for c in calls
+    )
+
 
 def test_retention_deletion_queue_filtering() -> None:
     calls = []
@@ -137,9 +145,7 @@ def test_retention_deletion_queue_filtering() -> None:
             params = kwargs.get("params", {})
             assert "queued_at" in params
             assert "lt." in params["queued_at"]
-            return [
-                {"id": "q-1", "storage_bucket": "raw-uploads", "storage_path": "v1.mp4"}
-            ]
+            return [{"id": "q-1", "storage_bucket": "raw-uploads", "storage_path": "v1.mp4"}]
         if method == "DELETE" and table == "storage_deletion_queue":
             calls.append(("delete_queue_row", kwargs.get("params", {}).get("id")))
         return []
@@ -149,6 +155,7 @@ def test_retention_deletion_queue_filtering() -> None:
     assert counts == 1
     assert ("storage", "v1.mp4") in calls
     assert ("delete_queue_row", "eq.q-1") in calls
+
 
 def test_data_handling_documentation_exists() -> None:
     doc_path = Path("/workspaces/Motionly-claude/motionly-main/Motionly-main/DATA_HANDLING.md")

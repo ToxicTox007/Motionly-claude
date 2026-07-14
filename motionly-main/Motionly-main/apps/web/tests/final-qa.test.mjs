@@ -84,3 +84,31 @@ test("Timeline virtualization, snapping alignments, and request queue compile co
   // Verify real-time alignment checks
   assert.match(timelineSource, /const getSnappedMs = useCallback/);
 });
+
+test("Shared modal and focus trap preserve accessible dialog behavior", async () => {
+  const modalSource = await readFile(new URL("components/brutal-ui.tsx", root), "utf8");
+  const focusSource = await readFile(new URL("lib/useFocusTrap.ts", root), "utf8");
+
+  assert.match(modalSource, /aria-labelledby=\{titleId\}/);
+  assert.match(modalSource, /aria-describedby=\{description \? descriptionId : undefined\}/);
+  assert.match(modalSource, /id=\{titleId\}/);
+  assert.match(focusSource, /const onCloseRef = useRef\(onClose\)/);
+  assert.match(focusSource, /\}, \[active\]\);/);
+  assert.match(focusSource, /opener\?\.isConnected/);
+});
+
+test("Upload replacement and project bootstrap reject stale or failed state", async () => {
+  const uploadSource = await readFile(new URL("components/upload-panel.tsx", root), "utf8");
+  const projectSource = await readFile(
+    new URL("app/(app)/projects/[projectId]/page.tsx", root),
+    "utf8",
+  );
+
+  assert.match(uploadSource, /const operationIdRef = useRef\(0\)/);
+  assert.match(uploadSource, /if \(isWorking\) return/);
+  assert.match(uploadSource, /if \(!isCurrentOperation\(\)\) return/);
+  assert.match(uploadSource, /abortRef\.current\?\.abort\(\)/);
+  assert.match(projectSource, /if \(response\.status === 404\) return null/);
+  assert.match(projectSource, /throw new Error\(/);
+  assert.doesNotMatch(projectSource, /if \(!response\.ok\) return null/);
+});
