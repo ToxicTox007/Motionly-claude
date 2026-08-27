@@ -13,16 +13,16 @@
     "perf:bullmq": "node scripts/perf/bullmq-queue-load.mjs",
     "perf:browser": "pnpm --filter @motionly/web perf:browser",
     "perf:media": "node scripts/perf/media-golden-benchmarks.mjs",
+    "perf:slo:check": "node scripts/perf/assert-slo.mjs",
     "contracts:generate": "pnpm --filter @motionly/shared contracts:generate",
     "contracts:check": "pnpm --filter @motionly/shared contracts:check"
   },
   "devDependencies": {
-    "pg": "^8.21.0",
-    "prettier": "^3.4.2",
-    "railway": "^3.4.1",
-    "supabase": "^2.104.0",
-    "turbo": "^2.3.3",
-    "typescript": "^5.7.2"
+    "pg": "8.21.0",
+    "prettier": "3.8.3",
+    "supabase": "2.104.0",
+    "turbo": "2.9.16",
+    "typescript": "5.9.3"
   },
   "pnpm": {
     "overrides": {

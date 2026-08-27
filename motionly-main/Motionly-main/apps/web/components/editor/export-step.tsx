@@ -14,6 +14,7 @@ import {
   Trash2,
   Video,
 } from "lucide-react";
+import { DEFAULT_RENDER_FPS } from "@motionly/shared";
 import type {
   ExportFitMode,
   ExportFraming,
@@ -41,6 +42,17 @@ import { createClient } from "@/lib/supabase/browser";
 import type { PreviewExportState } from "./preview/VideoPreview";
 import { useToast } from "../toast";
 import { StaleIndicator } from "./StaleIndicator";
+import type { BrandKitResource } from "./BrandKitPanel";
+import {
+  createRepurposeTarget,
+  RepurposePanel,
+  type RepurposeTarget,
+} from "./repurpose-panel";
+import { PerformanceFeedbackPanel } from "./performance-feedback-panel";
+import {
+  captionSelectionForBulkExport,
+  captionSelectionForExport,
+} from "./export-caption-selection.mjs";
 
 interface ExportStepProps {
   projectId: string;
@@ -67,6 +79,7 @@ const platforms: { value: PlatformPreset; label: string }[] = [
   { value: "shorts", label: "YouTube Shorts" },
   { value: "youtube_landscape", label: "YouTube Landscape" },
   { value: "instagram_post", label: "Instagram Post" },
+  { value: "linkedin", label: "LinkedIn" },
   { value: "x_landscape", label: "X Landscape" },
   { value: "custom", label: "Custom Download" },
 ];
@@ -81,6 +94,30 @@ const resolutionRank: Record<ExportResolution, number> = {
   "1080p": 1,
   "4k": 2,
 };
+
+function isExportResolution(
+  value: string | undefined,
+): value is ExportResolution {
+  return value === "720p" || value === "1080p" || value === "4k";
+}
+
+function isPlatformPreset(value: string | undefined): value is PlatformPreset {
+  return platforms.some((option) => option.value === value);
+}
+
+function isOutputAspect(value: string | undefined): value is OutputAspect {
+  return outputAspects.some((option) => option.value === value);
+}
+
+function isExportFitMode(value: string | undefined): value is ExportFitMode {
+  return fitModes.some((option) => option.value === value);
+}
+
+function isRenderTemplateId(
+  value: string | null | undefined,
+): value is RenderTemplateId {
+  return templates.some((option) => option.value === value);
+}
 
 const outputAspects: { value: OutputAspect; label: string }[] = [
   { value: "9:16", label: "Vertical 9:16" },
@@ -128,6 +165,14 @@ type PublishJob = {
   error_message?: string | null;
 };
 
+type LocalizedPublishPackage = {
+  id: string;
+  caption_track_id: string;
+  language: string;
+  review_status: "needs_review" | "approved";
+  selected_title?: string | null;
+};
+
 export function ExportStep({
   projectId,
   workspaceId,
@@ -153,15 +198,21 @@ export function ExportStep({
   );
   const [outputAspect, setOutputAspect] = useState<OutputAspect>("9:16");
   const [fitMode, setFitMode] = useState<ExportFitMode>("fill");
-  const [bulkPlatforms, setBulkPlatforms] = useState<PlatformPreset[]>([
-    "tiktok",
-    "shorts",
-    "youtube_landscape",
-  ]);
+  const [repurposeTargets, setRepurposeTargets] = useState<RepurposeTarget[]>(
+    () =>
+      ["instagram", "tiktok", "shorts", "linkedin"].map((targetPlatform) =>
+        createRepurposeTarget(
+          targetPlatform as Exclude<PlatformPreset, "custom">,
+          Boolean(captionTrackId),
+        ),
+      ),
+  );
   const [cropX, setCropX] = useState(50);
   const [cropY, setCropY] = useState(50);
   const [cropZoom, setCropZoom] = useState(100);
-  const [includeCaptions, setIncludeCaptions] = useState(Boolean(captionTrackId));
+  const [includeCaptions, setIncludeCaptions] = useState(
+    Boolean(captionTrackId),
+  );
   const [loading, setLoading] = useState(false);
   const [jobs, setJobs] = useState(initialJobs);
   const [exports, setExports] = useState(initialExports);
@@ -184,6 +235,13 @@ export function ExportStep({
   const [connectAccountName, setConnectAccountName] = useState("");
   const [connectToken, setConnectToken] = useState("");
   const [publishCaption, setPublishCaption] = useState("");
+  const [brandKits, setBrandKits] = useState<BrandKitResource[]>([]);
+  const [selectedBrandKitId, setSelectedBrandKitId] = useState("");
+  const [localizedPackages, setLocalizedPackages] = useState<
+    LocalizedPublishPackage[]
+  >([]);
+  const [selectedLocalizedPackageId, setSelectedLocalizedPackageId] =
+    useState("");
   const streamAbortRef = useRef<AbortController | null>(null);
 
   const latestJob = jobs[0];
@@ -202,12 +260,18 @@ export function ExportStep({
       : null;
   const retryableJob = latestJob?.status === "failed" ? latestJob : null;
   const canceledJob = latestJob?.status === "canceled" ? latestJob : null;
+  const selectedLocalizedPackage = localizedPackages.find(
+    (item) => item.id === selectedLocalizedPackageId,
+  );
+  const captionSourceAvailable = Boolean(
+    captionTrackId || selectedLocalizedPackage,
+  );
   const primaryRenderAction = getPrimaryRenderAction({
     renderUiState,
     loading,
     isRendering: Boolean(isRendering),
     retryableJobId: retryableJob?.id ?? null,
-    captionTrackId: captionTrackId ?? null,
+    captionSourceAvailable,
     includeCaptions,
     startRender,
     retryRender,
@@ -231,8 +295,94 @@ export function ExportStep({
     padding_color: "#000000",
   };
 
+  function applyBrandKitExportDefaults(kit: BrandKitResource) {
+    const settings = kit.payload.settings ?? {};
+    const preset = settings.default_export ?? {};
+    if (isRenderTemplateId(settings.creator_template))
+      setTemplateId(settings.creator_template);
+    if (isPlatformPreset(preset.platform)) setPlatform(preset.platform);
+    if (isOutputAspect(preset.output_aspect))
+      setOutputAspect(preset.output_aspect);
+    if (isExportFitMode(preset.fit_mode)) setFitMode(preset.fit_mode);
+    if (isExportResolution(preset.resolution)) {
+      const allowedResolution =
+        resolutionRank[preset.resolution] > resolutionRank[maxExportResolution]
+          ? maxExportResolution
+          : preset.resolution;
+      setResolution(allowedResolution);
+    }
+    if (typeof preset.include_captions === "boolean") {
+      setIncludeCaptions(preset.include_captions);
+    }
+    setSelectedBrandKitId(kit.id);
+    window.localStorage.setItem(`motionly:brand-kit:${projectId}`, kit.id);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void editorApiRequest<{ resources: BrandKitResource[] }>(
+      `${env.apiBaseUrl}/phase5/brand-kits`,
+      {
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Brand Kit defaults could not be loaded.",
+      },
+    )
+      .then((response) => {
+        if (cancelled) return;
+        const kits = response.resources ?? [];
+        setBrandKits(kits);
+        const rememberedId = window.localStorage.getItem(
+          `motionly:brand-kit:${projectId}`,
+        );
+        const remembered = kits.find((kit) => kit.id === rememberedId);
+        if (remembered) applyBrandKitExportDefaults(remembered);
+      })
+      .catch((error) => {
+        if (!cancelled)
+          console.warn("Brand Kit defaults were not loaded.", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Export defaults are intentionally restored once for this project/session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiAccessToken, projectId, userId, workspaceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void editorApiRequest<{ packages: LocalizedPublishPackage[] }>(
+      `${env.apiBaseUrl}/projects/${projectId}/localized-publish-packages`,
+      {
+        workspaceId,
+        userId,
+        accessToken: apiAccessToken,
+        friendlyError: "Localized publishing packages could not be loaded.",
+      },
+    )
+      .then((response) => {
+        if (cancelled) return;
+        const approved = (response.packages ?? []).filter(
+          (item) => item.review_status === "approved",
+        );
+        setLocalizedPackages(approved);
+        setSelectedLocalizedPackageId((current) =>
+          approved.some((item) => item.id === current) ? current : "",
+        );
+      })
+      .catch((error) => {
+        if (!cancelled)
+          console.warn("Localized publishing packages were not loaded.", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiAccessToken, projectId, userId, workspaceId]);
+
   useEffect(() => {
     onPreviewExportUpdated?.({
+      fps: DEFAULT_RENDER_FPS,
       outputAspect,
       fitMode,
       cropX,
@@ -281,7 +431,11 @@ export function ExportStep({
         accessToken: apiAccessToken,
         friendlyError: "Render could not be started. Please try again.",
         body: {
-          caption_track_id: includeCaptions ? (captionTrackId ?? null) : null,
+          ...captionSelectionForExport({
+            includeCaptions,
+            captionTrackId,
+            localizedPublishPackageId: selectedLocalizedPackage?.id ?? null,
+          }),
           edit_plan_id: activePlanId ?? null,
           template_id: templateId,
           duration_preset: "medium",
@@ -339,20 +493,27 @@ export function ExportStep({
         accessToken: apiAccessToken,
         friendlyError: "Bulk export could not be started. Please try again.",
         body: {
-          caption_track_id: includeCaptions ? (captionTrackId ?? null) : null,
+          ...captionSelectionForBulkExport({
+            includeCaptions,
+            captionTrackId,
+            localizedPublishPackageId: selectedLocalizedPackage?.id ?? null,
+            targetIncludesCaptions: repurposeTargets.map(
+              (target) => target.includeCaptions,
+            ),
+          }),
           edit_plan_id: activePlanId ?? null,
           template_id: templateId,
           duration_preset: "medium",
           include_captions: includeCaptions,
           include_broll: true,
-          export_targets: bulkPlatforms.map((targetPlatform) => ({
-            platform: targetPlatform,
+          export_targets: repurposeTargets.map((target) => ({
+            platform: target.platform,
             resolution,
             format: "mp4",
-            framing: {
-              ...framing,
-              output_aspect: defaultAspectForPlatform(targetPlatform),
-            },
+            duration_preset: target.durationPreset,
+            include_captions: target.includeCaptions,
+            hook_text: target.hookText.trim() || null,
+            framing: target.framing,
           })),
         },
       });
@@ -555,7 +716,10 @@ export function ExportStep({
           await pollRender(renderJobId, abortController.signal);
         } catch (pollError) {
           if (abortController.signal.aborted || canceled) return;
-          console.warn("Render status polling stopped unexpectedly.", pollError);
+          console.warn(
+            "Render status polling stopped unexpectedly.",
+            pollError,
+          );
           setMessage("Render status updates are temporarily unavailable.");
         }
       } finally {
@@ -570,13 +734,7 @@ export function ExportStep({
     };
     // pollRender and refreshExports intentionally read the latest auth/project props.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    activeStreamJobId,
-    apiAccessToken,
-    projectId,
-    userId,
-    workspaceId,
-  ]);
+  }, [activeStreamJobId, apiAccessToken, projectId, userId, workspaceId]);
 
   function updateJob(job: RenderJobSummary) {
     setJobs((current) => [
@@ -639,7 +797,8 @@ export function ExportStep({
           return;
         }
       } catch (error) {
-        if (signal.aborted || (error as Error).name === "AbortError") throw error;
+        if (signal.aborted || (error as Error).name === "AbortError")
+          throw error;
         console.warn("Render status poll failed; retrying.", error);
       }
     }
@@ -885,13 +1044,46 @@ export function ExportStep({
       aria-labelledby="export-heading"
     >
       <div className="space-y-2 border-b-2 border-foreground pb-4">
-        <h2 id="export-heading" className="text-2xl font-black uppercase tracking-tight">
-          Export
+        <h2
+          id="export-heading"
+          className="text-2xl font-black uppercase tracking-tight"
+        >
+          Repurpose
         </h2>
         <p className="text-xs text-muted-foreground leading-relaxed font-mono">
-          Ready to post? Choose the export frame, then render your MP4.
+          Turn one source into tailored, platform-ready outputs without
+          rebuilding your edit.
         </p>
       </div>
+
+      {brandKits.length ? (
+        <div className="border-2 border-primary bg-primary/5 p-3 rounded shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+          <Label className="mb-1 block">Brand Kit export defaults</Label>
+          <Select
+            id="brand-kit-export"
+            label="Brand Kit export defaults"
+            value={selectedBrandKitId}
+            onChange={(value) => {
+              const kit = brandKits.find((item) => item.id === value);
+              if (kit) applyBrandKitExportDefaults(kit);
+              else {
+                setSelectedBrandKitId("");
+                window.localStorage.removeItem(
+                  `motionly:brand-kit:${projectId}`,
+                );
+              }
+            }}
+            options={[
+              { value: "", label: "No Brand Kit defaults" },
+              ...brandKits.map((kit) => ({ value: kit.id, label: kit.name })),
+            ]}
+          />
+          <p className="mt-1 text-[10px] font-mono text-muted-foreground">
+            Applies the selected kit’s creator template, platform, frame,
+            captions, and permitted quality.
+          </p>
+        </div>
+      ) : null}
 
       <div className="card rounded-md border-2 border-foreground p-4 sm:p-5 space-y-4 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] bg-surface">
         <ExportStepSection step="1" title="Format" status="completed">
@@ -921,44 +1113,20 @@ export function ExportStep({
               />
             </div>
           </div>
-          <div className="mt-4 border-t-2 border-foreground/20 pt-4">
-            <Label className="mb-2.5">Bulk Targets</Label>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {platforms
-                .filter((item) => item.value !== "custom")
-                .map((item) => {
-                  const checked = bulkPlatforms.includes(item.value);
-                  return (
-                    <label
-                      key={item.value}
-                      className={`flex min-h-[44px] cursor-pointer items-center justify-between gap-2 rounded-md border-2 p-3 text-xs font-bold transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
-                        checked
-                          ? "bg-primary border-foreground text-primary-foreground"
-                          : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
-                      }`}
-                    >
-                      {item.label}
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => {
-                          setBulkPlatforms((current) =>
-                            event.target.checked
-                              ? current.includes(item.value)
-                                ? current
-                                : [...current, item.value]
-                              : current.filter(
-                                  (target) => target !== item.value,
-                                ),
-                          );
-                        }}
-                        className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary"
-                      />
-                    </label>
-                  );
-                })}
-            </div>
-          </div>
+          <RepurposePanel
+            targets={repurposeTargets}
+            onTargetsChange={setRepurposeTargets}
+            captionTrackId={captionTrackId}
+            onPreview={(target) => {
+              setPlatform(target.platform);
+              setOutputAspect(target.framing.output_aspect);
+              setFitMode(target.framing.fit_mode);
+              setCropX(target.framing.crop.x * 100);
+              setCropY(target.framing.crop.y * 100);
+              setCropZoom(target.framing.crop.zoom * 100);
+              setIncludeCaptions(target.includeCaptions);
+            }}
+          />
         </ExportStepSection>
 
         <ExportStepSection
@@ -1071,6 +1239,32 @@ export function ExportStep({
         </ExportStepSection>
       </div>
 
+      <div className="rounded-md border-2 border-foreground bg-surface px-4 py-3">
+        <Label className="mb-1">Caption language</Label>
+        <Select
+          id="localized-publish-package"
+          label="Caption language"
+          value={selectedLocalizedPackageId}
+          onChange={(value) => {
+            setSelectedLocalizedPackageId(value);
+            if (value) setIncludeCaptions(true);
+          }}
+          options={[
+            { value: "", label: "Original caption track" },
+            ...localizedPackages.map((item) => ({
+              value: item.id,
+              label: `${item.language.toUpperCase()} — ${
+                item.selected_title || "Approved localized package"
+              }`,
+            })),
+          ]}
+        />
+        <p className="mt-1 text-[10px] font-mono text-muted-foreground">
+          Approved packages use their reviewed captions and localized text
+          overlays.
+        </p>
+      </div>
+
       <label className="flex min-h-12 items-center justify-between gap-4 rounded-md border-2 border-foreground bg-surface px-4 py-3 text-sm font-bold">
         <span>
           <span className="block">Burn captions into export</span>
@@ -1094,7 +1288,7 @@ export function ExportStep({
         aria-describedby={
           message
             ? "export-message"
-            : includeCaptions && !captionTrackId
+            : includeCaptions && !captionSourceAvailable
               ? "export-missing-captions"
               : undefined
         }
@@ -1115,8 +1309,9 @@ export function ExportStep({
         disabled={
           loading ||
           Boolean(isRendering) ||
-          (includeCaptions && !captionTrackId) ||
-          bulkPlatforms.length === 0
+          repurposeTargets.length === 0 ||
+          (repurposeTargets.some((target) => target.includeCaptions) &&
+            !captionSourceAvailable)
         }
         aria-busy={loading || Boolean(isRendering)}
         className="w-full inline-flex items-center justify-center gap-2 h-12 mt-2 rounded-md bg-surface text-foreground border-2 border-foreground hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none font-black uppercase text-xs"
@@ -1126,19 +1321,23 @@ export function ExportStep({
         ) : (
           <Download className="size-4" />
         )}
-        Queue Selected Formats
+        {repurposeTargets.length
+          ? `Create ${repurposeTargets.length} Tailored Output${repurposeTargets.length === 1 ? "" : "s"}`
+          : "Select Platforms to Repurpose"}
       </button>
 
-      {latestJob && latestJob.status === "complete" && (
-        (latestJob as any).stale === true ||
-        (planRevision != null && (latestJob as any).source_plan_revision != null && (latestJob as any).source_plan_revision < planRevision)
-      ) && (
-        <StaleIndicator
-          message="Render is outdated — timeline has been modified since last render"
-          actionLabel="Re-render"
-          onAction={onRerender ?? primaryRenderAction.onClick}
-        />
-      )}
+      {latestJob &&
+        latestJob.status === "complete" &&
+        ((latestJob as any).stale === true ||
+          (planRevision != null &&
+            (latestJob as any).source_plan_revision != null &&
+            (latestJob as any).source_plan_revision < planRevision)) && (
+          <StaleIndicator
+            message="Render is outdated — timeline has been modified since last render"
+            actionLabel="Re-render"
+            onAction={onRerender ?? primaryRenderAction.onClick}
+          />
+        )}
 
       {latestJob ? (
         <div
@@ -1214,7 +1413,9 @@ export function ExportStep({
             >
               <div className="flex gap-2 items-center">
                 <AlertTriangle className="size-4 shrink-0" strokeWidth={2} />
-                <span className="font-black">Render Failed: {latestJob.error_message}</span>
+                <span className="font-black">
+                  Render Failed: {latestJob.error_message}
+                </span>
               </div>
               <div className="pl-6 font-semibold text-muted-foreground leading-relaxed">
                 What you can do next:
@@ -1286,7 +1487,9 @@ export function ExportStep({
                   Ready to post
                 </p>
                 <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 font-mono text-xs text-muted-foreground">
-                  <span>{latestExport.width}x{latestExport.height}</span>
+                  <span>
+                    {latestExport.width}x{latestExport.height}
+                  </span>
                   <span>•</span>
                   <span>{latestExport.format.toUpperCase()}</span>
                   {latestExport.duration_ms ? (
@@ -1298,7 +1501,12 @@ export function ExportStep({
                   {latestExport.file_size_bytes ? (
                     <>
                       <span>•</span>
-                      <span>{(latestExport.file_size_bytes / (1024 * 1024)).toFixed(1)}MB</span>
+                      <span>
+                        {(latestExport.file_size_bytes / (1024 * 1024)).toFixed(
+                          1,
+                        )}
+                        MB
+                      </span>
                     </>
                   ) : null}
                 </div>
@@ -1334,9 +1542,15 @@ export function ExportStep({
             }
             className="flex min-h-11 w-full appearance-none rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 pr-10 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none text-foreground"
           >
-            <option value="tiktok" className="bg-surface text-foreground">TikTok</option>
-            <option value="instagram" className="bg-surface text-foreground">Instagram</option>
-            <option value="youtube" className="bg-surface text-foreground">YouTube</option>
+            <option value="tiktok" className="bg-surface text-foreground">
+              TikTok
+            </option>
+            <option value="instagram" className="bg-surface text-foreground">
+              Instagram
+            </option>
+            <option value="youtube" className="bg-surface text-foreground">
+              YouTube
+            </option>
           </select>
         </div>
         <button
@@ -1464,13 +1678,23 @@ export function ExportStep({
           </div>
         ) : null}
       </section>
-      {includeCaptions && !captionTrackId ? (
+      <PerformanceFeedbackPanel
+        projectId={projectId}
+        workspaceId={workspaceId}
+        userId={userId}
+        apiAccessToken={apiAccessToken}
+        platform={connectPlatform}
+      />
+      {includeCaptions && !captionSourceAvailable ? (
         <p
           id="export-missing-captions"
           role="alert"
           className="rounded-md border-2 border-foreground bg-amber-500/10 p-3.5 text-xs font-bold text-amber-700 dark:text-amber-300 flex items-start gap-2.5 mt-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]"
         >
-          <AlertTriangle className="size-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300" strokeWidth={2} />
+          <AlertTriangle
+            className="size-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300"
+            strokeWidth={2}
+          />
           <span>
             Generate captions before export. Open the Text tab and generate or
             save captions, then start render again.
@@ -1513,7 +1737,9 @@ function ExportStepSection({
         <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold border-2 border-foreground select-none font-mono">
           {step}
         </span>
-        <h3 className="flex-1 text-sm font-black uppercase tracking-tight text-foreground">{title}</h3>
+        <h3 className="flex-1 text-sm font-black uppercase tracking-tight text-foreground">
+          {title}
+        </h3>
         {status === "completed" && (
           <span className="rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground bg-green-500 text-white shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
             Completed
@@ -1620,7 +1846,7 @@ function getRenderUiState(job?: RenderJobSummary): RenderUiState {
 function defaultAspectForPlatform(platform: PlatformPreset): OutputAspect {
   if (platform === "youtube_landscape" || platform === "x_landscape")
     return "16:9";
-  if (platform === "instagram_post") return "4:5";
+  if (platform === "instagram_post" || platform === "linkedin") return "4:5";
   if (platform === "custom") return "original";
   return "9:16";
 }
@@ -1676,7 +1902,7 @@ function getPrimaryRenderAction({
   loading,
   isRendering,
   retryableJobId,
-  captionTrackId,
+  captionSourceAvailable,
   includeCaptions,
   startRender,
   retryRender,
@@ -1685,7 +1911,7 @@ function getPrimaryRenderAction({
   loading: boolean;
   isRendering: boolean;
   retryableJobId: string | null;
-  captionTrackId: string | null;
+  captionSourceAvailable: boolean;
   includeCaptions: boolean;
   startRender: () => void;
   retryRender: (renderJobId: string) => void;
@@ -1717,14 +1943,14 @@ function getPrimaryRenderAction({
   if (renderUiState === "canceled") {
     return {
       label: "Start Again",
-      disabled: includeCaptions && !captionTrackId,
+      disabled: includeCaptions && !captionSourceAvailable,
       icon: "video" as const,
       onClick: startRender,
     };
   }
   return {
     label: "Start Render",
-    disabled: includeCaptions && !captionTrackId,
+    disabled: includeCaptions && !captionSourceAvailable,
     icon: "video" as const,
     onClick: startRender,
   };

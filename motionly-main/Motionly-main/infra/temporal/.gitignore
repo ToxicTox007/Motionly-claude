@@ -1,0 +1,7 @@
+# Never commit rendered runtime config or certificate/key material.
+*.pem
+*.crt
+*.key
+*.p12
+rendered/
+!config/production.yaml.tmpl

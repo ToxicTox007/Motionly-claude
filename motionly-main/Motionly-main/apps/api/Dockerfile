@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,15 +12,17 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY apps/api/pyproject.toml ./pyproject.toml
+COPY apps/api/requirements.lock ./requirements.lock
 COPY apps/api/app ./app
+COPY apps/api/worker-bridge/package.json ./apps/api/worker-bridge/package.json
+COPY apps/api/worker-bridge/package-lock.json ./apps/api/worker-bridge/package-lock.json
 COPY apps/worker/src/queue-bridge.mjs ./apps/api/worker-bridge/queue-bridge.mjs
 COPY apps/worker/src/queue-common.mjs ./apps/api/worker-bridge/queue-common.mjs
 
 RUN cd apps/api/worker-bridge \
-    && npm install --omit=dev --no-audit --no-fund --no-save bullmq@5.78.0 ioredis@5.11.1 \
+    && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && cd /app \
-    && pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir . \
+    && pip install --no-cache-dir --require-hashes -r requirements.lock \
     && useradd --create-home --uid 10001 motionly \
     && mkdir -p /var/data/motionly /var/cache/motionly /tmp/motionly \
     && chown -R motionly:motionly \

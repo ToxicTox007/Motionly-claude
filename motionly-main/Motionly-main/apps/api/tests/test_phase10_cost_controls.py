@@ -6,6 +6,7 @@ import pytest
 
 from app.api.errors import ApiError
 from app.api.internal_jobs import EnqueuedJob, _execute_job
+from app.repositories.ai_proposals import InMemoryAIProposalRepository
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
 from app.repositories.captions import InMemoryCaptionRepository, TranscriptRecord
@@ -15,8 +16,11 @@ from app.repositories.uploads import InMemoryUploadRepository, UploadStatus
 from app.schemas.billing import BillingPlanKey, SubscriptionStatus
 from app.schemas.captions import TranscriptStatus, TranscriptWord
 from app.schemas.plans import EditPlan, EditPlanCut, EditPlanStyle, PlanCreateRequest
+from app.services.ai_proposals import build_multimodal_context, request_identity
 from app.services.billing import check_quota
 from app.services.edit_planner import PlannerProviderResult
+from app.services.model_domain_adapters import register_runway_route
+from app.services.model_gateway import ModelGateway, OperationsGatewayTelemetry
 from app.services.operations import OperationsRepository
 from app.services.scale import FixtureRunwayProvider, _generate_broll
 
@@ -320,6 +324,93 @@ def test_runway_retry_resumes_polling_without_calling_provider_again():
     assert res["task_id"] == "fixture-test-prompt"
 
 
+def test_production_legacy_runway_poll_binds_to_gateway_route() -> None:
+    workspace_id = uuid4()
+    project_id = uuid4()
+    scale_repo = InMemoryScaleRepository()
+    operations = OperationsRepository()
+    runway_provider = SpyRunwayProvider()
+    gateway = ModelGateway(
+        adapters={},
+        routes=[],
+        telemetry=OperationsGatewayTelemetry(
+            metrics_registry=None,
+            operations_repository=operations,
+        ),
+    )
+    route = register_runway_route(
+        gateway,
+        provider=runway_provider,
+        model="gen3a_turbo",
+        revision="gen3a_turbo-2024-11-06",
+        fixed_cost_usd=0.5,
+    )
+    record = scale_repo.create(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        kind="generated_broll",
+        name="legacy prompt",
+        status=ScaleResourceStatus.QUEUED,
+        payload={
+            "prompt": "legacy prompt",
+            "duration_s": 5,
+            "runway_task_id": "fixture-legacy-prompt",
+        },
+    )
+
+    result = _generate_broll(
+        record=record,
+        settings=SimpleNamespace(
+            app_env="production",
+            media_work_dir="/var/data/test",
+            upload_storage_bucket="test-bucket",
+        ),
+        broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
+        runway_provider=runway_provider,
+        model_gateway=gateway,
+        runway_gateway_route=route,
+        operations_repository=operations,
+        repository=scale_repo,
+    )
+
+    assert runway_provider.initiate_called_count == 0
+    assert runway_provider.poll_called_count == 1
+    assert result["model_gateway_route_id"] == route.route_id
+    assert result["model_revision"] == route.model_revision
+    assert operations.provider_events[0]["operation"] == "generation.video_poll"
+    persisted = scale_repo.get(resource_id=record.id, workspace_id=workspace_id)
+    assert persisted.payload["model_gateway_submit_state"] == "legacy_route_bound"
+
+
+def test_production_legacy_runway_poll_fails_closed_without_gateway() -> None:
+    runway_provider = SpyRunwayProvider()
+    record = ScaleResourceRecord(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        kind="generated_broll",
+        name="legacy prompt",
+        status=ScaleResourceStatus.QUEUED,
+        payload={
+            "prompt": "legacy prompt",
+            "duration_s": 5,
+            "runway_task_id": "fixture-legacy-prompt",
+        },
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        _generate_broll(
+            record=record,
+            settings=SimpleNamespace(app_env="production"),
+            broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
+            runway_provider=runway_provider,
+        )
+
+    assert exc_info.value.code == "runway_legacy_route_unavailable"
+    assert runway_provider.initiate_called_count == 0
+    assert runway_provider.poll_called_count == 0
+
+
 def test_planner_retry_attempts_cap():
     workspace_id = uuid4()
     project_id = uuid4()
@@ -367,7 +458,7 @@ def test_planner_retry_attempts_cap():
     upload_repo.attach_active_video(project_id=project_id, video_id=upload.id)
 
     caption_repo = InMemoryCaptionRepository(upload_repo)
-    transcript = caption_repo.create_transcript(
+    caption_repo.create_transcript(
         workspace_id=workspace_id,
         project_id=project_id,
         uploaded_video_id=upload.id,
@@ -382,7 +473,24 @@ def test_planner_retry_attempts_cap():
         words=[TranscriptWord(index=0, text="test", start_ms=0, end_ms=1000, confidence=1.0)],
     )
     plan_repo = InMemoryPlanRepository(caption_repo)
+    proposals = InMemoryAIProposalRepository(plan_repository=plan_repo)
+    proposal_context = build_multimodal_context(
+        repository=plan_repo,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        payload=PlanCreateRequest.model_validate_json(plan_request_payload),
+    )
+    proposal, _ = proposals.create_queued(
+        context=proposal_context,
+        request_id=request_identity(
+            context=proposal_context,
+            idempotency_key="planner-retry-attempts-cap",
+        ),
+        created_by=uuid4(),
+        prompt_version="edit-planner-prompt-v2",
+    )
     app_state.plan_repository = plan_repo
+    app_state.proposal_repository = proposals
 
     # Attempt = 0, under max (1), should pass
     job_0 = EnqueuedJob(
@@ -392,12 +500,12 @@ def test_planner_retry_attempts_cap():
         max_attempts=3,
         workspace_id=workspace_id,
         project_id=project_id,
-        resource_id=transcript.id,
+        resource_id=proposal.id,
         render_engine=plan_request_payload,
     )
 
     res_0 = _execute_job(job=job_0, request=request)
-    assert res_0["status"] == "ready"
+    assert res_0["status"] == "awaiting_approval"
 
     # Attempt = 1, >= max (1), should raise ApiError(429)
     job_1 = EnqueuedJob(
@@ -407,7 +515,7 @@ def test_planner_retry_attempts_cap():
         max_attempts=3,
         workspace_id=workspace_id,
         project_id=project_id,
-        resource_id=transcript.id,
+        resource_id=proposal.id,
         render_engine=plan_request_payload,
     )
 

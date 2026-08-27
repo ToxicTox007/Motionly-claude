@@ -5,9 +5,14 @@ from uuid import UUID
 
 from app.api.errors import ApiError
 from app.core.config import get_settings
+from app.core.production import validate_production_settings
 from app.repositories.uploads import SupabaseUploadRepository
 from app.repositories.visual import SupabaseVisualRepository
 from app.services.matte_jobs import run_matte_for_upload
+from app.services.model_domain_adapters import register_matte_route
+from app.services.model_gateway import ModelOperation, validate_gateway_operations
+from app.services.model_gateway_factory import model_gateway_from_settings
+from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider
 
 
@@ -22,6 +27,7 @@ def main() -> None:
 
 def _runner():
     settings = get_settings()
+    validate_production_settings(settings)
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
     upload_repository = SupabaseUploadRepository(
@@ -44,6 +50,29 @@ def _runner():
         )
         provider_models = provider._load_models()
 
+    operations = OperationsRepository(
+        supabase_url=str(settings.supabase_url),
+        service_role_key=settings.supabase_service_role_key,
+    )
+    gateway = model_gateway_from_settings(
+        settings,
+        metrics_registry=MetricsRegistry(),
+        operations_repository=operations,
+    )
+    matte_route = None
+    if gateway is not None and provider_models:
+        matte_route = register_matte_route(
+            gateway,
+            provider_models=provider_models,
+            revision="mediapipe-selfie-segmentation-v1",
+        )
+    if settings.app_env == "production":
+        validate_gateway_operations(
+            gateway,
+            required=(ModelOperation.VISION_MATTE_SEGMENTATION,),
+            runtime="matte worker",
+        )
+
     def execute(payload: dict[str, object]) -> dict[str, object]:
         record = run_matte_for_upload(
             repository=repository,
@@ -55,6 +84,9 @@ def _runner():
             supabase_url=str(settings.supabase_url),
             service_role_key=settings.supabase_service_role_key,
             provider_models=provider_models,
+            model_gateway=gateway,
+            matte_gateway_route=matte_route,
+            production=settings.app_env == "production",
         )
         return {
             "matte_id": str(record.id),

@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.media_uploads import MediaUploadSessionResponse
 from app.schemas.request_body import JsonStringBodyMixin
 
 BROLL_SCHEMA_VERSION = 2
@@ -67,6 +68,11 @@ class StockVideoAssetResponse(BaseModel):
     enrichment_failure_reason: str | None = None
     embedding_model_version: str | None = None
     raw_metadata: dict[str, object] = Field(default_factory=dict)
+    object_reference_id: UUID | None = None
+    media_upload_session_id: UUID | None = None
+    media_state: str | None = None
+    verified_size_bytes: int | None = Field(default=None, gt=0)
+    verified_sha256: str | None = Field(default=None, min_length=64, max_length=64)
     created_at: datetime
 
 
@@ -178,6 +184,7 @@ class UserBrollUploadInitRequest(JsonStringBodyMixin, BaseModel):
     width: int = Field(default=1080, ge=1, le=8192)
     height: int = Field(default=1920, ge=1, le=8192)
     duration_ms: int = Field(default=0, ge=0, le=3_600_000)
+    sha256_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
     @model_validator(mode="before")
     @classmethod
@@ -190,6 +197,13 @@ class UserBrollUploadInitResponse(BaseModel):
     signed_upload_url: str
     upload_headers: dict[str, str]
     expires_in_seconds: int
+    session_id: UUID | None = None
+    part_size_bytes: int | None = None
+
+
+class UserBrollMultipartInitResponse(BaseModel):
+    asset: StockVideoAssetResponse
+    session: MediaUploadSessionResponse
 
 
 class UserBrollUploadCompleteResponse(BaseModel):

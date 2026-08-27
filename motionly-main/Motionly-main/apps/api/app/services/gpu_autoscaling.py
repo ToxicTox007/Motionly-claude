@@ -30,10 +30,6 @@ def policy_from_settings(settings) -> GpuAutoscalingPolicy:
         getattr(settings, "gpu_max_worker_count", 4),
         default=4,
     )
-    lightning_max_replicas = positive_int(
-        getattr(settings, "lightning_max_replicas", gpu_max_worker_count),
-        default=gpu_max_worker_count,
-    )
     return GpuAutoscalingPolicy(
         instance_type=str(getattr(settings, "gpu_worker_instance_type", "g5.xlarge")),
         max_concurrent_jobs_per_gpu=positive_int(
@@ -65,7 +61,7 @@ def policy_from_settings(settings) -> GpuAutoscalingPolicy:
             getattr(settings, "gpu_autoscale_cooldown_seconds", 300),
             default=300,
         ),
-        max_worker_count=min(gpu_max_worker_count, lightning_max_replicas),
+        max_worker_count=gpu_max_worker_count,
         oom_alert_threshold=positive_int(
             getattr(settings, "gpu_oom_alert_threshold", 2),
             default=2,

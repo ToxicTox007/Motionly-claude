@@ -238,6 +238,12 @@ PLATFORM_METADATA: dict[PlatformPreset, dict[str, object]] = {
         "safe_area_top_pct": 0.08,
         "safe_area_bottom_pct": 0.1,
     },
+    PlatformPreset.LINKEDIN: {
+        "aspect_ratio": "4:5",
+        "delivery": "linkedin_feed",
+        "safe_area_top_pct": 0.08,
+        "safe_area_bottom_pct": 0.12,
+    },
     PlatformPreset.X_LANDSCAPE: {
         "aspect_ratio": "16:9",
         "delivery": "x_timeline",

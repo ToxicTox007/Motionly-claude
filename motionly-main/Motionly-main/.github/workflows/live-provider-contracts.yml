@@ -5,9 +5,12 @@ name: Live Provider Contracts
 
 on:
   workflow_dispatch:
-  schedule:
-    # Optional scheduled run: weekly on Sundays at midnight
-    - cron: '0 0 * * 0'
+    inputs:
+      authorize_external_provider_contracts:
+        description: Run approved provider contracts with sandbox-scoped credentials
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,7 +22,14 @@ env:
 
 jobs:
   live-contracts:
+    if: inputs.authorize_external_provider_contracts == true
     runs-on: ubuntu-latest
+    environment: external-provider-verification
+    env:
+      LIVE_PROVIDER_CONTRACTS: "true"
+      EXTERNAL_VERIFICATION_AUTHORIZATION: ${{ secrets.EXTERNAL_VERIFICATION_AUTHORIZATION }}
+      EXTERNAL_VERIFICATION_TARGET: staging-sandbox
+      EXTERNAL_VERIFICATION_RUN_ID: ${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -41,7 +51,6 @@ jobs:
       - name: Run live provider contracts
         run: |
           cd apps/api
-          LIVE_PROVIDER_CONTRACTS=true \
           OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" \
           GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}" \
           RUNWAY_API_KEY="${{ secrets.RUNWAY_API_KEY }}" \

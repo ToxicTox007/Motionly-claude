@@ -66,6 +66,9 @@ export function AudioTab({
   const [includeMusic, setIncludeMusic] = useState(
     initialSelection ? Boolean(initialSelection.music_track_id) : true,
   );
+  const [rightsDecision, setRightsDecision] = useState(
+    Boolean(initialSelection?.rights_confirmed),
+  );
   const [mood, setMood] = useState(initialMood);
   const [tracks, setTracks] = useState<MusicTrackSummary[]>([]);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(
@@ -163,7 +166,7 @@ export function AudioTab({
           sfx_intensity: nextInclude ? Math.max(0.05, sfxIntensity / 100) : 0,
           mood: nextMood,
           include_music: nextInclude,
-          rights_confirmed: true,
+          rights_decision: nextInclude ? rightsDecision : false,
           force: nextTrackId ? false : nextMood !== mood,
         },
       });
@@ -234,6 +237,18 @@ export function AudioTab({
               className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary cursor-pointer"
             />
           </label>
+          <label className="mt-3 flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded border-2 border-foreground bg-muted/20 px-3.5 text-xs font-bold select-none">
+            <span>Use this licensed catalog track for this export</span>
+            <input
+              type="checkbox"
+              aria-label="Acknowledge licensed music terms"
+              checked={rightsDecision}
+              onChange={(event) => setRightsDecision(event.target.checked)}
+              disabled={!includeMusic || loading}
+              className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary cursor-pointer disabled:cursor-not-allowed"
+            />
+          </label>
+          <p className="text-xs text-muted-foreground">Music is used only after Motionly verifies the catalog grant, scope, and expiry on the server.</p>
         </PanelSection>
 
         <PanelSection title="Mix" defaultOpen>

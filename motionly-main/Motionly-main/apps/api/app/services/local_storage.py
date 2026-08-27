@@ -1,12 +1,21 @@
+import hashlib
 import os
 import shutil
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote
 
 import httpx
 
 from app.api.errors import ApiError
+
+
+@dataclass(frozen=True)
+class ObjectMetadata:
+    size_bytes: int
+    sha256: str | None = None
+    etag: str | None = None
 
 
 class LocalObjectStorage:
@@ -34,6 +43,20 @@ class LocalObjectStorage:
             raise ApiError(404, "storage_object_missing", "Uploaded video was not found.")
         target.touch(exist_ok=True)
         return target
+
+    def inspect_object(
+        self,
+        *,
+        bucket: str,
+        path: str,
+        compute_sha256: bool = False,
+    ) -> ObjectMetadata:
+        target = self.ensure_object(bucket=bucket, path=path)
+        digest = _sha256_file(target) if compute_sha256 else None
+        return ObjectMetadata(size_bytes=target.stat().st_size, sha256=digest)
+
+    def delete_object(self, *, bucket: str, path: str) -> None:
+        self.object_path(bucket=bucket, path=path).unlink(missing_ok=True)
 
     def evict_cache(self, *, max_bytes: int, max_age_seconds: int) -> dict[str, int]:
         """Evict oldest cached files until both age and size bounds are satisfied."""
@@ -119,6 +142,76 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
         os.replace(temporary, target)
         return target
 
+    def inspect_object(
+        self,
+        *,
+        bucket: str,
+        path: str,
+        compute_sha256: bool = False,
+    ) -> ObjectMetadata:
+        encoded_path = quote(path, safe="/")
+        url = f"{self.supabase_url}/storage/v1/object/{bucket}/{encoded_path}"
+        response = httpx.head(url, headers=self._storage_headers(), timeout=30)
+        if response.status_code == 404:
+            raise ApiError(404, "storage_object_missing", "Uploaded video was not found.")
+        if response.status_code >= 400:
+            raise ApiError(
+                502,
+                "storage_inspection_failed",
+                "Uploaded object could not be verified.",
+            )
+        try:
+            size_bytes = int(response.headers["content-length"])
+        except (KeyError, ValueError) as exc:
+            raise ApiError(
+                502,
+                "storage_inspection_failed",
+                "Uploaded object size was unavailable.",
+            ) from exc
+        digest = None
+        if compute_sha256:
+            hasher = hashlib.sha256()
+            streamed_size = 0
+            with httpx.stream(
+                "GET",
+                url,
+                headers=self._storage_headers(),
+                timeout=180,
+            ) as stream_response:
+                if stream_response.status_code >= 400:
+                    raise ApiError(
+                        502,
+                        "storage_inspection_failed",
+                        "Uploaded object could not be hashed.",
+                    )
+                for chunk in stream_response.iter_bytes(chunk_size=1024 * 1024):
+                    streamed_size += len(chunk)
+                    hasher.update(chunk)
+            if streamed_size != size_bytes:
+                raise ApiError(
+                    502,
+                    "storage_inspection_failed",
+                    "Uploaded object changed while it was being verified.",
+                )
+            digest = hasher.hexdigest()
+        return ObjectMetadata(
+            size_bytes=size_bytes,
+            sha256=digest,
+            etag=response.headers.get("etag"),
+        )
+
+    def delete_object(self, *, bucket: str, path: str) -> None:
+        response = httpx.request(
+            "DELETE",
+            f"{self.supabase_url}/storage/v1/object/{bucket}",
+            headers={**self._storage_headers(), "content-type": "application/json"},
+            json={"prefixes": [path]},
+            timeout=30,
+        )
+        if response.status_code >= 400 and response.status_code != 404:
+            raise ApiError(502, "storage_delete_failed", "Uploaded object could not be deleted.")
+        super().delete_object(bucket=bucket, path=path)
+
     def upload_file(
         self,
         *,
@@ -185,3 +278,11 @@ def _file_chunks(path: Path, *, chunk_size: int = 1024 * 1024):
     with path.open("rb") as source:
         while chunk := source.read(chunk_size):
             yield chunk
+
+
+def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(chunk_size):
+            hasher.update(chunk)
+    return hasher.hexdigest()

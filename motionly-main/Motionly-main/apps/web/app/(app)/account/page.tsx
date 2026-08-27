@@ -1,5 +1,6 @@
 import { Briefcase, KeyRound, Mail, UserRound } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import { EditorialLearningSettings } from "@/components/editorial-learning-settings";
 import { Button } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
 import { createClient } from "@/lib/supabase/server";
@@ -24,6 +25,7 @@ export default async function AccountPage({
   let role = "";
   let workspaceName = "Personal workspace";
   let workspaceRole = "owner";
+  let workspaceId = "00000000-0000-4000-8000-000000000002";
 
   if (process.env.SKIP_AUTH_MIDDLEWARE !== "true") {
     const supabase = await createClient();
@@ -44,7 +46,7 @@ export default async function AccountPage({
 
       const { data: membership } = await supabase
         .from("workspace_members")
-        .select("role,workspaces(name)")
+        .select("workspace_id,role,workspaces(name)")
         .eq("user_id", user.id)
         .eq("status", "active")
         .limit(1)
@@ -55,6 +57,7 @@ export default async function AccountPage({
         : membership?.workspaces;
       workspaceName = workspace?.name ?? workspaceName;
       workspaceRole = membership?.role ?? workspaceRole;
+      workspaceId = membership?.workspace_id ?? workspaceId;
     }
   }
 
@@ -196,6 +199,8 @@ export default async function AccountPage({
             Update password
           </Button>
         </form>
+
+        <EditorialLearningSettings workspaceId={workspaceId} />
       </div>
     </AppShell>
   );

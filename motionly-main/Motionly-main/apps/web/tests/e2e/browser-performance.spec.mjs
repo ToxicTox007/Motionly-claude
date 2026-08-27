@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 
 const runBrowserPerf = process.env.RUN_BROWSER_PERF === "1";
+const enforce = process.env.PERF_ENFORCE === "1";
 const allowRedirects = process.env.ALLOW_BROWSER_PERF_REDIRECTS === "1";
 const projectId = process.env.PERF_PROJECT_ID || "00000000-0000-4000-8000-000000000001";
 const outputPath =
@@ -34,7 +35,16 @@ test.describe("browser performance surfaces", () => {
     await mkdir(outputPath.split("/").slice(0, -1).join("/") || ".", { recursive: true });
     await writeFile(
       outputPath,
-      `${JSON.stringify({ thresholds, samples }, null, 2)}\n`,
+      `${JSON.stringify({
+        schema_version: 1,
+        mode: enforce ? "enforce" : "observe",
+        revision: process.env.DEPLOYMENT_REVISION || "unversioned",
+        environment: process.env.APP_ENV || "local",
+        browser: process.env.BROWSER || "chromium",
+        thresholds,
+        sample_count: samples.length,
+        samples,
+      }, null, 2)}\n`,
       "utf8",
     );
   });

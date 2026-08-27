@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.media_uploads import MediaUploadSessionResponse
 from app.schemas.plans import BrollDensity, EditPlanStyle
 
 
@@ -58,7 +59,8 @@ class StyleProfileCreateRequest(BaseModel):
 class StyleReferenceInitRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     mime_type: str = Field(pattern="^video/")
-    file_size_bytes: int = Field(gt=0)
+    file_size_bytes: int = Field(gt=0, le=536_870_912)
+    sha256_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class StyleReferenceInitResponse(BaseModel):
@@ -67,6 +69,14 @@ class StyleReferenceInitResponse(BaseModel):
     signed_upload_url: str
     upload_headers: dict[str, str]
     expires_in_seconds: int
+    session_id: UUID | None = None
+    part_size_bytes: int | None = None
+
+
+class StyleReferenceMultipartInitResponse(BaseModel):
+    profile: ScaleResourceResponse
+    reference_id: UUID
+    session: MediaUploadSessionResponse
 
 
 class StyleReferenceCompleteRequest(BaseModel):
@@ -228,3 +238,84 @@ class AudioIntelligence(BaseModel):
 class AudioIntelligenceResponse(BaseModel):
     project_id: UUID
     audio_intelligence: AudioIntelligence
+
+
+class BrandKitAsset(BaseModel):
+    """A reusable public or workspace media reference used by a Brand Kit."""
+
+    label: str = Field(min_length=1, max_length=120)
+    asset_url: str = Field(min_length=1, max_length=4000)
+    alt_text: str = Field(default="", max_length=240)
+
+
+class BrandKitToneRules(BaseModel):
+    voice: str = Field(default="", max_length=500)
+    do_rules: list[str] = Field(default_factory=list, max_length=12)
+    avoid_rules: list[str] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def bound_rule_lengths(self) -> "BrandKitToneRules":
+        self.do_rules = [rule.strip() for rule in self.do_rules if rule.strip()][:12]
+        self.avoid_rules = [rule.strip() for rule in self.avoid_rules if rule.strip()][:12]
+        if any(len(rule) > 240 for rule in [*self.do_rules, *self.avoid_rules]):
+            raise ValueError("Brand tone rules must be 240 characters or fewer.")
+        return self
+
+
+class BrandKitExportPreset(BaseModel):
+    platform: str = Field(
+        default="instagram",
+        pattern="^(instagram|tiktok|shorts|youtube_landscape|instagram_post|x_landscape|custom)$",
+    )
+    resolution: str = Field(default="1080p", pattern="^(720p|1080p|4k)$")
+    output_aspect: str = Field(default="9:16", pattern="^(9:16|original|1:1|4:5|16:9)$")
+    fit_mode: str = Field(default="fill", pattern="^(fill|fit|custom)$")
+    include_captions: bool = True
+
+
+class BrandKitSettings(BaseModel):
+    colors: list[str] = Field(default_factory=list, max_length=6)
+    font_family: str = Field(default="Inter", min_length=1, max_length=120)
+    caption_settings: dict[str, Any] = Field(default_factory=dict)
+    effects_settings: dict[str, Any] = Field(default_factory=dict)
+    style_profile_id: UUID | None = None
+    saved_template_id: UUID | None = None
+    creator_template: str | None = Field(
+        default=None,
+        pattern="^(luxury_reel_v1|podcast_reel_v1|talking_head_reel_v1|product_promo_reel_v1|travel_reel_v1|founder_reel_v1|fashion_reel_v1)$",
+    )
+    intro_asset: BrandKitAsset | None = None
+    outro_asset: BrandKitAsset | None = None
+    logo_asset: BrandKitAsset | None = None
+    watermark_asset: BrandKitAsset | None = None
+    tone_rules: BrandKitToneRules = Field(default_factory=BrandKitToneRules)
+    default_export: BrandKitExportPreset = Field(default_factory=BrandKitExportPreset)
+
+    @model_validator(mode="after")
+    def valid_colors(self) -> "BrandKitSettings":
+        normalized = []
+        for color in self.colors:
+            value = color.strip()
+            if not value:
+                continue
+            if (
+                len(value) != 7
+                or value[0] != "#"
+                or any(character not in "0123456789abcdefABCDEF" for character in value[1:])
+            ):
+                raise ValueError("Brand colors must use #RRGGBB hex values.")
+            if value.lower() not in {item.lower() for item in normalized}:
+                normalized.append(value)
+        self.colors = normalized
+        return self
+
+
+class BrandKitCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    settings: BrandKitSettings
+
+
+class BrandKitUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    settings: BrandKitSettings | None = None
+    expected_revision: int | None = Field(default=None, ge=1)

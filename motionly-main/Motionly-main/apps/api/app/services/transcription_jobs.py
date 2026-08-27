@@ -11,6 +11,7 @@ from app.services.provider_resilience import ProviderCallFailure, classify_provi
 from app.services.queue import TranscriptionQueue
 from app.services.transcript_quality import assess_transcript_quality
 from app.services.transcription_provider import FixtureTranscriptionProvider, TranscriptionProvider
+from app.services.worker_media import materialize_upload_source
 
 
 def queue_transcription_for_upload(
@@ -84,6 +85,7 @@ def run_transcription_for_upload(
     caption_repository: InMemoryCaptionRepository,
     transcription_provider: TranscriptionProvider,
     audio_ml_providers: dict[str, object] | None = None,
+    audio_intelligence_provider: object | None = None,
     workspace_id: UUID,
     project_id: UUID,
     video_id: UUID,
@@ -162,26 +164,47 @@ def run_transcription_for_upload(
                 supabase_url=supabase_url,
                 service_role_key=service_role_key,
             )
-            source_path = storage.ensure_object(
-                bucket=upload.storage_bucket,
-                path=upload.storage_path,
+            source_path = materialize_upload_source(
+                upload=upload,
+                storage=storage,
             )
             audio_path = source_path.with_suffix(".transcription.wav")
             extractor.extract_mono_wav(source_path=source_path, output_path=audio_path)
             stage = "transcription"
 
-        result = transcription_provider.transcribe(
-            audio_path=audio_path,
-            language_hint=transcript.language_hint,
+        contextual_transcribe = getattr(
+            transcription_provider,
+            "transcribe_with_context",
+            None,
         )
+        if callable(contextual_transcribe):
+            result = contextual_transcribe(
+                audio_path=audio_path,
+                language_hint=transcript.language_hint,
+                workspace_id=workspace_id,
+                project_id=project_id,
+            )
+        else:
+            result = transcription_provider.transcribe(
+                audio_path=audio_path,
+                language_hint=transcript.language_hint,
+            )
         raw_payload = merge_audio_intelligence(
             raw_payload=result.raw_payload,
             words=result.words,
             duration_ms=upload.metadata.duration_ms,
             has_audio=upload.metadata.has_audio,
-            ml_insights=_run_audio_ml_providers(
-                providers=audio_ml_providers,
-                audio_path=audio_path,
+            ml_insights=(
+                audio_intelligence_provider.analyze_with_context(
+                    audio_path=audio_path,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                )
+                if audio_intelligence_provider is not None and audio_path is not None
+                else _run_audio_ml_providers(
+                    providers=audio_ml_providers,
+                    audio_path=audio_path,
+                )
             ),
         )
         quality = assess_transcript_quality(

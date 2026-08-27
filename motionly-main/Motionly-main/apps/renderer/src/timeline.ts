@@ -1,7 +1,18 @@
+import {
+  normalizeSourceClips,
+  outputMsToSourceMs,
+  outputTimelineDurationMs,
+  resolveSourceClipAtOutputMs,
+} from "@motionly/shared/timeline-eval.mjs";
+
 import type { MotionlyRenderProps, SourceTimelineClip } from "./types.js";
 
+// The renderer consumes the single canonical source-timeline evaluator from
+// @motionly/shared so exported frames map to source time identically to the
+// browser preview. This module only adapts render props into the clip list.
+
 export function sourceTimelineClips(input: MotionlyRenderProps): SourceTimelineClip[] {
-  const explicit = normalizeClips(input.timeline?.clips ?? []);
+  const explicit = normalizeSourceClips(input.timeline?.clips ?? []);
   if (explicit.length) return explicit;
 
   const cuts = input.editPlan.cuts.map((cut, index) => ({
@@ -12,7 +23,7 @@ export function sourceTimelineClips(input: MotionlyRenderProps): SourceTimelineC
     output_end_ms: 0,
     reason: cut.reason,
   }));
-  const normalizedCuts = normalizeClips(cuts);
+  const normalizedCuts = normalizeSourceClips(cuts);
   if (normalizedCuts.length) return normalizedCuts;
 
   return [
@@ -28,8 +39,7 @@ export function sourceTimelineClips(input: MotionlyRenderProps): SourceTimelineC
 }
 
 export function outputDurationMs(input: MotionlyRenderProps): number {
-  const clips = sourceTimelineClips(input);
-  return clips[clips.length - 1]?.output_end_ms ?? 1;
+  return outputTimelineDurationMs(sourceTimelineClips(input));
 }
 
 export function outputTimeToSourceTime(
@@ -37,35 +47,6 @@ export function outputTimeToSourceTime(
   outputTimeMs: number,
 ): { clip: SourceTimelineClip; sourceTimeMs: number } {
   const clips = sourceTimelineClips(input);
-  const clip =
-    clips.find(
-      (candidate) =>
-        outputTimeMs >= candidate.output_start_ms &&
-        outputTimeMs < candidate.output_end_ms,
-    ) ?? clips[clips.length - 1];
-  const localTime = Math.max(
-    0,
-    Math.min(
-      clip.output_end_ms - clip.output_start_ms,
-      outputTimeMs - clip.output_start_ms,
-    ),
-  );
-  return { clip, sourceTimeMs: clip.source_start_ms + localTime };
-}
-
-function normalizeClips(clips: SourceTimelineClip[]): SourceTimelineClip[] {
-  let outputCursor = 0;
-  return [...clips]
-    .filter((clip) => clip.source_end_ms > clip.source_start_ms)
-    .sort((left, right) => left.output_start_ms - right.output_start_ms)
-    .map((clip) => {
-      const durationMs = clip.source_end_ms - clip.source_start_ms;
-      const normalized = {
-        ...clip,
-        output_start_ms: outputCursor,
-        output_end_ms: outputCursor + durationMs,
-      };
-      outputCursor += durationMs;
-      return normalized;
-    });
+  const clip = resolveSourceClipAtOutputMs(outputTimeMs, clips) ?? clips[clips.length - 1];
+  return { clip, sourceTimeMs: outputMsToSourceMs(outputTimeMs, clips) };
 }

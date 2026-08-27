@@ -5,10 +5,11 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("editor-layout.tsx implements responsive shells and sheets correctly", async () => {
-  const source = await readFile(
-    new URL("components/editor-layout.tsx", root),
-    "utf8",
-  );
+  const [layoutSource, workspaceSource] = await Promise.all([
+    readFile(new URL("components/editor-layout.tsx", root), "utf8"),
+    readFile(new URL("components/editor/layout/EditorWorkspaces.tsx", root), "utf8"),
+  ]);
+  const source = `${layoutSource}\n${workspaceSource}`;
 
   // Verify imports
   assert.match(source, /import.*useFocusTrap.*from.*@\/lib\/useFocusTrap/);
@@ -16,7 +17,7 @@ test("editor-layout.tsx implements responsive shells and sheets correctly", asyn
 
   // Verify mobile responsive shell visibility classes
   assert.match(source, /lg:hidden/);
-  assert.match(source, /hidden lg:grid/);
+  assert.match(source, /hidden[^\"]*lg:grid/);
 
   // Verify mobile tab bar button labels
   assert.match(source, /Preview/);
@@ -26,32 +27,25 @@ test("editor-layout.tsx implements responsive shells and sheets correctly", asyn
   // Verify slide-out drawers
   assert.match(source, /activeSheet === "left"/);
   assert.match(source, /activeSheet === "right"/);
-  assert.match(source, /Element Palette/);
-  assert.match(source, /Editor Settings/);
+  assert.match(source, /Element palette/i);
+  assert.match(source, /Editor settings/i);
 });
 
 test("editor-layout.tsx implements accessible drawers with focus traps", async () => {
-  const source = await readFile(
-    new URL("components/editor-layout.tsx", root),
-    "utf8",
-  );
+  const [layoutSource, workspaceSource] = await Promise.all([
+    readFile(new URL("components/editor-layout.tsx", root), "utf8"),
+    readFile(new URL("components/editor/layout/EditorWorkspaces.tsx", root), "utf8"),
+  ]);
+  const source = `${layoutSource}\n${workspaceSource}`;
 
-  // Verify focus trap bindings on drawers
-  assert.match(source, /ref=\{leftTrapRef\}/);
-  assert.match(source, /ref=\{rightTrapRef\}/);
+  // Verify both focus traps are passed into the shared accessible drawer.
+  assert.match(source, /panelRef=\{leftTrapRef\}/);
+  assert.match(source, /panelRef=\{rightTrapRef\}/);
+  assert.match(source, /ref=\{panelRef\}/);
 
-  // Verify ARIA dialog declarations on drawers
   const dialogMatches = source.match(/role="dialog"/g);
-  assert.equal(
-    dialogMatches?.length,
-    2,
-    "Both left and right overlay sheets should have dialog roles",
-  );
+  assert.equal(dialogMatches?.length, 1, "The shared drawer should declare a dialog role");
 
   const modalMatches = source.match(/aria-modal="true"/g);
-  assert.equal(
-    modalMatches?.length,
-    2,
-    "Both overlay sheets should have aria-modal set to true",
-  );
+  assert.equal(modalMatches?.length, 1, "The shared drawer should be modal");
 });

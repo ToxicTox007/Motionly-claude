@@ -4,6 +4,13 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_staging_canary:
+        description: Run the protected staging-sandbox deployment and canary verification
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,11 +43,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
       - name: Install locked dependencies
         run: |
           pnpm install --frozen-lockfile
-          python -m pip install --disable-pip-version-check './apps/api[dev]'
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
       - name: Verify generated FastAPI contract
         run: pnpm contracts:check
       - name: Lint and typecheck
@@ -57,6 +66,23 @@ jobs:
       - name: Enforce forward-only migrations
         run: bash scripts/check_forward_migrations.sh origin/main
 
+  performance-harness-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify performance and canary contracts without live infrastructure
+        run: |
+          node --test scripts/perf/*.test.mjs
+          pnpm --filter @motionly/web exec node --test tests/performance-harness.test.mjs
+
   empty-database-and-repositories:
     runs-on: ubuntu-latest
     steps:
@@ -72,13 +98,15 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
       - uses: supabase/setup-cli@v1
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
       - run: |
           pnpm install --frozen-lockfile
-          python -m pip install --disable-pip-version-check './apps/api[dev]'
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
       - name: Apply all migrations to an empty database
         run: |
           supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
@@ -117,13 +145,15 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
       - name: Verify FFmpeg golden and 512 MiB streaming ceiling
         working-directory: apps/api
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          python -m pip install --disable-pip-version-check '.[dev]'
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements-dev.lock
           APP_ENV=test python -m pytest -q tests/test_golden_media_pipeline.py tests/test_phase8_integrity.py::test_512_mib_upload_is_streamed_with_bounded_python_memory
 
   redis-contracts:
@@ -146,12 +176,27 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
+      - run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
       - name: Verify Redis retry, failure, and idempotency
         env:
           RUN_REDIS_CONTRACTS: "true"
           REDIS_URL: redis://127.0.0.1:6379/15
         run: pnpm --filter @motionly/worker test
+      - name: Verify gateway budgets, leases, and circuits across processes
+        working-directory: apps/api
+        env:
+          RUN_REDIS_CONTRACTS: "true"
+          REDIS_URL: redis://127.0.0.1:6379/14
+        run: python -m pytest -q tests/test_model_gateway_redis.py
 
   browser-creator-journey:
     runs-on: ubuntu-latest
@@ -168,14 +213,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
       - uses: supabase/setup-cli@v1
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
       - name: Install browser-test dependencies
         run: |
           pnpm install --frozen-lockfile
-          python -m pip install --disable-pip-version-check './apps/api[dev]'
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
           pnpm --filter @motionly/web exec playwright install --with-deps chromium
           sudo apt-get update
           sudo apt-get install -y ffmpeg
@@ -248,11 +295,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Scan Python dependencies
-        working-directory: apps/api
-        run: |
-          python -m pip install --disable-pip-version-check pip-audit .
-          python -m pip_audit .
+      - name: Scan hash-locked Python dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: -r apps/api/requirements.lock
 
   phase-10-prelaunch:
     runs-on: ubuntu-latest
@@ -269,7 +315,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/api/pyproject.toml
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
       - uses: supabase/setup-cli@v1
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
@@ -278,7 +326,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client
           pnpm install --frozen-lockfile
-          python -m pip install --disable-pip-version-check './apps/api[dev]'
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
       - name: Verify documented launch evidence
         run: node scripts/verify_prelaunch_evidence.mjs
       - name: Run Phase 10 pre-launch contracts
@@ -291,12 +339,14 @@ jobs:
           eval "$(supabase status -o env)"
           psql "$DB_URL" --command "drop database if exists motionly_restore;"
           psql "$DB_URL" --command "create database motionly_restore;"
-          bash scripts/verify_backup_restore.sh "$DB_URL" "postgresql://postgres:postgres@127.0.0.1:54322/motionly_restore"
+          psql "$DB_URL" --set ON_ERROR_STOP=1 --file scripts/backup_restore_seed.sql
+          MOTIONLY_BACKUP_RESTORE_ACK=restore-target bash scripts/verify_backup_restore.sh "$DB_URL" "postgresql://postgres:postgres@127.0.0.1:54322/motionly_restore"
 
   staging-canary:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_staging_canary == true
     needs:
       - quality-and-contracts
+      - performance-harness-contracts
       - empty-database-and-repositories
       - media-goldens
       - redis-contracts
@@ -305,16 +355,34 @@ jobs:
       - secret-and-dependency-scans
       - phase-10-prelaunch
     runs-on: ubuntu-latest
-    environment: staging
+    environment: external-provider-verification
     env:
       DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
       STAGING_DEPLOY_HOOK: ${{ secrets.STAGING_DEPLOY_HOOK }}
       STAGING_HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
       STAGING_PROVIDER_CONTRACT_URL: ${{ secrets.STAGING_PROVIDER_CONTRACT_URL }}
       CANARY_PROMOTE_HOOK: ${{ secrets.CANARY_PROMOTE_HOOK }}
+      CANARY_ROLLBACK_HOOK: ${{ secrets.CANARY_ROLLBACK_HOOK }}
       CANARY_METRICS_URL: ${{ secrets.CANARY_METRICS_URL }}
+      EXTERNAL_VERIFICATION_AUTHORIZATION: ${{ secrets.EXTERNAL_VERIFICATION_AUTHORIZATION }}
+      EXTERNAL_VERIFICATION_TARGET: staging-sandbox
+      EXTERNAL_VERIFICATION_RUN_ID: ${{ github.run_id }}
+      EXTERNAL_VERIFICATION_ALLOWED_HOSTS: ${{ secrets.EXTERNAL_VERIFICATION_ALLOWED_HOSTS }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Authorize staging-sandbox verification endpoints
+        run: >-
+          node scripts/external-verification-gate.mjs
+          --evidence-dir test-results/external-verification
+          --endpoint "$STAGING_DEPLOY_HOOK"
+          --endpoint "$STAGING_HEALTH_URL"
+          --endpoint "$STAGING_PROVIDER_CONTRACT_URL"
+          --endpoint "$CANARY_PROMOTE_HOOK"
+          --endpoint "$CANARY_ROLLBACK_HOOK"
+          --endpoint "$CANARY_METRICS_URL"
       - name: Deploy immutable revision with forward-only migrations
         run: |
           : "${DEPLOY_TOKEN:?missing staging deploy token}"
@@ -334,19 +402,18 @@ jobs:
             --header "content-type: application/json" \
             --data "{\"revision\":\"$GITHUB_SHA\",\"mode\":\"sandbox\"}" \
             "$STAGING_PROVIDER_CONTRACT_URL"
-      - name: Promote and monitor five-percent canary
-        run: |
-          : "${CANARY_PROMOTE_HOOK:?missing canary promotion hook}"
-          : "${CANARY_METRICS_URL:?missing canary metrics URL}"
-          curl --fail --silent --show-error --request POST \
-            --header "authorization: Bearer $DEPLOY_TOKEN" \
-            --header "content-type: application/json" \
-            --data "{\"revision\":\"$GITHUB_SHA\",\"traffic_percent\":5}" \
-            "$CANARY_PROMOTE_HOOK"
-          for attempt in {1..10}; do
-            payload="$(curl --fail --silent --show-error "$CANARY_METRICS_URL?revision=$GITHUB_SHA")"
-            if jq -e '.healthy == true and (.error_rate // 1) < 0.01' <<<"$payload" >/dev/null; then exit 0; fi
-            sleep 30
-          done
-          echo "Canary failed its health gate; keep the schema and ship a forward fix." >&2
-          exit 1
+      - name: Progressively promote, enforce SLOs, and roll back failures
+        run: >-
+          node scripts/canary-gate.mjs
+          --contract scripts/perf/slo-contract.json
+          --evidence-dir test-results/canary
+          --revision "$GITHUB_SHA"
+      - name: Upload canary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-canary-${{ github.sha }}
+          path: |
+            test-results/external-verification/
+            test-results/canary/
+          if-no-files-found: warn

@@ -43,7 +43,7 @@ from app.services.effects import (
     render_time_impact,
 )
 from app.services.matte_jobs import enqueue_matte_for_upload
-from app.services.music import MusicTrackCandidate
+from app.services.music import MusicTrackCandidate, catalog_rights_snapshot, rights_fingerprint
 from app.services.regeneration import (
     affected_layers_for_request,
     build_regeneration_cache_key,
@@ -57,7 +57,7 @@ from app.services.stock_video import (
     build_stock_asset_raw_metadata,
     candidate_shot_type,
     desired_requests,
-    enrich_stock_asset,
+    enqueue_stock_asset_enrichment,
     ensure_owned_stock_asset,
     keyword_query,
     latency_ms_since,
@@ -75,7 +75,9 @@ def execute_broll_generation(
     billing_repository,
     providers: list[StockVideoProvider],
     storage_signer: StorageSigner,
+    stock_asset_enrichment_queue,
     settings,
+    embedding_provider=None,
     workspace_id: UUID,
     project_id: UUID,
     user_id: UUID | None,
@@ -124,11 +126,24 @@ def execute_broll_generation(
             "The active edit plan has no B-roll that can be placed safely.",
         )
 
+    preferred_embedding_revision = getattr(
+        embedding_provider,
+        "preferred_model_revision",
+        None,
+    )
+    embedding_cache_version = getattr(
+        embedding_provider,
+        "cache_version",
+        getattr(settings, "visual_clip_model", "openai/clip-vit-base-patch32"),
+    )
     cache_key = build_broll_cache_key(
         edit_plan_id=plan.id,
         density=payload.density,
         schema_version=BROLL_SCHEMA_VERSION,
-        semantic_context=visual_manifest_cache_signature(visual_manifest),
+        semantic_context={
+            "visual": visual_manifest_cache_signature(visual_manifest),
+            "embedding_routes": embedding_cache_version,
+        },
     )
     if not payload.force:
         cached = repository.find_cached_slots(
@@ -136,6 +151,8 @@ def execute_broll_generation(
             workspace_id=workspace_id,
             cache_key=cache_key,
         )
+        if cached and any(bool(slot.metadata.get("embedding_fallback_used")) for slot in cached):
+            cached = []
         if cached:
             for slot in cached:
                 if slot.selected_asset_id:
@@ -162,13 +179,27 @@ def execute_broll_generation(
     slots: list[dict[str, object]] = []
     for broll_request in requests:
         query = keyword_query(broll_request, plan.style.value)
+        used_gateway_embedding = not bool(broll_request.semantic_embedding)
         slot_embedding = (
             broll_request.semantic_embedding
             if broll_request.semantic_embedding
             else query_embedding(
                 semantic_query=broll_request.semantic_query or query,
                 clip_model_name=clip_model_name,
+                embedding_provider=embedding_provider,
+                workspace_id=workspace_id,
+                project_id=project_id,
             )
+        )
+        selected_embedding_revision = getattr(
+            embedding_provider,
+            "model_version",
+            clip_model_name,
+        )
+        embedding_fallback_used = bool(
+            used_gateway_embedding
+            and preferred_embedding_revision
+            and selected_embedding_revision != preferred_embedding_revision
         )
         slot_duration_ms = broll_request.end_ms - broll_request.start_ms
         ranked_assets = []
@@ -232,9 +263,9 @@ def execute_broll_generation(
                         },
                     },
                 )
-                asset = enrich_stock_asset(
+                enqueue_stock_asset_enrichment(
+                    queue=stock_asset_enrichment_queue,
                     asset=asset,
-                    repository=repository,
                     clip_model_name=clip_model_name,
                 )
                 candidate = StockVideoCandidate(
@@ -310,11 +341,7 @@ def execute_broll_generation(
             selected_embedding = selected.raw_metadata.get("embedding")
             if isinstance(selected_embedding, list):
                 adjacent_embeddings.append(
-                    [
-                        float(value)
-                        for value in selected_embedding
-                        if isinstance(value, (int, float))
-                    ]
+                    [float(value) for value in selected_embedding if isinstance(value, int | float)]
                 )
         if selected_shot_type:
             used_shot_types.add(selected_shot_type)
@@ -367,6 +394,8 @@ def execute_broll_generation(
                     "validation_errors": (
                         selected_score.reasons if selected_score else ["no_candidate"]
                     ),
+                    "embedding_model_revision": selected_embedding_revision,
+                    "embedding_fallback_used": embedding_fallback_used,
                 },
             }
         )
@@ -458,12 +487,40 @@ def execute_music_selection(
             raw_metadata={**candidate.raw_metadata, "mood": mood},
         )
 
-    cache_key = build_music_cache_key(
-        edit_plan_id=plan.id,
-        mood=mood,
-        music_volume=music_volume,
-        sfx_intensity=sfx_intensity,
-        track_id=payload.music_track_id,
+    if not payload.include_music:
+        rights_snapshot: dict[str, object] = {
+            "status": "not_applicable",
+            "verified": True,
+            "verified_at": None,
+        }
+    elif track is not None:
+        rights_snapshot = catalog_rights_snapshot(
+            track,
+            acknowledged=payload.rights_decision,
+        )
+        settings = getattr(getattr(request, "app", None), "state", None)
+        app_env = getattr(getattr(settings, "settings", None), "app_env", "test")
+        if app_env == "production" and not rights_snapshot["verified"]:
+            raise ApiError(
+                409,
+                "music_rights_unverified",
+                (
+                    "Select a currently cleared licensed catalog track and "
+                    "acknowledge its usage terms."
+                ),
+            )
+    else:
+        rights_snapshot = {"status": "unverified", "verified": False}
+
+    cache_key = (
+        build_music_cache_key(
+            edit_plan_id=plan.id,
+            mood=mood,
+            music_volume=music_volume,
+            sfx_intensity=sfx_intensity,
+            track_id=payload.music_track_id,
+        )
+        + f":rights:{rights_fingerprint(rights_snapshot)}"
     )
     if not payload.force:
         cached = repository.find_cached_selection(
@@ -471,7 +528,7 @@ def execute_music_selection(
             workspace_id=workspace_id,
             cache_key=cache_key,
         )
-        if cached:
+        if cached and bool(cached.rights_snapshot.get("verified")):
             return {"selection_id": str(cached.id), "cached": True}
 
     plan_duration_ms = (
@@ -490,7 +547,8 @@ def execute_music_selection(
         music_track_id=track.id if track else None,
         music_volume=music_volume,
         sfx_intensity=sfx_intensity,
-        rights_confirmed=payload.rights_confirmed,
+        rights_confirmed=False,
+        rights_snapshot=rights_snapshot,
         cache_key=cache_key,
         regions=regions,
     )
@@ -747,6 +805,7 @@ def execute_caption_generation(
     *,
     repository: InMemoryCaptionRepository,
     settings,
+    model_gateway=None,
     workspace_id: UUID,
     project_id: UUID,
     payload: CaptionGenerateRequest,
@@ -792,11 +851,17 @@ def execute_caption_generation(
         segments=segments,
         source_language=transcript.language,
         output_language=payload.output_language,
-        settings=settings,
+        model_gateway=model_gateway,
+        workspace_id=workspace_id,
+        project_id=project_id,
     )
     if not segments:
         raise ApiError(422, "caption_segments_empty", "No captionable words were found.")
 
+    output_language = (payload.output_language or "original").strip().lower()
+    target_language = (
+        transcript.language if output_language in {"", "original", "auto"} else output_language
+    )
     track = repository.create_caption_track(
         workspace_id=workspace_id,
         project_id=project_id,
@@ -805,6 +870,8 @@ def execute_caption_generation(
         schema_version=CAPTION_SCHEMA_VERSION,
         style=preset.style,
         hide_filler_words=payload.hide_filler_words,
+        language=target_language,
+        review_status=("approved" if target_language == transcript.language else "needs_review"),
         segments=segments,
     )
     return {"track_id": str(track.id)}

@@ -37,17 +37,9 @@ test("visual_analysis concurrency defaults to 1 and is configurable", async () =
   assert.equal(workerConcurrency("transcription"), 3);
 });
 
-test("Docker Compose and Lightning keep GPU/media queue placement aligned", async () => {
+test("Docker Compose statically assigns GPU/media queues", async () => {
   const compose = await readFile(
     new URL("../../../infra/docker-compose.gpu.yml", import.meta.url),
-    "utf8",
-  );
-  const deploy = await readFile(
-    new URL("../../../scripts/deploy_lightning_workers.sh", import.meta.url),
-    "utf8",
-  );
-  const lightningStart = await readFile(
-    new URL("../../../scripts/lightning_start_worker.sh", import.meta.url),
     "utf8",
   );
 
@@ -57,18 +49,6 @@ test("Docker Compose and Lightning keep GPU/media queue placement aligned", asyn
   assert.match(compose, /HF_HOME: \/var\/cache\/motionly\/huggingface/);
   assert.match(compose, /TORCH_HOME: \/var\/cache\/motionly\/torch/);
   assert.match(compose, /XDG_CACHE_HOME: \/var\/cache\/motionly/);
-
-  assert.match(deploy, /WORKER_QUEUES=visual_analysis,transcription/);
-  assert.match(deploy, /PYTHON_MEDIA_WORKER_ENABLED=true/);
-  assert.match(deploy, /WORKER_QUEUES=matte_extraction/);
-  assert.match(deploy, /WORKER_QUEUES=render_gpu/);
-  assert.match(deploy, /HF_HOME=\/var\/cache\/motionly\/huggingface/);
-  assert.match(deploy, /TORCH_HOME=\/var\/cache\/motionly\/torch/);
-  assert.match(deploy, /XDG_CACHE_HOME=\/var\/cache\/motionly/);
-
-  assert.match(lightningStart, /WORKER_QUEUES="\$\{WORKER_QUEUES:-visual_analysis,transcription\}"/);
-  assert.match(lightningStart, /WORKER_QUEUES="\$\{WORKER_QUEUES:-matte_extraction\}"/);
-  assert.match(lightningStart, /WORKER_QUEUES="\$\{WORKER_QUEUES:-render_gpu\}"/);
 });
 
 test("worker runtime telemetry reports queue wait and runtime", async () => {

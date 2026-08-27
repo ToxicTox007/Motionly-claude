@@ -35,7 +35,7 @@ export function UploadProjectScreen(props: ProjectPhaseAuth) {
           <h1 className="text-2xl font-bold">Upload your footage</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Drop in your raw talking-head video. We&apos;ll transcribe it and
-            build the first AI edit directly on the timeline.
+            prepare an AI edit proposal for you to review before it reaches the timeline.
           </p>
         </div>
         <UploadPanel

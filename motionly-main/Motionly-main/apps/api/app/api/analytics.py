@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.dependencies import Actor, get_actor, get_analytics_repository
 from app.repositories.analytics import InMemoryAnalyticsRepository
@@ -62,6 +62,7 @@ async def record_ai_edit_feedback(
     payload: AIEditFeedbackEventCreateRequest,
     actor: ActorDep,
     repository: AnalyticsRepositoryDep,
+    request: Request,
 ) -> AIEditFeedbackEventResponse:
     event = await _repository_call(
         repository,
@@ -80,6 +81,23 @@ async def record_ai_edit_feedback(
         user_payload=payload.user_payload,
         metadata=payload.metadata,
     )
+    learning_repository = getattr(request.app.state, "editorial_learning_repository", None)
+    if learning_repository is not None and getattr(
+        request.app.state.settings, "editorial_learning_enabled", False
+    ):
+        from app.services.editorial_learning import capture_consented_feedback
+
+        capture_consented_feedback(
+            repository=learning_repository,
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+            user_id=actor.user_id,
+            source_event_id=event.id,
+            layer=payload.layer,
+            event_type=payload.event_type,
+            ai_payload=payload.ai_payload,
+            user_payload=payload.user_payload,
+        )
     return event.to_response()
 
 
@@ -90,16 +108,7 @@ async def get_fine_tuning_dataset(
     repository: AnalyticsRepositoryDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 250,
 ) -> FineTuningDatasetResponse:
-    examples = await _repository_call(
-        repository,
-        "fine_tuning_examples_async",
-        "fine_tuning_examples",
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        limit=limit,
-    )
-    return FineTuningDatasetResponse(
-        project_id=project_id,
-        example_count=len(examples),
-        examples=examples,
-    )
+    # Raw operational feedback is not a training export. Consented datasets are
+    # frozen and retained behind the editorial-learning governance service.
+    del repository, actor, limit
+    return FineTuningDatasetResponse(project_id=project_id, example_count=0, examples=[])

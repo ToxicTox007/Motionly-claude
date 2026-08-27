@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -11,8 +12,10 @@ from app.services.upload_state import assert_upload_transition
 
 UPLOAD_RESPONSE_COLUMNS = (
     "id,project_id,workspace_id,storage_bucket,storage_path,original_filename,mime_type,"
-    "file_size_bytes,byte_size,status,thumbnail_path,metadata,error_code,error_message,"
-    "created_at,updated_at"
+    "file_size_bytes,byte_size,status,media_revision,thumbnail_path,metadata,error_code,error_message,"
+    "source_object_reference_id,verified_size_bytes,verified_sha256,workflow_version,"
+    "storage_quota_reservation_id,legacy_quota_reservation_id,"
+    "legacy_upload_expires_at,created_at,updated_at"
 )
 
 
@@ -35,6 +38,14 @@ class UploadRecord:
     mime_type: str
     file_size_bytes: int
     status: UploadStatus = UploadStatus.CREATED
+    media_revision: int = 1
+    source_object_reference_id: UUID | None = None
+    verified_size_bytes: int | None = None
+    verified_sha256: str | None = None
+    workflow_version: str | None = None
+    storage_quota_reservation_id: UUID | None = None
+    legacy_quota_reservation_id: UUID | None = None
+    legacy_upload_expires_at: datetime | None = None
     thumbnail_path: str | None = None
     metadata: VideoMetadata = field(default_factory=VideoMetadata)
     error_code: str | None = None
@@ -53,6 +64,11 @@ class UploadRecord:
             original_filename=self.original_filename,
             mime_type=self.mime_type,
             file_size_bytes=self.file_size_bytes,
+            media_revision=self.media_revision,
+            source_object_reference_id=self.source_object_reference_id,
+            verified_size_bytes=self.verified_size_bytes,
+            verified_sha256=self.verified_sha256,
+            workflow_version=self.workflow_version,
             thumbnail_path=self.thumbnail_path,
             metadata=self.metadata,
             error_code=self.error_code,
@@ -66,6 +82,7 @@ class InMemoryUploadRepository:
     def __init__(self) -> None:
         self.projects: dict[UUID, ProjectRecord] = {}
         self.uploads: dict[UUID, UploadRecord] = {}
+        self._admission_lock = asyncio.Lock()
 
     def seed_project(
         self,
@@ -162,6 +179,10 @@ class InMemoryUploadRepository:
         self.uploads[upload.id] = upload
         return upload
 
+    async def initialize_upload_async(self, **kwargs) -> UploadRecord:
+        async with self._admission_lock:
+            return self.initialize_upload(**kwargs)
+
     def get_upload_for_project(
         self,
         *,
@@ -223,9 +244,90 @@ class InMemoryUploadRepository:
         upload.updated_at = datetime.now(UTC)
         return upload
 
+    def attach_source_reference(
+        self,
+        *,
+        upload: UploadRecord,
+        source_object_reference_id: UUID,
+    ) -> UploadRecord:
+        if (
+            upload.source_object_reference_id is not None
+            and upload.source_object_reference_id != source_object_reference_id
+        ):
+            raise ApiError(
+                409,
+                "source_reference_conflict",
+                "Upload source reference changed unexpectedly.",
+            )
+        upload.source_object_reference_id = source_object_reference_id
+        upload.updated_at = datetime.now(UTC)
+        return upload
+
+    async def attach_source_reference_async(self, **kwargs) -> UploadRecord:
+        return self.attach_source_reference(**kwargs)
+
     def attach_active_video(self, *, project_id: UUID, video_id: UUID) -> None:
         if project := self.projects.get(project_id):
             project.active_video_id = video_id
+
+    def record_verified_source(
+        self,
+        *,
+        upload: UploadRecord,
+        source_object_reference_id: UUID,
+        verified_size_bytes: int,
+        verified_sha256: str,
+    ) -> UploadRecord:
+        upload.source_object_reference_id = source_object_reference_id
+        upload.verified_size_bytes = verified_size_bytes
+        upload.verified_sha256 = verified_sha256
+        upload.updated_at = datetime.now(UTC)
+        return upload
+
+    async def record_verified_source_async(self, **kwargs) -> UploadRecord:
+        return self.record_verified_source(**kwargs)
+
+    def mark_workflow_owned(
+        self, *, upload: UploadRecord, workflow_version: str
+    ) -> UploadRecord:
+        if workflow_version != "first-draft-v2":
+            raise ApiError(422, "upload_workflow_version_invalid", "Workflow version is invalid.")
+        if upload.workflow_version not in {None, workflow_version}:
+            raise ApiError(
+                409,
+                "upload_workflow_ownership_conflict",
+                "Upload workflow ownership conflicts.",
+            )
+        upload.workflow_version = workflow_version
+        upload.updated_at = datetime.now(UTC)
+        return upload
+
+    async def mark_workflow_owned_async(self, **kwargs) -> UploadRecord:
+        return self.mark_workflow_owned(**kwargs)
+
+    def record_legacy_completion_reservation(
+        self,
+        *,
+        upload: UploadRecord,
+        reservation_id: UUID,
+        expires_at: datetime,
+    ) -> UploadRecord:
+        if (
+            upload.legacy_quota_reservation_id is not None
+            and upload.legacy_quota_reservation_id != reservation_id
+        ):
+            raise ApiError(
+                409,
+                "legacy_upload_reservation_conflict",
+                "Legacy upload reservation identity changed.",
+            )
+        upload.legacy_quota_reservation_id = reservation_id
+        upload.legacy_upload_expires_at = expires_at
+        upload.updated_at = datetime.now(UTC)
+        return upload
+
+    async def record_legacy_completion_reservation_async(self, **kwargs) -> UploadRecord:
+        return self.record_legacy_completion_reservation(**kwargs)
 
     def complete_upload_for_processing(
         self,
@@ -399,36 +501,34 @@ class SupabaseUploadRepository:
         max_active_uploads: int,
     ) -> UploadRecord:
         self.get_project_for_workspace(project_id=project_id, workspace_id=workspace_id)
-        if self.count_active_uploads(workspace_id=workspace_id) >= max_active_uploads:
+        upload_id = uuid4()
+        storage_path = (
+            f"workspaces/{workspace_id}/projects/{project_id}/raw/{upload_id}.{storage_extension}"
+        )
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_initialize_upload",
+            json={
+                "p_upload_id": str(upload_id),
+                "p_workspace_id": str(workspace_id),
+                "p_project_id": str(project_id),
+                "p_storage_bucket": storage_bucket,
+                "p_storage_path": storage_path,
+                "p_original_filename": original_filename,
+                "p_mime_type": mime_type,
+                "p_file_size_bytes": file_size_bytes,
+                "p_max_active_uploads": max_active_uploads,
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
             raise ApiError(
                 429,
                 "upload_concurrency_limit",
                 "Your workspace has too many active uploads. Try again when one finishes.",
             )
-        upload_id = uuid4()
-        storage_path = (
-            f"workspaces/{workspace_id}/projects/{project_id}/raw/"
-            f"{upload_id}.{storage_extension}"
-        )
-        response = self.client.request(
-            "POST",
-            "/uploaded_videos",
-            params={"select": UPLOAD_RESPONSE_COLUMNS},
-            json={
-                "id": str(upload_id),
-                "workspace_id": str(workspace_id),
-                "project_id": str(project_id),
-                "storage_bucket": storage_bucket,
-                "storage_path": storage_path,
-                "original_filename": original_filename,
-                "mime_type": mime_type,
-                "byte_size": file_size_bytes,
-                "file_size_bytes": file_size_bytes,
-                "status": UploadStatus.UPLOADING.value,
-            },
-        )
-        self._raise_for_supabase(response)
-        return self._upload_from_row(response.json()[0])
+        return self._upload_from_row(rows[0])
 
     async def initialize_upload_async(
         self,
@@ -446,36 +546,34 @@ class SupabaseUploadRepository:
             project_id=project_id,
             workspace_id=workspace_id,
         )
-        if await self.count_active_uploads_async(workspace_id=workspace_id) >= max_active_uploads:
+        upload_id = uuid4()
+        storage_path = (
+            f"workspaces/{workspace_id}/projects/{project_id}/raw/{upload_id}.{storage_extension}"
+        )
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_initialize_upload",
+            json={
+                "p_upload_id": str(upload_id),
+                "p_workspace_id": str(workspace_id),
+                "p_project_id": str(project_id),
+                "p_storage_bucket": storage_bucket,
+                "p_storage_path": storage_path,
+                "p_original_filename": original_filename,
+                "p_mime_type": mime_type,
+                "p_file_size_bytes": file_size_bytes,
+                "p_max_active_uploads": max_active_uploads,
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
             raise ApiError(
                 429,
                 "upload_concurrency_limit",
                 "Your workspace has too many active uploads. Try again when one finishes.",
             )
-        upload_id = uuid4()
-        storage_path = (
-            f"workspaces/{workspace_id}/projects/{project_id}/raw/"
-            f"{upload_id}.{storage_extension}"
-        )
-        response = await self.client.async_request(
-            "POST",
-            "/uploaded_videos",
-            params={"select": UPLOAD_RESPONSE_COLUMNS},
-            json={
-                "id": str(upload_id),
-                "workspace_id": str(workspace_id),
-                "project_id": str(project_id),
-                "storage_bucket": storage_bucket,
-                "storage_path": storage_path,
-                "original_filename": original_filename,
-                "mime_type": mime_type,
-                "byte_size": file_size_bytes,
-                "file_size_bytes": file_size_bytes,
-                "status": UploadStatus.UPLOADING.value,
-            },
-        )
-        self._raise_for_supabase(response)
-        return self._upload_from_row(response.json()[0])
+        return self._upload_from_row(rows[0])
 
     def get_upload_for_project(
         self,
@@ -678,6 +776,343 @@ class SupabaseUploadRepository:
         self._raise_for_supabase(response)
         return self._upload_from_row(response.json()[0])
 
+    def attach_source_reference(
+        self,
+        *,
+        upload: UploadRecord,
+        source_object_reference_id: UUID,
+    ) -> UploadRecord:
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={
+                "id": f"eq.{upload.id}",
+                "workspace_id": f"eq.{upload.workspace_id}",
+                "project_id": f"eq.{upload.project_id}",
+                "source_object_reference_id": "is.null",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+            },
+            json={
+                "source_object_reference_id": str(source_object_reference_id),
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if rows:
+            return self._upload_from_row(rows[0])
+        current = self.get_upload_for_project(
+            project_id=upload.project_id,
+            video_id=upload.id,
+            workspace_id=upload.workspace_id,
+        )
+        if current.source_object_reference_id != source_object_reference_id:
+            raise ApiError(
+                409,
+                "source_reference_conflict",
+                "Upload source reference changed unexpectedly.",
+            )
+        return current
+
+    async def attach_source_reference_async(
+        self,
+        *,
+        upload: UploadRecord,
+        source_object_reference_id: UUID,
+    ) -> UploadRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/uploaded_videos",
+            params={
+                "id": f"eq.{upload.id}",
+                "workspace_id": f"eq.{upload.workspace_id}",
+                "project_id": f"eq.{upload.project_id}",
+                "source_object_reference_id": "is.null",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+            },
+            json={
+                "source_object_reference_id": str(source_object_reference_id),
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if rows:
+            return self._upload_from_row(rows[0])
+        current = await self.get_upload_for_project_async(
+            project_id=upload.project_id,
+            video_id=upload.id,
+            workspace_id=upload.workspace_id,
+        )
+        if current.source_object_reference_id != source_object_reference_id:
+            raise ApiError(
+                409,
+                "source_reference_conflict",
+                "Upload source reference changed unexpectedly.",
+            )
+        return current
+
+    def record_verified_source(
+        self,
+        *,
+        upload: UploadRecord,
+        source_object_reference_id: UUID,
+        verified_size_bytes: int,
+        verified_sha256: str,
+    ) -> UploadRecord:
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            json={
+                "source_object_reference_id": str(source_object_reference_id),
+                "verified_size_bytes": verified_size_bytes,
+                "verified_sha256": verified_sha256,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        return self._upload_from_row(response.json()[0])
+
+    async def record_verified_source_async(
+        self,
+        *,
+        upload: UploadRecord,
+        source_object_reference_id: UUID,
+        verified_size_bytes: int,
+        verified_sha256: str,
+    ) -> UploadRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/uploaded_videos",
+            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            json={
+                "source_object_reference_id": str(source_object_reference_id),
+                "verified_size_bytes": verified_size_bytes,
+                "verified_sha256": verified_sha256,
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        return self._upload_from_row(response.json()[0])
+
+    def mark_workflow_owned(
+        self, *, upload: UploadRecord, workflow_version: str
+    ) -> UploadRecord:
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={
+                "id": f"eq.{upload.id}",
+                "workspace_id": f"eq.{upload.workspace_id}",
+                "project_id": f"eq.{upload.project_id}",
+                "or": f"(workflow_version.is.null,workflow_version.eq.{workflow_version})",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+            },
+            json={"workflow_version": workflow_version},
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(
+                409,
+                "upload_workflow_ownership_conflict",
+                "Upload workflow ownership conflicts.",
+            )
+        return self._upload_from_row(rows[0])
+
+    async def mark_workflow_owned_async(
+        self, *, upload: UploadRecord, workflow_version: str
+    ) -> UploadRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/uploaded_videos",
+            params={
+                "id": f"eq.{upload.id}",
+                "workspace_id": f"eq.{upload.workspace_id}",
+                "project_id": f"eq.{upload.project_id}",
+                "or": f"(workflow_version.is.null,workflow_version.eq.{workflow_version})",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+            },
+            json={"workflow_version": workflow_version},
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            raise ApiError(
+                409,
+                "upload_workflow_ownership_conflict",
+                "Upload workflow ownership conflicts.",
+            )
+        return self._upload_from_row(rows[0])
+
+    def record_legacy_completion_reservation(
+        self,
+        *,
+        upload: UploadRecord,
+        reservation_id: UUID,
+        expires_at: datetime,
+    ) -> UploadRecord:
+        response = self.client.request(
+            "PATCH",
+            "/uploaded_videos",
+            params={
+                "id": f"eq.{upload.id}",
+                "workspace_id": f"eq.{upload.workspace_id}",
+                "project_id": f"eq.{upload.project_id}",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+            },
+            json={
+                "legacy_quota_reservation_id": str(reservation_id),
+                "legacy_upload_expires_at": expires_at.isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        return self._upload_from_row(response.json()[0])
+
+    async def record_legacy_completion_reservation_async(
+        self,
+        *,
+        upload: UploadRecord,
+        reservation_id: UUID,
+        expires_at: datetime,
+    ) -> UploadRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/uploaded_videos",
+            params={
+                "id": f"eq.{upload.id}",
+                "workspace_id": f"eq.{upload.workspace_id}",
+                "project_id": f"eq.{upload.project_id}",
+                "select": UPLOAD_RESPONSE_COLUMNS,
+            },
+            json={
+                "legacy_quota_reservation_id": str(reservation_id),
+                "legacy_upload_expires_at": expires_at.isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        return self._upload_from_row(response.json()[0])
+
+    def claim_legacy_upload_atomic(
+        self,
+        *,
+        upload: UploadRecord,
+        reservation_id: UUID,
+        byte_amount: int,
+        expires_at: datetime,
+    ) -> bool:
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_claim_legacy_upload",
+            json={
+                "p_upload_id": str(upload.id),
+                "p_workspace_id": str(upload.workspace_id),
+                "p_project_id": str(upload.project_id),
+                "p_reservation_id": str(reservation_id),
+                "p_byte_amount": byte_amount,
+                "p_expires_at": expires_at.isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        return response.json() is True
+
+    async def claim_legacy_upload_atomic_async(self, **kwargs) -> bool:
+        upload = kwargs["upload"]
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_claim_legacy_upload",
+            json={
+                "p_upload_id": str(upload.id),
+                "p_workspace_id": str(upload.workspace_id),
+                "p_project_id": str(upload.project_id),
+                "p_reservation_id": str(kwargs["reservation_id"]),
+                "p_byte_amount": kwargs["byte_amount"],
+                "p_expires_at": kwargs["expires_at"].isoformat(),
+            },
+        )
+        self._raise_for_supabase(response)
+        return response.json() is True
+
+    def finalize_legacy_upload_atomic(
+        self,
+        *,
+        upload: UploadRecord,
+        reservation_id: UUID,
+        reference_id: UUID,
+        verified_size_bytes: int,
+        verified_sha256: str,
+    ) -> bool:
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_finalize_legacy_upload",
+            json={
+                "p_upload_id": str(upload.id),
+                "p_workspace_id": str(upload.workspace_id),
+                "p_project_id": str(upload.project_id),
+                "p_reservation_id": str(reservation_id),
+                "p_reference_id": str(reference_id),
+                "p_verified_size_bytes": verified_size_bytes,
+                "p_verified_sha256": verified_sha256,
+            },
+        )
+        self._raise_for_supabase(response)
+        return response.json() is True
+
+    async def finalize_legacy_upload_atomic_async(self, **kwargs) -> bool:
+        upload = kwargs["upload"]
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_finalize_legacy_upload",
+            json={
+                "p_upload_id": str(upload.id),
+                "p_workspace_id": str(upload.workspace_id),
+                "p_project_id": str(upload.project_id),
+                "p_reservation_id": str(kwargs["reservation_id"]),
+                "p_reference_id": str(kwargs["reference_id"]),
+                "p_verified_size_bytes": kwargs["verified_size_bytes"],
+                "p_verified_sha256": kwargs["verified_sha256"],
+            },
+        )
+        self._raise_for_supabase(response)
+        return response.json() is True
+
+    def cancel_legacy_upload_atomic(
+        self,
+        *,
+        upload: UploadRecord,
+        reservation_id: UUID,
+    ) -> bool:
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_cancel_legacy_upload",
+            json={
+                "p_upload_id": str(upload.id),
+                "p_workspace_id": str(upload.workspace_id),
+                "p_project_id": str(upload.project_id),
+                "p_reservation_id": str(reservation_id),
+            },
+        )
+        self._raise_for_supabase(response)
+        return response.json() is True
+
+    async def cancel_legacy_upload_atomic_async(self, **kwargs) -> bool:
+        upload = kwargs["upload"]
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_cancel_legacy_upload",
+            json={
+                "p_upload_id": str(upload.id),
+                "p_workspace_id": str(upload.workspace_id),
+                "p_project_id": str(upload.project_id),
+                "p_reservation_id": str(kwargs["reservation_id"]),
+            },
+        )
+        self._raise_for_supabase(response)
+        return response.json() is True
+
     def complete_upload_for_processing(
         self,
         *,
@@ -774,6 +1209,36 @@ class SupabaseUploadRepository:
             mime_type=str(row["mime_type"]),
             file_size_bytes=int(row.get("file_size_bytes") or row.get("byte_size") or 0),
             status=UploadStatus(str(row.get("status", UploadStatus.CREATED))),
+            media_revision=int(row.get("media_revision") or 1),
+            source_object_reference_id=(
+                UUID(str(row["source_object_reference_id"]))
+                if row.get("source_object_reference_id")
+                else None
+            ),
+            verified_size_bytes=(
+                int(row["verified_size_bytes"])
+                if row.get("verified_size_bytes") is not None
+                else None
+            ),
+            verified_sha256=(str(row["verified_sha256"]) if row.get("verified_sha256") else None),
+            workflow_version=(
+                str(row["workflow_version"]) if row.get("workflow_version") else None
+            ),
+            storage_quota_reservation_id=(
+                UUID(str(row["storage_quota_reservation_id"]))
+                if row.get("storage_quota_reservation_id")
+                else None
+            ),
+            legacy_quota_reservation_id=(
+                UUID(str(row["legacy_quota_reservation_id"]))
+                if row.get("legacy_quota_reservation_id")
+                else None
+            ),
+            legacy_upload_expires_at=(
+                datetime.fromisoformat(str(row["legacy_upload_expires_at"]).replace("Z", "+00:00"))
+                if row.get("legacy_upload_expires_at")
+                else None
+            ),
             thumbnail_path=str(row["thumbnail_path"]) if row.get("thumbnail_path") else None,
             metadata=VideoMetadata.model_validate(metadata),
             error_code=str(row["error_code"]) if row.get("error_code") else None,

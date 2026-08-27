@@ -17,7 +17,7 @@ import type {
   TimelineState,
   TimelineTrack,
 } from "@motionly/shared";
-export { outputMsToSourceMs } from "@/lib/timeline-time.mjs";
+export { outputMsToSourceMs } from "@motionly/shared";
 
 // ── Track accent colours (Tailwind utility strings) ──────────────────────────
 const TRACK_COLORS: Record<string, string> = {

@@ -1,0 +1,71 @@
+# Development-only override. Apply with infra/docker-compose.gpu.yml and a
+# local env file that supplies the same image-variable names with local tags.
+# Never include this file in a release deployment command.
+services:
+  api:
+    image: motionly-api:dev
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+
+  web:
+    image: motionly-web:dev
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+
+  cpu-ffmpeg-worker:
+    image: motionly-cpu-ffmpeg-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+
+  gpu-inference-worker:
+    image: motionly-gpu-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.gpu
+
+  matte-worker:
+    image: motionly-gpu-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.gpu
+
+  gpu-ffmpeg-worker:
+    image: motionly-gpu-ffmpeg-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+
+  demucs-worker:
+    image: motionly-demucs-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+      args:
+        API_EXTRAS: demucs
+
+  provider-worker:
+    image: motionly-provider-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+
+  planning-worker:
+    image: motionly-planning-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python
+
+  remotion-worker:
+    image: motionly-remotion-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile
+
+  publishing-worker:
+    image: motionly-publishing-worker:dev
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile.python

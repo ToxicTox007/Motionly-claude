@@ -73,6 +73,7 @@ export interface PreviewLookState {
 }
 
 export interface PreviewExportState {
+  fps: number;
   outputAspect: string;
   fitMode: "fill" | "fit" | "custom" | string;
   cropX: number;
@@ -84,9 +85,10 @@ interface VideoPreviewProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   sourceUrl: string | null;
   thumbnailUrl: string | null;
+  onSourceError?: () => void;
+  onPosterError?: () => void;
   sourceWidth?: number | null;
   sourceHeight?: number | null;
-  sourceFps?: number | null;
   playheadMs: number;
   captionSegments: CaptionSegment[];
   captionStyle: CaptionStyle | null;
@@ -106,9 +108,10 @@ export function VideoPreview({
   videoRef,
   sourceUrl,
   thumbnailUrl,
+  onSourceError,
+  onPosterError,
   sourceWidth,
   sourceHeight,
-  sourceFps,
   playheadMs,
   captionSegments,
   captionStyle,
@@ -129,6 +132,16 @@ export function VideoPreview({
   });
   const previewRootRef = React.useRef<HTMLDivElement | null>(null);
   const isPreviewVisible = usePreviewVisibility(previewRootRef);
+  const [activeSourceUrl, setActiveSourceUrl] = useState(sourceUrl);
+  const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
+  const playbackRestoreRef = React.useRef<{
+    sourceUrl: string | null;
+    currentTime: number;
+    shouldPlay: boolean;
+    muted: boolean;
+    volume: number;
+    playbackRate: number;
+  } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(80);
@@ -138,11 +151,13 @@ export function VideoPreview({
     height: number;
   } | null>(null);
   const activeIntrinsicSize =
-    intrinsicSize?.sourceUrl === sourceUrl ? intrinsicSize : null;
+    intrinsicSize?.sourceUrl === activeSourceUrl ? intrinsicSize : null;
+  const activePosterUrl =
+    thumbnailUrl && failedPosterUrl !== thumbnailUrl ? thumbnailUrl : null;
   const frameWidth = sourceWidth || activeIntrinsicSize?.width || 16;
   const frameHeight = sourceHeight || activeIntrinsicSize?.height || 9;
   const previewAspectRatio = getPreviewAspectRatio(previewExport?.outputAspect, frameWidth, frameHeight);
-  const canonicalPreviewFps = normalizeRenderFps(sourceFps ?? DEFAULT_RENDER_FPS);
+  const canonicalPreviewFps = normalizeRenderFps(previewExport?.fps ?? DEFAULT_RENDER_FPS);
   const canonicalPlayheadMs = frameToMilliseconds(
     millisecondsToNearestFrame(playheadMs, canonicalPreviewFps),
     canonicalPreviewFps,
@@ -172,6 +187,46 @@ export function VideoPreview({
     previewMotion.transform,
   ].filter(Boolean).join(" ") || undefined;
   const webglGrade = getWebGLGrade(previewLook);
+
+  useEffect(() => {
+    if (sourceUrl === activeSourceUrl) return;
+    const video = videoRef.current;
+    if (video) {
+      playbackRestoreRef.current = {
+        sourceUrl,
+        currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+        shouldPlay: !video.paused && !video.ended,
+        muted: video.muted,
+        volume: video.volume,
+        playbackRate: video.playbackRate,
+      };
+    }
+    // Keep the old URL rendered until its playback state has been captured.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional two-phase media source swap
+    setActiveSourceUrl(sourceUrl);
+  }, [activeSourceUrl, sourceUrl, videoRef]);
+
+  useEffect(() => {
+    if (!thumbnailUrl) return;
+    const image = new Image();
+    let cancelled = false;
+    image.onload = () => {
+      if (!cancelled && failedPosterUrl === thumbnailUrl) {
+        setFailedPosterUrl(null);
+      }
+    };
+    image.onerror = () => {
+      if (cancelled) return;
+      setFailedPosterUrl(thumbnailUrl);
+      onPosterError?.();
+    };
+    image.src = thumbnailUrl;
+    return () => {
+      cancelled = true;
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, [failedPosterUrl, onPosterError, thumbnailUrl]);
 
   // Keep isPlaying in sync with the actual video state
   useEffect(() => {
@@ -254,12 +309,12 @@ export function VideoPreview({
           style={{ aspectRatio: previewAspectRatio, outline: isCanvasDropActive ? "3px solid hsl(var(--primary))" : undefined, outlineOffset: -3 }}
         >
           {/* Video element */}
-          {sourceUrl ? (
+          {activeSourceUrl ? (
             <>
               <video
                 ref={videoRef}
-                src={sourceUrl}
-                poster={thumbnailUrl ?? undefined}
+                src={activeSourceUrl}
+                poster={activePosterUrl ?? undefined}
                 className="absolute inset-0 h-full w-full transition-[filter,transform] duration-150"
                 style={{
                   filter: videoFilter,
@@ -271,14 +326,31 @@ export function VideoPreview({
                 }}
                 onLoadedMetadata={(event) => {
                   const video = event.currentTarget;
-                  if (video.videoWidth && video.videoHeight) {
+                  if (video.videoWidth && video.videoHeight && activeSourceUrl) {
                     setIntrinsicSize({
-                      sourceUrl,
+                      sourceUrl: activeSourceUrl,
                       width: video.videoWidth,
                       height: video.videoHeight,
                     });
                   }
+                  const restore = playbackRestoreRef.current;
+                  if (restore?.sourceUrl === activeSourceUrl) {
+                    playbackRestoreRef.current = null;
+                    video.muted = restore.muted;
+                    video.volume = restore.volume;
+                    video.playbackRate = restore.playbackRate;
+                    if (Number.isFinite(video.duration) && video.duration > 0) {
+                      video.currentTime = Math.min(
+                        restore.currentTime,
+                        Math.max(0, video.duration - 0.001),
+                      );
+                    }
+                    if (restore.shouldPlay) {
+                      void video.play().catch(() => undefined);
+                    }
+                  }
                 }}
+                onError={onSourceError}
                 playsInline
                 preload="metadata"
                 crossOrigin="anonymous"
@@ -312,7 +384,7 @@ export function VideoPreview({
             </div>
           )}
 
-          {sourceUrl ? (
+          {activeSourceUrl ? (
             <WebGLVideoCanvas
               videoRef={videoRef}
               active={isPreviewVisible}
@@ -542,6 +614,13 @@ function usePreviewVisibility(ref: React.RefObject<HTMLElement | null>) {
   return visible;
 }
 
+// BROWSER-ONLY APPROXIMATION. getWebGLGrade / getPreviewFilter / getPreviewMotionState
+// below produce fast CSS/WebGL approximations of the color grade and motion for the
+// live editor preview. They are intentionally simpler than the authoritative export,
+// which is rendered by the Remotion pipeline (apps/renderer VisualGrade + VideoScene
+// motion). Timeline/frame timing IS canonical (shared @motionly/shared evaluator); only
+// the visual grade/motion here are approximate and are labeled as such in the preview UI
+// (see PreviewSyncBadges "Grade/motion: preview approximation").
 function getWebGLGrade(look?: PreviewLookState | null) {
   const amount = Math.max(0, Math.min(1, look?.intensity ?? 0));
   const values: Record<string, [number, number, number]> = {
@@ -968,6 +1047,9 @@ function PreviewSyncBadges({
 }) {
   const badges = [
     look ? `Look ${look.intensity}%` : null,
+    look && (look.preset || look.grain || look.vignette || look.motionEffects?.length || look.motion)
+      ? "Grade/motion: preview approximation"
+      : null,
     look?.backgroundRemoval?.enabled
       ? look.mattePreview?.status === "available"
         ? "Real matte preview"

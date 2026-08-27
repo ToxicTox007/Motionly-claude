@@ -5,19 +5,31 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("admin ops fetches bounded queue jobs and surfaces slice metadata", async () => {
-  const page = await readFile(new URL("app/(app)/admin/ops/page.tsx", root), "utf8");
-  const list = await readFile(new URL("app/(app)/admin/ops/AdminJobsList.tsx", root), "utf8");
+  const page = await readFile(
+    new URL("app/(app)/admin/ops/page.tsx", root),
+    "utf8",
+  );
+  const list = await readFile(
+    new URL("app/(app)/admin/ops/AdminJobsList.tsx", root),
+    "utf8",
+  );
 
   assert.match(page, /\/admin\/queues\?limit=50/);
   assert.match(page, /total_jobs\?: number/);
   assert.match(page, /limit\?: number/);
   assert.match(page, /totalJobs=\{queues\?\.total_jobs \?\? 0\}/);
-  assert.match(list, /Showing \{Math\.min\(jobs\.length, limit\)\} of \{totalJobs\} latest jobs/);
+  assert.match(
+    list,
+    /Showing \{Math\.min\(jobs\.length, limit\)\} of \{totalJobs\} latest jobs/,
+  );
   assert.doesNotMatch(list, /filteredJobs\.slice\(0, 50\)/);
 });
 
 test("admin ops surfaces provider SLO and cost panels", async () => {
-  const page = await readFile(new URL("app/(app)/admin/ops/page.tsx", root), "utf8");
+  const page = await readFile(
+    new URL("app/(app)/admin/ops/page.tsx", root),
+    "utf8",
+  );
 
   assert.match(page, /type ProviderSloSummary/);
   assert.match(page, /type ProviderCostSummary/);
@@ -31,7 +43,10 @@ test("admin ops surfaces provider SLO and cost panels", async () => {
 });
 
 test("admin ops surfaces runtime operations dashboard signals", async () => {
-  const page = await readFile(new URL("app/(app)/admin/ops/page.tsx", root), "utf8");
+  const page = await readFile(
+    new URL("app/(app)/admin/ops/page.tsx", root),
+    "utf8",
+  );
 
   assert.match(page, /type OpsDashboard/);
   assert.match(page, /operations_dashboard\?: OpsDashboard/);
@@ -47,12 +62,12 @@ test("admin ops surfaces runtime operations dashboard signals", async () => {
   assert.match(page, /Export p95/);
 });
 
-test("web runtime config sends cache headers for static assets", async () => {
+test("web runtime config leaves Next static caching to the framework", async () => {
   const config = await readFile(new URL("next.config.ts", root), "utf8");
 
   assert.match(config, /async headers\(\)/);
-  assert.match(config, /source: "\/_next\/static\/:path\*"/);
-  assert.match(config, /public, max-age=31536000, immutable/);
+  assert.doesNotMatch(config, /source: "\/_next\/static\/:path\*"/);
+  assert.doesNotMatch(config, /max-age=31536000, immutable/);
   assert.match(config, /source: "\/icon\.svg"/);
   assert.match(config, /stale-while-revalidate=604800/);
 });

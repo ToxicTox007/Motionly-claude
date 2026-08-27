@@ -15,9 +15,16 @@ def _modules_available(*names: str) -> bool:
 class PyannoteSpeakerDiarizationProvider:
     provider_name = "pyannote"
 
-    def __init__(self, *, model: str, auth_token: str | None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        auth_token: str | None,
+        revision: str | None = None,
+    ) -> None:
         self.model = model
         self.auth_token = auth_token
+        self.revision = revision
         self._pipeline = None
 
     def check_availability(self) -> tuple[bool, str]:
@@ -81,15 +88,20 @@ class PyannoteSpeakerDiarizationProvider:
                 "pyannote_dependency_missing",
                 "Install pyannote.audio before enabling pyannote diarization.",
             ) from exc
-        self._pipeline = Pipeline.from_pretrained(self.model, use_auth_token=self.auth_token)
+        self._pipeline = Pipeline.from_pretrained(
+            self.model,
+            use_auth_token=self.auth_token,
+            revision=self.revision,
+        )
         return self._pipeline
 
 
 class Wav2VecEmotionProvider:
     provider_name = "wav2vec2_emotion"
 
-    def __init__(self, *, model: str) -> None:
+    def __init__(self, *, model: str, revision: str | None = None) -> None:
         self.model = model
+        self.revision = revision
         self._loaded: dict[str, object] | None = None
 
     def check_availability(self) -> tuple[bool, str]:
@@ -173,8 +185,14 @@ class Wav2VecEmotionProvider:
         self._loaded = {
             "torch": torch,
             "torchaudio": torchaudio,
-            "processor": AutoFeatureExtractor.from_pretrained(self.model),
-            "model": AutoModelForAudioClassification.from_pretrained(self.model),
+            "processor": AutoFeatureExtractor.from_pretrained(
+                self.model,
+                revision=self.revision,
+            ),
+            "model": AutoModelForAudioClassification.from_pretrained(
+                self.model,
+                revision=self.revision,
+            ),
         }
         return self._loaded
 

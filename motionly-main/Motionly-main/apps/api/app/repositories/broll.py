@@ -20,7 +20,9 @@ from app.services.supabase import SupabaseRestClient
 
 STOCK_ASSET_COLUMNS = (
     "id,workspace_id,project_id,provider,provider_asset_id,title,thumbnail_url,preview_video_url,"
-    "download_url,license,width,height,duration_ms,orientation,score,raw_metadata,created_at"
+    "download_url,license,width,height,duration_ms,orientation,score,raw_metadata,"
+    "object_reference_id,media_upload_session_id,media_state,verified_size_bytes,verified_sha256,"
+    "storage_quota_reservation_id,created_at"
 )
 BROLL_SLOT_COLUMNS = (
     "id,workspace_id,project_id,edit_plan_id,version,schema_version,status,start_ms,end_ms,"
@@ -50,6 +52,12 @@ class StockAssetRecord:
     orientation: StockOrientation
     score: float
     raw_metadata: dict[str, object] = field(default_factory=dict)
+    object_reference_id: UUID | None = None
+    media_upload_session_id: UUID | None = None
+    media_state: str = "not_applicable"
+    verified_size_bytes: int | None = None
+    verified_sha256: str | None = None
+    storage_quota_reservation_id: UUID | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_response(self) -> StockVideoAssetResponse:
@@ -60,9 +68,7 @@ class StockAssetRecord:
             enrichment_failure_reason=_string_metadata(
                 self.raw_metadata, "enrichment_failure_reason"
             ),
-            embedding_model_version=_string_metadata(
-                self.raw_metadata, "embedding_model_version"
-            ),
+            embedding_model_version=_string_metadata(self.raw_metadata, "embedding_model_version"),
         )
 
 
@@ -278,6 +284,58 @@ class InMemoryBrollRepository:
             asset=asset,
             raw_metadata={"status": "ready"},
         )
+
+    def set_library_media_session(
+        self, *, asset: StockAssetRecord, media_upload_session_id: UUID
+    ) -> StockAssetRecord:
+        asset.media_upload_session_id = media_upload_session_id
+        asset.media_state = "uploading"
+        asset.object_reference_id = None
+        asset.verified_size_bytes = None
+        asset.verified_sha256 = None
+        asset.storage_quota_reservation_id = None
+        asset.download_url = None
+        asset.preview_video_url = None
+        asset.raw_metadata = {
+            key: value
+            for key, value in asset.raw_metadata.items()
+            if key not in {"storage_bucket", "storage_path", "status"}
+        }
+        return asset
+
+    def mark_library_asset_verified(
+        self,
+        *,
+        asset: StockAssetRecord,
+        object_reference_id: UUID,
+        media_upload_session_id: UUID,
+        verified_size_bytes: int,
+        verified_sha256: str,
+        storage_quota_reservation_id: UUID,
+    ) -> StockAssetRecord:
+        asset.object_reference_id = object_reference_id
+        asset.media_upload_session_id = media_upload_session_id
+        asset.media_state = "verified"
+        asset.verified_size_bytes = verified_size_bytes
+        asset.verified_sha256 = verified_sha256
+        asset.storage_quota_reservation_id = storage_quota_reservation_id
+        asset.download_url = None
+        asset.preview_video_url = None
+        asset.raw_metadata = {
+            **{
+                key: value
+                for key, value in asset.raw_metadata.items()
+                if key not in {"storage_bucket", "storage_path", "status"}
+            },
+            "upload_state": "verified",
+        }
+        return asset
+
+    def mark_library_asset_media_failed(
+        self, *, asset: StockAssetRecord, state: str = "failed"
+    ) -> StockAssetRecord:
+        asset.media_state = state
+        return asset
 
     def mark_stock_asset_owned(
         self,
@@ -719,6 +777,141 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         self._raise_for_supabase(response)
         return self._asset_from_row(response.json()[0])
 
+    def _library_media_payload(
+        self, asset: StockAssetRecord, **values: object
+    ) -> dict[str, object]:
+        raw_metadata = {
+            key: value
+            for key, value in asset.raw_metadata.items()
+            if key not in {"storage_bucket", "storage_path", "status"}
+        }
+        return {
+            "download_url": None,
+            "preview_video_url": None,
+            "raw_metadata": raw_metadata,
+            **self._json_safe(values),
+        }
+
+    def set_library_media_session(
+        self, *, asset: StockAssetRecord, media_upload_session_id: UUID
+    ) -> StockAssetRecord:
+        response = self.client.request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json=self._library_media_payload(
+                asset,
+                media_upload_session_id=media_upload_session_id,
+                object_reference_id=None,
+                media_state="uploading",
+                verified_size_bytes=None,
+                verified_sha256=None,
+                storage_quota_reservation_id=None,
+            ),
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    async def set_library_media_session_async(
+        self, *, asset: StockAssetRecord, media_upload_session_id: UUID
+    ) -> StockAssetRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json=self._library_media_payload(
+                asset,
+                media_upload_session_id=media_upload_session_id,
+                object_reference_id=None,
+                media_state="uploading",
+                verified_size_bytes=None,
+                verified_sha256=None,
+                storage_quota_reservation_id=None,
+            ),
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    def mark_library_asset_verified(
+        self,
+        *,
+        asset: StockAssetRecord,
+        object_reference_id: UUID,
+        media_upload_session_id: UUID,
+        verified_size_bytes: int,
+        verified_sha256: str,
+        storage_quota_reservation_id: UUID,
+    ) -> StockAssetRecord:
+        response = self.client.request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json=self._library_media_payload(
+                asset,
+                object_reference_id=object_reference_id,
+                media_upload_session_id=media_upload_session_id,
+                media_state="verified",
+                verified_size_bytes=verified_size_bytes,
+                verified_sha256=verified_sha256,
+                storage_quota_reservation_id=storage_quota_reservation_id,
+                raw_metadata={"upload_state": "verified"},
+            ),
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    async def mark_library_asset_verified_async(
+        self,
+        *,
+        asset: StockAssetRecord,
+        object_reference_id: UUID,
+        media_upload_session_id: UUID,
+        verified_size_bytes: int,
+        verified_sha256: str,
+        storage_quota_reservation_id: UUID,
+    ) -> StockAssetRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json=self._library_media_payload(
+                asset,
+                object_reference_id=object_reference_id,
+                media_upload_session_id=media_upload_session_id,
+                media_state="verified",
+                verified_size_bytes=verified_size_bytes,
+                verified_sha256=verified_sha256,
+                storage_quota_reservation_id=storage_quota_reservation_id,
+                raw_metadata={"upload_state": "verified"},
+            ),
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    def mark_library_asset_media_failed(
+        self, *, asset: StockAssetRecord, state: str = "failed"
+    ) -> StockAssetRecord:
+        response = self.client.request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json={"media_state": state},
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
+    async def mark_library_asset_media_failed_async(
+        self, *, asset: StockAssetRecord, state: str = "failed"
+    ) -> StockAssetRecord:
+        response = await self.client.async_request(
+            "PATCH",
+            "/stock_assets",
+            params={"id": f"eq.{asset.id}", "select": STOCK_ASSET_COLUMNS},
+            json={"media_state": state},
+        )
+        self._raise_for_supabase(response)
+        return self._asset_from_row(response.json()[0])
+
     def update_asset_metadata(
         self,
         *,
@@ -1052,6 +1245,20 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             raw_metadata=row.get("raw_metadata")
             if isinstance(row.get("raw_metadata"), dict)
             else {},
+            object_reference_id=UUID(str(row["object_reference_id"]))
+            if row.get("object_reference_id")
+            else None,
+            media_upload_session_id=UUID(str(row["media_upload_session_id"]))
+            if row.get("media_upload_session_id")
+            else None,
+            media_state=str(row.get("media_state") or "not_applicable"),
+            verified_size_bytes=int(row["verified_size_bytes"])
+            if row.get("verified_size_bytes") is not None
+            else None,
+            verified_sha256=str(row["verified_sha256"]) if row.get("verified_sha256") else None,
+            storage_quota_reservation_id=UUID(str(row["storage_quota_reservation_id"]))
+            if row.get("storage_quota_reservation_id")
+            else None,
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
         )
 
@@ -1080,9 +1287,7 @@ def _string_metadata(metadata: dict[str, object], key: str) -> str | None:
     return str(value) if isinstance(value, str) and value.strip() else None
 
 
-def _confidence_label_from_metadata(
-    metadata: dict[str, object]
-) -> BrollConfidenceLabel | None:
+def _confidence_label_from_metadata(metadata: dict[str, object]) -> BrollConfidenceLabel | None:
     value = _string_metadata(metadata, "confidence_label")
     if value is None:
         return None
@@ -1093,7 +1298,7 @@ def _confidence_label_from_metadata(
 
 
 def _enrichment_status_from_metadata(
-    metadata: dict[str, object]
+    metadata: dict[str, object],
 ) -> StockAssetEnrichmentStatus | None:
     value = _string_metadata(metadata, "enrichment_status")
     if value is None:

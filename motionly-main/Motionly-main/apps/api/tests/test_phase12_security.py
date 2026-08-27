@@ -140,21 +140,28 @@ def test_retention_deletion_queue_filtering() -> None:
     service = RetentionService(settings=settings, storage_signer=signer)
 
     def request(method, table, **kwargs):
-        if method == "GET" and table == "storage_deletion_queue":
-            # Return queue elements, one that is within 30 days, one that is older
-            params = kwargs.get("params", {})
-            assert "queued_at" in params
-            assert "lt." in params["queued_at"]
-            return [{"id": "q-1", "storage_bucket": "raw-uploads", "storage_path": "v1.mp4"}]
-        if method == "DELETE" and table == "storage_deletion_queue":
-            calls.append(("delete_queue_row", kwargs.get("params", {}).get("id")))
+        if method == "POST" and table == "rpc/motionly_claim_storage_deletion_queue":
+            payload = kwargs["json"]
+            assert payload["p_lease_owner"].startswith("retention:")
+            assert payload["p_before"] is not None
+            return [
+                {
+                    "id": "q-1",
+                    "storage_bucket": "raw-uploads",
+                    "storage_path": "v1.mp4",
+                    "lease_token": "lease-1",
+                }
+            ]
+        if method == "POST" and table == "rpc/motionly_ack_storage_deletion_queue":
+            calls.append(("ack_queue_row", kwargs["json"]))
+            return True
         return []
 
     service._request = request
     counts = service._drain_storage_deletion_queue()
     assert counts == 1
     assert ("storage", "v1.mp4") in calls
-    assert ("delete_queue_row", "eq.q-1") in calls
+    assert ("ack_queue_row", {"p_queue_id": "q-1", "p_lease_token": "lease-1"}) in calls
 
 
 def test_data_handling_documentation_exists() -> None:

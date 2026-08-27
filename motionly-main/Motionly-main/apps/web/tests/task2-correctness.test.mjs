@@ -13,7 +13,10 @@ test("project loading checks every active workspace membership", async () => {
   assert.match(source, /const \{ data: memberships \} = await supabase/);
   assert.match(source, /return memberships\.map\(\(membership\) =>/);
   assert.match(source, /contexts\.map\(async \(context\) =>/);
-  assert.match(source, /projectMatches\.find\(\(candidate\) => candidate\.project !== null\)/);
+  assert.match(
+    source,
+    /projectMatches\.find\(\s*\(candidate\) => candidate\.project !== null,\s*\)/,
+  );
   assert.doesNotMatch(source, /\.limit\(1\)[\s\S]*\.maybeSingle\(\)/);
 });
 
@@ -32,4 +35,23 @@ test("normal AI generation uses caches while explicit regeneration can bypass th
   assert.doesNotMatch(scale, /saved_template_id: template\.id, force: true/);
   assert.doesNotMatch(scale, /style_profile_id: profile\.id, force: true/);
   assert.match(broll, /async function regenerateBroll\(\)[\s\S]*force: true/);
+});
+
+test("conflict reload requests the individual plan and discards stale editor state", async () => {
+  const editor = await readFile(
+    new URL("components/editor-client.tsx", root),
+    "utf8",
+  );
+  const dialog = await readFile(
+    new URL("components/editor/ConflictDialog.tsx", root), "utf8");
+
+  assert.match(
+    editor,
+    /projects\/\$\{projectId\}\/plans\/\$\{localActivePlanId\}/,
+  );
+  assert.match(editor, /handlePlanUpdated\(payload\.plan\)/);
+  assert.match(editor, /clearConflict\(\)/);
+  assert.match(editor, /router\.refresh\(\)/);
+  assert.match(dialog, /onReload/);
+  assert.match(dialog, /Reload &amp; Discard/);
 });

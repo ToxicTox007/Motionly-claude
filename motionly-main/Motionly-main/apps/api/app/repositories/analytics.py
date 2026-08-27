@@ -79,13 +79,15 @@ class InMemoryAnalyticsRepository:
         user_payload: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AIEditFeedbackEventRecord:
-        if decision_id and event_type == AIEditFeedbackEventType.KEPT:
+        if decision_id:
             existing = next(
                 (
                     event
                     for event in self.events.values()
                     if event.workspace_id == workspace_id
-                    and event.event_type == AIEditFeedbackEventType.KEPT
+                    and event.project_id == project_id
+                    and event.event_type == event_type
+                    and event.layer == layer
                     and event.decision_id == decision_id
                 ),
                 None,
@@ -232,21 +234,24 @@ class SupabaseAnalyticsRepository(InMemoryAnalyticsRepository):
             "user_payload": user_payload or {},
             "metadata": metadata or {},
         }
-        if decision_id and event_type == AIEditFeedbackEventType.KEPT:
+        if decision_id:
             existing = self.client.request(
                 "GET",
                 "/ai_edit_feedback_events",
                 params={
                     "workspace_id": f"eq.{workspace_id}",
-                    "event_type": "eq.kept",
+                    "project_id": f"eq.{project_id}",
+                    "event_type": f"eq.{event_type.value}",
+                    "layer": f"eq.{layer.value}",
                     "decision_id": f"eq.{decision_id}",
                     "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
                     "limit": "1",
                 },
             )
             self._raise_for_supabase(existing)
-            if existing.json():
-                return self._event_from_row(existing.json()[0])
+            existing_rows = existing.json()
+            if existing_rows:
+                return self._event_from_row(existing_rows[0])
         response = self.client.request(
             "POST",
             "/ai_edit_feedback_events",
@@ -286,21 +291,24 @@ class SupabaseAnalyticsRepository(InMemoryAnalyticsRepository):
             "user_payload": user_payload or {},
             "metadata": metadata or {},
         }
-        if decision_id and event_type == AIEditFeedbackEventType.KEPT:
+        if decision_id:
             existing = await self.client.async_request(
                 "GET",
                 "/ai_edit_feedback_events",
                 params={
                     "workspace_id": f"eq.{workspace_id}",
-                    "event_type": "eq.kept",
+                    "project_id": f"eq.{project_id}",
+                    "event_type": f"eq.{event_type.value}",
+                    "layer": f"eq.{layer.value}",
                     "decision_id": f"eq.{decision_id}",
                     "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
                     "limit": "1",
                 },
             )
             self._raise_for_supabase(existing)
-            if existing.json():
-                return self._event_from_row(existing.json()[0])
+            existing_rows = existing.json()
+            if existing_rows:
+                return self._event_from_row(existing_rows[0])
         response = await self.client.async_request(
             "POST",
             "/ai_edit_feedback_events",

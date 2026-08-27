@@ -82,8 +82,24 @@ def test_phase10_prelaunch_evidence_files_are_present() -> None:
 def test_backup_restore_script_uses_dump_restore_and_schema_probe() -> None:
     script = (ROOT / "scripts/verify_backup_restore.sh").read_text()
     assert "pg_dump --format=custom" in script
-    assert "pg_restore --clean --if-exists" in script
+    assert "--exclude-table-data=vault.secrets" in script
+    assert "pg_restore --exit-on-error --no-owner" in script
     assert "information_schema.tables" in script
+    assert "Restore target must be empty" in script
+    assert "MOTIONLY_BACKUP_RESTORE_ACK" in script
+    assert "Restore target resolves to the source database" in script
+    assert "fingerprint_tables" in script
+    assert "cmp -s" in script
+    assert "pg_is_in_recovery" in script
+
+
+def test_backup_restore_drill_seeds_representative_workflow_data() -> None:
+    seed = (ROOT / "scripts/backup_restore_seed.sql").read_text()
+    workflow = (ROOT / ".github/workflows/phase-0-safety.yml").read_text()
+    assert "motionly_ensure_first_draft_v2" in seed
+    assert "workflow_version" in seed
+    assert "backup_restore_seed.sql" in workflow
+    assert "MOTIONLY_BACKUP_RESTORE_ACK=restore-target" in workflow
 
 
 def test_ci_runs_phase10_prelaunch_gates() -> None:

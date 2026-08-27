@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./timeline-eval.mjs": "./src/timeline-eval.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -15,6 +16,6 @@
     "contracts:check": "cd ../../apps/api && python scripts/generate_openapi_contract.py --check"
   },
   "devDependencies": {
-    "typescript": "^5.7.2"
+    "typescript": "5.9.3"
   }
 }

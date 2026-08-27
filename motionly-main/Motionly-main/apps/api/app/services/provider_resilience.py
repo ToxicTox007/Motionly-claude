@@ -11,6 +11,19 @@ class ProviderErrorInfo:
     code: str
     retryable: bool
     status_code: int | None = None
+    fallback_eligible: bool | None = None
+    circuit_worthy: bool | None = None
+    billable: bool = True
+
+    @property
+    def can_fallback(self) -> bool:
+        """Whether a different route may safely handle the same request."""
+        return self.retryable if self.fallback_eligible is None else self.fallback_eligible
+
+    @property
+    def should_open_circuit(self) -> bool:
+        """Whether repeated route-local failures should quarantine this route."""
+        return self.retryable if self.circuit_worthy is None else self.circuit_worthy
 
 
 class ProviderCircuitOpen(RuntimeError):
@@ -100,9 +113,21 @@ def classify_provider_status(status_code: int) -> ProviderErrorInfo:
     if status_code == 429:
         return ProviderErrorInfo("provider_rate_limited", True, status_code)
     if status_code in {401, 403}:
-        return ProviderErrorInfo("provider_auth_failed", False, status_code)
+        return ProviderErrorInfo(
+            "provider_auth_failed",
+            False,
+            status_code,
+            fallback_eligible=True,
+            circuit_worthy=True,
+        )
     if status_code == 402:
-        return ProviderErrorInfo("provider_quota_exceeded", False, status_code)
+        return ProviderErrorInfo(
+            "provider_quota_exceeded",
+            False,
+            status_code,
+            fallback_eligible=True,
+            circuit_worthy=True,
+        )
     if 500 <= status_code < 600:
         return ProviderErrorInfo("provider_unavailable", True, status_code)
     if 400 <= status_code < 500:

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import tempfile
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -51,7 +53,10 @@ from app.schemas.visual import (
     VideoManifest,
 )
 from app.services.broll_intelligence import apply_stage4_broll_rules
+from app.services.generic_media_upload import GenericMediaUploadSessionService
+from app.services.local_storage import LocalObjectStorage
 from app.services.media_url_policy import MediaUrlPolicyError
+from app.services.object_references import ObjectReferenceService
 from app.services.queue import BrollQueue, QueueRegistry, StockAssetEnrichmentQueue
 from app.services.stock_video import (
     EMBEDDING_DOWNLOAD_MAX_BYTES,
@@ -67,6 +72,7 @@ from app.services.stock_video import (
     score_candidate_details,
 )
 from app.services.storage import StorageSigner
+from app.services.storage_quota import StorageQuotaService
 from app.services.transcription_provider import FixtureTranscriptionProvider
 from tests.worker_job_test_helpers import (
     build_queue_request_state,
@@ -132,6 +138,49 @@ def make_creator_billing_repository(workspace_id: UUID) -> InMemoryBillingReposi
     return repository
 
 
+def attach_media_upload_services(request: SimpleNamespace) -> LocalObjectStorage:
+    """Attach the production-shaped generic lifecycle to a direct API test request."""
+    state = request.app.state
+    signer = getattr(state, "storage_signer", StorageSigner(base_url="http://localhost:8000"))
+    storage = LocalObjectStorage(root=tempfile.mkdtemp(prefix="motionly-broll-media-"))
+    reference_service = ObjectReferenceService(storage_signer=signer, in_memory=True)
+    quota_service = StorageQuotaService(in_memory=True)
+    state.storage_signer = signer
+    state.object_storage = storage
+    state.object_reference_service = reference_service
+    state.storage_quota_service = quota_service
+    state.media_upload_session_service = GenericMediaUploadSessionService(
+        storage_signer=signer,
+        object_storage=storage,
+        quota_service=quota_service,
+        object_reference_service=reference_service,
+    )
+    return storage
+
+
+def write_broll_upload_part(
+    request: SimpleNamespace,
+    *,
+    session_id: UUID,
+    workspace_id: UUID,
+    project_id: UUID,
+    content: bytes,
+) -> None:
+    service = request.app.state.media_upload_session_service
+    session = asyncio.run(
+        service.get(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+    )
+    request.app.state.object_storage.write_object(
+        bucket=session.final_storage_bucket,
+        path=session.parts[0].object_path,
+        content=content,
+    )
+
+
 def test_generate_broll_creates_scored_vertical_slots() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
     registry = QueueRegistry()
@@ -169,6 +218,15 @@ def test_generate_broll_creates_scored_vertical_slots() -> None:
         if slot.selected_asset
     )
     assert all(slot.crossfade_ms == 260 for slot in slot_responses)
+    enrichment_jobs = [
+        job for job in registry.jobs.values() if job.kind == "stock_asset_enrichment"
+    ]
+    assert enrichment_jobs
+    assert {job.resource_id for job in enrichment_jobs} == set(repository.assets)
+    assert all(job.queue_name == "stock_asset_enrichment" for job in enrichment_jobs)
+    assert all(
+        '"clip_model_name":"fixture-clip-model"' in job.render_engine for job in enrichment_jobs
+    )
 
 
 def test_user_broll_library_upload_list_and_delete() -> None:
@@ -185,7 +243,9 @@ def test_user_broll_library_upload_list_and_delete() -> None:
             )
         )
     )
+    attach_media_upload_services(request)
     signer = StorageSigner(base_url="http://localhost:8000")
+    content = b"b" * 4096
     initialized = asyncio.run(
         init_user_broll_upload(
             project_id=project_id,
@@ -193,6 +253,7 @@ def test_user_broll_library_upload_list_and_delete() -> None:
                 filename="office-cutaway.mp4",
                 mime_type="video/mp4",
                 file_size_bytes=4096,
+                sha256_hash=hashlib.sha256(content).hexdigest(),
                 width=1080,
                 height=1920,
                 duration_ms=3200,
@@ -204,8 +265,15 @@ def test_user_broll_library_upload_list_and_delete() -> None:
         )
     )
     assert initialized.asset.provider == "user_library"
-    assert initialized.signed_upload_url.endswith(".mp4")
+    assert ".mp4.parts/" in initialized.signed_upload_url
 
+    write_broll_upload_part(
+        request,
+        session_id=initialized.session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        content=content,
+    )
     completed = asyncio.run(
         complete_user_broll_upload(
             project_id=project_id,
@@ -216,7 +284,9 @@ def test_user_broll_library_upload_list_and_delete() -> None:
             storage_signer=signer,
         )
     )
-    assert completed.asset.download_url
+    assert completed.asset.media_state == "verified"
+    assert completed.asset.object_reference_id
+    assert completed.asset.verified_sha256 == hashlib.sha256(content).hexdigest()
     listed = asyncio.run(
         list_user_broll_library(
             project_id=project_id,
@@ -227,6 +297,7 @@ def test_user_broll_library_upload_list_and_delete() -> None:
         )
     )
     assert [asset.id for asset in listed.assets] == [initialized.asset.id]
+    assert listed.assets[0].download_url
 
     deleted = asyncio.run(
         delete_user_broll_library_asset(
@@ -401,6 +472,14 @@ def test_broll_api_prefers_async_repository_methods() -> None:
             self.async_calls.append("list-library")
             return self.list_library_assets(**kwargs)
 
+        async def set_library_media_session_async(self, **kwargs):
+            self.async_calls.append("set-library-media-session")
+            return self.set_library_media_session(**kwargs)
+
+        async def mark_library_asset_verified_async(self, **kwargs):
+            self.async_calls.append("mark-library-verified")
+            return self.mark_library_asset_verified(**kwargs)
+
         async def mark_library_asset_ready_async(self, **kwargs):
             self.async_calls.append("mark-library-ready")
             return self.mark_library_asset_ready(**kwargs)
@@ -446,7 +525,9 @@ def test_broll_api_prefers_async_repository_methods() -> None:
             )
         )
     )
+    attach_media_upload_services(request)
     signer = StorageSigner(base_url="http://localhost:8000")
+    content = b"b" * 4096
     initialized = asyncio.run(
         init_user_broll_upload(
             project_id=project_id,
@@ -454,6 +535,7 @@ def test_broll_api_prefers_async_repository_methods() -> None:
                 filename="office-cutaway.mp4",
                 mime_type="video/mp4",
                 file_size_bytes=4096,
+                sha256_hash=hashlib.sha256(content).hexdigest(),
                 width=1080,
                 height=1920,
                 duration_ms=3200,
@@ -463,6 +545,13 @@ def test_broll_api_prefers_async_repository_methods() -> None:
             repository=repository,
             storage_signer=signer,
         )
+    )
+    write_broll_upload_part(
+        request,
+        session_id=initialized.session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        content=content,
     )
     asyncio.run(
         complete_user_broll_upload(
@@ -529,7 +618,8 @@ def test_broll_api_prefers_async_repository_methods() -> None:
     assert "upsert-asset" in repository.async_calls
     assert "get-asset" in repository.async_calls
     assert "list-library" in repository.async_calls
-    assert "mark-library-ready" in repository.async_calls
+    assert "set-library-media-session" in repository.async_calls
+    assert "mark-library-verified" in repository.async_calls
     assert repository.async_calls.count("find-cache") >= 2
     assert "list-slots" in repository.async_calls
     assert "get-slot" in repository.async_calls
@@ -703,10 +793,11 @@ def test_update_broll_region_validates_ranges() -> None:
 def test_search_broll_candidates_adds_provider_results_to_slot() -> None:
     repository, project_id, workspace_id, user_id = make_broll_repository()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    request = _request()
     generated = run_generate_broll(
         project_id=project_id,
         payload=BrollGenerateRequest(),
-        request=_request(),
+        request=request,
         actor=actor,
         repository=repository,
         billing_repository=make_creator_billing_repository(workspace_id),
@@ -719,10 +810,13 @@ def test_search_broll_candidates_adds_provider_results_to_slot() -> None:
         search_broll_candidates(
             project_id=project_id,
             slot_id=slot.id,
-            request=_request(),
+            request=request,
             actor=actor,
             repository=repository,
             providers=[FixtureStockVideoProvider()],
+            stock_asset_enrichment_queue=StockAssetEnrichmentQueue(
+                request.app.state.stock_asset_enrichment_queue.registry
+            ),
             query="modern office",
         )
     )
@@ -730,6 +824,10 @@ def test_search_broll_candidates_adds_provider_results_to_slot() -> None:
     assert response.query == "modern office"
     assert response.candidates
     assert len(response.slot.candidates) >= len(slot.candidates)
+    assert any(
+        job.kind == "stock_asset_enrichment"
+        for job in request.app.state.queue_registry.jobs.values()
+    )
 
 
 def test_stage_4_rules_avoid_critical_face_overlap_and_limit_consecutive_broll() -> None:
@@ -1211,10 +1309,30 @@ def test_stock_asset_enrichment_queue_executes_without_duplicate_rows(
         project_id=project_id,
         workspace_id=workspace_id,
         asset_id=asset.id,
+        refresh_key="provider-metadata-v1",
         job_payload='{"clip_model_name":"fixture-clip-model"}',
     )
+    duplicate = queue.enqueue_asset_enrichment(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        asset_id=asset.id,
+        refresh_key="provider-metadata-v1",
+        job_payload='{"clip_model_name":"fixture-clip-model"}',
+    )
+    assert duplicate.id == job.id
+    assert len(registry.jobs) == 1
 
     asyncio.run(run_enqueued_job(job_id=job.id, request=request))
+
+    refreshed = queue.enqueue_asset_enrichment(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        asset_id=asset.id,
+        refresh_key="provider-metadata-v2",
+        job_payload='{"clip_model_name":"fixture-clip-model"}',
+    )
+    assert refreshed.id != job.id
+    assert refreshed.resource_id == asset.id
 
     enriched = repository.get_asset(
         project_id=project_id,
@@ -1233,7 +1351,7 @@ def _request(
     billing_repository=None,
 ):
     registry = registry or QueueRegistry()
-    return build_queue_request_state(
+    request = build_queue_request_state(
         registry=registry,
         settings=SimpleNamespace(
             billing_enabled=billing_enabled,
@@ -1247,6 +1365,8 @@ def _request(
         stock_video_providers=[FixtureStockVideoProvider()],
         storage_signer=StorageSigner(base_url="http://localhost:8000"),
     )
+    request.app.state.stock_asset_enrichment_queue = StockAssetEnrichmentQueue(registry)
+    return request
 
 
 def run_generate_broll(
@@ -1267,6 +1387,7 @@ def run_generate_broll(
     registry = broll_queue.registry or QueueRegistry()
     broll_queue = BrollQueue(registry=registry)
     request.app.state.queue_registry = registry
+    request.app.state.stock_asset_enrichment_queue = StockAssetEnrichmentQueue(registry)
     request.app.state.broll_repository = repository
     request.app.state.billing_repository = billing_repository
     request.app.state.stock_video_providers = providers
@@ -1287,9 +1408,7 @@ def run_generate_broll(
         )
     )
     if getattr(broll_response, "status", None) == "queued":
-        asyncio.run(
-            run_enqueued_job(job_id=broll_response.job_id, request=request)
-        )
+        asyncio.run(run_enqueued_job(job_id=broll_response.job_id, request=request))
         slots = repository.list_slots(project_id=project_id, workspace_id=actor.workspace_id)
         broll_response = BrollGenerateResponse(
             slots=[repository.response_for_slot(slot) for slot in slots],
@@ -1297,7 +1416,6 @@ def run_generate_broll(
             status="ready",
         )
     return broll_response
-
 
 
 class DummyResponse:

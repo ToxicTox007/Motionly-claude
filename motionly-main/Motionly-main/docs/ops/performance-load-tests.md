@@ -94,3 +94,30 @@ Covered surfaces:
 The script writes dry-run scenario metadata by default. Live runs execute the
 existing golden/correctness suites, record duration and resource samples, and
 fail if any benchmark command fails.
+
+## Versioned SLO gate and staged canary
+
+`scripts/perf/slo-contract.json` is the source of truth for canary decisions. It
+requires schema version, contract revision, a five-minute window, minimum sample
+counts, HTTP/5xx and p95 measurements by surface, queue backpressure, provider
+health, and (when provided) baseline regression evidence. Validate a collected
+metrics document locally with:
+
+```bash
+node scripts/perf/assert-slo.mjs test-results/canary/metrics.json
+```
+
+Use `--observe` while the metrics producer is being integrated; observe mode
+writes a decision but does not fail. `SLO_ENFORCE=1` is fail-closed: a malformed,
+stale, or undersampled document blocks promotion. The canary workflow promotes
+5%, then 25%, then 100% only after each stage validates. Set
+`CANARY_ROLLBACK_HOOK` to a reversible platform rollback command before enabling
+enforcement; the workflow preserves forward-only migrations and stores the
+promotion, metric, decision, and rollback artifacts under `test-results/canary`.
+
+For live k6 evidence, use strict mode and retain its JSON summary:
+
+```bash
+K6_STRICT_SLO=1 K6_SUMMARY_OUTPUT=test-results/k6-summary.json \
+k6 run scripts/perf/k6-api-workflows.js
+```

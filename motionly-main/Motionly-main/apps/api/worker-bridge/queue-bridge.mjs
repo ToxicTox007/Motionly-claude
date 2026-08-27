@@ -6,9 +6,11 @@ import {
   bullConnection,
   allQueueNames,
   bullPriority,
+  bullTransportAttempts,
   defaultJobOptions,
   normalizeJobRecord,
   queueFor,
+  workflowJobFields,
 } from "./queue-common.mjs";
 
 const queueNames = allQueueNames;
@@ -33,12 +35,14 @@ async function findJob(connection, jobId, preferredQueueName = null) {
 async function enqueue(connection, payload) {
   const queue = queueFor(payload.queue_name, connection);
   const now = new Date().toISOString();
+  const workflowFields = workflowJobFields(payload);
+  const transportAttempts = bullTransportAttempts(payload);
   const data = {
     id: payload.id,
     kind: payload.kind,
     queue_name: payload.queue_name,
     priority: payload.priority || 0,
-    max_attempts: payload.max_attempts || defaultJobOptions().attempts,
+    max_attempts: transportAttempts,
     enqueued_at: now,
     workspace_id: payload.workspace_id || null,
     project_id: payload.project_id || null,
@@ -47,12 +51,13 @@ async function enqueue(connection, payload) {
     trace_id: payload.trace_id || null,
     error_code: payload.error_code || null,
     error_message: payload.error_message || null,
+    ...workflowFields,
   };
   const job = await queue.add(payload.kind, data, {
     ...defaultJobOptions(),
     jobId: payload.id,
     priority: bullPriority(payload.priority),
-    attempts: data.max_attempts,
+    attempts: transportAttempts,
   });
   const state = await job.getState();
   return normalizeJobRecord(job, state);

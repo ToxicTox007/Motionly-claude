@@ -5,8 +5,17 @@ from uuid import UUID
 
 from app.api.errors import ApiError
 from app.core.config import get_settings
+from app.core.production import validate_production_settings
 from app.repositories.uploads import SupabaseUploadRepository
 from app.repositories.visual import SupabaseVisualRepository
+from app.services.model_domain_adapters import (
+    GatewayVisualIntelligenceProvider,
+    bundle_revision,
+    register_visual_route,
+)
+from app.services.model_gateway import ModelOperation, validate_gateway_operations
+from app.services.model_gateway_factory import model_gateway_from_settings
+from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider
 
 
@@ -21,6 +30,7 @@ def main() -> None:
 
 def _runner():
     settings = get_settings()
+    validate_production_settings(settings)
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
     upload_repository = SupabaseUploadRepository(
@@ -35,13 +45,45 @@ def _runner():
     visual_provider_key = settings.visual_intelligence_provider.strip().lower()
     if visual_provider_key == "fixture":
         from app.services.visual_intelligence import FixtureVisualIntelligenceProvider
-        provider = FixtureVisualIntelligenceProvider()
+
+        native_provider = FixtureVisualIntelligenceProvider()
     else:
-        provider = LocalMLVisualIntelligenceProvider(
+        native_provider = LocalMLVisualIntelligenceProvider(
             clip_model=settings.visual_clip_model,
             blip_model=settings.visual_blip_model,
             yolo_model=settings.visual_yolo_model,
+            clip_revision=settings.visual_clip_model_revision,
+            blip_revision=settings.visual_blip_model_revision,
+            yolo_revision=settings.visual_yolo_model_revision,
         )
+    operations = OperationsRepository(
+        supabase_url=str(settings.supabase_url),
+        service_role_key=settings.supabase_service_role_key,
+    )
+    gateway = model_gateway_from_settings(
+        settings,
+        metrics_registry=MetricsRegistry(),
+        operations_repository=operations,
+    )
+    if gateway is None:
+        raise RuntimeError("Model gateway is required for visual inference")
+    route = register_visual_route(
+        gateway,
+        provider=native_provider,
+        model=native_provider.model,
+        revision=bundle_revision(
+            settings.visual_clip_model_revision,
+            settings.visual_blip_model_revision,
+            settings.visual_yolo_model_revision,
+        ),
+    )
+    if settings.app_env == "production":
+        validate_gateway_operations(
+            gateway,
+            required=(ModelOperation.VISION_VIDEO_MANIFEST,),
+            runtime="visual worker",
+        )
+    provider = GatewayVisualIntelligenceProvider(gateway=gateway, route=route)
     from app.services.visual_intelligence import run_visual_analysis_for_upload
 
     def execute(payload: dict[str, object]) -> dict[str, object]:

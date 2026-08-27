@@ -159,31 +159,6 @@ export function Alert({
   );
 }
 
-export function ToastSurface({
-  tone = "info",
-  className,
-  children,
-  ...props
-}: HTMLAttributes<HTMLDivElement> & {
-  tone?: "info" | "success" | "warning" | "danger" | "loading";
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded border-2 border-foreground border-l-[10px] bg-surface p-4 text-foreground shadow-brutal",
-        tone === "success" && "border-l-success",
-        tone === "danger" && "border-l-danger",
-        tone === "warning" && "border-l-warning",
-        (tone === "info" || tone === "loading") && "border-l-primary",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </div>
-  );
-}
-
 export function Modal({
   open,
   title,
@@ -288,20 +263,6 @@ export function Tabs({
       ))}
     </div>
   );
-}
-
-export function SegmentedControl({
-  options,
-  value,
-  onChange,
-  className,
-}: {
-  options: Array<{ value: string; label: string }>;
-  value: string;
-  onChange: (value: string) => void;
-  className?: string;
-}) {
-  return <Tabs tabs={options} value={value} onChange={onChange} className={className} />;
 }
 
 export function Progress({

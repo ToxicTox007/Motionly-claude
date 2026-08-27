@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, statfsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,8 @@ import { Worker } from "bullmq";
 import {
   bullConnection,
   apiBaseUrl,
+  assertQueuePayloadSafe,
+  env,
   hasApiConfig,
   hasQueueConfig,
   isProduction,
@@ -14,19 +17,19 @@ import {
   stalledIntervalMs,
   workerConcurrency,
   workerToken,
+  workflowJobFieldNames,
+  workflowJobFields,
   writeBuildStamp,
 } from "./queue-common.mjs";
-
-function env(name, fallback = "") {
-  return process.env[name] || fallback;
-}
 
 function remotionEnabled() {
   return env("REMOTION_ENABLED") === "true";
 }
 
 function rendererPath() {
-  return resolve(env("RENDERER_BASE_PATH", join(import.meta.dirname, "../../renderer")));
+  return resolve(
+    env("RENDERER_BASE_PATH", join(import.meta.dirname, "../../renderer")),
+  );
 }
 
 const pythonExecutors = new Map();
@@ -44,14 +47,38 @@ function diskFreeBytes(path = env("MEDIA_WORK_DIR", "/tmp")) {
 
 export function pythonExecutorConfig(overrides = {}) {
   return {
-    requestTimeoutMs: Number(overrides.requestTimeoutMs || env("PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS", "900000")),
-    startupTimeoutMs: Number(overrides.startupTimeoutMs || env("PYTHON_EXECUTOR_STARTUP_TIMEOUT_MS", "900000")),
-    heartbeatIntervalMs: Number(overrides.heartbeatIntervalMs || env("PYTHON_EXECUTOR_HEARTBEAT_INTERVAL_MS", "15000")),
-    heartbeatTimeoutMs: Number(overrides.heartbeatTimeoutMs || env("PYTHON_EXECUTOR_HEARTBEAT_TIMEOUT_MS", "120000")),
-    restartBackoffMs: Number(overrides.restartBackoffMs || env("PYTHON_EXECUTOR_RESTART_BACKOFF_MS", "1000")),
-    restartBackoffCapMs: Number(overrides.restartBackoffCapMs || env("PYTHON_EXECUTOR_RESTART_BACKOFF_CAP_MS", "30000")),
-    restartWindowMs: Number(overrides.restartWindowMs || env("PYTHON_EXECUTOR_RESTART_WINDOW_MS", "60000")),
-    maxRestartsPerWindow: Number(overrides.maxRestartsPerWindow || env("PYTHON_EXECUTOR_MAX_RESTARTS_PER_WINDOW", "5")),
+    requestTimeoutMs: Number(
+      overrides.requestTimeoutMs ||
+        env("PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS", "900000"),
+    ),
+    startupTimeoutMs: Number(
+      overrides.startupTimeoutMs ||
+        env("PYTHON_EXECUTOR_STARTUP_TIMEOUT_MS", "900000"),
+    ),
+    heartbeatIntervalMs: Number(
+      overrides.heartbeatIntervalMs ||
+        env("PYTHON_EXECUTOR_HEARTBEAT_INTERVAL_MS", "15000"),
+    ),
+    heartbeatTimeoutMs: Number(
+      overrides.heartbeatTimeoutMs ||
+        env("PYTHON_EXECUTOR_HEARTBEAT_TIMEOUT_MS", "120000"),
+    ),
+    restartBackoffMs: Number(
+      overrides.restartBackoffMs ||
+        env("PYTHON_EXECUTOR_RESTART_BACKOFF_MS", "1000"),
+    ),
+    restartBackoffCapMs: Number(
+      overrides.restartBackoffCapMs ||
+        env("PYTHON_EXECUTOR_RESTART_BACKOFF_CAP_MS", "30000"),
+    ),
+    restartWindowMs: Number(
+      overrides.restartWindowMs ||
+        env("PYTHON_EXECUTOR_RESTART_WINDOW_MS", "60000"),
+    ),
+    maxRestartsPerWindow: Number(
+      overrides.maxRestartsPerWindow ||
+        env("PYTHON_EXECUTOR_MAX_RESTARTS_PER_WINDOW", "5"),
+    ),
     sleep: overrides.sleep || sleep,
     spawnImpl: overrides.spawnImpl || spawn,
     now: overrides.now || Date.now,
@@ -97,7 +124,11 @@ function emitSupervisorEvent(state, event, extra = {}) {
 async function ensurePythonExecutor(name, moduleName, options = {}) {
   let state = pythonExecutors.get(name);
   if (!state) {
-    state = createSupervisorState(name, moduleName, pythonExecutorConfig(options));
+    state = createSupervisorState(
+      name,
+      moduleName,
+      pythonExecutorConfig(options),
+    );
     pythonExecutors.set(name, state);
   }
   if (state.starting) {
@@ -143,7 +174,10 @@ async function startPythonExecutor(state) {
   state.buffer = "";
   state.shuttingDown = false;
   attachSupervisorListeners(state);
-  emitSupervisorEvent(state, state.restartCount > 0 ? "subprocess_restarted" : "subprocess_started");
+  emitSupervisorEvent(
+    state,
+    state.restartCount > 0 ? "subprocess_restarted" : "subprocess_started",
+  );
   state.restartTimestamps.push(state.config.now());
   state.restartCount += 1;
   startHeartbeatTimer(state);
@@ -155,7 +189,9 @@ async function startPythonExecutor(state) {
 
 function pruneRestartTimestamps(state) {
   const cutoff = state.config.now() - state.config.restartWindowMs;
-  state.restartTimestamps = state.restartTimestamps.filter((timestamp) => timestamp >= cutoff);
+  state.restartTimestamps = state.restartTimestamps.filter(
+    (timestamp) => timestamp >= cutoff,
+  );
 }
 
 function computeRestartDelayMs(state) {
@@ -163,14 +199,16 @@ function computeRestartDelayMs(state) {
   const exponent = Math.max(0, state.restartCount - 1);
   return Math.min(
     state.config.restartBackoffCapMs,
-    state.config.restartBackoffMs * (2 ** exponent),
+    state.config.restartBackoffMs * 2 ** exponent,
   );
 }
 
 function attachSupervisorListeners(state) {
   const child = state.child;
   if (!child) return;
-  child.stdout.on("data", (data) => handleSupervisorStdout(state, String(data)));
+  child.stdout.on("data", (data) =>
+    handleSupervisorStdout(state, String(data)),
+  );
   child.stderr.on("data", (data) => {
     const text = String(data);
     globalThis.process.stderr.write(text);
@@ -184,7 +222,9 @@ function attachSupervisorListeners(state) {
       state,
       pythonExecutorError(
         "subprocess_crashed",
-        error instanceof Error ? error.message : `${state.name} subprocess error`,
+        error instanceof Error
+          ? error.message
+          : `${state.name} subprocess error`,
       ),
     );
   });
@@ -214,7 +254,10 @@ function handleSupervisorStdout(state, chunk) {
       if (/^[\[{]/.test(line) && state.pending.size > 0) {
         handleSupervisorFailure(
           state,
-          pythonExecutorError("python_protocol_invalid", `${state.name} emitted invalid JSON`),
+          pythonExecutorError(
+            "python_protocol_invalid",
+            `${state.name} emitted invalid JSON`,
+          ),
         );
         return;
       }
@@ -288,14 +331,24 @@ function sendSupervisorControl(state, control) {
   });
 }
 
-function sendSupervisorRequest(state, payload, { timeoutMs, control = null } = {}) {
+function sendSupervisorRequest(
+  state,
+  payload,
+  { timeoutMs, control = null } = {},
+) {
   const child = state.child;
   if (!child || child.exitCode !== null || child.killed) {
-    throw pythonExecutorError("subprocess_crashed", `${state.name} is not running`);
+    throw pythonExecutorError(
+      "subprocess_crashed",
+      `${state.name} is not running`,
+    );
   }
   const stdin = child.stdin;
   if (!stdin || stdin.destroyed || !stdin.writable) {
-    const error = pythonExecutorError("python_broken_pipe", `${state.name} stdin is unavailable`);
+    const error = pythonExecutorError(
+      "python_broken_pipe",
+      `${state.name} stdin is unavailable`,
+    );
     handleSupervisorFailure(state, error);
     throw error;
   }
@@ -323,7 +376,12 @@ function sendSupervisorRequest(state, payload, { timeoutMs, control = null } = {
   });
 }
 
-export async function persistentPythonExecutor(name, moduleName, payload, options = {}) {
+export async function persistentPythonExecutor(
+  name,
+  moduleName,
+  payload,
+  options = {},
+) {
   const state = await ensurePythonExecutor(name, moduleName, options);
   return sendSupervisorRequest(state, payload);
 }
@@ -350,7 +408,10 @@ export function queueWaitMs(job, now = Date.now()) {
   return Math.max(0, now - Number(job?.timestamp || now));
 }
 
-export function jobRuntimeTelemetry(job, { startedAt, finishedAt = Date.now() } = {}) {
+export function jobRuntimeTelemetry(
+  job,
+  { startedAt, finishedAt = Date.now() } = {},
+) {
   return {
     runtime_ms: Math.max(0, finishedAt - startedAt),
     queue_wait_ms: queueWaitMs(job, startedAt),
@@ -370,21 +431,39 @@ function isSubprocessFailureCode(code) {
 }
 
 async function runRenderJob(job) {
-  if (job.data.render_engine === "remotion_premium" && env("REMOTION_ENABLED") === "true") {
+  if (
+    job.data.render_engine === "remotion_premium" &&
+    env("REMOTION_ENABLED") === "true"
+  ) {
     const { runRemotionJob } = await import("./remotion.mjs");
     return runRemotionJob(job.data, {
+      queueIdentity: {
+        id: String(job.id),
+        attemptsMade: Number(job.attemptsMade || 0),
+      },
       onProgress: async ({ progressPct, message, eventType, metadata }) => {
         await job.updateProgress(progressPct);
-        console.log(JSON.stringify({ event: eventType || "worker_progress", progress_pct: progressPct, message, metadata: metadata || {} }));
+        console.log(
+          JSON.stringify({
+            event: eventType || "worker_progress",
+            progress_pct: progressPct,
+            message,
+            metadata: metadata || {},
+          }),
+        );
       },
     });
   }
-  throw new Error("remotion_premium requires REMOTION_ENABLED=true on the Chromium worker");
+  throw new Error(
+    "remotion_premium requires REMOTION_ENABLED=true on the Chromium worker",
+  );
 }
 
 async function runVisualJob(job) {
   if (env("ML_WORKER_ENABLED") !== "true") {
-    throw new Error("visual_analysis requires the dedicated GPU/ML worker image");
+    throw new Error(
+      "visual_analysis requires the dedicated GPU/ML worker image",
+    );
   }
   await ensureUploadRecordExists(job);
   return persistentPythonExecutor("visual-ml", "app.workers.visual_job", {
@@ -396,7 +475,9 @@ async function runVisualJob(job) {
 
 async function runMatteJob(job) {
   if (env("ML_WORKER_ENABLED") !== "true") {
-    throw new Error("matte_extraction requires the dedicated GPU/media worker image");
+    throw new Error(
+      "matte_extraction requires the dedicated GPU/media worker image",
+    );
   }
   await ensureUploadRecordExists(job);
   return persistentPythonExecutor("matte-gpu", "app.workers.matte_job", {
@@ -407,74 +488,107 @@ async function runMatteJob(job) {
   });
 }
 
+export function domainJobPayload(job) {
+  const data = job?.data || {};
+  return {
+    job_id: String(job?.id),
+    kind: String(data.kind),
+    queue_name: String(job?.queueName),
+    workspace_id: String(data.workspace_id),
+    project_id: String(data.project_id),
+    resource_id: String(data.resource_id),
+    render_engine: String(data.render_engine || "ffmpeg_basic"),
+    ...workflowJobFields(data),
+  };
+}
+
 async function runDomainJob(job) {
   if (env("PYTHON_MEDIA_WORKER_ENABLED") !== "true") {
-    throw new Error(`${job.data.kind} requires a dedicated Python media worker image`);
+    throw new Error(
+      `${job.data.kind} requires a dedicated Python media worker image`,
+    );
   }
-  return persistentPythonExecutor("domain", "app.workers.domain_job", {
-    job_id: String(job.id),
-    kind: String(job.data.kind),
-    queue_name: String(job.queueName),
-    workspace_id: String(job.data.workspace_id),
-    project_id: String(job.data.project_id),
-    resource_id: String(job.data.resource_id),
-    render_engine: String(job.data.render_engine || "ffmpeg_basic"),
-  });
+  return persistentPythonExecutor(
+    "domain",
+    "app.workers.domain_job",
+    domainJobPayload(job),
+  );
 }
 
 async function runRetentionJob() {
   if (!hasApiConfig()) {
-    throw new Error("maintenance retention requires WORKER_API_BASE_URL and WORKER_API_TOKEN");
+    throw new Error(
+      "maintenance retention requires WORKER_API_BASE_URL and WORKER_API_TOKEN",
+    );
   }
   const response = await fetch(`${apiBaseUrl()}/internal/retention/run`, {
     method: "POST",
     headers: { "x-motionly-worker-token": workerToken() },
   });
-  if (!response.ok) throw new Error(`retention endpoint returned HTTP ${response.status}`);
+  if (!response.ok)
+    throw new Error(`retention endpoint returned HTTP ${response.status}`);
   return response.json();
 }
 
 async function runGpuAutoscalingJob() {
   if (!hasApiConfig()) {
-    throw new Error("maintenance autoscaling requires WORKER_API_BASE_URL and WORKER_API_TOKEN");
+    throw new Error(
+      "maintenance autoscaling requires WORKER_API_BASE_URL and WORKER_API_TOKEN",
+    );
   }
-  const response = await fetch(`${apiBaseUrl()}/internal/operations/gpu-autoscaling/run`, {
-    method: "POST",
-    headers: { "x-motionly-worker-token": workerToken() },
-  });
-  if (!response.ok) throw new Error(`gpu autoscaling endpoint returned HTTP ${response.status}`);
+  const response = await fetch(
+    `${apiBaseUrl()}/internal/operations/gpu-autoscaling/run`,
+    {
+      method: "POST",
+      headers: { "x-motionly-worker-token": workerToken() },
+    },
+  );
+  if (!response.ok)
+    throw new Error(
+      `gpu autoscaling endpoint returned HTTP ${response.status}`,
+    );
   return response.json();
 }
 
 async function runBatchJob(job) {
   if (!hasApiConfig()) {
-    throw new Error("batch planning requires WORKER_API_BASE_URL and WORKER_API_TOKEN");
+    throw new Error(
+      "batch planning requires WORKER_API_BASE_URL and WORKER_API_TOKEN",
+    );
   }
   const response = await fetch(
     `${apiBaseUrl()}/internal/batches/${job.data.workspace_id}/${job.data.resource_id}/run`,
     { method: "POST", headers: { "x-motionly-worker-token": workerToken() } },
   );
-  if (!response.ok) throw new Error(`batch endpoint returned HTTP ${response.status}`);
+  if (!response.ok)
+    throw new Error(`batch endpoint returned HTTP ${response.status}`);
   return response.json();
 }
 
 async function sendHeartbeat() {
   if (!hasApiConfig()) return;
-  const response = await fetch(`${apiBaseUrl()}/internal/operations/heartbeat`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-motionly-worker-token": workerToken(),
+  const response = await fetch(
+    `${apiBaseUrl()}/internal/operations/heartbeat`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-motionly-worker-token": workerToken(),
+      },
+      body: JSON.stringify({
+        worker_id: env(
+          "WORKER_ID",
+          `${env("HOSTNAME", "worker")}-${process.pid}`,
+        ),
+        worker_role: env("PROCESS_ROLE", "worker"),
+        queues: queueNames,
+        version: env("APP_VERSION") || null,
+        metadata: { concurrency: env("WORKER_CONCURRENCY", "1") },
+      }),
     },
-    body: JSON.stringify({
-      worker_id: env("WORKER_ID", `${env("HOSTNAME", "worker")}-${process.pid}`),
-      worker_role: env("PROCESS_ROLE", "worker"),
-      queues: queueNames,
-      version: env("APP_VERSION") || null,
-      metadata: { concurrency: env("WORKER_CONCURRENCY", "1") },
-    }),
-  });
-  if (!response.ok) throw new Error(`heartbeat endpoint returned HTTP ${response.status}`);
+  );
+  if (!response.ok)
+    throw new Error(`heartbeat endpoint returned HTTP ${response.status}`);
 }
 
 async function reportProviderSlo(job, success, latencyMs, errorCode = null) {
@@ -488,21 +602,25 @@ async function reportProviderSlo(job, success, latencyMs, errorCode = null) {
     "batch_plan",
   ]);
   if (!providerKinds.has(String(job.data.kind))) return;
-  const response = await fetch(`${apiBaseUrl()}/internal/operations/provider-slo`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-motionly-worker-token": workerToken(),
+  const response = await fetch(
+    `${apiBaseUrl()}/internal/operations/provider-slo`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-motionly-worker-token": workerToken(),
+      },
+      body: JSON.stringify({
+        provider: String(job.data.provider || job.queueName),
+        operation: String(job.data.kind),
+        success,
+        latency_ms: latencyMs,
+        error_code: errorCode,
+      }),
     },
-    body: JSON.stringify({
-      provider: String(job.data.provider || job.queueName),
-      operation: String(job.data.kind),
-      success,
-      latency_ms: latencyMs,
-      error_code: errorCode,
-    }),
-  });
-  if (!response.ok) throw new Error(`provider SLO endpoint returned HTTP ${response.status}`);
+  );
+  if (!response.ok)
+    throw new Error(`provider SLO endpoint returned HTTP ${response.status}`);
 }
 
 function processEnv() {
@@ -518,11 +636,490 @@ function supabaseHeaders() {
   };
 }
 
-export async function ensureUploadRecordExists(job, { fetchImpl = globalThis.fetch } = {}) {
+export const MAX_WORKFLOW_RESULT_BYTES = 1_048_576;
+const MIN_WORKFLOW_RESULT_BYTES = 1_024;
+const DEFAULT_WORKFLOW_RESULT_BYTES = 262_144;
+const DEFAULT_WORKFLOW_LEASE_SECONDS = 3_600;
+
+function workflowError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function boundedText(value, maximum, fallback) {
+  const text = String(value ?? fallback)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .trim();
+  return (text || fallback).slice(0, maximum);
+}
+
+export function normalizeWorkflowErrorCode(value) {
+  const source = String(value || "worker_error").trim();
+  const normalized = source
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9_.-]+/g, "_")
+    .replace(/^[_.-]+|[_.-]+$/g, "")
+    .toLowerCase();
+  return (
+    normalized && /^[a-z0-9]/.test(normalized) ? normalized : "worker_error"
+  ).slice(0, 120);
+}
+
+export function deterministicWorkflowAttemptKey(job) {
+  const attemptKey = workflowJobFields(job?.data || {}).attempt_key;
+  if (!attemptKey) {
+    throw workflowError(
+      "workflow_payload_invalid",
+      "attempt_key is required for workflow jobs",
+    );
+  }
+  return attemptKey;
+}
+
+export function workflowRetryable(job) {
+  if (job?.data?.status === "canceled") return false;
+  const context = workflowContextForJob(job);
+  if (!context) {
+    const attempts = Math.max(
+      1,
+      Number(job?.opts?.attempts || job?.data?.max_attempts || 1),
+    );
+    return Number(job?.attemptsMade || 0) + 1 < attempts;
+  }
+  return context.attemptNumber < context.maxAttempts;
+}
+
+export function workflowContextForJob(job) {
+  const data = job?.data || {};
+  const hasWorkflowFields = workflowJobFieldNames.some(
+    (name) => data[name] !== undefined && data[name] !== null,
+  );
+  if (!hasWorkflowFields) return null;
+
+  const fields = workflowJobFields(data);
+  for (const name of [
+    "workflow_run_id",
+    "step_key",
+    "step_kind",
+    "attempt_key",
+  ]) {
+    if (!fields[name]) {
+      throw workflowError(
+        "workflow_payload_invalid",
+        `${name} is required for workflow jobs`,
+      );
+    }
+  }
+  for (const name of ["workflow_attempt_number", "workflow_max_attempts"]) {
+    if (!Number.isInteger(fields[name])) {
+      throw workflowError(
+        "workflow_payload_invalid",
+        `${name} is required for workflow jobs`,
+      );
+    }
+  }
+  if (fields.workflow_attempt_number > fields.workflow_max_attempts) {
+    throw workflowError(
+      "workflow_payload_invalid",
+      "workflow_attempt_number must not exceed workflow_max_attempts",
+    );
+  }
+  for (const name of ["workspace_id", "project_id", "kind"]) {
+    if (typeof data[name] !== "string" || data[name].length < 1) {
+      throw workflowError(
+        "workflow_payload_invalid",
+        `${name} is required for workflow jobs`,
+      );
+    }
+  }
+  return {
+    workspaceId: data.workspace_id,
+    projectId: data.project_id,
+    workflowRunId: fields.workflow_run_id,
+    workflowStepId: fields.workflow_step_id || null,
+    stepKey: fields.step_key,
+    stepKind: fields.step_kind,
+    attemptKey: fields.attempt_key,
+    attemptNumber: fields.workflow_attempt_number,
+    maxAttempts: fields.workflow_max_attempts,
+    inputHash: fields.input_hash || null,
+    nextRunState: fields.next_run_state || null,
+  };
+}
+
+export function workflowBeginParameters(job, options = {}) {
+  const context = workflowContextForJob(job);
+  if (!context) return null;
+  const maxAttempts = context.maxAttempts;
+  const configuredLeaseSeconds = boundedInteger(
+    env("WORKFLOW_STEP_LEASE_SECONDS"),
+    DEFAULT_WORKFLOW_LEASE_SECONDS,
+    5,
+    3_600,
+  );
+  const leaseSeconds = boundedInteger(
+    options.leaseSeconds,
+    configuredLeaseSeconds,
+    5,
+    3_600,
+  );
+  const leaseOwner = boundedText(options.leaseOwner, 160, "bullmq-worker");
+  return {
+    p_workspace_id: context.workspaceId,
+    p_project_id: context.projectId,
+    p_workflow_run_id: context.workflowRunId,
+    p_step_key: context.stepKey,
+    p_step_kind: context.stepKind,
+    p_attempt_key: deterministicWorkflowAttemptKey(job),
+    p_lease_owner: leaseOwner,
+    p_lease_seconds: leaseSeconds,
+    p_input_hash: context.inputHash,
+    p_max_attempts: maxAttempts,
+  };
+}
+
+function canonicalJsonValue(value, path, seen) {
+  if (value === null || typeof value === "boolean" || typeof value === "string")
+    return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw workflowError(
+        "workflow_result_unsafe",
+        `${path} contains a non-finite number`,
+      );
+    }
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (typeof value !== "object") {
+    throw workflowError("workflow_result_unsafe", `${path} is not JSON-safe`);
+  }
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    throw workflowError(
+      "workflow_result_unsafe",
+      `${path} contains binary data`,
+    );
+  }
+  if (seen.has(value)) {
+    throw workflowError(
+      "workflow_result_unsafe",
+      `${path} contains circular data`,
+    );
+  }
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getOwnPropertySymbols(value).length > 0) {
+        throw workflowError(
+          "workflow_result_unsafe",
+          `${path} contains symbol keys`,
+        );
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const indexKeys = Object.keys(descriptors).filter(
+        (key) => key !== "length",
+      );
+      if (indexKeys.length !== value.length) {
+        throw workflowError(
+          "workflow_result_unsafe",
+          `${path} must not contain sparse arrays`,
+        );
+      }
+      return indexKeys
+        .sort((left, right) => Number(left) - Number(right))
+        .map((key) => {
+          const descriptor = descriptors[key];
+          if (!descriptor.enumerable || descriptor.get || descriptor.set) {
+            throw workflowError(
+              "workflow_result_unsafe",
+              `${path}[${key}] is not plain JSON data`,
+            );
+          }
+          return canonicalJsonValue(descriptor.value, `${path}[${key}]`, seen);
+        });
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw workflowError(
+        "workflow_result_unsafe",
+        `${path} must contain only plain objects`,
+      );
+    }
+    const symbolKeys = Object.getOwnPropertySymbols(value);
+    if (symbolKeys.length > 0) {
+      throw workflowError(
+        "workflow_result_unsafe",
+        `${path} contains symbol keys`,
+      );
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const output = {};
+    for (const key of Object.keys(descriptors).sort()) {
+      const descriptor = descriptors[key];
+      if (!descriptor.enumerable || descriptor.get || descriptor.set) {
+        throw workflowError(
+          "workflow_result_unsafe",
+          `${path}.${key} is not plain JSON data`,
+        );
+      }
+      output[key] = canonicalJsonValue(
+        descriptor.value,
+        `${path}.${key}`,
+        seen,
+      );
+    }
+    return output;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function canonicalizeWorkflowResult(result, options = {}) {
+  assertQueuePayloadSafe(result, "workflow_result");
+  const value = canonicalJsonValue(result, "workflow_result", new Set());
+  const canonical = JSON.stringify(value);
+  const bytes = Buffer.byteLength(canonical, "utf8");
+  const configuredMaxBytes = boundedInteger(
+    env("WORKFLOW_STEP_RESULT_MAX_BYTES"),
+    DEFAULT_WORKFLOW_RESULT_BYTES,
+    MIN_WORKFLOW_RESULT_BYTES,
+    MAX_WORKFLOW_RESULT_BYTES,
+  );
+  const maxBytes = boundedInteger(
+    options.maxBytes,
+    configuredMaxBytes,
+    MIN_WORKFLOW_RESULT_BYTES,
+    MAX_WORKFLOW_RESULT_BYTES,
+  );
+  if (bytes > maxBytes) {
+    throw workflowError(
+      "workflow_result_oversized",
+      `workflow result is ${bytes} bytes; maximum is ${maxBytes}`,
+    );
+  }
+  return {
+    value,
+    canonical,
+    bytes,
+    hash: createHash("sha256").update(canonical).digest("hex"),
+  };
+}
+
+function firstRpcResult(value, rpcName) {
+  const result = Array.isArray(value) ? value[0] : value;
+  if (!result || typeof result !== "object") {
+    throw workflowError(
+      "workflow_rpc_invalid",
+      `${rpcName} returned no result`,
+    );
+  }
+  return result;
+}
+
+export async function callWorkflowRpc(
+  rpcName,
+  parameters,
+  { fetchImpl = globalThis.fetch } = {},
+) {
   const supabaseUrl = env("SUPABASE_URL");
   const serviceRoleKey = env("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !serviceRoleKey) {
-    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for GPU/media queues.");
+    throw workflowError(
+      "workflow_rpc_config_missing",
+      "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for workflow jobs",
+    );
+  }
+  const url = new URL(`/rest/v1/rpc/${rpcName}`, supabaseUrl);
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: supabaseHeaders(),
+    body: JSON.stringify(parameters),
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // An invalid or empty body is handled below without exposing response content.
+  }
+  if (!response.ok) {
+    const message = boundedText(
+      payload?.message || `${rpcName} returned HTTP ${response.status}`,
+      500,
+      "workflow RPC failed",
+    );
+    throw workflowError(payload?.code || "workflow_rpc_failed", message);
+  }
+  return firstRpcResult(payload, rpcName);
+}
+
+export async function beginWorkflowStep(job, options = {}) {
+  const rpcCall = options.rpcCall || callWorkflowRpc;
+  const parameters = workflowBeginParameters(job, options);
+  if (!parameters) return null;
+  return firstRpcResult(
+    await rpcCall("motionly_begin_workflow_step", parameters),
+    "motionly_begin_workflow_step",
+  );
+}
+
+export async function completeWorkflowStep(
+  job,
+  claimToken,
+  result,
+  options = {},
+) {
+  const context = workflowContextForJob(job);
+  if (!context)
+    throw workflowError(
+      "workflow_payload_invalid",
+      "workflow context is required",
+    );
+  if (!claimToken)
+    throw workflowError(
+      "workflow_claim_missing",
+      "workflow claim token is required",
+    );
+  const compact = canonicalizeWorkflowResult(result, options);
+  const parameters = {
+    p_workspace_id: context.workspaceId,
+    p_project_id: context.projectId,
+    p_workflow_run_id: context.workflowRunId,
+    p_step_key: context.stepKey,
+    p_claim_token: claimToken,
+    p_output_hash: compact.hash,
+    p_output: compact.value,
+    p_next_run_state: context.nextRunState,
+  };
+  const rpcCall = options.rpcCall || callWorkflowRpc;
+  const rpcResult = firstRpcResult(
+    await rpcCall("motionly_complete_workflow_step", parameters),
+    "motionly_complete_workflow_step",
+  );
+  return { compact, rpcResult };
+}
+
+export async function failWorkflowStep(
+  job,
+  claimToken,
+  originalError,
+  options = {},
+) {
+  const context = workflowContextForJob(job);
+  if (!context)
+    throw workflowError(
+      "workflow_payload_invalid",
+      "workflow context is required",
+    );
+  if (!claimToken)
+    throw workflowError(
+      "workflow_claim_missing",
+      "workflow claim token is required",
+    );
+  const errorCode = normalizeWorkflowErrorCode(
+    originalError instanceof Error
+      ? originalError.code || originalError.name
+      : "worker_error",
+  );
+  const errorMessage = boundedText(
+    originalError instanceof Error ? originalError.message : originalError,
+    500,
+    "Worker execution failed",
+  );
+  const parameters = {
+    p_workspace_id: context.workspaceId,
+    p_project_id: context.projectId,
+    p_workflow_run_id: context.workflowRunId,
+    p_step_key: context.stepKey,
+    p_claim_token: claimToken,
+    p_error_code: errorCode,
+    p_error_message: errorMessage,
+    p_retryable: options.retryable ?? workflowRetryable(job),
+  };
+  const rpcCall = options.rpcCall || callWorkflowRpc;
+  return firstRpcResult(
+    await rpcCall("motionly_fail_workflow_step", parameters),
+    "motionly_fail_workflow_step",
+  );
+}
+
+export function classifyWorkflowBeginResult(beginResult, context) {
+  const step = beginResult?.step || {};
+  const attempt = beginResult?.attempt || null;
+  if (context.workflowStepId && step.id !== context.workflowStepId) {
+    throw workflowError(
+      "workflow_step_identity_mismatch",
+      "workflow begin result did not match workflow_step_id",
+    );
+  }
+  if (step.state === "succeeded") {
+    const compact = canonicalizeWorkflowResult(step.output);
+    if (step.output_hash && step.output_hash !== compact.hash) {
+      throw workflowError(
+        "workflow_result_hash_mismatch",
+        "stored workflow result hash is invalid",
+      );
+    }
+    return { action: "succeeded", result: compact.value };
+  }
+  if (beginResult?.exhausted || step.state === "failed") {
+    return {
+      action: "terminal",
+      result: {
+        status: "workflow_step_exhausted",
+        workflow_run_id: context.workflowRunId,
+        workflow_step_id: step.id || context.workflowStepId,
+        step_key: context.stepKey,
+      },
+    };
+  }
+  const leaseExpiresAt = Date.parse(attempt?.lease_expires_at || "");
+  if (
+    attempt?.state === "active" &&
+    Number.isFinite(leaseExpiresAt) &&
+    leaseExpiresAt <= Date.now()
+  ) {
+    throw workflowError(
+      "workflow_stale_claim",
+      "workflow begin returned an expired claim",
+    );
+  }
+  if (attempt?.state && attempt.state !== "active") {
+    return {
+      action: "terminal",
+      result: {
+        status: "workflow_step_not_claimed",
+        workflow_run_id: context.workflowRunId,
+        workflow_step_id: step.id || context.workflowStepId,
+        step_key: context.stepKey,
+        attempt_state: attempt.state,
+      },
+    };
+  }
+  if (attempt?.state !== "active" || !attempt.claim_token) {
+    throw workflowError(
+      "workflow_claim_missing",
+      "workflow begin did not return an active claim",
+    );
+  }
+  return { action: "execute", claimToken: attempt.claim_token };
+}
+
+export async function ensureUploadRecordExists(
+  job,
+  { fetchImpl = globalThis.fetch } = {},
+) {
+  const supabaseUrl = env("SUPABASE_URL");
+  const serviceRoleKey = env("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for GPU/media queues.",
+    );
   }
   const url = new URL("/rest/v1/uploaded_videos", supabaseUrl);
   url.searchParams.set("select", "id,status");
@@ -549,12 +1146,23 @@ export async function runJob(job, testOverrides = {}) {
     testOverrides && typeof testOverrides === "object" ? testOverrides : {};
   const executeJob = overrides.executeJob;
   const reportSlo = overrides.reportProviderSlo || reportProviderSlo;
+  const rpcCall = overrides.workflowRpc || overrides.rpcCall || callWorkflowRpc;
+  const workflowOptions = {
+    rpcCall,
+    leaseOwner:
+      overrides.leaseOwner ||
+      `${env("WORKER_ID", `${env("HOSTNAME", "worker")}-${process.pid}`)}:${job.queueName}`,
+    leaseSeconds: overrides.leaseSeconds,
+    maxBytes: overrides.maxWorkflowResultBytes,
+  };
   if (job.data.status === "canceled") {
     throw new Error(`Queue job ${job.id} was canceled`);
   }
 
   const startedAt = Date.now();
-  const coldStartMs = firstJobStarted ? null : Math.max(0, startedAt - workerStartedAt);
+  const coldStartMs = firstJobStarted
+    ? null
+    : Math.max(0, startedAt - workerStartedAt);
   firstJobStarted = true;
   console.log(
     JSON.stringify({
@@ -562,7 +1170,7 @@ export async function runJob(job, testOverrides = {}) {
       queue_job_id: job.id,
       kind: job.data.kind,
       queue_name: job.queueName,
-      attempt: job.attemptsMade + 1,
+      attempt: job.data.workflow_attempt_number || job.attemptsMade + 1,
       queue_wait_ms: queueWaitMs(job, startedAt),
       cold_start_ms: coldStartMs,
       trace_id: job.data.trace_id || null,
@@ -571,36 +1179,107 @@ export async function runJob(job, testOverrides = {}) {
 
   await job.updateProgress(1);
   let result;
+  let workflowContext = null;
+  let claimToken = null;
+  let specializedExecutionStarted = false;
   try {
-    result = executeJob
-      ? await executeJob(job)
-      : job.data.kind === "retention"
-        ? await runRetentionJob()
-        : job.data.kind === "gpu_autoscaling"
-        ? await runGpuAutoscalingJob()
-        : job.data.kind === "batch_plan"
-        ? await runBatchJob(job)
-        : job.data.kind === "render"
-        ? job.data.render_engine === "remotion_premium"
-          ? await runRenderJob(job)
-          : await runDomainJob(job)
-        : job.data.kind === "visual_analysis"
-          ? await runVisualJob(job)
-          : job.data.kind === "matte_extraction"
-          ? await runMatteJob(job)
-          : await runDomainJob(job);
-    await reportSlo(job, true, Date.now() - startedAt).catch((error) => {
-      console.error(
-        JSON.stringify({
-          event: "provider_slo_report_failed",
-          queue_job_id: job.id,
-          message: error instanceof Error ? error.message : String(error),
-        }),
+    workflowContext = workflowContextForJob(job);
+    if (workflowContext) {
+      const beginResult = await beginWorkflowStep(job, workflowOptions);
+      const beginAction = classifyWorkflowBeginResult(
+        beginResult,
+        workflowContext,
       );
-    });
+      if (beginAction.action === "execute") {
+        claimToken = beginAction.claimToken;
+      } else {
+        result = beginAction.result;
+      }
+    }
+
+    if (!workflowContext || claimToken) {
+      specializedExecutionStarted = true;
+      result = executeJob
+        ? await executeJob(job)
+        : job.data.kind === "retention"
+          ? await runRetentionJob()
+          : job.data.kind === "gpu_autoscaling"
+            ? await runGpuAutoscalingJob()
+            : job.data.kind === "batch_plan"
+              ? await runBatchJob(job)
+              : job.data.kind === "render"
+                ? job.data.render_engine === "remotion_premium"
+                  ? await runRenderJob(job)
+                  : await runDomainJob(job)
+                : job.data.kind === "visual_analysis"
+                  ? await runVisualJob(job)
+                  : job.data.kind === "matte_extraction"
+                    ? await runMatteJob(job)
+                    : await runDomainJob(job);
+      if (workflowContext) {
+        if (workflowContext.stepKind === "render_draft") {
+          const normalizedRender = {
+            render_job_id: String(job.data.resource_id),
+            render_status: String(
+              result?.render_status || result?.status || "",
+            ),
+            failed: Boolean(result?.failed),
+          };
+          if (normalizedRender.failed) {
+            normalizedRender.error_code =
+              result?.error_code || "domain_render_failed";
+            normalizedRender.error_message =
+              result?.error_message || "Domain render failed.";
+          }
+          result = normalizedRender;
+        }
+        if (result?.failed) {
+          const failure = new Error(
+            result.error_message || "Domain render failed.",
+          );
+          failure.code = result.error_code || "domain_render_failed";
+          throw failure;
+        }
+        const completion = await completeWorkflowStep(
+          job,
+          claimToken,
+          result,
+          workflowOptions,
+        );
+        result = completion.compact.value;
+      }
+      await reportSlo(job, true, Date.now() - startedAt).catch((error) => {
+        console.error(
+          JSON.stringify({
+            event: "provider_slo_report_failed",
+            queue_job_id: job.id,
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      });
+    }
   } catch (error) {
-    if (error instanceof Error && error.code === "upload_not_found") {
+    const uploadMissing =
+      error instanceof Error && error.code === "upload_not_found";
+    if (uploadMissing && typeof job.discard === "function") {
       job.discard();
+    }
+    if (workflowContext && claimToken) {
+      await failWorkflowStep(job, claimToken, error, {
+        ...workflowOptions,
+        retryable: uploadMissing ? false : workflowRetryable(job),
+      }).catch((callbackError) => {
+        console.error(
+          JSON.stringify({
+            event: "workflow_failure_callback_failed",
+            queue_job_id: job.id,
+            message:
+              callbackError instanceof Error
+                ? callbackError.message
+                : String(callbackError),
+          }),
+        );
+      });
     }
     console.error(
       JSON.stringify({
@@ -612,12 +1291,14 @@ export async function runJob(job, testOverrides = {}) {
         ...jobRuntimeTelemetry(job, { startedAt }),
       }),
     );
-    await reportSlo(
-      job,
-      false,
-      Date.now() - startedAt,
-      error instanceof Error ? error.code || error.name : "worker_error",
-    ).catch(() => {});
+    if (specializedExecutionStarted) {
+      await reportSlo(
+        job,
+        false,
+        Date.now() - startedAt,
+        error instanceof Error ? error.code || error.name : "worker_error",
+      ).catch(() => {});
+    }
     throw error;
   }
   await job.updateProgress(100).catch((error) => {
@@ -664,8 +1345,11 @@ function createWorker(queueName, connection) {
 
   worker.on("failed", async (job, error) => {
     const jobData = job?.data || {};
-    const errorCode = error instanceof Error ? error.code || error.name : "worker_error";
-    const retrying = Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
+    const errorCode =
+      error instanceof Error ? error.code || error.name : "worker_error";
+    const retrying = Boolean(
+      job && job.attemptsMade < Number(job.opts?.attempts || 1),
+    );
     console.error(
       JSON.stringify({
         event: "job_failed",
@@ -678,7 +1362,11 @@ function createWorker(queueName, connection) {
         message: error instanceof Error ? error.message : String(error),
       }),
     );
-    if (retrying && isSubprocessFailureCode(errorCode) && jobData.status !== "canceled") {
+    if (
+      retrying &&
+      isSubprocessFailureCode(errorCode) &&
+      jobData.status !== "canceled"
+    ) {
       console.error(
         JSON.stringify({
           event: "job_requeued_after_subprocess_crash",
@@ -709,7 +1397,9 @@ function createWorker(queueName, connection) {
             event: "render_failure_callback_failed",
             queue_job_id: job?.id,
             message:
-              callbackError instanceof Error ? callbackError.message : String(callbackError),
+              callbackError instanceof Error
+                ? callbackError.message
+                : String(callbackError),
           }),
         );
       }
@@ -717,7 +1407,13 @@ function createWorker(queueName, connection) {
   });
 
   worker.on("stalled", (jobId) => {
-    console.error(JSON.stringify({ event: "job_stalled", queue_job_id: jobId, queue_name: queueName }));
+    console.error(
+      JSON.stringify({
+        event: "job_stalled",
+        queue_job_id: jobId,
+        queue_name: queueName,
+      }),
+    );
   });
 
   worker.on("error", (error) => {
@@ -755,9 +1451,14 @@ function validateRemotionConfig() {
     );
   }
 
-  const browserPath = env("BROWSER_EXECUTABLE_PATH", env("PUPPETEER_EXECUTABLE_PATH"));
+  const browserPath = env(
+    "BROWSER_EXECUTABLE_PATH",
+    env("PUPPETEER_EXECUTABLE_PATH"),
+  );
   if (browserPath && !existsSync(browserPath)) {
-    throw new Error(`Configured Chromium executable was not found: ${browserPath}`);
+    throw new Error(
+      `Configured Chromium executable was not found: ${browserPath}`,
+    );
   }
   if (isProduction() && !browserPath) {
     throw new Error(
@@ -778,12 +1479,19 @@ async function main() {
     console.log("Worker queue config is not set; build check only.");
     return;
   }
-  if (queueNames.includes("visual_analysis") || queueNames.includes("matte_extraction")) {
+  if (
+    queueNames.includes("visual_analysis") ||
+    queueNames.includes("matte_extraction")
+  ) {
     if (env("ML_WORKER_ENABLED") !== "true") {
-      throw new Error("visual_analysis and matte_extraction must run with ML_WORKER_ENABLED=true.");
+      throw new Error(
+        "visual_analysis and matte_extraction must run with ML_WORKER_ENABLED=true.",
+      );
     }
     if (!env("SUPABASE_URL") || !env("SUPABASE_SERVICE_ROLE_KEY")) {
-      throw new Error("GPU/media queues require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
+      throw new Error(
+        "GPU/media queues require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+      );
     }
   }
 
@@ -805,7 +1513,10 @@ async function main() {
     await maintenanceQueue.add(
       "daily-retention",
       { kind: "retention", queue_name: "maintenance" },
-      { jobId: "daily-retention", repeat: { pattern: env("RETENTION_CRON", "0 3 * * *") } },
+      {
+        jobId: "daily-retention",
+        repeat: { pattern: env("RETENTION_CRON", "0 3 * * *") },
+      },
     );
     await maintenanceQueue.add(
       "gpu-autoscaling",
@@ -816,7 +1527,9 @@ async function main() {
       },
     );
   }
-  const workers = queueNames.map((queueName) => createWorker(queueName, connection));
+  const workers = queueNames.map((queueName) =>
+    createWorker(queueName, connection),
+  );
   await sendHeartbeat().catch((error) => {
     console.error(
       JSON.stringify({
@@ -831,18 +1544,28 @@ async function main() {
       process_alive: true,
       redis_connected: true,
       api_reachable: hasApiConfig(),
-      models_loaded: env("MODEL_PREFETCH") === "true" ? "prefetch_requested" : "not_requested",
+      models_loaded:
+        env("MODEL_PREFETCH") === "true"
+          ? "prefetch_requested"
+          : "not_requested",
       disk_free_bytes: diskFreeBytes(),
       queue_consumers_attached: workers.length,
       queues: queueNames,
     }),
   );
-  const heartbeatTimer = setInterval(() => {
-    void sendHeartbeat().catch((error) => console.error(JSON.stringify({
-      event: "worker_heartbeat_failed",
-      message: error instanceof Error ? error.message : String(error),
-    })));
-  }, Number(env("WORKER_HEARTBEAT_INTERVAL_MS", "30000")));
+  const heartbeatTimer = setInterval(
+    () => {
+      void sendHeartbeat().catch((error) =>
+        console.error(
+          JSON.stringify({
+            event: "worker_heartbeat_failed",
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+      );
+    },
+    Number(env("WORKER_HEARTBEAT_INTERVAL_MS", "30000")),
+  );
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
@@ -877,7 +1600,9 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const isMainModule = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMainModule =
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMainModule) {
   main().catch((error) => {

@@ -34,6 +34,7 @@ class PlatformPreset(StrEnum):
     SHORTS = "shorts"
     YOUTUBE_LANDSCAPE = "youtube_landscape"
     INSTAGRAM_POST = "instagram_post"
+    LINKEDIN = "linkedin"
     X_LANDSCAPE = "x_landscape"
     CUSTOM = "custom"
 
@@ -108,14 +109,20 @@ class ExportFraming(BaseModel):
 
 
 class ExportOptions(BaseModel):
+    """Platform-specific controls used by individual and bulk Repurpose renders."""
+
     resolution: ExportResolution = ExportResolution.PAID_1080P
     format: Literal["mp4"] = "mp4"
     platform: PlatformPreset = PlatformPreset.INSTAGRAM
     framing: ExportFraming = Field(default_factory=ExportFraming)
+    duration_preset: DurationPreset | None = None
+    include_captions: bool | None = None
+    hook_text: str | None = Field(default=None, max_length=160)
 
 
 class RenderCreateRequest(JsonStringBodyMixin, BaseModel):
     caption_track_id: UUID | None = None
+    localized_publish_package_id: UUID | None = None
     include_captions: bool = True
     include_broll: bool = True
     edit_plan_id: UUID | None = None
@@ -133,6 +140,7 @@ class RenderCreateRequest(JsonStringBodyMixin, BaseModel):
 
 class RenderBulkCreateRequest(JsonStringBodyMixin, BaseModel):
     caption_track_id: UUID | None = None
+    localized_publish_package_id: UUID | None = None
     include_captions: bool = True
     include_broll: bool = True
     edit_plan_id: UUID | None = None
@@ -170,6 +178,11 @@ class RenderJobResponse(BaseModel):
     project_id: UUID
     uploaded_video_id: UUID
     caption_track_id: UUID | None = None
+    workflow_run_id: UUID | None = None
+    edit_plan_id: UUID | None = None
+    source_plan_revision: int | None = Field(default=None, ge=1)
+    timeline_revision_id: UUID | None = None
+    source_media_revision: int | None = Field(default=None, ge=1)
     status: RenderJobStatus
     planner_version: str
     manifest: dict[str, Any]
@@ -213,6 +226,8 @@ class ExportResponse(BaseModel):
     workspace_id: UUID
     project_id: UUID
     render_job_id: UUID
+    workflow_run_id: UUID | None = None
+    source_plan_revision: int | None = Field(default=None, ge=1)
     version: int
     storage_bucket: str
     storage_path: str

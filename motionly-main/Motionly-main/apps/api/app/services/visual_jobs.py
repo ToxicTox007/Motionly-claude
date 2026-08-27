@@ -23,8 +23,13 @@ def visual_provider_identity(settings: object) -> tuple[str, str]:
     if provider == "fixture":
         return provider, "fixture-visual-v1"
     return provider, "|".join(
-        str(getattr(settings, name, "unknown"))
-        for name in ("visual_clip_model", "visual_blip_model", "visual_yolo_model")
+        f"{getattr(settings, model_name, 'unknown')}@"
+        f"{getattr(settings, revision_name, 'unknown')}"
+        for model_name, revision_name in (
+            ("visual_clip_model", "visual_clip_model_revision"),
+            ("visual_blip_model", "visual_blip_model_revision"),
+            ("visual_yolo_model", "visual_yolo_model_revision"),
+        )
     )
 
 

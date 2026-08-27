@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from app.api.ai_proposals import decide_proposal
 from app.api.analytics import (
     get_ai_edit_analytics,
     get_fine_tuning_dataset,
@@ -17,6 +18,7 @@ from app.repositories.analytics import (
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
+from app.schemas.ai_proposals import ProposalDecisionRequest, ProposalDecisionType
 from app.schemas.analytics import (
     AIEditFeedbackEventCreateRequest,
     AIEditFeedbackEventType,
@@ -36,6 +38,11 @@ def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -
     workspace_id = uuid4()
     user_id = uuid4()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(settings=SimpleNamespace(editorial_learning_enabled=False))
+        )
+    )
 
     asyncio.run(
         record_ai_edit_feedback(
@@ -50,6 +57,7 @@ def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -
             ),
             actor=actor,
             repository=repository,
+            request=request,
         )
     )
     asyncio.run(
@@ -65,6 +73,7 @@ def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -
             ),
             actor=actor,
             repository=repository,
+            request=request,
         )
     )
 
@@ -88,8 +97,9 @@ def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -
             repository=repository,
         )
     )
-    assert dataset.example_count == 2
-    assert {example.signal.value for example in dataset.examples} == {"positive", "correction"}
+    # Operational analytics is deliberately not exportable as training data.
+    assert dataset.example_count == 0
+    assert dataset.examples == []
 
 
 def test_supabase_analytics_repository_lists_with_explicit_projection(monkeypatch) -> None:
@@ -160,7 +170,7 @@ def test_supabase_analytics_async_methods_use_bounded_projections(monkeypatch) -
         "metadata": {},
         "created_at": now,
     }
-    responses = [[event_row], []]
+    responses = [[], [event_row], []]
     calls = []
 
     async def fake_async_request(_self, method, path, **kwargs):
@@ -197,6 +207,21 @@ def test_supabase_analytics_async_methods_use_bounded_projections(monkeypatch) -
     assert event.id == event_id
     assert events == []
     assert calls[0] == (
+        "GET",
+        "/ai_edit_feedback_events",
+        {
+            "params": {
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "event_type": "eq.changed",
+                "layer": "eq.cuts",
+                "decision_id": "eq.cut-1",
+                "select": AI_EDIT_FEEDBACK_EVENT_COLUMNS,
+                "limit": "1",
+            }
+        },
+    )
+    assert calls[1] == (
         "POST",
         "/ai_edit_feedback_events",
         {
@@ -219,7 +244,7 @@ def test_supabase_analytics_async_methods_use_bounded_projections(monkeypatch) -
             ],
         },
     )
-    assert calls[1] == (
+    assert calls[2] == (
         "GET",
         "/ai_edit_feedback_events",
         {
@@ -240,6 +265,11 @@ def test_analytics_api_prefers_async_repository_methods() -> None:
     workspace_id = uuid4()
     user_id = uuid4()
     actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(settings=SimpleNamespace(editorial_learning_enabled=False))
+        )
+    )
 
     class AsyncAnalyticsRepository(InMemoryAnalyticsRepository):
         def __init__(self) -> None:
@@ -277,6 +307,7 @@ def test_analytics_api_prefers_async_repository_methods() -> None:
             ),
             actor=actor,
             repository=repository,
+            request=request,
         )
     )
     asyncio.run(
@@ -297,12 +328,7 @@ def test_analytics_api_prefers_async_repository_methods() -> None:
         )
     )
 
-    assert repository.async_calls == [
-        "record-event",
-        "list-events",
-        "summarize",
-        "fine-tuning",
-    ]
+    assert repository.async_calls == ["record-event", "list-events", "summarize"]
 
 
 def test_plan_suggestions_and_manual_cut_overrides_create_feedback_events() -> None:
@@ -339,6 +365,30 @@ def test_plan_suggestions_and_manual_cut_overrides_create_feedback_events() -> N
         )
     )
     asyncio.run(run_enqueued_job(job_id=created_resp.job_id, request=request))
+    proposal_repository = plan_repository._proposal_repository
+    proposal = proposal_repository.get(
+        proposal_id=created_resp.proposal_id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    decision_payload = ProposalDecisionRequest(
+        decision=ProposalDecisionType.APPROVE,
+        expected_proposal_revision=proposal.revision,
+        expected_base_active_plan_id=proposal.artifacts.base_active_plan_id,
+        expected_base_active_plan_revision=proposal.artifacts.base_active_plan_revision,
+        idempotency_key=f"analytics-plan-{proposal.id}",
+    )
+    decision = asyncio.run(
+        decide_proposal(
+            project_id=project_id,
+            proposal_id=proposal.id,
+            payload=decision_payload,
+            request=request,
+            actor=actor,
+            repository=proposal_repository,
+        )
+    )
+    assert decision.edit_plan_id is not None
     plan = plan_repository.active_plan(project_id=project_id, workspace_id=workspace_id)
     created = SimpleNamespace(plan=plan)
 
@@ -347,6 +397,23 @@ def test_plan_suggestions_and_manual_cut_overrides_create_feedback_events() -> N
         workspace_id=workspace_id,
         limit=20,
     )
+    replay = asyncio.run(
+        decide_proposal(
+            project_id=project_id,
+            proposal_id=proposal.id,
+            payload=decision_payload,
+            request=request,
+            actor=actor,
+            repository=proposal_repository,
+        )
+    )
+    suggested_after_replay = analytics_repository.list_events(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        limit=20,
+    )
+    assert replay.idempotent_replay is True
+    assert len(suggested_after_replay) == len(suggested)
     assert any(
         event.event_type == AIEditFeedbackEventType.AI_SUGGESTED and event.layer == AIEditLayer.CUTS
         for event in suggested

@@ -80,12 +80,13 @@ async def run_queue_job(
 
     if job.status != QueueJobStatus.RUNNING:
         job = registry.start(queue_job_id)
-    
+
     from app.services.operations import monotonic_ms
+
     metrics = getattr(request.app.state, "metrics_registry", None)
     if metrics:
         metrics.observe("job_retry_count", job.attempts, kind=job.kind)
-        
+
     started_ms = monotonic_ms()
     try:
         if job.kind == "batch_plan" and job.workspace_id and job.resource_id:
@@ -99,7 +100,7 @@ async def run_queue_job(
             )
         else:
             result = _execute_job(job=job, request=request)
-            
+
         latency = monotonic_ms() - started_ms
         status = "failed" if result.get("failed") else "succeeded"
         if metrics:
@@ -166,6 +167,8 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             "upload_id": str(upload.id),
             "upload_status": upload.status.value,
         }
+        if job.workflow_run_id is not None:
+            return result
         if all(
             hasattr(request.app.state, name)
             for name in (
@@ -218,6 +221,11 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             caption_repository=request.app.state.caption_repository,
             transcription_provider=request.app.state.transcription_provider,
             audio_ml_providers=getattr(request.app.state, "audio_ml_providers", None),
+            audio_intelligence_provider=getattr(
+                request.app.state,
+                "audio_intelligence_provider",
+                None,
+            ),
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             video_id=job.resource_id,
@@ -276,6 +284,9 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
             service_role_key=settings.supabase_service_role_key,
             provider_models=request.app.state.matte_provider_models,
+            model_gateway=getattr(request.app.state, "model_gateway", None),
+            matte_gateway_route=getattr(request.app.state, "matte_gateway_route", None),
+            production=getattr(settings, "app_env", "test") == "production",
         )
         return {
             "matte_id": str(record.id),
@@ -345,12 +356,30 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             settings=settings,
             upload_repository=request.app.state.upload_repository,
             broll_repository=request.app.state.broll_repository,
-            visual_provider=request.app.state.visual_intelligence_provider,
+            visual_provider=(
+                getattr(request.app.state, "visual_gateway_provider", None)
+                or request.app.state.visual_intelligence_provider
+            ),
             analytics_repository=request.app.state.analytics_repository,
             stem_separator=request.app.state.stem_separator,
             runway_provider=request.app.state.runway_provider,
+            model_gateway=getattr(request.app.state, "model_gateway", None),
+            runway_gateway_route=getattr(
+                request.app.state,
+                "runway_gateway_route",
+                None,
+            ),
+            stem_gateway_route=getattr(
+                request.app.state,
+                "stem_gateway_route",
+                None,
+            ),
             operations_repository=request.app.state.operations_repository,
             billing_repository=request.app.state.billing_repository,
+            editorial_learning_repository=getattr(
+                request.app.state, "editorial_learning_repository", None
+            ),
+            object_reference_service=getattr(request.app.state, "object_reference_service", None),
         )
         return {
             "resource_id": str(resource.id),
@@ -360,306 +389,59 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         }
 
     if job.kind == "edit_plan":
-        from uuid import UUID
+        from app.services.proposal_generation import execute_proposal_generation
 
-        from app.schemas.captions import TranscriptStatus
-        from app.schemas.plans import (
-            EDIT_PLAN_PROMPT_VERSION,
-            EDIT_PLAN_SCHEMA_VERSION,
-            BrollDensity,
-            EditPlan,
-            EditPlanCut,
-            EditPlanStatus,
-            EditPlanStyle,
-            PlanSummary,
-        )
-        from app.services.ai_feedback import record_plan_suggestions
-        from app.services.edit_planner import (
-            PLANNER_SCHEMA_HASH,
-            build_plan_cache_key,
-            normalize_plan,
-            summarize_plan,
-        )
-        from app.services.operations import monotonic_ms
-        from app.services.style_classifier import classify_edit_style
-        from app.services.timeline_compiler import migrate_legacy_plan_to_timeline
-        from app.services.transcript_quality import is_transcript_usable_for_planning
-
-        repository = request.app.state.plan_repository
-        planner_provider = request.app.state.edit_planner_provider
-        operations = getattr(request.app.state, "operations_repository", None)
-        billing_repository = getattr(request.app.state, "billing_repository", None)
-        metrics = getattr(request.app.state, "metrics_registry", None)
-
-        max_attempts = getattr(settings, "max_paid_provider_attempts", 1)
-        if (
-            job.attempts >= max_attempts
-            and getattr(planner_provider, "provider_name", None) != "fixture"
-        ):
+        max_paid_attempts = max(1, int(getattr(settings, "max_paid_provider_attempts", 1)))
+        if job.attempts >= max_paid_attempts:
             raise ApiError(
                 429,
                 "edit_planner_retry_limit_exceeded",
-                (
-                    "Paid edit planner retry attempt cap reached "
-                    f"(attempts: {job.attempts}, max: {max_attempts})."
-                ),
+                "Paid edit-planner retry limit reached.",
             )
 
-        params = json.loads(job.render_engine)
-        prompt = params["prompt"]
-        style = EditPlanStyle(params["style"]) if params.get("style") else None
-        target_duration_s = int(params["target_duration_s"])
-        broll_density = BrollDensity(params["broll_density"])
-        feedback = params["feedback"]
-        style_profile_id = (
-            UUID(params["style_profile_id"]) if params.get("style_profile_id") else None
+        plan_repository = request.app.state.plan_repository
+        proposal_repository = getattr(request.app.state, "proposal_repository", None) or getattr(
+            plan_repository, "_proposal_repository", None
         )
-        saved_template_id = (
-            UUID(params["saved_template_id"]) if params.get("saved_template_id") else None
-        )
-        user_id = UUID(params["user_id"]) if params.get("user_id") else None
-
-        repository.get_project_for_workspace(
-            project_id=job.project_id,
-            workspace_id=job.workspace_id,
-        )
-        transcript = repository.latest_transcript(
-            project_id=job.project_id,
-            workspace_id=job.workspace_id,
-        )
-        if not transcript:
+        if proposal_repository is None:
             raise ApiError(
-                404,
-                "transcript_not_found",
-                "Generate a transcript before planning edits.",
+                500,
+                "proposal_repository_missing",
+                "Proposal storage is required for edit planning.",
             )
-        if transcript.status != TranscriptStatus.READY:
-            raise ApiError(
-                409,
-                str(transcript.status),
-                transcript.error_message or "Transcript is not ready for edit planning.",
-            )
-        if not transcript.words or not is_transcript_usable_for_planning(transcript.quality_status):
-            raise ApiError(
-                409,
-                transcript.quality_reasons[0]
-                if transcript.quality_reasons
-                else "transcript_quality_blocked",
-                transcript.error_message
-                or "Transcript quality must be recovered before edit planning.",
-            )
-
-        upload = repository.get_active_upload(
-            project_id=job.project_id,
-            workspace_id=job.workspace_id,
-        )
-        video_duration_ms = upload.metadata.duration_ms or transcript.duration_ms or 0
-
-        visual_manifest = None
-        visual_context_flag = "visual_context_unavailable"
-        visual_repository = getattr(repository, "visual_repository", None)
-        if visual_repository is not None:
-            latest = visual_repository.latest_for_upload(
-                uploaded_video_id=upload.id,
-                project_id=job.project_id,
-                workspace_id=job.workspace_id,
-            )
-            record_ready = visual_repository.latest_ready_for_upload(
-                uploaded_video_id=upload.id,
-                project_id=job.project_id,
-                workspace_id=job.workspace_id,
-            )
-            if record_ready and record_ready.manifest:
-                visual_manifest = record_ready.manifest
-                visual_context_flag = None
-            else:
-                status = latest.status.value if latest else "unavailable"
-                visual_context_flag = f"visual_context_{status}"
-
-        style_classification = classify_edit_style(
-            transcript=transcript,
-            visual_manifest=visual_manifest,
-            requested_style=style,
-            prompt=prompt,
-            feedback=feedback,
-        )
-        
-        from app.schemas.plans import PlanCreateRequest
-        effective_payload = PlanCreateRequest(
-            prompt=prompt,
-            style=style_classification.effective_style,
-            target_duration_s=target_duration_s,
-            broll_density=broll_density,
-            feedback=feedback,
-            style_profile_id=style_profile_id,
-            saved_template_id=saved_template_id,
-        )
-        
-        cache_key = build_plan_cache_key(
-            transcript=transcript,
-            payload=effective_payload,
-            visual_manifest=visual_manifest,
-            style_classification=style_classification,
-            model=getattr(planner_provider, "model", None),
-            provider=getattr(planner_provider, "provider_name", None),
-        )
-
-        started_ms = monotonic_ms()
-        try:
-            result = planner_provider.create_plan(
-                transcript=transcript,
-                payload=effective_payload,
-                video_duration_ms=video_duration_ms,
-                visual_manifest=visual_manifest,
-                style_classification=style_classification,
-                billing_repository=billing_repository,
-                operations_repository=operations,
-            )
-        except Exception as exc:
-            if operations is not None:
-                operations.record_provider_slo(
-                    workspace_id=job.workspace_id,
-                    project_id=job.project_id,
-                    provider=planner_provider.provider_name,
-                    operation="edit_plan",
-                    success=False,
-                    latency_ms=monotonic_ms() - started_ms,
-                    error_code=type(exc).__name__,
-                )
-            repository.create_plan(
-                workspace_id=job.workspace_id,
-                project_id=job.project_id,
-                transcript_id=transcript.id,
-                schema_version=EDIT_PLAN_SCHEMA_VERSION,
-                status=EditPlanStatus.FAILED,
-                style=style_classification.effective_style,
-                target_duration_s=target_duration_s,
-                broll_density=broll_density,
-                prompt=prompt.strip(),
-                feedback=feedback.strip() if feedback else None,
-                provider=planner_provider.provider_name,
-                model="failed_generation",
-                planner_source="deterministic_fallback",
-                model_name="failed_generation",
-                prompt_version=EDIT_PLAN_PROMPT_VERSION,
-                retry_count=0,
-                fallback_reason="planner_exception",
-                cache_key=cache_key,
-                schema_hash=PLANNER_SCHEMA_HASH,
-                latency_ms=monotonic_ms() - started_ms,
-                cost_estimate_usd=0.0,
-                validation_errors=[str(exc)],
-                summary=PlanSummary(
-                    duration_s=target_duration_s,
-                    cut_count=0,
-                    broll_count=0,
-                    zoom_count=0,
-                    music_mood="failed",
-                    effects=[],
-                    color_grade="failed",
-                    risk_flags=[visual_context_flag] if visual_context_flag else [],
-                ),
-                plan=EditPlan(
-                    style=style_classification.effective_style,
-                    target_duration_s=target_duration_s,
-                    cuts=[EditPlanCut(start_ms=0, end_ms=1000, reason="failed")],
-                    music_mood="failed",
-                    color_grade="failed"
-                ),
-            )
-            raise
-
-        if operations is not None:
-            operations.record_provider_slo(
-                workspace_id=job.workspace_id,
-                project_id=job.project_id,
-                provider=result.provider,
-                operation="edit_plan",
-                success=True,
-                latency_ms=result.latency_ms,
-                error_code=None,
-            )
-
-        plan = normalize_plan(
-            plan=result.plan,
-            words=transcript.words,
-            duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
-        )
-        if visual_context_flag and visual_context_flag not in plan.risk_flags:
-            plan = plan.model_copy(
-                update={"risk_flags": [*plan.risk_flags, visual_context_flag][:10]}
-            )
-        plan = migrate_legacy_plan_to_timeline(
-            plan=plan,
-            source_video_id=upload.id,
-            source_duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
-        )
-        record = repository.create_plan(
+        result = execute_proposal_generation(
+            proposal_repository=proposal_repository,
+            plan_repository=plan_repository,
+            planner_provider=request.app.state.edit_planner_provider,
             workspace_id=job.workspace_id,
             project_id=job.project_id,
-            transcript_id=transcript.id,
-            schema_version=EDIT_PLAN_SCHEMA_VERSION,
-            status=EditPlanStatus.READY,
-            style=style_classification.effective_style,
-            target_duration_s=effective_payload.target_duration_s,
-            broll_density=effective_payload.broll_density,
-            prompt=effective_payload.prompt.strip(),
-            feedback=effective_payload.feedback.strip() if effective_payload.feedback else None,
-            provider=result.provider,
-            model=result.model,
-            planner_source=result.planner_source,
-            model_name=result.model,
-            prompt_version=result.prompt_version,
-            retry_count=result.retry_count,
-            fallback_reason=result.fallback_reason,
-            cache_key=cache_key,
-            schema_hash=PLANNER_SCHEMA_HASH,
-            latency_ms=result.latency_ms,
-            cost_estimate_usd=result.cost_estimate_usd,
-            validation_errors=result.validation_errors,
-            summary=summarize_plan(plan, style_classification=style_classification),
-            plan=plan,
+            proposal_id=job.resource_id,
+            settings=settings,
+            billing_repository=getattr(request.app.state, "billing_repository", None),
+            operations_repository=getattr(request.app.state, "operations_repository", None),
+            metrics_registry=getattr(request.app.state, "metrics_registry", None),
         )
+        if job.workflow_run_id is not None:
+            from app.schemas.ai_proposals import ProposalState
 
-        if operations is not None:
-            usage = result.raw_payload.get("usage") if isinstance(result.raw_payload, dict) else {}
-            operations.record_cost(
-                workspace_id=job.workspace_id,
+            canonical = proposal_repository.get(
+                proposal_id=job.resource_id,
                 project_id=job.project_id,
-                provider=result.provider,
-                category="tokens",
-                quantity=float(usage.get("total_tokens") or 0) if isinstance(usage, dict) else 0,
-                unit="token",
-                unit_cost_usd=(
-                    float(result.cost_estimate_usd or 0)
-                    / float(usage.get("total_tokens") or 1)
-                    if isinstance(usage, dict)
-                    else 0
-                ),
-                metadata={"model": result.model, "plan_id": str(record.id)},
+                workspace_id=job.workspace_id,
             )
-            fallback_used = result.raw_payload.get("fallback_used", False)
-            if fallback_used and metrics is not None:
-                metrics.observe(
-                    "fallback_degraded_mode_count",
-                    1,
-                    provider=result.provider,
-                    model=result.model,
-                    reason="edit_plan_fallback",
-                )
-
-        record_plan_suggestions(
-            request=request,
-            workspace_id=job.workspace_id,
-            project_id=job.project_id,
-            user_id=user_id,
-            plan=record,
-        )
-
-        return {
-            "plan_id": str(record.id),
-            "status": "ready",
-        }
+            if (
+                canonical.workflow_run_id != job.workflow_run_id
+                or canonical.state != ProposalState.AWAITING_APPROVAL
+                or result.get("status") != ProposalState.AWAITING_APPROVAL.value
+            ):
+                return {
+                    "proposal_id": str(canonical.id),
+                    "status": canonical.state.value,
+                    "failed": True,
+                    "error_code": "workflow_proposal_not_approval_ready",
+                    "error_message": "Canonical workflow proposal is not awaiting approval.",
+                }
+        return result
 
     if job.kind == "broll_generation":
         from uuid import UUID
@@ -675,7 +457,13 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             billing_repository=request.app.state.billing_repository,
             providers=request.app.state.stock_video_providers,
             storage_signer=request.app.state.storage_signer,
+            stock_asset_enrichment_queue=request.app.state.stock_asset_enrichment_queue,
             settings=settings,
+            embedding_provider=getattr(
+                request.app.state,
+                "embedding_gateway_provider",
+                None,
+            ),
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             user_id=user_id,
@@ -699,6 +487,13 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             asset=asset,
             repository=request.app.state.broll_repository,
             clip_model_name=clip_model_name,
+            embedding_provider=getattr(
+                request.app.state,
+                "embedding_gateway_provider",
+                None,
+            ),
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
         )
         return {
             "asset_id": str(asset.id),
@@ -755,6 +550,7 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         return execute_caption_generation(
             repository=request.app.state.caption_repository,
             settings=settings,
+            model_gateway=getattr(request.app.state, "model_gateway", None),
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             payload=payload,
@@ -779,7 +575,6 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
         "skipped": True,
         "failed": True,
     }
-
 
 
 def _safe_job_error_message(exc: Exception) -> str:

@@ -15,6 +15,7 @@ dependencies = [
   "pydantic-settings>=2.7.0",
   "python-json-logger>=3.2.1",
   "redis>=5.2.1,<7.0",
+  "temporalio==1.31.0",
   "uvicorn[standard]>=0.34.0"
 ]
 
@@ -34,7 +35,11 @@ demucs = [
 ]
 visual-ml = [
   "mediapipe>=0.10.18",
+  # The hash-locked ML graph is NumPy 1.26.4, SciPy 1.17.1, and
+  # scikit-learn 1.9.0. Keep the compatible major/minor window explicit.
   "numpy>=1.26.4,<2.0",
+  "scipy>=1.17.1,<1.18",
+  "scikit-learn>=1.9.0,<1.10",
   "opencv-python-headless>=4.10.0.84",
   "Pillow>=11.0.0",
   "ultralytics>=8.3.0",
@@ -43,7 +48,8 @@ visual-ml = [
 ]
 dev = [
   "pytest>=8.3.4",
-  "ruff>=0.8.4"
+  "ruff>=0.8.4",
+  "pip-licenses==5.0.0"
 ]
 
 [tool.hatch.build.targets.wheel]

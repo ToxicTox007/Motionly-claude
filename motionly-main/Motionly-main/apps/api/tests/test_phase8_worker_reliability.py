@@ -348,77 +348,45 @@ def test_phase8_render_export_reuse_and_usage_deduplication(monkeypatch) -> None
 
 
 def test_phase8_supabase_export_create_reuses_existing_row(monkeypatch) -> None:
-    get_calls = []
-    patch_calls = []
+    calls = []
+    workspace_id = uuid4()
+    project_id = uuid4()
+    render_job_id = uuid4()
+    export_id = uuid4()
 
-    def fake_get(url, *, headers, params, timeout):
-        get_calls.append((url, params))
-        if url.endswith("/exports"):
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": str(uuid4()),
-                        "workspace_id": str(workspace_id),
-                        "project_id": str(project_id),
-                        "render_job_id": str(render_job_id),
-                        "version": 1,
-                        "storage_bucket": "exports",
-                        "storage_path": "video.mp4",
-                        "format": "mp4",
-                        "width": 1920,
-                        "height": 1080,
-                        "fps": 30,
-                        "duration_ms": 1000,
-                        "file_size_bytes": 100,
-                        "thumbnail_url": None,
-                        "settings_summary": {},
-                        "restored_from_export_id": None,
-                        "created_at": datetime.now(UTC).isoformat(),
-                    }
-                ],
-            )
-        return httpx.Response(200, json=[])
-
-    def fake_patch(url, *, headers, params, json, timeout):
-        patch_calls.append((url, params, json))
+    def fake_request(method, url, *, headers, params=None, json=None, timeout):
+        calls.append((method, url, params, json))
+        assert method == "POST"
+        assert url.endswith("/rpc/motionly_upsert_base_export")
         return httpx.Response(
             200,
             json=[
                 {
-                    "id": params["id"].removeprefix("eq."),
+                    "id": str(export_id),
                     "workspace_id": str(workspace_id),
                     "project_id": str(project_id),
                     "render_job_id": str(render_job_id),
+                    "workflow_run_id": None,
+                    "source_plan_revision": None,
                     "version": 1,
-                    "storage_bucket": json["storage_bucket"],
-                    "storage_path": json["storage_path"],
-                    "format": json["format"],
-                    "width": json["width"],
-                    "height": json["height"],
-                    "fps": json["fps"],
-                    "duration_ms": json["duration_ms"],
-                    "file_size_bytes": json["file_size_bytes"],
-                    "thumbnail_url": None,
-                    "settings_summary": json["settings_summary"],
+                    "storage_bucket": json["p_storage_bucket"],
+                    "storage_path": json["p_storage_path"],
+                    "format": json["p_format"],
+                    "width": json["p_width"],
+                    "height": json["p_height"],
+                    "fps": json["p_fps"],
+                    "duration_ms": json["p_duration_ms"],
+                    "file_size_bytes": json["p_file_size_bytes"],
+                    "thumbnail_url": json["p_thumbnail_url"],
+                    "settings_summary": json["p_settings_summary"],
                     "restored_from_export_id": None,
                     "created_at": datetime.now(UTC).isoformat(),
                 }
             ],
         )
 
-    def fake_request(method, url, *, headers, params=None, json=None, timeout):
-        if method == "GET":
-            return fake_get(url, headers=headers, params=params, timeout=timeout)
-        if method == "PATCH":
-            return fake_patch(url, headers=headers, params=params, json=json, timeout=timeout)
-        raise AssertionError(f"Unexpected method {method}")
-
     monkeypatch.setattr("app.services.supabase.httpx.request", fake_request)
 
-    workspace_id = uuid4()
-    project_id = uuid4()
-    render_job_id = uuid4()
     upload_repository = InMemoryUploadRepository()
     upload_repository.seed_project(project_id=project_id, workspace_id=workspace_id)
     repository = SupabaseRenderRepository(
@@ -442,31 +410,90 @@ def test_phase8_supabase_export_create_reuses_existing_row(monkeypatch) -> None:
         settings_summary={},
     )
 
+    assert export.id == export_id
     assert export.storage_path == "video-2.mp4"
-    assert len(patch_calls) == 1
+    assert len(calls) == 1
+    assert calls[0][3]["p_render_job_id"] == str(render_job_id)
 
 
-def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) -> None:
-    responses = [
-        httpx.Response(200, json=[{"id": "run-1"}]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[{"id": "run-2"}]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-        httpx.Response(200, json=[]),
-    ]
+def test_phase8_retention_reconciles_committed_quota_after_object_delete(
+    monkeypatch,
+    tmp_path,
+) -> None:
     calls = []
+    reservation_id = "66000000-0000-4000-8000-000000000099"
 
     def fake_request(method, url, headers, timeout, **kwargs):
         calls.append((method, url, kwargs))
-        return responses.pop(0)
+        if method == "POST" and url.endswith("/rpc/motionly_claim_storage_deletion_queue"):
+            assert kwargs["json"]["p_lease_owner"].startswith("retention:")
+            assert kwargs["json"]["p_before"] is None
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "queue-1",
+                        "storage_bucket": "raw-uploads",
+                        "storage_path": "workspaces/w/projects/p/raw/source.mp4",
+                        "quota_reservation_id": reservation_id,
+                        "lease_token": "lease-1",
+                    }
+                ],
+            )
+        if method == "POST" and url.endswith("/rpc/motionly_delete_committed_storage_quota"):
+            return httpx.Response(200, json=True)
+        if method == "POST" and url.endswith("/rpc/motionly_ack_storage_deletion_queue"):
+            return httpx.Response(200, json=True)
+        return httpx.Response(200, json=[])
+
+    deleted = []
+    monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
+    service = RetentionService(
+        settings=SimpleNamespace(
+            supabase_url="https://supabase.example",
+            supabase_service_role_key="service-role",
+            retention_export_days=90,
+            retention_local_cache_days=7,
+            media_cache_max_bytes=1024,
+            media_work_dir=str(tmp_path),
+        ),
+        storage_signer=SimpleNamespace(delete_object=lambda **kwargs: deleted.append(kwargs)),
+    )
+
+    assert service._drain_storage_deletion_queue(minimum_age_days=None) == 1
+    assert deleted == [
+        {
+            "bucket": "raw-uploads",
+            "path": "workspaces/w/projects/p/raw/source.mp4",
+        }
+    ]
+    quota_call = next(
+        call for call in calls if call[1].endswith("/rpc/motionly_delete_committed_storage_quota")
+    )
+    assert quota_call[2]["json"] == {"p_reservation_id": reservation_id}
+    assert calls[-1][0] == "POST"
+    assert calls[-1][1].endswith("/rpc/motionly_ack_storage_deletion_queue")
+    assert calls[-1][2]["json"] == {"p_queue_id": "queue-1", "p_lease_token": "lease-1"}
+
+
+def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) -> None:
+    calls = []
+    run_count = 0
+
+    def fake_request(method, url, headers, timeout, **kwargs):
+        nonlocal run_count
+        calls.append((method, url, kwargs))
+        if method == "POST" and url.endswith("/retention_runs"):
+            run_count += 1
+            return httpx.Response(200, json=[{"id": f"run-{run_count}"}])
+        if method == "POST" and url.endswith("/rpc/motionly_expire_upload_sessions"):
+            return httpx.Response(200, json=[0])
+        if method == "POST" and url.endswith("/rpc/motionly_expire_storage_quota_reservations"):
+            return httpx.Response(
+                200,
+                json=[{"motionly_expire_storage_quota_reservations": 0}],
+            )
+        return httpx.Response(200, json=[])
 
     monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
     service = RetentionService(
@@ -485,5 +512,56 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
     second = service.run_scheduled()
 
     assert first["exports"] == 0
+    assert first["expired_storage_reservations"] == 0
+    assert first["expired_generic_media_upload_sessions"] == 0
     assert second["exports"] == 0
-    assert len([call for call in calls if call[0] == "POST"]) == 2
+    assert second["expired_storage_reservations"] == 0
+    assert second["expired_generic_media_upload_sessions"] == 0
+    retention_starts = [
+        call for call in calls if call[0] == "POST" and call[1].endswith("/retention_runs")
+    ]
+    generic_media_expiries = [
+        call
+        for call in calls
+        if call[0] == "POST"
+        and call[1].endswith("/rpc/motionly_expire_generic_media_upload_sessions")
+    ]
+    reservation_expiries = [
+        call
+        for call in calls
+        if call[0] == "POST" and call[1].endswith("/rpc/motionly_expire_storage_quota_reservations")
+    ]
+    prompt_cleanup_calls = [
+        call
+        for call in calls
+        if call[0] == "POST"
+        and call[1].endswith("/rpc/motionly_claim_storage_deletion_queue")
+        and call[2].get("json", {}).get("p_source_table")
+        in {
+            "upload_session_parts",
+            "upload_sessions",
+            "generic_media_upload_session_parts",
+            "generic_media_upload_sessions",
+            "legacy_upload_expiry",
+            "legacy_upload_cancellation",
+        }
+    ]
+    assert {call[2]["json"]["p_source_table"] for call in prompt_cleanup_calls} == {
+        "upload_session_parts",
+        "upload_sessions",
+        "generic_media_upload_session_parts",
+        "generic_media_upload_sessions",
+        "legacy_upload_expiry",
+        "legacy_upload_cancellation",
+    }
+    assert all(call[2]["json"].get("p_before") for call in prompt_cleanup_calls)
+
+    assert len(retention_starts) == 2
+    assert len(generic_media_expiries) == 2
+    assert len(reservation_expiries) == 2
+    # Task 6 expiry stays inside atomic database RPCs, not Python row loops.
+    assert not any(
+        call[0] == "row"
+        and call[1] in ("uploaded_videos", "transcripts", "phase5_resources", "stock_assets")
+        for call in calls
+    )

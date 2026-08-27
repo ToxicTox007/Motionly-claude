@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,7 +33,12 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str | None = Field(default=None, alias="SUPABASE_JWT_SECRET")
     supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
     upload_storage_bucket: str = Field(default="raw-uploads", alias="UPLOAD_STORAGE_BUCKET")
-    upload_max_file_size_bytes: int = Field(default=536_870_912, alias="UPLOAD_MAX_FILE_SIZE_BYTES")
+    upload_max_file_size_bytes: int = Field(
+        default=536_870_912,
+        gt=0,
+        le=536_870_912,
+        alias="UPLOAD_MAX_FILE_SIZE_BYTES",
+    )
     upload_max_concurrent_per_workspace: int = Field(
         default=3,
         alias="UPLOAD_MAX_CONCURRENT_PER_WORKSPACE",
@@ -43,15 +49,54 @@ class Settings(BaseSettings):
     media_work_dir: str = Field(default="/var/data/motionly/storage", alias="MEDIA_WORK_DIR")
     force_local_media_storage: bool = Field(default=False, alias="FORCE_LOCAL_MEDIA_STORAGE")
     retention_source_days: int = Field(default=365, alias="RETENTION_SOURCE_DAYS")
-    retention_generated_asset_days: int = Field(
-        default=90, alias="RETENTION_GENERATED_ASSET_DAYS"
-    )
+    retention_generated_asset_days: int = Field(default=90, alias="RETENTION_GENERATED_ASSET_DAYS")
     retention_transcript_days: int = Field(default=365, alias="RETENTION_TRANSCRIPT_DAYS")
     retention_analytics_days: int = Field(default=365, alias="RETENTION_ANALYTICS_DAYS")
+    editorial_learning_enabled: bool = Field(default=False, alias="EDITORIAL_LEARNING_ENABLED")
+    editorial_learning_policy_version: str = Field(
+        default="editorial-consent/v1",
+        min_length=1,
+        max_length=80,
+        alias="EDITORIAL_LEARNING_POLICY_VERSION",
+    )
+    editorial_learning_retention_days: int = Field(
+        default=90, ge=1, le=365, alias="EDITORIAL_LEARNING_RETENTION_DAYS"
+    )
+    editorial_learning_minimum_examples: int = Field(
+        default=100, ge=1, le=10_000, alias="EDITORIAL_LEARNING_MINIMUM_EXAMPLES"
+    )
+    editorial_learning_shadow_sample_rate: float = Field(
+        default=0, ge=0, le=1, alias="EDITORIAL_LEARNING_SHADOW_SAMPLE_RATE"
+    )
+    performance_feedback_enabled: bool = Field(default=False, alias="PERFORMANCE_FEEDBACK_ENABLED")
+    performance_feedback_policy_version: str = Field(
+        default="performance-feedback/v1",
+        min_length=1,
+        max_length=80,
+        alias="PERFORMANCE_FEEDBACK_POLICY_VERSION",
+    )
+    performance_feedback_retention_days: int = Field(
+        default=90, ge=1, le=365, alias="PERFORMANCE_FEEDBACK_RETENTION_DAYS"
+    )
+    performance_feedback_minimum_examples: int = Field(
+        default=3, ge=1, le=10_000, alias="PERFORMANCE_FEEDBACK_MINIMUM_EXAMPLES"
+    )
     retention_export_days: int = Field(default=90, alias="RETENTION_EXPORT_DAYS")
     retention_local_cache_days: int = Field(default=7, alias="RETENTION_LOCAL_CACHE_DAYS")
     media_cache_max_bytes: int = Field(default=10_737_418_240, alias="MEDIA_CACHE_MAX_BYTES")
     readiness_timeout_seconds: float = Field(default=3.0, alias="READINESS_TIMEOUT_SECONDS")
+    health_diagnostics_cache_ttl_seconds: int = Field(
+        default=30,
+        ge=0,
+        le=300,
+        alias="HEALTH_DIAGNOSTICS_CACHE_TTL_SECONDS",
+    )
+    health_diagnostics_rate_limit_per_minute: int = Field(
+        default=10,
+        ge=1,
+        le=120,
+        alias="HEALTH_DIAGNOSTICS_RATE_LIMIT_PER_MINUTE",
+    )
     worker_heartbeat_max_age_seconds: int = Field(
         default=90, alias="WORKER_HEARTBEAT_MAX_AGE_SECONDS"
     )
@@ -60,6 +105,97 @@ class Settings(BaseSettings):
     ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
     ffmpeg_gpu_encoder: str = Field(default="h264_nvenc", alias="FFMPEG_GPU_ENCODER")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
+    temporal_address: str | None = Field(default=None, alias="TEMPORAL_ADDRESS")
+    temporal_deployment_mode: Literal["cloud", "self_hosted"] = Field(
+        default="cloud", alias="TEMPORAL_DEPLOYMENT_MODE"
+    )
+    temporal_namespace: str | None = Field(default=None, alias="TEMPORAL_NAMESPACE")
+    temporal_api_key: str | None = Field(default=None, alias="TEMPORAL_API_KEY")
+    temporal_task_queue: str | None = Field(default=None, alias="TEMPORAL_TASK_QUEUE")
+    temporal_tls_enabled: bool = Field(default=True, alias="TEMPORAL_TLS_ENABLED")
+    temporal_server_root_ca_path: str | None = Field(
+        default=None, alias="TEMPORAL_SERVER_ROOT_CA_PATH"
+    )
+    temporal_client_cert_path: str | None = Field(default=None, alias="TEMPORAL_CLIENT_CERT_PATH")
+    temporal_client_private_key_path: str | None = Field(
+        default=None, alias="TEMPORAL_CLIENT_PRIVATE_KEY_PATH"
+    )
+    temporal_server_name: str | None = Field(default=None, alias="TEMPORAL_SERVER_NAME")
+    temporal_client_role: str | None = Field(default=None, alias="TEMPORAL_CLIENT_ROLE")
+    temporal_identity: str | None = Field(default=None, alias="TEMPORAL_IDENTITY")
+    temporal_dispatcher_id: str | None = Field(default=None, alias="TEMPORAL_DISPATCHER_ID")
+    temporal_max_concurrent_activities: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        alias="TEMPORAL_MAX_CONCURRENT_ACTIVITIES",
+    )
+    temporal_max_concurrent_workflow_tasks: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        alias="TEMPORAL_MAX_CONCURRENT_WORKFLOW_TASKS",
+    )
+    workflow_dispatcher_batch_size: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        alias="WORKFLOW_DISPATCHER_BATCH_SIZE",
+    )
+    workflow_dispatcher_lease_seconds: int = Field(
+        default=60,
+        ge=5,
+        le=900,
+        alias="WORKFLOW_DISPATCHER_LEASE_SECONDS",
+    )
+    workflow_dispatcher_poll_interval_seconds: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=60.0,
+        alias="WORKFLOW_DISPATCHER_POLL_INTERVAL_SECONDS",
+    )
+    workflow_dispatcher_backoff_initial_seconds: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=300.0,
+        alias="WORKFLOW_DISPATCHER_BACKOFF_INITIAL_SECONDS",
+    )
+    workflow_dispatcher_backoff_max_seconds: float = Field(
+        default=60.0,
+        ge=1.0,
+        le=3600.0,
+        alias="WORKFLOW_DISPATCHER_BACKOFF_MAX_SECONDS",
+    )
+    workflow_reconciler_interval_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=3600,
+        alias="WORKFLOW_RECONCILER_INTERVAL_SECONDS",
+    )
+    workflow_reconciler_staleness_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=86_400,
+        alias="WORKFLOW_RECONCILER_STALENESS_SECONDS",
+    )
+    workflow_reconciler_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=100,
+        alias="WORKFLOW_RECONCILER_BATCH_SIZE",
+    )
+    workflow_step_lease_seconds: int = Field(
+        default=3600,
+        ge=5,
+        le=3600,
+        alias="WORKFLOW_STEP_LEASE_SECONDS",
+    )
+    workflow_step_result_max_bytes: int = Field(
+        default=262_144,
+        ge=1024,
+        le=1_048_576,
+        alias="WORKFLOW_STEP_RESULT_MAX_BYTES",
+    )
     bullmq_bridge_path: str | None = Field(default=None, alias="BULLMQ_BRIDGE_PATH")
     bullmq_node_command: str = Field(default="node", alias="BULLMQ_NODE_COMMAND")
     bullmq_bridge_timeout_seconds: float = Field(
@@ -85,32 +221,11 @@ class Settings(BaseSettings):
         alias="GPU_AUTOSCALE_COOLDOWN_SECONDS",
     )
     gpu_max_worker_count: int = Field(default=4, alias="GPU_MAX_WORKER_COUNT")
-    lightning_user_id: str | None = Field(default=None, alias="LIGHTNING_USER_ID")
-    lightning_api_key: str | None = Field(default=None, alias="LIGHTNING_API_KEY")
-    lightning_teamspace: str | None = Field(default=None, alias="LIGHTNING_TEAMSPACE")
-    lightning_visual_deployment: str | None = Field(
-        default=None,
-        alias="LIGHTNING_VISUAL_DEPLOYMENT",
-    )
-    lightning_matte_deployment: str | None = Field(
-        default=None,
-        alias="LIGHTNING_MATTE_DEPLOYMENT",
-    )
-    lightning_render_deployment: str | None = Field(
-        default=None,
-        alias="LIGHTNING_RENDER_DEPLOYMENT",
-    )
-    lightning_scale_url_template: str = Field(
-        default=(
-            "https://lightning.ai/api/v1/teamspaces/"
-            "{teamspace}/deployments/{deployment}"
-        ),
-        alias="LIGHTNING_SCALE_URL_TEMPLATE",
-    )
-    lightning_max_replicas: int | None = Field(
-        default=None,
-        alias="LIGHTNING_MAX_REPLICAS",
-    )
+    # Static Compose GPU pool capacity. This is the only supported production
+    # compute placement; it never calls a remote orchestration API.
+    gpu_pool_visual_replicas: int = Field(default=1, alias="GPU_POOL_VISUAL_REPLICAS")
+    gpu_pool_matte_replicas: int = Field(default=1, alias="GPU_POOL_MATTE_REPLICAS")
+    gpu_pool_render_replicas: int = Field(default=1, alias="GPU_POOL_RENDER_REPLICAS")
     gpu_oom_alert_threshold: int = Field(default=2, alias="GPU_OOM_ALERT_THRESHOLD")
     gpu_long_job_timeout_seconds: int = Field(
         default=1800,
@@ -122,6 +237,7 @@ class Settings(BaseSettings):
     )
     admin_api_token: str | None = Field(default=None, alias="ADMIN_API_TOKEN")
     worker_api_token: str | None = Field(default=None, alias="WORKER_API_TOKEN")
+    worker_api_base_url: str | None = Field(default=None, alias="WORKER_API_BASE_URL")
     admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
     admin_workspace_ids: str = Field(default="", alias="ADMIN_WORKSPACE_IDS")
     transcription_provider: str = Field(default="groq", alias="TRANSCRIPTION_PROVIDER")
@@ -136,10 +252,18 @@ class Settings(BaseSettings):
         default="pyannote/speaker-diarization-3.1",
         alias="PYANNOTE_MODEL",
     )
+    pyannote_model_revision: str = Field(
+        default="84fd25912480287da0247647c3d2b4853cb3ee5d",
+        alias="PYANNOTE_MODEL_REVISION",
+    )
     pyannote_auth_token: str | None = Field(default=None, alias="PYANNOTE_AUTH_TOKEN")
     wav2vec_emotion_model: str = Field(
         default="superb/wav2vec2-base-superb-er",
         alias="WAV2VEC_EMOTION_MODEL",
+    )
+    wav2vec_emotion_model_revision: str = Field(
+        default="441a7599c3b22107314dcbd9166621c5c83f2cc5",
+        alias="WAV2VEC_EMOTION_MODEL_REVISION",
     )
     yamnet_model_url: str = Field(
         default="https://tfhub.dev/google/yamnet/1",
@@ -150,11 +274,26 @@ class Settings(BaseSettings):
         default="openai/clip-vit-base-patch32",
         alias="VISUAL_CLIP_MODEL",
     )
+    visual_clip_model_revision: str = Field(
+        default="3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+        alias="VISUAL_CLIP_MODEL_REVISION",
+    )
     visual_blip_model: str = Field(
         default="Salesforce/blip2-opt-2.7b",
         alias="VISUAL_BLIP_MODEL",
     )
-    visual_yolo_model: str = Field(default="yolov8n.pt", alias="VISUAL_YOLO_MODEL")
+    visual_blip_model_revision: str = Field(
+        default="59a1ef6c1e5117b3f65523d1c6066825bcf315e3",
+        alias="VISUAL_BLIP_MODEL_REVISION",
+    )
+    visual_yolo_model: str = Field(
+        default="https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
+        alias="VISUAL_YOLO_MODEL",
+    )
+    visual_yolo_model_revision: str = Field(
+        default="ultralytics-assets-v8.3.0",
+        alias="VISUAL_YOLO_MODEL_REVISION",
+    )
     visual_sample_fps: float = Field(default=2.0, alias="VISUAL_SAMPLE_FPS")
     visual_scene_threshold: float = Field(default=0.42, alias="VISUAL_SCENE_THRESHOLD")
     allow_fixture_providers: bool = Field(default=False, alias="ALLOW_FIXTURE_PROVIDERS")
@@ -164,8 +303,53 @@ class Settings(BaseSettings):
         alias="LICENSED_MUSIC_CATALOG_TABLE",
     )
     edit_planner_provider: str = Field(default="openrouter", alias="EDIT_PLANNER_PROVIDER")
-    edit_planner_model: str = Field(default="openrouter/free", alias="EDIT_PLANNER_MODEL")
+    edit_planner_model: str = Field(
+        default="openai/gpt-4.1-mini",
+        alias="EDIT_PLANNER_MODEL",
+    )
+    edit_planner_model_revision: str = Field(
+        default="openai/gpt-4.1-mini-2025-04-14",
+        alias="EDIT_PLANNER_MODEL_REVISION",
+    )
+    edit_planner_input_cost_per_million_usd: float = Field(
+        default=2.0, ge=0, alias="EDIT_PLANNER_INPUT_COST_PER_MILLION_USD"
+    )
+    edit_planner_output_cost_per_million_usd: float = Field(
+        default=2.0, ge=0, alias="EDIT_PLANNER_OUTPUT_COST_PER_MILLION_USD"
+    )
+    transcription_model_revision: str = Field(
+        default="whisper-large-v3-turbo-2025-02-01",
+        alias="TRANSCRIPTION_MODEL_REVISION",
+    )
+    transcription_estimated_cost_per_request_usd: float = Field(
+        default=0.25, ge=0, alias="TRANSCRIPTION_ESTIMATED_COST_PER_REQUEST_USD"
+    )
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    model_gateway_enabled: bool = Field(default=True, alias="MODEL_GATEWAY_ENABLED")
+    model_gateway_routes: str = Field(default="", alias="MODEL_GATEWAY_ROUTES")
+    model_gateway_monthly_budget_usd: float = Field(
+        default=100.0, ge=0, alias="MODEL_GATEWAY_MONTHLY_BUDGET_USD"
+    )
+    model_gateway_request_budget_usd: float = Field(
+        default=5.0, ge=0, alias="MODEL_GATEWAY_REQUEST_BUDGET_USD"
+    )
+    model_gateway_failure_threshold: int = Field(
+        default=3, ge=1, alias="MODEL_GATEWAY_FAILURE_THRESHOLD"
+    )
+    model_gateway_circuit_cooldown_seconds: int = Field(
+        default=60, ge=1, alias="MODEL_GATEWAY_CIRCUIT_COOLDOWN_SECONDS"
+    )
+    model_gateway_openai_base_url: AnyHttpUrl | None = Field(
+        default=None, alias="MODEL_GATEWAY_OPENAI_BASE_URL"
+    )
+    model_gateway_openai_api_key: str | None = Field(
+        default=None, alias="MODEL_GATEWAY_OPENAI_API_KEY"
+    )
+    azure_openai_endpoint: AnyHttpUrl | None = Field(default=None, alias="AZURE_OPENAI_ENDPOINT")
+    azure_openai_api_key: str | None = Field(default=None, alias="AZURE_OPENAI_API_KEY")
+    azure_openai_api_version: str = Field(
+        default="2025-01-01-preview", alias="AZURE_OPENAI_API_VERSION"
+    )
     stock_video_provider: str = Field(default="pexels_pixabay", alias="STOCK_VIDEO_PROVIDER")
     pexels_api_key: str | None = Field(default=None, alias="PEXELS_API_KEY")
     pixabay_api_key: str | None = Field(default=None, alias="PIXABAY_API_KEY")
@@ -210,6 +394,7 @@ class Settings(BaseSettings):
     google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
     stem_separation_provider: str = Field(default="demucs", alias="STEM_SEPARATION_PROVIDER")
     demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
+    demucs_model_revision: str = Field(default="demucs==4.1.0", alias="DEMUCS_MODEL_REVISION")
     quota_runway_free_limit_seconds: float = Field(
         default=0.0,
         alias="QUOTA_RUNWAY_FREE_LIMIT_SECONDS",
@@ -248,9 +433,31 @@ class Settings(BaseSettings):
 
     runway_api_key: str | None = Field(default=None, alias="RUNWAY_API_KEY")
     runway_model: str = Field(default="gen3a_turbo", alias="RUNWAY_MODEL")
+    runway_model_revision: str = Field(
+        default="gen3a_turbo-2024-11-06",
+        alias="RUNWAY_MODEL_REVISION",
+    )
+    runway_estimated_cost_per_request_usd: float = Field(
+        default=0.5,
+        gt=0,
+        alias="RUNWAY_ESTIMATED_COST_PER_REQUEST_USD",
+    )
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
+        if (
+            self.workflow_dispatcher_backoff_initial_seconds
+            > self.workflow_dispatcher_backoff_max_seconds
+        ):
+            raise ValueError(
+                "WORKFLOW_DISPATCHER_BACKOFF_INITIAL_SECONDS cannot exceed "
+                "WORKFLOW_DISPATCHER_BACKOFF_MAX_SECONDS."
+            )
+        if self.workflow_reconciler_interval_seconds > self.workflow_reconciler_staleness_seconds:
+            raise ValueError(
+                "WORKFLOW_RECONCILER_INTERVAL_SECONDS cannot exceed "
+                "WORKFLOW_RECONCILER_STALENESS_SECONDS."
+            )
         skip_api_auth = os.getenv("SKIP_API_AUTH")
         if env_flag_enabled(skip_api_auth) and self.app_env not in LOCAL_AUTH_BYPASS_ENVS:
             raise ValueError(
@@ -281,6 +488,24 @@ class Settings(BaseSettings):
                     "Security violation: FORCE_LOCAL_MEDIA_STORAGE cannot be enabled in "
                     "production environment."
                 )
+            if self.model_gateway_openai_base_url:
+                if not str(self.model_gateway_openai_base_url).startswith("https://"):
+                    raise ValueError(
+                        "Security violation: MODEL_GATEWAY_OPENAI_BASE_URL must use HTTPS."
+                    )
+                if not self.model_gateway_openai_api_key:
+                    raise ValueError(
+                        "Security violation: MODEL_GATEWAY_OPENAI_API_KEY is required in "
+                        "production when a custom endpoint is configured."
+                    )
+            if self.azure_openai_endpoint:
+                if not str(self.azure_openai_endpoint).startswith("https://"):
+                    raise ValueError("Security violation: AZURE_OPENAI_ENDPOINT must use HTTPS.")
+                if not self.azure_openai_api_key:
+                    raise ValueError(
+                        "Security violation: AZURE_OPENAI_API_KEY is required in production "
+                        "when Azure OpenAI is configured."
+                    )
         return self
 
     @property
@@ -316,13 +541,18 @@ def get_settings() -> Settings:
         "PUBLISH_TOKEN_ENCRYPTION_KEY",
         "PUBLISH_OAUTH_STATE_SECRET",
         "REDIS_URL",
+        "TEMPORAL_API_KEY",
         "METRICS_BEARER_TOKEN",
-        "LIGHTNING_API_KEY",
+        "MODEL_GATEWAY_OPENAI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "RUNWAY_API_KEY",
     ):
         secret_file = os.getenv(f"{name}_FILE")
         if secret_file and not os.getenv(name):
             os.environ[name] = Path(secret_file).read_text(encoding="utf-8").strip()
-    
+
     env_file = os.getenv("SETTINGS_ENV_FILE", ".env")
     if env_file == "none":
         return Settings(_env_file=None)

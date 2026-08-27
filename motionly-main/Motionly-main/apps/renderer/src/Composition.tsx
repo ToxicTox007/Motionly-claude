@@ -6,6 +6,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type React from "react";
+import { durationMsToFrameCount, millisecondsToFrameEnd, millisecondsToFrameStart } from "@motionly/shared";
 import { AnimatedCaptions } from "./components/Captions";
 import { VideoScene } from "./components/VideoScene";
 import { ManualElements } from "./components/ManualElements";
@@ -48,18 +49,16 @@ function CutMappedVocalStem({ input }: { input: MotionlyRenderProps }) {
       {sourceTimelineClips(input).map((clip) => (
         <Sequence
           key={`vocals-${clip.id}`}
-          from={Math.round((clip.output_start_ms / 1000) * fps)}
-          durationInFrames={Math.max(
-            1,
-            Math.round(
-              ((clip.output_end_ms - clip.output_start_ms) / 1000) * fps,
-            ),
+          from={millisecondsToFrameStart(clip.output_start_ms, fps)}
+          durationInFrames={durationMsToFrameCount(
+            clip.output_end_ms - clip.output_start_ms,
+            fps,
           )}
         >
           <Audio
             src={source}
-            startFrom={Math.round((clip.source_start_ms / 1000) * fps)}
-            endAt={Math.round((clip.source_end_ms / 1000) * fps)}
+            startFrom={millisecondsToFrameStart(clip.source_start_ms, fps)}
+            endAt={millisecondsToFrameEnd(clip.source_end_ms, fps)}
           />
         </Sequence>
       ))}
@@ -251,7 +250,7 @@ function beatCueFrames(
   durationInFrames: number,
 ) {
   const beats = (beatMap ?? [])
-    .map((beatMs) => Math.round((beatMs / 1000) * fps))
+    .map((beatMs) => millisecondsToFrameStart(beatMs, fps))
     .filter((frame) => frame >= 0 && frame < durationInFrames);
   return beats.length ? beats : [0];
 }

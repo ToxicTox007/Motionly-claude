@@ -1,6 +1,49 @@
 import type { components as ApiComponents } from "./generated/api";
 export * from "./generated/api";
 export * from "./timeline";
+export * from "./timeline-eval.mjs";
+
+// Named aliases keep application code on the generated OpenAPI contract instead of
+// maintaining a second, hand-written copy of the proposal schemas.
+export type ProposalAction = ApiComponents["schemas"]["ProposalAction"];
+export type ProposalCostUsage = ApiComponents["schemas"]["ProposalCostUsage"];
+export type ProposalDecisionRequest =
+  ApiComponents["schemas"]["ProposalDecisionRequest"];
+export type ProposalDecisionResponse =
+  ApiComponents["schemas"]["ProposalDecisionResponse"];
+export type ProposalDecisionType =
+  ApiComponents["schemas"]["ProposalDecisionType"];
+export type ProposalProvenance = ApiComponents["schemas"]["ProposalProvenance"];
+export type ProposalResponse = ApiComponents["schemas"]["ProposalResponse"];
+export type ProposalState = ApiComponents["schemas"]["ProposalState"];
+
+// Explicit workflow aliases keep UI control flow on the bounded API projection.
+// In particular, consumers must not inspect WorkflowEvent payloads to infer state.
+export type WorkflowRunState = ApiComponents["schemas"]["WorkflowRunState"];
+export type WorkflowAllowedAction =
+  ApiComponents["schemas"]["WorkflowAllowedAction"];
+export type WorkflowStepState = ApiComponents["schemas"]["WorkflowStepState"];
+export type WorkflowStep = ApiComponents["schemas"]["WorkflowStepResponse"];
+export type WorkflowArtifactType =
+  ApiComponents["schemas"]["WorkflowArtifactType"];
+export type WorkflowArtifact =
+  ApiComponents["schemas"]["WorkflowArtifactResponse"];
+export type WorkflowDraftRender =
+  ApiComponents["schemas"]["WorkflowDraftRenderResponse"];
+export type WorkflowDraftExport =
+  ApiComponents["schemas"]["WorkflowDraftExportResponse"];
+export type WorkflowSummary =
+  ApiComponents["schemas"]["WorkflowSummaryResponse"];
+export type WorkflowDetail = ApiComponents["schemas"]["WorkflowDetailResponse"];
+export type WorkflowList = ApiComponents["schemas"]["WorkflowListResponse"];
+export type WorkflowCommandRequest =
+  ApiComponents["schemas"]["WorkflowCommandRequest"];
+export type WorkflowCommandResponse =
+  ApiComponents["schemas"]["WorkflowCommandResponse"];
+export type WorkflowCommand = Extract<
+  WorkflowAllowedAction,
+  "cancel" | "retry"
+>;
 
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type WorkspaceMemberStatus = "active" | "invited" | "disabled";
@@ -81,7 +124,12 @@ export type RenderEngine = "ffmpeg_basic" | "remotion_premium";
 export type BrollDensity = "none" | "low" | "medium" | "high";
 export type EditPlanStatus = "ready" | "failed";
 export type BrollSlotStatus = "ready" | "disabled" | "failed";
-export type StockProviderKey = "fixture" | "pexels" | "pixabay" | "user_library" | "runway";
+export type StockProviderKey =
+  | "fixture"
+  | "pexels"
+  | "pixabay"
+  | "user_library"
+  | "runway";
 export type MusicProviderKey = "fixture" | "licensed_catalog";
 export type MusicSelectionStatus = "ready" | "failed";
 export type VisualPresetKey =
@@ -123,6 +171,7 @@ export type PlatformPreset =
   | "shorts"
   | "youtube_landscape"
   | "instagram_post"
+  | "linkedin"
   | "x_landscape"
   | "custom";
 export type ExportResolution = "720p" | "1080p" | "4k";
@@ -185,6 +234,9 @@ export interface UploadedVideoSummary {
   width?: number | null;
   height?: number | null;
   fps?: number | null;
+  mediaRevision?: number | null;
+  sourceObjectReferenceId?: string | null;
+  verifiedSha256?: string | null;
   thumbnailPath?: string | null;
   warnings: string[];
   updatedAt: string;
@@ -199,7 +251,8 @@ export interface TranscriptWord {
   confidence?: number | null;
 }
 
-export type AudioIntelligenceSummary = ApiComponents["schemas"]["AudioIntelligence"];
+export type AudioIntelligenceSummary =
+  ApiComponents["schemas"]["AudioIntelligence"];
 
 export interface TranscriptSummary {
   id: string;
@@ -593,7 +646,12 @@ export interface GradientRampSettings {
   blend_mode: "screen" | "overlay" | "soft-light" | "normal";
 }
 
-export type MotionEasing = "linear" | "ease_in" | "ease_out" | "ease_in_out" | "spring";
+export type MotionEasing =
+  | "linear"
+  | "ease_in"
+  | "ease_out"
+  | "ease_in_out"
+  | "spring";
 export type MotionTarget = "source" | "broll" | "all";
 
 export interface MotionKeyframe {
@@ -611,7 +669,13 @@ export interface MotionKeyframe {
 export interface KenBurnsSettings {
   enabled: boolean;
   intensity: number;
-  direction: "push_in" | "pull_out" | "pan_left" | "pan_right" | "pan_up" | "pan_down";
+  direction:
+    | "push_in"
+    | "pull_out"
+    | "pan_left"
+    | "pan_right"
+    | "pan_up"
+    | "pan_down";
   easing: MotionEasing;
 }
 
@@ -797,6 +861,7 @@ export interface EditPlanRecordSummary {
   validation_errors: string[];
   summary: EditPlanSummary;
   plan: EditPlan;
+  revision?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -946,6 +1011,9 @@ export interface ExportOptions {
   format: ExportFormat;
   platform: PlatformPreset;
   framing?: ExportFraming;
+  duration_preset?: DurationPreset | null;
+  include_captions?: boolean | null;
+  hook_text?: string | null;
 }
 
 export interface RegenerateResponseSummary {
@@ -1013,8 +1081,18 @@ export interface BillingStatusSummary {
   entitlements: PlanEntitlements;
 }
 
-export type AIEditLayer = "cuts" | "captions" | "broll" | "music" | "effects" | "render";
-export type AIEditFeedbackEventType = "ai_suggested" | "kept" | "changed" | "rejected";
+export type AIEditLayer =
+  | "cuts"
+  | "captions"
+  | "broll"
+  | "music"
+  | "effects"
+  | "render";
+export type AIEditFeedbackEventType =
+  | "ai_suggested"
+  | "kept"
+  | "changed"
+  | "rejected";
 export type FineTuningSignal = "positive" | "correction" | "rejection";
 
 export interface AIEditFeedbackEventSummary {
@@ -1078,7 +1156,15 @@ export interface FineTuningDatasetSummary {
 // Timeline editor types
 // ---------------------------------------------------------------------------
 
-export type TimelineTrackKind = "video" | "broll" | "caption" | "transition" | "overlay" | "music" | "sfx" | "zoom";
+export type TimelineTrackKind =
+  | "video"
+  | "broll"
+  | "caption"
+  | "transition"
+  | "overlay"
+  | "music"
+  | "sfx"
+  | "zoom";
 
 export interface TimelineClip {
   id: string;
@@ -1090,9 +1176,15 @@ export interface TimelineClip {
   colorClass: string;
   disabled: boolean;
   sourceRef: {
-    kind: "cut" | "caption_segment" | "broll_slot" | "music" | "zoom_marker" | "manual_element";
+    kind:
+      | "cut"
+      | "caption_segment"
+      | "broll_slot"
+      | "music"
+      | "zoom_marker"
+      | "manual_element";
     index?: number; // positional index in array (cuts)
-    id?: string;    // UUID (segments, slots)
+    id?: string; // UUID (segments, slots)
     regionId?: string; // music region id
   };
 }

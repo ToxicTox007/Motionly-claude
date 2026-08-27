@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -8,6 +9,7 @@ from app.api.plans import _apply_phase5_learning
 from app.repositories.analytics import InMemoryAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
+from app.repositories.editorial_learning import InMemoryEditorialLearningRepository
 from app.repositories.renders import RenderJobRecord
 from app.repositories.scale import InMemoryScaleRepository
 from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
@@ -27,36 +29,49 @@ from app.services.storage import StorageSigner
 
 def test_preference_learning_uses_latest_nonempty_feedback_per_layer() -> None:
     workspace_id, project_id, user_id = uuid4(), uuid4(), uuid4()
-    analytics = InMemoryAnalyticsRepository()
-    older = analytics.record_event(
+    learning = InMemoryEditorialLearningRepository()
+    learning.set_policy_if_revision(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        memory_enabled=True,
+        training_enabled=True,
+        policy_version="editorial-consent/v1",
+        retention_days=None,
+        expected_revision=None,
+    )
+    older = learning.capture_delta(
         workspace_id=workspace_id,
         project_id=project_id,
         user_id=user_id,
-        event_type=AIEditFeedbackEventType.CHANGED,
-        layer=AIEditLayer.CUTS,
-        source="manual_editor",
-        user_payload={"pace": "slow"},
+        source_event_id=uuid4(),
+        layer="cuts",
+        delta={"before": {"pace": "normal"}, "after": {"pace": "slow"}},
+        normalizer_version="editorial-delta/v1",
+        memory_eligible=True,
+        training_eligible=True,
     )
-    newer = analytics.record_event(
+    newer = learning.capture_delta(
         workspace_id=workspace_id,
         project_id=project_id,
         user_id=user_id,
-        event_type=AIEditFeedbackEventType.CHANGED,
-        layer=AIEditLayer.CUTS,
-        source="manual_editor",
-        user_payload={"pace": "fast"},
+        source_event_id=uuid4(),
+        layer="cuts",
+        delta={"before": {"pace": "slow"}, "after": {"pace": "fast"}},
+        normalizer_version="editorial-delta/v1",
+        memory_eligible=True,
+        training_eligible=True,
     )
-    analytics.record_event(
+    assert older is not None and newer is not None
+    older = replace(older, created_at=datetime.now(UTC) - timedelta(minutes=2))
+    newer = replace(newer, created_at=datetime.now(UTC) - timedelta(minutes=1))
+    learning.deltas[older.id] = older
+    learning.deltas[newer.id] = newer
+    dataset = learning.freeze_dataset(
         workspace_id=workspace_id,
         project_id=project_id,
         user_id=user_id,
-        event_type=AIEditFeedbackEventType.REJECTED,
-        layer=AIEditLayer.CUTS,
-        source="manual_editor",
-        ai_payload={"pace": "bad"},
+        minimum_examples=1,
     )
-    older.created_at = datetime.now(UTC) - timedelta(minutes=2)
-    newer.created_at = datetime.now(UTC) - timedelta(minutes=1)
     scale = InMemoryScaleRepository()
     resource = scale.create(
         workspace_id=workspace_id,
@@ -64,7 +79,11 @@ def test_preference_learning_uses_latest_nonempty_feedback_per_layer() -> None:
         kind="model_training",
         name="Preference summary",
         status=ScaleResourceStatus.QUEUED,
-        payload={"minimum_examples": 1},
+        payload={
+            "minimum_examples": 1,
+            "editorial_dataset_id": str(dataset.id),
+            "editorial_user_id": str(user_id),
+        },
     )
 
     completed = execute_scale_resource(
@@ -75,7 +94,8 @@ def test_preference_learning_uses_latest_nonempty_feedback_per_layer() -> None:
         upload_repository=None,
         broll_repository=None,
         visual_provider=None,
-        analytics_repository=analytics,
+        analytics_repository=None,
+        editorial_learning_repository=learning,
         stem_separator=None,
         runway_provider=None,
     )
@@ -83,43 +103,79 @@ def test_preference_learning_uses_latest_nonempty_feedback_per_layer() -> None:
     assert completed.result["preferences"]["cuts"] == {"pace": "fast"}
 
 
-def test_learned_preferences_are_scoped_to_the_project() -> None:
-    workspace_id, first_project_id, second_project_id = uuid4(), uuid4(), uuid4()
-    scale = InMemoryScaleRepository()
-    for project_id, pace in (
-        (first_project_id, "fast"),
-        (second_project_id, "slow"),
-    ):
-        scale.create(
+def test_promoted_editorial_memory_is_scoped_to_the_project() -> None:
+    workspace_id, first_project_id, second_project_id, user_id = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    learning = InMemoryEditorialLearningRepository()
+    learning.set_policy_if_revision(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        memory_enabled=True,
+        training_enabled=True,
+        policy_version="editorial-consent/v1",
+        retention_days=None,
+        expected_revision=None,
+    )
+    manifest_hashes = {}
+    for project_id, pace in ((first_project_id, "fast"), (second_project_id, "slow")):
+        learning.capture_delta(
             workspace_id=workspace_id,
             project_id=project_id,
-            kind="model_training",
-            name="Preference summary",
-            status=ScaleResourceStatus.READY,
-            payload={},
-            result={"preferences": {"cuts": {"pace": pace}}},
+            user_id=user_id,
+            source_event_id=uuid4(),
+            layer="cuts",
+            delta={"before": {"pace": "normal"}, "after": {"pace": pace}},
+            normalizer_version="editorial-delta/v1",
+            memory_eligible=True,
+            training_eligible=True,
         )
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(scale_repository=scale))
-    )
+        dataset = learning.freeze_dataset(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            user_id=user_id,
+            minimum_examples=1,
+        )
+        learning.promote(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            user_id=user_id,
+            dataset_id=dataset.id,
+            expected_revision=0,
+        )
+        manifest_hashes[project_id] = dataset.manifest_hash[:32]
 
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                scale_repository=InMemoryScaleRepository(),
+                editorial_learning_repository=learning,
+                settings=SimpleNamespace(editorial_learning_enabled=True),
+            )
+        )
+    )
     first = _apply_phase5_learning(
         payload=PlanCreateRequest(),
         request=request,
         workspace_id=workspace_id,
         project_id=first_project_id,
+        user_id=user_id,
     )
     second = _apply_phase5_learning(
         payload=PlanCreateRequest(),
         request=request,
         workspace_id=workspace_id,
         project_id=second_project_id,
+        user_id=user_id,
     )
 
-    assert "'pace': 'fast'" in first.prompt
-    assert "'pace': 'slow'" not in first.prompt
-    assert "'pace': 'slow'" in second.prompt
-    assert "'pace': 'fast'" not in second.prompt
+    assert manifest_hashes[first_project_id] in first.prompt
+    assert manifest_hashes[second_project_id] not in first.prompt
+    assert manifest_hashes[second_project_id] in second.prompt
+    assert manifest_hashes[first_project_id] not in second.prompt
 
 
 def test_render_success_records_usage_and_acceptance_once() -> None:

@@ -754,3 +754,14 @@ a {
     border-radius: 4px;
   }
 }
+
+/* Adaptive editor density: Creator mode favors readable sentence case while
+   Professional mode preserves the compact precision-oriented controls. */
+.editor-shell[data-editor-mode="creator"] .uppercase {
+  text-transform: none;
+}
+
+.editor-shell[data-editor-mode="creator"] :where(.text-\[9px\], .text-\[10px\], .text-2xs) {
+  font-size: 0.75rem;
+  line-height: 1rem;
+}

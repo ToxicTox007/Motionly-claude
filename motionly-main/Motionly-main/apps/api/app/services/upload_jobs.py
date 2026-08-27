@@ -5,6 +5,7 @@ from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
 from app.schemas.uploads import UploadStatus
 from app.services.local_storage import create_object_storage
 from app.services.preprocessing import VideoPreprocessor
+from app.services.worker_media import materialize_upload_source
 
 
 def complete_upload_preprocessing(
@@ -35,9 +36,9 @@ def complete_upload_preprocessing(
             supabase_url=supabase_url,
             service_role_key=service_role_key,
         )
-        source_path = storage.ensure_object(
-            bucket=upload.storage_bucket,
-            path=upload.storage_path,
+        source_path = materialize_upload_source(
+            upload=upload,
+            storage=storage,
         )
         thumbnail_path = (
             f"workspaces/{upload.workspace_id}/projects/{upload.project_id}/"

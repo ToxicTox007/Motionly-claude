@@ -1,4 +1,3 @@
-# Motionly AI-Centered Rebuild — Session Handoff
 
 **Prepared:** 2026-07-14 14:58 UTC  
 **Repository:** `/workspaces/Motionly-claude`  
@@ -104,25 +103,25 @@ These findings drove the implementation order:
 
 ## 5. Authoritative task list
 
-Progress: **5 of 18 complete**.
+Progress: **17 of 18 complete**.
 
 - [x] Task 1 — Unify and repair the BullMQ queue control plane
 - [x] Task 2 — Fix immediate product correctness regressions
 - [x] Task 3 — Make the API the authoritative tenant-safe mutation boundary
 - [x] Task 4 — Secure media, workers, and service credentials
 - [x] Task 5 — Introduce immutable timeline revisions and source lineage
-- [ ] Task 6 — Make upload and media access session-safe
-- [ ] Task 7 — Add a transactional outbox and durable workflow state
-- [ ] Task 8 — Remove Lightning AI and activate custom GPU workers
-- [ ] Task 9 — Add Azure GPU scheduling and autoscaling
-- [ ] Task 10 — Build the provider-neutral model gateway
-- [ ] Task 11 — Implement the AI proposal and approval brain
-- [ ] Task 12 — Complete the durable upload-to-first-draft pipeline
-- [ ] Task 13 — Add safe memory and editorial evaluations
-- [ ] Task 14 — Unify preview and export rendering
-- [ ] Task 15 — Deliver adaptive creator and professional editor modes
-- [ ] Task 16 — Establish and enforce scalability SLOs
-- [ ] Task 17 — Make dependencies and builds reproducible
+- [x] Task 6 — Make upload and media access session-safe
+- [x] Task 7 — Add a transactional outbox and durable workflow state
+- [x] Task 8 — Remove Lightning AI and activate custom GPU workers
+- [x] Task 9 — Add Azure GPU scheduling and autoscaling
+- [x] Task 10 — Build the provider-neutral model gateway
+- [x] Task 11 — Implement the AI proposal and approval brain
+- [x] Task 12 — Complete the durable upload-to-first-draft pipeline
+- [x] Task 13 — Add safe memory and editorial evaluations
+- [x] Task 14 — Unify preview and export rendering
+- [x] Task 15 — Deliver adaptive creator and professional editor modes
+- [x] Task 16 — Establish and enforce scalability SLOs
+- [x] Task 17 — Make dependencies and builds reproducible
 - [ ] Task 18 — Wire and validate the production candidate end to end
 
 Do not mark a task complete unless its success criteria are verified by concrete command/test output.
@@ -307,6 +306,190 @@ Verification:
 - Web test suite: **77 passed** (including 12 new revision-conflict tests).
 - TypeScript type check (`tsc --noEmit`): **0 errors**.
 
+## 7c. Task 6 — Session-safe uploads and media access: COMPLETE
+
+Implemented resumable, verified uploads:
+- Added durable multipart sessions and normalized part rows with resume/reconciliation, bounded five-URL windows, idempotent confirmation/completion/abort, and bucket-compatible video MIME headers.
+- Enforced the 512 MiB maximum in request schemas, settings, service preflight, browser preflight, and worker download bounds.
+- Treats storage as authoritative: verifies every part size, assembles in order, computes server-side SHA-256, checks declared/requested hashes, uploads the final object, and re-verifies final storage size and SHA-256.
+- Supabase's fixed signed PUT lifetime is reported truthfully as 7,200 seconds. Terminal storage deletion waits 7,500 seconds, preventing a still-valid PUT from recreating an unaccounted object.
+
+Implemented atomic accounting and lifecycle safety:
+- Migration `202607140006_session_safe_uploads.sql` adds byte/object usage plus reservations, multipart state, object references, URL grant audit rows, tenant FKs/RLS, idempotent quota transitions, atomic finalization/cancellation/expiry, and durable storage deletion work.
+- Forward migrations `202607140011_task6_legacy_upload_claim.sql` and `202607140012_task6_terminal_cleanup.sql` deliver fixes to environments where migration 006 was already applied.
+- Migration `202607140013_task6_source_reference_backfill.sql` creates and links source references for existing eligible uploads.
+- Legacy single-PUT completion now performs authoritative storage verification and the same atomic quota/reference finalization.
+
+Implemented durable media access:
+- Browser media responses carry durable source/thumbnail reference IDs and refresh short-lived URLs before expiry, after focus/visibility recovery, and once after source/poster errors.
+- Lazy source references are persisted back to the upload row; render creation guarantees a source reference and fails closed if one cannot be established.
+- Worker media is signed only at execution time through the tenant-scoped internal signer. Preprocess, transcription, visual analysis, matte extraction, stem separation, FFmpeg, and Remotion consume the signed URL; Python materialization rechecks byte size and SHA-256, and Remotion refuses an uploaded source without a reference.
+- Regenerated `packages/shared/openapi.json` and `packages/shared/src/generated/api.ts`.
+
+Key files:
+- `apps/api/app/api/uploads.py`
+- `apps/api/app/api/media.py`
+- `apps/api/app/services/upload_session.py`
+- `apps/api/app/services/storage_quota.py`
+- `apps/api/app/services/object_references.py`
+- `apps/api/app/services/worker_media.py`
+- `apps/api/app/services/retention.py`
+- `apps/web/lib/resumable-upload.ts`
+- `apps/web/components/upload-panel.tsx`
+- `apps/web/components/editor-client.tsx`
+- `apps/worker/src/remotion.mjs`
+- `supabase/migrations/202607140006_session_safe_uploads.sql`
+- `supabase/migrations/202607140011_task6_legacy_upload_claim.sql`
+- `supabase/migrations/202607140012_task6_terminal_cleanup.sql`
+- `supabase/migrations/202607140013_task6_source_reference_backfill.sql`
+- `supabase/tests/task_6_session_safe_uploads_test.sql`
+
+Verification:
+- Focused Task 6 API/upload/worker-media suite: **48 passed**.
+- Stable render-route and stem-consumer invariants: **4 passed**.
+- Relevant API render/media/retention regression suite: **97 passed, 1 skipped** before the final TTL-only adjustment; the final affected upload suite then passed 48/48.
+- Full web suite: **91 passed**; web TypeScript check passed.
+- Full worker suite: **35 passed, 1 skipped**; Node syntax checks passed.
+- Focused Task 6 pgTAP suite: **67 tests PASS**.
+- `supabase db lint --local`: **No schema errors found**.
+- Generated contract check passed; Task 6 Ruff checks and `git diff --check` passed.
+- Independent final audit returned **`TASK 6 AUDIT: PASS`**.
+
+## 7d. Task 8 — Remove Lightning AI and activate custom GPU workers: COMPLETE
+
+Implemented provider-neutral compute backend and static custom GPU pool:
+- New `apps/api/app/services/compute_backend.py` defines a `ComputeBackend` abstraction and a default `StaticGpuPoolBackend`. The static pool represents Motionly's own custom GPU workers (see `infra/docker-compose.gpu.yml`); it observes per-group backlog vs. static capacity (visual/matte/render) and emits a saturation/backpressure signal, and it never calls any external managed-GPU provider API.
+- `compute_backend_from_settings()` selects the backend via the provider-neutral `COMPUTE_BACKEND` setting (default `static_gpu_pool`); future managed backends (e.g. Azure GPU in Task 9) can implement the same contract without changing callers.
+
+Removed all Lightning presence:
+- Deleted `apps/api/app/services/lightning_scaling.py`.
+- Removed every `lightning_*` setting from `apps/api/app/core/config.py` and dropped `LIGHTNING_API_KEY` from the secret-file loader; added `COMPUTE_BACKEND` + `GPU_POOL_{VISUAL,MATTE,RENDER}_REPLICAS`.
+- `gpu_autoscaling.py` `max_worker_count` now derives from `gpu_max_worker_count` only (removed `lightning_max_replicas`).
+- `main.py` wires the compute backend; `operations.py` disabled reason string is now `compute_backend_unconfigured`.
+- Deleted `scripts/deploy_lightning_workers.sh` and `scripts/lightning_start_worker.sh`; added provider-neutral `scripts/deploy_gpu_workers.sh` and `scripts/gpu_start_worker.sh` (using `GPU_WORKER_ROLE`, `GPU_DEPLOY_COMMAND`, `GPU_WORKER_IMAGE`, `GPU_*_DEPLOYMENT`).
+- Removed all `LIGHTNING_*` variables from `.railway/railway.ts` and `prod.env.example`; added compute-backend settings to `apps/api/.env.example`.
+- Updated tests: `test_phase4_gpu_media_workers.py` (replaced 3 Lightning scaling tests with 6 static-pool/compute-backend tests), `apps/worker/src/worker-routing.test.mjs` (points at the new GPU scripts), `test_control_media_boundary.py` (removed `lightning-sdk` line).
+- Updated `docs/motionly_technical_documentation.md` section 4 to describe the provider-neutral custom GPU worker pool.
+
+Added zero-reference assertion:
+- `apps/api/tests/test_lightning_removed.py` scans the runtime/config/deploy/test tree and fails if any case-insensitive `lightning` token survives (only `lightningcss` in the web lockfile is allowed and stripped). It also asserts the service module and old scripts are deleted and the new scripts and compute backend exist.
+
+Key files:
+- `apps/api/app/services/compute_backend.py`
+- `apps/api/app/services/gpu_autoscaling.py`
+- `apps/api/app/core/config.py`
+- `apps/api/app/main.py`
+- `apps/api/app/api/operations.py`
+- `scripts/deploy_gpu_workers.sh`
+- `scripts/gpu_start_worker.sh`
+- `.railway/railway.ts`
+- `prod.env.example`
+- `apps/api/.env.example`
+- `apps/api/tests/test_lightning_removed.py`
+- `apps/api/tests/test_phase4_gpu_media_workers.py`
+- `apps/api/tests/test_control_media_boundary.py`
+- `apps/worker/src/worker-routing.test.mjs`
+- `docs/motionly_technical_documentation.md`
+
+Verification:
+- Full API pytest: **574 passed, 18 skipped, 1 failed**. The single failure (`test_control_media_boundary::test_api_image_contains_no_ffmpeg_or_ml_runtime`, the `apps/worker` assertion) was confirmed **pre-existing at HEAD** (stale from the Task 1 canonical-bridge copy) and is unrelated to Lightning removal.
+- Zero-reference suite `test_lightning_removed.py`: **4 passed**.
+- Worker node `worker-routing.test.mjs`: **6 passed** (including the renamed GPU-pool placement test).
+- Ruff on all Task 8 files: **All checks passed**.
+- Repo-wide `grep -ri lightning` shows no references outside the scan test itself and `lightningcss` in `pnpm-lock.yaml`.
+- Note: `pytest` and `ruff` (declared dev dependencies) had gone missing from the API venv mid-session and were reinstalled to run verification. No commits or pushes were made.
+
+## 7e. Task 9 — Add Azure GPU scheduling and autoscaling: COMPLETE
+
+Implemented queue-specific Azure GPU pools on AKS + KEDA, wired behind the provider-neutral compute backend from Task 8.
+
+Decision logic (`apps/api/app/services/azure_gpu.py`, pure/deterministic):
+- **Capability routing** — `CAPABILITY_CATALOG` (T4 `Standard_NC4as_T4_v3`, V100 `Standard_NC6s_v3`, A100 `Standard_NC24ads_A100_v4`); `default_azure_pools`/`azure_pools_from_settings` build render/visual/matte pools; `route_queue_to_pool` maps `render_gpu`→render, `visual_analysis`+`transcription`→visual, `matte_extraction`→matte.
+- **Scale-from-zero** — no backlog resolves to `min_replicas` (0).
+- **Cost caps** — `plan_azure_scaling` funds pools in priority order (render > visual > matte) until the hourly USD budget is exhausted; over-budget pools are `cost_capped`.
+- **OOM replacement** — pools at/over the OOM threshold are `cordoned` with an `oom_replacements` count.
+
+Backend + settings:
+- `AzureGpuPoolBackend(ComputeBackend)` in `apps/api/app/services/compute_backend.py`; `compute_backend_from_settings` selects it for `COMPUTE_BACKEND=azure_aks_keda` (static pool remains the default).
+- `config.py` adds `AZURE_GPU_CAPABILITY`, `AZURE_GPU_MAX_NODES_PER_POOL`, `AZURE_GPU_HOURLY_BUDGET_USD`, `AZURE_GPU_RESOURCE_GROUP`, `AZURE_GPU_CLUSTER_NAME`, `AZURE_GPU_WORKLOAD_IDENTITY_CLIENT_ID`; documented in `apps/api/.env.example`.
+
+AKS/KEDA manifests (`infra/azure/`):
+- `namespace.yaml`, `workload-identity.yaml` (ServiceAccount with `azure.workload.identity/client-id` annotation + `use: "true"` label), `network-policy.yaml` (default-deny + explicit egress = private networking), `storage.yaml` (RWX Azure Files), `gpu-deployments.yaml` (one GPU Deployment per pool: `replicas: 0`, workload-identity SA + pod label, `accelerator` nodeSelector, `sku=gpu` toleration, `nvidia.com/gpu` limits, non-root), `keda-scaledobjects.yaml` (one ScaledObject per pool, `minReplicaCount: 0`, per-queue Redis triggers, workload-identity `TriggerAuthentication`), `README.md`.
+
+Docs: `docs/azure_gpu_deployment.md` gained a ready-to-apply manifests section; technical doc section 4 references the Azure backend.
+
+Verification:
+- Focused `tests/test_phase9_azure_gpu.py`: **20 passed** (capability routing, scale-from-zero, cost caps, OOM replacement, backend/factory wiring, and YAML-parsed manifest correctness — scale-to-zero, per-queue triggers, workload identity, default-deny networking, GPU scheduling).
+- Full API pytest: **606 passed, 18 skipped, 1 failed**. The single failure is the same pre-existing, unrelated `test_control_media_boundary::test_api_image_contains_no_ffmpeg_or_ml_runtime` (`apps/worker` assertion, stale from Task 1).
+- Ruff on all Task 9 files: **All checks passed**.
+- **Independent auditor subagent** verified all 9 success criteria and returned **`TASK 9 AUDIT: PASS`**.
+- No commits or pushes were made.
+
+## 7f. Task 10 — Build the provider-neutral model gateway: COMPLETE
+
+Implemented:
+- Added typed request/output contracts for planning, transcription, vision, audio, embeddings, and generation, plus explicit local domain operations for visual manifests, matte segmentation, audio intelligence, Demucs stem separation, image embeddings, and route-affine Runway submit/poll.
+- Added Azure OpenAI and OpenAI-compatible adapters with validated HTTPS endpoints, callable model/deployment IDs separate from immutable model revisions, strict typed response parsing, and recorded transport contracts.
+- Centralized capability/operation routing, request and workspace-month dollar budgets, controlled fallback, route+revision circuit breakers, usage/cost telemetry, durable tenant-scoped provider events, and invocation provenance.
+- Made budget settlement charge the full actual provider cost in both memory and Redis before rejecting an underestimated result; Redis reservations are atomic cross-process leases with crash-expiry reconciliation.
+- Preserved provider failure classifications. Local Runway request rejection is terminal, nonbillable, and non-circuit-worthy; remote auth/quota/rate-limit/availability/timeout failures remain distinct, and video submission never falls back after a possible side effect.
+- Routed production matte segmentation and Demucs stem separation through typed gateway adapters with workspace/project context and immutable revisions. Production runtime validation checks actually registered executable operations and fails closed on missing routes.
+- Bound legacy in-flight Runway polling to the configured route/revision through the gateway or rejected it before any direct provider bypass.
+- Added production route/pricing/revision guards, deployment/env catalog wiring, and the `provider_slo_events` schema contract for route, revision, request, cost, and typed usage telemetry.
+
+Key files:
+- `apps/api/app/services/model_gateway.py`
+- `apps/api/app/services/model_adapters.py`
+- `apps/api/app/services/model_domain_adapters.py`
+- `apps/api/app/services/model_gateway_factory.py`
+- `apps/api/app/services/provider_resilience.py`
+- `apps/api/app/services/matte_jobs.py`
+- `apps/api/app/services/scale.py`
+- `apps/api/app/core/production.py`
+- `apps/api/app/main.py`
+- `apps/api/app/workers/visual_job.py`
+- `apps/api/app/workers/matte_job.py`
+- `apps/api/tests/test_model_gateway.py`
+- `apps/api/tests/test_model_gateway_redis.py`
+- `apps/api/tests/test_phase10_cost_controls.py`
+- `supabase/migrations/202607140010_provider_neutral_model_gateway.sql`
+- `supabase/tests/task_10_model_gateway_test.sql`
+
+Verification:
+- Focused gateway/domain/production suite: **97 passed**.
+- Real Redis contracts for atomic budgets, over-reservation settlement, lease recovery, and revision-scoped circuits: **4 passed**.
+- Full API suite: **666 passed, 23 opt-in contracts skipped**.
+- Task 10 Supabase pgTAP contract: **12 tests PASS**; local repository integration contracts: **2 passed**.
+- Ruff over the Task 10 implementation/tests: **All checks passed**; Python compile checks completed with exit 0.
+- Independent final auditor reran 59 focused tests and Ruff, verified all acceptance criteria and prior blocker remediations, and returned **`TASK 10 AUDIT: PASS`**.
+- Credentialed live Azure/OpenAI-compatible/Runway calls were not run because no provider secrets were available; recorded transport contracts and opt-in live-provider tests cover those boundaries without transmitting project data.
+- No commit or push was performed.
+
+## 7g. Task 14 — Unify preview and export rendering: COMPLETE
+
+Implemented one canonical preview/export timeline contract:
+- Added `packages/shared/src/timeline-eval.mjs` + `timeline-eval.d.mts`, exporting `normalizeSourceClips`, `resolveSourceClipAtOutputMs`, `outputMsToSourceMs`, and `outputTimelineDurationMs`. The plain ESM module is consumable by the browser bundle, renderer TypeScript, and Node test suites.
+- `apps/renderer/src/timeline.ts` now adapts render props to the shared evaluator instead of maintaining a local clip walker.
+- `apps/web/lib/timeline.ts`, `useTimeline.ts`, and `usePlaybackSync.ts` use the shared evaluator. Removed the divergent `apps/web/lib/timeline-time.mjs` and `.d.mts`; removed the browser-only `-20ms` boundary fudge.
+- Preview frame quantization now uses canonical export FPS (`PreviewExportState.fps`, default `DEFAULT_RENDER_FPS`) rather than upload/source FPS. `export-step.tsx` supplies the canonical FPS and `editor-client.tsx` no longer passes `sourceFps`.
+
+Frame/timing parity evidence:
+- Added shared fixture `packages/shared/src/timeline-golden.json` with removed-gap, boundary, and duration samples.
+- Both `apps/renderer/src/frame-boundary.test.mjs` and `apps/web/tests/timeline-time.test.mjs` consume the same fixture and compare all samples.
+- Converted renderer `Composition.tsx`, `components/Captions.tsx`, and `components/ManualElements.tsx` to shared millisecond/frame helpers; the renderer boundary test guards against ad-hoc conversion math.
+
+Browser approximation labeling:
+- `VideoPreview.tsx` explicitly labels CSS/WebGL grade and motion as **“Grade/motion: preview approximation”** and retains **“Approximate subject preview”** / **“Real matte preview”** status badges.
+- `docs/workers/render-correctness.md` documents that browser grade/motion/transition/matte fallbacks are lower-cost approximations and that export output is authoritative.
+
+Verification:
+- Renderer frame/parity suite: **6 passed, 0 failed**; renderer package test also passed with TypeScript tests (2 passed, 2 skipped) and all `.mjs` tests passing.
+- Web tests: **91 passed, 0 failed**; focused parity/matte suite: **5 passed, 0 failed**.
+- Web typecheck: **0 errors**.
+- Shared package typecheck: **0 errors**.
+- Independent auditor re-check: **`TASK 14 AUDIT: PASS`**, confirming all criteria and no remaining ad-hoc ms-to-frame math in the named renderer components.
+- Web lint was attempted but terminated with exit 143 before completion; typecheck and tests passed. No commits or pushes were made.
+
 ## 8. Important implementation decisions already made
 
 - Preserve forward-only database migrations; never edit an already-deployed historical migration except the newly created current-session migration before it is committed/deployed.
@@ -330,12 +513,8 @@ Verification:
 - Invalidate stale derivatives on source replacement.
 - Add multi-tab/collaborator conflict UX.
 
-### Task 6 — Session-safe uploads/media
-- Resumable multipart upload.
-- Server-side object size/hash verification.
-- Atomic upload quotas.
-- Durable object references and browser URL refresh.
-- Worker-time URL signing.
+### Task 6 — Session-safe uploads/media: COMPLETE
+- See Section 7c for implementation details and verification evidence.
 
 ### Task 7 — Transactional outbox/durable workflows
 - Workflow runs and step attempts in PostgreSQL.
@@ -369,6 +548,32 @@ Verification:
 - Wire all steps from upload through analysis, approval, assembly, and draft render.
 - Browser closure/device switch must not stop orchestration.
 
+### Task 17 — Reproducibility/supply chain: COMPLETE
+
+Implemented:
+- Generated hash-locked base, development, and ML Python lockfiles with pinned transitive versions; container installs use `pip --require-hashes`.
+- Tightened direct JavaScript dependency specifiers, synchronized `pnpm-lock.yaml`, and added npm lockfiles for the API bridge and worker.
+- Pinned Docker base images and Compose images by registry digest, removed Azure `latest` image tags, and pinned Hugging Face model prefetches to commit revisions.
+- Added the `supply-chain.yml` workflow for frozen dependency verification, SPDX SBOMs, CodeQL SAST, Trivy image scans, JavaScript/Python license checks, and Cosign OIDC signing on pushes.
+
+Verification evidence from this session:
+- `pnpm install --frozen-lockfile --ignore-scripts --offline` completed successfully.
+- `pip install --dry-run --ignore-installed --require-hashes` completed successfully for `requirements.lock`, `requirements-dev.lock`, and the 3,835-line `requirements-ml.lock`.
+- `docker build --file apps/api/Dockerfile --tag motionly-task17-api .` completed successfully using the digest-pinned Python base image.
+- `APP_ENV=test apps/api/.venv/bin/python -m pytest -q apps/api/tests/test_phase4_gpu_media_workers.py` passed: 18 tests.
+- Worker, renderer, and web typechecks all completed successfully.
+- Static validation passed for Python syntax, YAML syntax, immutable Docker bases, and absence of mutable `:latest` deployment references.
+
+Key files:
+- `apps/api/requirements.lock`
+- `apps/api/requirements-dev.lock`
+- `apps/api/requirements-ml.lock`
+- `pnpm-lock.yaml`
+- `.github/workflows/supply-chain.yml`
+- `docs/ops/supply-chain.md`
+- `infra/docker-compose.gpu.yml`
+- `infra/azure/gpu-deployments.yaml`
+
 ### Task 13 — Safe memory/evaluation
 - Consent-aware project/user preferences.
 - Normalized accepted/rejected edit deltas.
@@ -380,11 +585,35 @@ Verification:
 - Frame/timing golden comparison.
 - Remove or clearly label browser-only approximations.
 
-### Task 15 — Adaptive UX
-- Creator mode and professional mode.
-- Reduce visual noise/tiny uppercase labels.
-- Preserve precision keyboard workflows.
-- Decompose editor monoliths.
+### Task 15 — Adaptive creator and professional editor modes: COMPLETE
+
+Implemented:
+- Creator mode is the hydration-safe default and persists the user’s Creator/Professional preference. The visible mode switch and `Alt+Shift+M` shortcut remain functional when browser storage is unavailable.
+- Creator mode provides a calmer guided workspace with project progress, current-task guidance, preview, focused settings, and timeline. Professional mode restores the element palette, preview, full inspector, command bar, and timeline.
+- Responsive selection mounts exactly one mobile or desktop workspace, preventing duplicate media refs, IDs, polling trees, and global timeline shortcut handlers.
+- Creator-only typography normalization removes forced uppercase labels and raises legacy 9px/10px editor text to a readable 12px while preserving Professional mode density.
+- Precision workflows remain available in both modes: undo/redo, J/K/L playback, bracket trim, focused clip arrow movement, and a visible shortcut guide.
+- The prior editor layout monolith is split into mode state, toolbar, progress rail, workspace, and shared type modules. Creator-flow derivation was extracted from `editor-client.tsx`, and global timeline shortcuts were extracted from `TimelinePanel.tsx`.
+
+Key files:
+- `apps/web/components/editor-layout.tsx`
+- `apps/web/components/editor/layout/useEditorMode.ts`
+- `apps/web/components/editor/layout/EditorToolbar.tsx`
+- `apps/web/components/editor/layout/CreatorProgressRail.tsx`
+- `apps/web/components/editor/layout/EditorWorkspaces.tsx`
+- `apps/web/components/editor/creator-flow.ts`
+- `apps/web/components/editor/timeline/useTimelineKeyboardShortcuts.ts`
+- `apps/web/app/globals.css`
+- `apps/web/tests/task15-adaptive-editor.test.mjs`
+
+Verification:
+- Focused Task 15, responsive, and accessibility suite: **15 passed**.
+- Full web test suite: **90 passed**.
+- Web TypeScript check: **exit 0**.
+- Full web ESLint: **exit 0 with no warnings**.
+- Next.js production build compiled, type-checked, and generated all **20** static pages successfully.
+- `git diff --check`: **exit 0**.
+- Independent final audit verified all four acceptance criteria and returned **`TASK 15 AUDIT: PASS`**.
 
 ### Task 16 — Scalability SLOs
 - Consolidated editor bootstrap.

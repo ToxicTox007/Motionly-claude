@@ -3,6 +3,7 @@ import socket
 import httpx
 import pytest
 
+from app.schemas.plans import ManualElement
 from app.services.media_url_policy import (
     MediaUrlPolicyError,
     safe_http_stream,
@@ -251,3 +252,55 @@ def test_safe_http_stream_bounds_redirects_without_leaking_query() -> None:
             pass
     assert "secret" not in str(exc_info.value)
     assert "hidden" not in str(exc_info.value)
+
+
+def test_manual_graphics_and_css_backgrounds_are_typed_sanitized_and_validated() -> None:
+    legacy_graphic = ManualElement(
+        id="legacy-graphic",
+        type="graphic",
+        name="Legacy graphic",
+        zone="canvas",
+        start_ms=0,
+        end_ms=1_000,
+        properties={
+            "imageUrl": "https://media.example.com/legacy.png",
+            "background": "url(http://169.254.169.254/latest/meta-data/)",
+        },
+    )
+    # Old palettes used imageUrl, while raw CSS URLs never reach a renderer.
+    assert legacy_graphic.properties["assetUrl"] == "https://media.example.com/legacy.png"
+    assert "imageUrl" not in legacy_graphic.properties
+    assert legacy_graphic.properties["background"] == "transparent"
+
+    props = {
+        "editPlan": {
+            "manual_elements": [
+                {
+                    "type": "graphic",
+                    "properties": {"assetUrl": "https://media.example.com/graphic.png"},
+                },
+                {
+                    "type": "overlay",
+                    "properties": {
+                        "background": "linear-gradient(135deg,#0f172a,#f59e0b)",
+                    },
+                },
+            ]
+        }
+    }
+    validate_render_media_manifest(props, resolver=_public_lookup)
+
+    props["editPlan"]["manual_elements"][0]["properties"]["assetUrl"] = (
+        "http://169.254.169.254/latest/meta-data/"
+    )
+    with pytest.raises(MediaUrlPolicyError):
+        validate_render_media_manifest(props, resolver=_public_lookup)
+
+    props["editPlan"]["manual_elements"][0]["properties"]["assetUrl"] = (
+        "https://media.example.com/graphic.png"
+    )
+    props["editPlan"]["manual_elements"][1]["properties"]["background"] = (
+        "url('http://127.0.0.1/private.png')"
+    )
+    with pytest.raises(MediaUrlPolicyError):
+        validate_render_media_manifest(props, resolver=_public_lookup)

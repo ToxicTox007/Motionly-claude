@@ -1,5 +1,5 @@
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
@@ -9,16 +9,17 @@ from app.api.dependencies import (
     get_edit_planner_provider,
     get_plan_queue,
     get_plan_repository,
+    get_proposal_repository,
 )
 from app.api.errors import ApiError
-from app.api.revision_errors import RevisionConflictError
 from app.core.logging import get_logger
 from app.repositories.plans import InMemoryPlanRepository
+from app.schemas.ai_proposals import ProposalState
 from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
 from app.schemas.captions import TranscriptStatus
 from app.schemas.plans import (
+    EDIT_PLAN_PROMPT_VERSION,
     BrollDensity,
-    EditPlanStatus,
     EditPlanStyle,
     PlanActivateResponse,
     PlanCaptionHighlightsUpdateRequest,
@@ -27,6 +28,7 @@ from app.schemas.plans import (
     PlanCreateResponse,
     PlanCutsUpdateRequest,
     PlanCutsUpdateResponse,
+    PlanGetResponse,
     PlanJobStatusResponse,
     PlanListResponse,
     PlanManualElementsUpdateRequest,
@@ -41,17 +43,18 @@ from app.schemas.plans import (
 from app.schemas.scale import ScaleResourceStatus
 from app.schemas.visual import VideoManifest
 from app.services.ai_feedback import record_ai_feedback
+from app.services.ai_proposals import (
+    build_multimodal_context,
+    request_identity,
+)
 from app.services.edit_planner import (
     EditPlannerProvider,
-    build_plan_cache_key,
     summarize_plan,
 )
 from app.services.layer_job_enqueue import prepare_heavy_job_enqueue
 from app.services.queue import PlanQueue
-from app.services.style_classifier import classify_edit_style
 from app.services.timeline_compiler import (
     compile_timeline,
-    migrate_legacy_plan_to_timeline,
     project_timeline_to_legacy_plan,
 )
 from app.services.transcript_quality import is_transcript_usable_for_planning
@@ -60,6 +63,7 @@ router = APIRouter(prefix="/projects/{project_id}/plans", tags=["AI plans"])
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
 PlanRepositoryDep = Annotated[InMemoryPlanRepository, Depends(get_plan_repository)]
+ProposalRepositoryDep = Annotated[object, Depends(get_proposal_repository)]
 EditPlannerProviderDep = Annotated[EditPlannerProvider, Depends(get_edit_planner_provider)]
 PlanQueueDep = Annotated[PlanQueue, Depends(get_plan_queue)]
 
@@ -163,6 +167,7 @@ async def create_plan(
     repository: PlanRepositoryDep,
     planner_provider: EditPlannerProviderDep,
     plan_queue: PlanQueueDep,
+    proposal_repository: ProposalRepositoryDep = None,  # type: ignore[assignment]
     response: Response = None,  # type: ignore[assignment]
     request: Request = None,  # type: ignore[assignment]
 ) -> PlanCreateResponse:
@@ -176,6 +181,7 @@ async def create_plan(
         request=request,
         workspace_id=actor.workspace_id,
         project_id=project_id,
+        user_id=actor.user_id,
     )
     transcript = repository.latest_transcript(
         project_id=project_id,
@@ -202,103 +208,71 @@ async def create_plan(
             or "Transcript quality must be recovered before edit planning.",
         )
 
-    upload = await _get_active_upload(
-        repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-    )
-    video_duration_ms = upload.metadata.duration_ms or transcript.duration_ms or 0
-    visual_manifest, visual_context_flag = _visual_context(
+    if proposal_repository is None:
+        state = getattr(getattr(request, "app", None), "state", None)
+        proposal_repository = getattr(state, "proposal_repository", None)
+    if proposal_repository is None:
+        from app.repositories.ai_proposals import InMemoryAIProposalRepository
+
+        proposal_repository = getattr(repository, "_proposal_repository", None)
+        if proposal_repository is None:
+            proposal_repository = InMemoryAIProposalRepository(plan_repository=repository)
+            repository._proposal_repository = proposal_repository
+
+    context = build_multimodal_context(
         repository=repository,
-        project_id=project_id,
         workspace_id=actor.workspace_id,
-        uploaded_video_id=upload.id,
+        project_id=project_id,
+        payload=payload,
     )
-    style_classification = classify_edit_style(
-        transcript=transcript,
-        visual_manifest=visual_manifest,
-        requested_style=payload.style,
-        prompt=payload.prompt,
-        feedback=payload.feedback,
+    caller_key = payload.idempotency_key
+    if payload.force and caller_key is None:
+        caller_key = f"force-{uuid4()}"
+    request_id = request_identity(context=context, idempotency_key=caller_key)
+    proposal, deduplicated = proposal_repository.create_queued(
+        context=context,
+        request_id=request_id,
+        created_by=actor.user_id,
+        prompt_version=EDIT_PLAN_PROMPT_VERSION,
     )
-    effective_payload = payload.model_copy(
-        update={"style": style_classification.effective_style},
-    )
-    cache_key = build_plan_cache_key(
-        transcript=transcript,
-        payload=effective_payload,
-        visual_manifest=visual_manifest,
-        style_classification=style_classification,
-        model=getattr(planner_provider, "model", None),
-        provider=getattr(planner_provider, "provider_name", None),
-    )
-    execution_id = f"sync-complete--plan--{project_id}--{transcript.id}"
-    if not payload.force:
-        cached = await _repository_call(
-            repository,
-            "find_cached_plan_async",
-            "find_cached_plan",
-            project_id=project_id,
-            workspace_id=actor.workspace_id,
-            cache_key=cache_key,
-        )
-        if cached:
-            migrated = migrate_legacy_plan_to_timeline(
-                plan=cached.plan,
-                source_video_id=upload.id,
-                source_duration_ms=video_duration_ms or cached.target_duration_s * 1000,
-            )
-            if migrated is not cached.plan:
-                cached = await _update_plan_cuts(
-                    repository,
-                    project_id=project_id,
-                    workspace_id=actor.workspace_id,
-                    plan_id=cached.id,
-                    plan=migrated,
-                    summary=cached.summary,
-                    target_duration_s=cached.target_duration_s,
-                )
-            return PlanCreateResponse(
-                plan=cached.to_response(),
-                job_id=execution_id,
-                cached=True,
-                status="ready",
-                project_id=project_id,
-            )
 
-    # Cache miss: Enqueue on PlanQueue and return 202 Accepted
     import json
-    serialized_params = json.dumps({
-        "prompt": payload.prompt,
-        "style": payload.style.value if payload.style else None,
-        "target_duration_s": payload.target_duration_s,
-        "broll_density": payload.broll_density.value,
-        "feedback": payload.feedback,
-        "style_profile_id": str(payload.style_profile_id) if payload.style_profile_id else None,
-        "saved_template_id": str(payload.saved_template_id) if payload.saved_template_id else None,
-        "user_id": str(actor.user_id),
-    })
 
-
+    serialized_params = json.dumps(
+        {
+            "proposal_id": str(proposal.id),
+            "request_id": proposal.request_id,
+            "context_digest": proposal.context_digest,
+            "user_id": str(actor.user_id),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     prepare_heavy_job_enqueue(request=request)
     job = plan_queue.enqueue_plan(
         project_id=project_id,
         workspace_id=actor.workspace_id,
         transcript_id=transcript.id,
+        proposal_id=proposal.id,
+        request_id=proposal.request_id,
+        context_digest=proposal.context_digest,
         render_engine=serialized_params,
     )
 
     if response is not None:
         response.status_code = status.HTTP_202_ACCEPTED
     status_url = f"/projects/{project_id}/plans/jobs/{job.id}"
-
+    proposal_url = f"/projects/{project_id}/proposals/{proposal.id}"
     return PlanCreateResponse(
+        proposal_id=proposal.id,
+        proposal_revision=proposal.revision,
         job_id=job.id,
-        status="queued",
+        status=proposal.state.value,
+        cached=deduplicated,
         project_id=project_id,
         status_url=status_url,
+        proposal_url=proposal_url,
     )
-
 
 
 @router.get("/jobs/{job_id}", response_model=PlanJobStatusResponse)
@@ -314,7 +288,6 @@ async def get_plan_job_status(
         project_id=project_id,
         workspace_id=actor.workspace_id,
     )
-
     queue_registry = request.app.state.queue_registry
     job = queue_registry.get_job(job_id, queue_name="planning")
     if job is not None and (
@@ -324,58 +297,96 @@ async def get_plan_job_status(
     ):
         job = None
 
-    transcript_id = None
-    try:
-        parts = job_id.split("--")
-        if len(parts) >= 4 and parts[0] == "plan":
-            transcript_id = UUID(parts[2])
-    except Exception:
-        pass
+    proposal_repository = getattr(request.app.state, "proposal_repository", None) or getattr(
+        repository, "_proposal_repository", None
+    )
+    if job is not None and (job.resource_id is None or proposal_repository is None):
+        from app.services.queue import QueueJobStatus
 
-    async def find_completed_plan(t_id: UUID | None):
-        if not t_id:
-            return None
-        return await _repository_call(
-            repository,
-            "find_latest_plan_for_transcript_async",
-            "find_latest_plan_for_transcript",
+        if job.status == QueueJobStatus.RUNNING:
+            return PlanJobStatusResponse(status="running", progress=50)
+        if job.status == QueueJobStatus.QUEUED:
+            return PlanJobStatusResponse(status="queued", progress=0)
+        if job.status == QueueJobStatus.SUCCEEDED:
+            return PlanJobStatusResponse(status="succeeded", progress=100)
+        return PlanJobStatusResponse(
+            status="failed", progress=0, failure_reason="Job failed in queue worker"
+        )
+
+    proposal_id = job.resource_id if job is not None else None
+    if proposal_id is None:
+        try:
+            parts = job_id.split("--")
+            if len(parts) >= 3 and parts[0] == "plan":
+                proposal_id = UUID(parts[2])
+        except (ValueError, TypeError):
+            proposal_id = None
+    if proposal_id is None:
+        return PlanJobStatusResponse(status="failed", progress=0, failure_reason="Job not found")
+    try:
+        proposal = proposal_repository.get(
+            proposal_id=proposal_id,
             project_id=project_id,
             workspace_id=actor.workspace_id,
-            transcript_id=t_id,
         )
-
-    if not job:
-        db_plan = await find_completed_plan(transcript_id)
-        if db_plan:
-            if db_plan.status == EditPlanStatus.READY:
-                return PlanJobStatusResponse(status="succeeded", progress=100, plan_id=db_plan.id)
-            elif db_plan.status == EditPlanStatus.FAILED:
-                return PlanJobStatusResponse(
-                    status="failed",
-                    progress=0,
-                    failure_reason="Edit planning failed during execution",
-                )
-        return PlanJobStatusResponse(status="failed", progress=0, failure_reason="Job not found")
+    except ApiError as exc:
+        if exc.code == "proposal_not_found":
+            return PlanJobStatusResponse(
+                status="failed", progress=0, failure_reason="Job not found"
+            )
+        raise
 
     from app.services.queue import QueueJobStatus
-    if job.status == QueueJobStatus.SUCCEEDED:
-        db_plan = await find_completed_plan(transcript_id)
-        return PlanJobStatusResponse(
-            status="succeeded",
-            progress=100,
-            plan_id=db_plan.id if db_plan else None,
-        )
-    elif job.status == QueueJobStatus.RUNNING:
-        return PlanJobStatusResponse(status="running", progress=50)
-    elif job.status == QueueJobStatus.QUEUED:
-        return PlanJobStatusResponse(status="queued", progress=0)
-    else:
-        db_plan = await find_completed_plan(transcript_id)
-        reason = "Job failed in queue worker"
-        if db_plan and db_plan.validation_errors:
-            reason = db_plan.validation_errors[0]
-        return PlanJobStatusResponse(status="failed", progress=0, failure_reason=reason)
 
+    if proposal.state == ProposalState.QUEUED and job is not None:
+        if job.status == QueueJobStatus.RUNNING:
+            return PlanJobStatusResponse(
+                status="running",
+                progress=50,
+                proposal_id=proposal.id,
+                proposal_revision=proposal.revision,
+            )
+        if job.status not in {QueueJobStatus.QUEUED, QueueJobStatus.RUNNING}:
+            return PlanJobStatusResponse(
+                status="failed",
+                progress=0,
+                proposal_id=proposal.id,
+                proposal_revision=proposal.revision,
+                failure_reason=job.error_code or "Job failed in queue worker",
+            )
+
+    if proposal.state == ProposalState.AWAITING_APPROVAL:
+        return PlanJobStatusResponse(
+            status=proposal.state.value,
+            progress=100,
+            proposal_id=proposal.id,
+            proposal_revision=proposal.revision,
+        )
+    if proposal.state in {
+        ProposalState.APPROVED,
+        ProposalState.PARTIALLY_APPROVED,
+        ProposalState.REJECTED,
+    }:
+        return PlanJobStatusResponse(
+            status=proposal.state.value,
+            progress=100,
+            proposal_id=proposal.id,
+            proposal_revision=proposal.revision,
+        )
+    if proposal.state == ProposalState.FAILED:
+        return PlanJobStatusResponse(
+            status="failed",
+            progress=0,
+            proposal_id=proposal.id,
+            proposal_revision=proposal.revision,
+            failure_reason=proposal.failure_code or "Proposal generation failed",
+        )
+    return PlanJobStatusResponse(
+        status=proposal.state.value,
+        progress=50 if proposal.state == ProposalState.GENERATING else 0,
+        proposal_id=proposal.id,
+        proposal_revision=proposal.revision,
+    )
 
 
 def _apply_phase5_learning(
@@ -384,6 +395,7 @@ def _apply_phase5_learning(
     request: Request | None,
     workspace_id: UUID,
     project_id: UUID,
+    user_id: UUID | None = None,
 ) -> PlanCreateRequest:
     state = getattr(getattr(request, "app", None), "state", None)
     scale_repository = getattr(state, "scale_repository", None)
@@ -424,19 +436,30 @@ def _apply_phase5_learning(
             if learned.get("broll_density"):
                 updates["broll_density"] = BrollDensity(str(learned["broll_density"]))
             direction_parts.append(
-                "Reference style profile: "
-                + str(learned.get("caption_direction") or learned)
+                "Reference style profile: " + str(learned.get("caption_direction") or learned)
             )
-    adapter = scale_repository.latest(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        kind="model_training",
-        status=ScaleResourceStatus.READY,
-    )
-    if adapter and adapter.result.get("preferences"):
-        direction_parts.append(
-            "Project learned preferences: " + str(adapter.result["preferences"])
-        )
+    learning_repository = getattr(state, "editorial_learning_repository", None)
+    settings = getattr(state, "settings", None)
+    if (
+        user_id is not None
+        and learning_repository is not None
+        and getattr(settings, "editorial_learning_enabled", False)
+    ):
+        # Only a per-user, explicitly promoted deployment may influence a new
+        # plan. Missing policy, revoked data, or repository failures fail closed.
+        try:
+            memory = learning_repository.resolve_active_memory(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                user_id=user_id,
+            )
+        except Exception:
+            memory = None
+        if memory:
+            direction_parts.append(
+                "Consented editorial memory provenance: "
+                + str(memory.get("manifest_hash") or "")[:32]
+            )
     if direction_parts:
         updates["prompt"] = "\n".join(direction_parts)[:1200]
     return payload.model_copy(update=updates)
@@ -482,6 +505,22 @@ async def list_plan_snapshots(
     return PlanSnapshotListResponse(
         snapshots=[snapshot.to_response() for snapshot in snapshots],
     )
+
+
+@router.get("/{plan_id}", response_model=PlanGetResponse)
+async def get_plan(
+    project_id: UUID,
+    plan_id: UUID,
+    actor: ActorDep,
+    repository: PlanRepositoryDep,
+) -> PlanGetResponse:
+    plan = await _get_plan(
+        repository,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        plan_id=plan_id,
+    )
+    return PlanGetResponse(plan=plan.to_response())
 
 
 @router.post("/snapshots", response_model=PlanSnapshotCreateResponse, status_code=201)
@@ -716,7 +755,11 @@ async def update_plan_caption_highlights(
     else:
         logger.warning(
             "plan_mutation_without_revision",
-            extra={"plan_id": str(plan_id), "endpoint": "caption_highlights", "project_id": str(project_id)},
+            extra={
+                "plan_id": str(plan_id),
+                "endpoint": "caption_highlights",
+                "project_id": str(project_id),
+            },
         )
         updated = await _update_plan_cuts(
             repository,
@@ -750,7 +793,9 @@ async def update_plan_caption_highlights(
         },
         metadata={"previous_version": record.version},
     )
-    return PlanCaptionHighlightsUpdateResponse(plan=updated.to_response(), revision=updated.revision)
+    return PlanCaptionHighlightsUpdateResponse(
+        plan=updated.to_response(), revision=updated.revision
+    )
 
 
 @router.patch("/{plan_id}/manual-elements", response_model=PlanManualElementsUpdateResponse)
@@ -802,7 +847,11 @@ async def update_plan_manual_elements(
     else:
         logger.warning(
             "plan_mutation_without_revision",
-            extra={"plan_id": str(plan_id), "endpoint": "manual_elements", "project_id": str(project_id)},
+            extra={
+                "plan_id": str(plan_id),
+                "endpoint": "manual_elements",
+                "project_id": str(project_id),
+            },
         )
         updated = await _update_plan_cuts(
             repository,
@@ -1008,7 +1057,11 @@ async def compile_project_timeline(
     else:
         logger.warning(
             "plan_mutation_without_revision",
-            extra={"plan_id": str(plan_id), "endpoint": "compile_timeline", "project_id": str(project_id)},
+            extra={
+                "plan_id": str(plan_id),
+                "endpoint": "compile_timeline",
+                "project_id": str(project_id),
+            },
         )
         updated = await _update_plan_cuts(
             repository,

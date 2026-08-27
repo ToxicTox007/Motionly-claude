@@ -23,7 +23,7 @@ from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
 from app.repositories.plans import InMemoryPlanRepository
-from app.repositories.renders import InMemoryRenderRepository
+from app.repositories.renders import InMemoryRenderRepository, RenderJobRecord
 from app.schemas.billing import BillingPlanKey
 from app.schemas.broll import BrollSlotStatus
 from app.schemas.captions import CaptionPresetKey, CaptionSegment, TranscriptWord
@@ -178,7 +178,7 @@ def requested_renderer_features(
     features.update(
         f"manual_{element_type}"
         for element_type in manual_element_types
-        if element_type in {"transition", "music", "sfx", "broll"}
+        if element_type in {"transition", "music", "sfx", "broll", "graphic"}
     )
     return features
 
@@ -190,6 +190,7 @@ def renderer_feature_compatibility(
         "template_intro_outro",
         "manual_transition",
         "manual_music",
+        "manual_graphic",
     }
     unsupported = {
         feature
@@ -265,7 +266,7 @@ def beat_sync_summary(
         "aligned_cut_count": len(aligned),
         "tolerance_ms": tolerance_ms,
         "aligned_cuts": aligned[:12],
-            "strategy": "alignment report only; speech cuts are not retimed",
+        "strategy": "alignment report only; speech cuts are not retimed",
     }
 
 
@@ -338,6 +339,37 @@ async def create_render(
     render_queue: RenderQueueDep,
     broll_repository: BrollRepositoryDep = None,  # type: ignore[assignment]
 ) -> RenderCreateResponse:
+    result = await _create_render_target(
+        project_id=project_id,
+        payload=payload,
+        request=request,
+        actor=actor,
+        repository=repository,
+        billing_repository=billing_repository,
+        plan_repository=plan_repository,
+        render_queue=render_queue,
+        broll_repository=broll_repository,
+    )
+    assert isinstance(result, RenderCreateResponse)
+    return result
+
+
+async def _create_render_target(
+    *,
+    project_id: UUID,
+    payload: RenderCreateRequest,
+    request: Request,
+    actor: object,
+    repository: InMemoryRenderRepository,
+    billing_repository: object,
+    plan_repository: InMemoryPlanRepository,
+    render_queue: RenderQueue,
+    broll_repository: InMemoryBrollRepository | None = None,
+    workflow_repository: object | None = None,
+    workflow_run_id: UUID | None = None,
+    timeline_revision_id: UUID | None = None,
+    publish: bool = True,
+) -> RenderCreateResponse | RenderJobRecord:
     if request.app.state.settings.billing_enabled:
         billing_status = enforce_render_entitlement(
             workspace_id=actor.workspace_id,
@@ -351,6 +383,42 @@ async def create_render(
             can_render=True,
         )
     upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
+    if upload.source_object_reference_id is None:
+        reference_service = getattr(
+            request.app.state,
+            "object_reference_service",
+            None,
+        )
+        if reference_service is not None:
+            source_reference = await reference_service.create_reference(
+                workspace_id=actor.workspace_id,
+                project_id=project_id,
+                storage_bucket=upload.storage_bucket,
+                storage_path=upload.storage_path,
+                owner_type="uploaded_video",
+                owner_id=upload.id,
+                object_type="source_video",
+                mime_type=upload.mime_type,
+                size_bytes=upload.verified_size_bytes or upload.file_size_bytes,
+                sha256=upload.verified_sha256,
+            )
+            upload_repository = getattr(request.app.state, "upload_repository", None)
+            if upload_repository is not None:
+                upload = await _repository_call(
+                    upload_repository,
+                    "attach_source_reference_async",
+                    "attach_source_reference",
+                    upload=upload,
+                    source_object_reference_id=source_reference.id,
+                )
+            else:
+                upload.source_object_reference_id = source_reference.id
+    if upload.source_object_reference_id is None:
+        raise ApiError(
+            503,
+            "durable_media_reference_missing",
+            "Render source media requires a durable object reference.",
+        )
     if upload.status != UploadStatus.READY:
         raise ApiError(
             409,
@@ -360,6 +428,14 @@ async def create_render(
     readiness = assert_video_render_ready(upload.metadata)
     upload.metadata.warnings = readiness.warning_codes
 
+    effective_include_captions = (
+        payload.export_options.include_captions
+        if payload.export_options.include_captions is not None
+        else payload.include_captions
+    )
+    requested_duration_preset = payload.export_options.duration_preset or payload.duration_preset
+    hook_text = (payload.export_options.hook_text or "").strip() or None
+
     track = None
     if payload.caption_track_id:
         track = repository.get_caption_track(
@@ -367,19 +443,43 @@ async def create_render(
             caption_track_id=payload.caption_track_id,
             workspace_id=actor.workspace_id,
         )
-    elif payload.include_captions:
+    elif effective_include_captions:
         track = repository.latest_caption_track(
             project_id=project_id,
             workspace_id=actor.workspace_id,
         )
-    if payload.include_captions and (track is None or not track.segments):
+    localized_package = None
+    if payload.localized_publish_package_id:
+        localized_repository = getattr(request.app.state, "localized_publishing_repository", None)
+        if localized_repository is None:
+            raise ApiError(
+                503, "localized_publishing_unavailable", "Localized publishing is unavailable."
+            )
+        localized_package = localized_repository.get_package(
+            package_id=payload.localized_publish_package_id,
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+        )
+        if (
+            getattr(localized_package.review_status, "value", localized_package.review_status)
+            != "approved"
+        ):
+            raise ApiError(
+                409,
+                "localized_publish_review_required",
+                "Review and approve the localized publish package before rendering.",
+            )
+        track = repository.get_caption_track(
+            project_id=project_id,
+            caption_track_id=localized_package.caption_track_id,
+            workspace_id=actor.workspace_id,
+        )
+    if effective_include_captions and (track is None or not track.segments):
         raise ApiError(422, "caption_segments_empty", "Generate captions before rendering.")
 
     caption_segments = track.segments if track else []
     caption_style = (
-        track.style
-        if track
-        else get_caption_preset(CaptionPresetKey.BOLD_INFLUENCER).style
+        track.style if track else get_caption_preset(CaptionPresetKey.BOLD_INFLUENCER).style
     )
     caption_words = [word for segment in caption_segments for word in segment.words]
     if not caption_words:
@@ -410,7 +510,7 @@ async def create_render(
         )
 
     effective_duration_preset = (
-        payload.duration_preset
+        requested_duration_preset
         if payload.adjustment_action != RenderAdjustmentAction.MAKE_PUNCHIER
         else DurationPreset.SHORT
     )
@@ -438,7 +538,7 @@ async def create_render(
         segments=caption_segments,
         keep_segments=keep_segments,
     )
-    caption_segments_for_render = retimed_caption_segments if payload.include_captions else []
+    caption_segments_for_render = retimed_caption_segments if effective_include_captions else []
     caption_words_for_render = [
         retimed_word
         for output_start, keep in _keep_segments_with_output_starts(keep_segments)
@@ -464,8 +564,15 @@ async def create_render(
         duration_preset=effective_duration_preset,
     )
     render_export_settings["watermark"] = billing_status.current_plan.entitlements.watermark
-    if effective_duration_preset != payload.duration_preset:
-        render_export_settings["requested_duration_preset"] = payload.duration_preset.value
+    if localized_package:
+        render_export_settings["localized_publish"] = {
+            "package_id": str(localized_package.id),
+            "language": getattr(localized_package.language, "value", localized_package.language),
+            "title": localized_package.selected_title,
+            "description": localized_package.selected_description,
+        }
+    if effective_duration_preset != requested_duration_preset:
+        render_export_settings["requested_duration_preset"] = requested_duration_preset.value
     render_props_export_settings = {
         **specs.model_dump(mode="json"),
         **render_export_settings,
@@ -565,6 +672,17 @@ async def create_render(
         )
     if music_selection and edit_plan_record and music_selection.edit_plan_id != edit_plan_record.id:
         music_selection = None
+    if (
+        music_selection
+        and music_selection.music_track_id
+        and getattr(request.app.state.settings, "app_env", "test") == "production"
+        and not bool(getattr(music_selection, "rights_snapshot", {}).get("verified"))
+    ):
+        raise ApiError(
+            409,
+            "music_rights_unverified",
+            "A verified licensed music selection is required before rendering.",
+        )
     if music_selection:
         music_props = {
             "selection_id": str(music_selection.id),
@@ -574,6 +692,7 @@ async def create_render(
             "music_volume": music_selection.music_volume,
             "sfx_intensity": music_selection.sfx_intensity,
             "regions": [region.model_dump(mode="json") for region in music_selection.regions],
+            "rights": getattr(music_selection, "rights_snapshot", {}),
         }
         if music_selection.music_track_id and music_repository:
             music_track = music_repository.get_track(
@@ -662,6 +781,16 @@ async def create_render(
         keep_segments=keep_segments,
         template_default_color_grade=template.default_color_grade,
     )
+    if localized_package:
+        translations = {
+            item.source_element_id: item.content for item in localized_package.overlay_translations
+        }
+        for element in render_edit_plan.get("manual_elements") or []:
+            if not isinstance(element, dict) or str(element.get("id")) not in translations:
+                continue
+            properties = dict(element.get("properties") or {})
+            properties["content"] = translations[str(element["id"])]
+            element["properties"] = properties
     if edit_plan_record:
         render_source_duration_ms = (
             upload.metadata.duration_ms
@@ -672,12 +801,12 @@ async def create_render(
         try:
             validated_render_plan = validate_edit_plan_for_render(
                 plan=EditPlan.model_validate(render_edit_plan),
-                    context=EditPlanValidationContext(
-                        source_duration_ms=render_source_duration_ms,
-                        transcript_words=caption_words,
-                        project_id=project_id,
-                        plan_id=edit_plan_record.id,
-                    ),
+                context=EditPlanValidationContext(
+                    source_duration_ms=render_source_duration_ms,
+                    transcript_words=caption_words,
+                    project_id=project_id,
+                    plan_id=edit_plan_record.id,
+                ),
             )
         except EditPlanValidationFailure as exc:
             raise ApiError(
@@ -691,6 +820,33 @@ async def create_render(
         keep_segments=keep_segments,
         include_broll=False,
     )
+    if hook_text:
+        render_edit_plan["manual_elements"].append(
+            {
+                "id": f"repurpose-hook-{payload.export_options.platform.value}",
+                "type": "text",
+                "name": "Platform opening hook",
+                "zone": "canvas",
+                "start_ms": 0,
+                "end_ms": min(
+                    3_000,
+                    max(1, sum(segment.end_ms - segment.start_ms for segment in keep_segments)),
+                ),
+                "x_pct": 50,
+                "y_pct": 18,
+                "width_pct": 86,
+                "height_pct": 14,
+                "rotation_deg": 0,
+                "opacity": 1,
+                "properties": {
+                    "content": hook_text,
+                    "color": "#ffffff",
+                    "fontSize": 46,
+                    "fontWeight": 800,
+                },
+                "ai_reason": "platform-specific opening hook",
+            }
+        )
     source_stems = _source_stems_for_render(
         request=request,
         project_id=project_id,
@@ -700,7 +856,7 @@ async def create_render(
         plan=EditPlan.model_validate(render_edit_plan),
         source_video_id=upload.id,
         source_duration_ms=upload.metadata.duration_ms or 1,
-        captions=caption_segments if payload.include_captions else [],
+        captions=caption_segments if effective_include_captions else [],
         caption_style=caption_style.model_dump(mode="json"),
         broll=active_broll_assets,
         music=music_props,
@@ -741,6 +897,11 @@ async def create_render(
     render_props = {
         "sourceVideo": {
             "src": f"supabase://{upload.storage_bucket}/{upload.storage_path}",
+            "referenceId": (
+                str(upload.source_object_reference_id)
+                if upload.source_object_reference_id
+                else None
+            ),
             "width": upload.metadata.width or specs.width,
             "height": upload.metadata.height or specs.height,
             "duration_ms": upload.metadata.duration_ms,
@@ -783,6 +944,8 @@ async def create_render(
         element.type
         for element in (edit_plan_record.plan.manual_elements if edit_plan_record else [])
     }
+    if hook_text:
+        manual_element_types.add("text")
     requested_features = requested_renderer_features(
         has_active_broll=bool(active_broll_assets),
         has_music=bool(music_selection and music_selection.music_track_id),
@@ -813,10 +976,12 @@ async def create_render(
         "billing_plan": billing_status.current_plan.key.value,
         "source_video_id": str(upload.id),
         "caption_track_id": str(track.id) if track else None,
-        "include_captions": payload.include_captions,
+        "include_captions": effective_include_captions,
         "include_broll": payload.include_broll,
         "adjustment_action": payload.adjustment_action.value if payload.adjustment_action else None,
         "edit_plan_id": str(edit_plan_record.id) if edit_plan_record else None,
+        "workflow_run_id": str(workflow_run_id) if workflow_run_id else None,
+        "timeline_revision_id": str(timeline_revision_id) if timeline_revision_id else None,
         "source_plan_revision": edit_plan_record.revision if edit_plan_record else None,
         "source_media_revision": getattr(upload, "media_revision", None),
         "music_selection_id": str(music_selection.id) if music_selection else None,
@@ -849,6 +1014,10 @@ async def create_render(
             requested_features=requested_features,
         ),
         "export_settings": render_export_settings,
+        "repurpose": {
+            "hook_text": hook_text,
+            "caption_mode": "burned" if effective_include_captions else "none",
+        },
         "billing": {
             "plan": billing_status.current_plan.key.value,
             "watermark": billing_status.current_plan.entitlements.watermark,
@@ -866,12 +1035,19 @@ async def create_render(
         },
         "source": {
             "uploaded_video_id": str(upload.id),
+            "reference_id": (
+                str(upload.source_object_reference_id)
+                if upload.source_object_reference_id
+                else None
+            ),
             "bucket": upload.storage_bucket,
             "path": upload.storage_path,
+            "verified_size_bytes": upload.verified_size_bytes,
+            "verified_sha256": upload.verified_sha256,
         },
         "caption_ass": (
             caption_track_to_ass(segments=caption_segments_for_render, style=caption_style)
-            if payload.include_captions and track
+            if effective_include_captions and track
             else None
         ),
         "render_props": render_props,
@@ -896,7 +1072,7 @@ async def create_render(
             "stage B-roll, music, and effects selections for the premium renderer",
             (
                 "render captioned vertical MP4 with FFmpeg fallback engine"
-                if payload.include_captions
+                if effective_include_captions
                 else "render vertical MP4 without burned-in captions"
             ),
             (
@@ -907,24 +1083,29 @@ async def create_render(
             "apply account entitlement watermark and resolution caps",
         ],
     }
-    job = repository.create_render_job(
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-        uploaded_video_id=upload.id,
-        caption_track_id=track.id if track else None,
-        status=RenderJobStatus.QUEUED,
-        planner_version=PLANNER_VERSION,
-        manifest=manifest,
-        keep_segments=keep_segments,
-        specs=specs,
-        template_id=template.id,
-        render_engine=selected_engine,
-        renderer_version=_RENDERER_VERSIONS[selected_engine],
-        props_hash=props_hash,
-        logs=[
+    job_values = {
+        "workspace_id": actor.workspace_id,
+        "project_id": project_id,
+        "uploaded_video_id": upload.id,
+        "caption_track_id": track.id if track else None,
+        "workflow_run_id": workflow_run_id,
+        "edit_plan_id": edit_plan_record.id if edit_plan_record else None,
+        "source_plan_revision": edit_plan_record.revision if edit_plan_record else None,
+        "timeline_revision_id": timeline_revision_id,
+        "source_media_revision": getattr(upload, "media_revision", None),
+        "status": RenderJobStatus.QUEUED,
+        "planner_version": PLANNER_VERSION,
+        "manifest": manifest,
+        "keep_segments": keep_segments,
+        "specs": specs,
+        "template_id": template.id,
+        "render_engine": selected_engine,
+        "renderer_version": _RENDERER_VERSIONS[selected_engine],
+        "props_hash": props_hash,
+        "logs": [
             "render manifest prepared",
             f"template={template.id.value}",
-            f"include_captions={payload.include_captions}",
+            f"include_captions={effective_include_captions}",
             f"include_broll={payload.include_broll}",
             f"broll_assets={len(active_broll_assets)}",
             f"compute_tier={compute_tier}",
@@ -932,8 +1113,23 @@ async def create_render(
             if payload.adjustment_action
             else "adjustment_action=none",
         ],
-        progress_pct=5,
-    )
+        "progress_pct": 5,
+    }
+    if workflow_run_id is not None:
+        if workflow_repository is None or timeline_revision_id is None:
+            raise ApiError(
+                500,
+                "workflow_render_lineage_missing",
+                "Workflow render persistence requires immutable approval lineage.",
+            )
+        job = repository.ensure_workflow_draft_render(
+            workflow_repository=workflow_repository,
+            **job_values,
+        )
+    else:
+        job = repository.create_render_job(**job_values)
+    if not publish:
+        return job
     queue_job = render_queue.enqueue_render(
         render_job_id=job.id,
         project_id=project_id,
@@ -973,6 +1169,7 @@ async def create_bulk_render(
             project_id=project_id,
             payload=RenderCreateRequest(
                 caption_track_id=payload.caption_track_id,
+                localized_publish_package_id=payload.localized_publish_package_id,
                 include_captions=payload.include_captions,
                 include_broll=payload.include_broll,
                 edit_plan_id=payload.edit_plan_id,
@@ -1203,10 +1400,7 @@ async def list_renders(
         limit=limit,
     )
     return RenderListResponse(
-        jobs=[
-            job.to_response(await _events_for_job(repository, job.id))
-            for job in jobs
-        ],
+        jobs=[job.to_response(await _events_for_job(repository, job.id)) for job in jobs],
     )
 
 

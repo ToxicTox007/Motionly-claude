@@ -12,6 +12,7 @@ from app.schemas.captions import (
     CaptionSegment,
     CaptionStyle,
     CaptionTrackReadResponse,
+    CaptionTrackReviewStatus,
     LanguageHint,
     TranscriptQualityStatus,
     TranscriptReadResponse,
@@ -31,11 +32,9 @@ TRANSCRIPT_COLUMNS = (
 TRANSCRIPT_WORD_COLUMNS = "id,word_index,text,start_ms,end_ms,confidence"
 CAPTION_TRACK_COLUMNS = (
     "id,workspace_id,project_id,transcript_id,preset,schema_version,style,hide_filler_words,"
-    "created_at,updated_at"
+    "language,source_track_id,review_status,created_at,updated_at"
 )
-CAPTION_SEGMENT_COLUMNS = (
-    "id,segment_index,start_ms,end_ms,text,line_count,words,highlight_words"
-)
+CAPTION_SEGMENT_COLUMNS = "id,segment_index,start_ms,end_ms,text,line_count,words,highlight_words"
 DEFAULT_CAPTION_TRACK_LIMIT = 100
 MAX_TRANSCRIPT_WORDS = 5000
 MAX_CAPTION_SEGMENTS = 1000
@@ -98,6 +97,9 @@ class CaptionTrackRecord:
     schema_version: int
     style: CaptionStyle
     hide_filler_words: bool
+    language: str = "original"
+    source_track_id: UUID | None = None
+    review_status: CaptionTrackReviewStatus = CaptionTrackReviewStatus.APPROVED
     segments: list[CaptionSegment] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -112,6 +114,9 @@ class CaptionTrackRecord:
             schema_version=self.schema_version,
             style=self.style,
             hide_filler_words=self.hide_filler_words,
+            language=self.language,
+            source_track_id=self.source_track_id,
+            review_status=self.review_status,
             segments=self.segments,
             created_at=self.created_at,
             updated_at=self.updated_at,
@@ -245,11 +250,20 @@ class InMemoryCaptionRepository:
         style: CaptionStyle,
         hide_filler_words: bool,
         segments: list[CaptionSegment],
+        language: str | None = None,
+        source_track_id: UUID | None = None,
+        review_status: CaptionTrackReviewStatus | str | None = None,
     ) -> CaptionTrackRecord:
         track.preset = preset
         track.style = style
         track.hide_filler_words = hide_filler_words
         track.segments = segments
+        if language is not None:
+            track.language = language
+        if source_track_id is not None:
+            track.source_track_id = source_track_id
+        if review_status is not None:
+            track.review_status = CaptionTrackReviewStatus(review_status)
         track.updated_at = datetime.now(UTC)
         return track
 
@@ -629,6 +643,9 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         style: CaptionStyle,
         hide_filler_words: bool,
         segments: list[CaptionSegment],
+        language: str | None = None,
+        source_track_id: UUID | None = None,
+        review_status: CaptionTrackReviewStatus | str | None = None,
     ) -> CaptionTrackRecord:
         response = self.client.request(
             "PATCH",
@@ -638,6 +655,13 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                 "preset": preset.value,
                 "style": style.model_dump(mode="json"),
                 "hide_filler_words": hide_filler_words,
+                "language": language or track.language,
+                "source_track_id": str(source_track_id or track.source_track_id)
+                if (source_track_id or track.source_track_id)
+                else None,
+                "review_status": CaptionTrackReviewStatus(
+                    review_status or track.review_status
+                ).value,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         )
@@ -661,6 +685,9 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         style: CaptionStyle,
         hide_filler_words: bool,
         segments: list[CaptionSegment],
+        language: str | None = None,
+        source_track_id: UUID | None = None,
+        review_status: CaptionTrackReviewStatus | str | None = None,
     ) -> CaptionTrackRecord:
         response = await self.client.async_request(
             "PATCH",
@@ -670,6 +697,13 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                 "preset": preset.value,
                 "style": style.model_dump(mode="json"),
                 "hide_filler_words": hide_filler_words,
+                "language": language or track.language,
+                "source_track_id": str(source_track_id or track.source_track_id)
+                if (source_track_id or track.source_track_id)
+                else None,
+                "review_status": CaptionTrackReviewStatus(
+                    review_status or track.review_status
+                ).value,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         )
@@ -954,9 +988,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                 str(row.get("quality_status") or TranscriptQualityStatus.OK)
             ),
             quality_reasons=[
-                str(reason)
-                for reason in row.get("quality_reasons", [])
-                if isinstance(reason, str)
+                str(reason) for reason in row.get("quality_reasons", []) if isinstance(reason, str)
             ],
             duration_ms=row.get("duration_ms"),
             raw_payload=row.get("raw_payload") if isinstance(row.get("raw_payload"), dict) else {},
@@ -989,6 +1021,13 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             schema_version=int(row["schema_version"]),
             style=style,
             hide_filler_words=bool(row.get("hide_filler_words")),
+            language=str(row.get("language") or "original"),
+            source_track_id=(
+                UUID(str(row["source_track_id"])) if row.get("source_track_id") else None
+            ),
+            review_status=CaptionTrackReviewStatus(
+                str(row.get("review_status") or CaptionTrackReviewStatus.APPROVED)
+            ),
             segments=segments,
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),

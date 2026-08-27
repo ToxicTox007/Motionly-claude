@@ -93,6 +93,11 @@ test("auth, upload/reload, edit, render, billing, and publish creator journey", 
   await expect(
     page.getByText(/processing|transcribing/i).first(),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Professional", exact: true }).click();
+  await expect(page.locator('[data-editor-workspace="professional"]')).toBeVisible();
+  await expect(page.getByRole("button", { name: /Undo/ })).toBeVisible();
+  await page.keyboard.press("Alt+Shift+M");
+  await expect(page.locator('[data-editor-workspace="creator"]')).toBeVisible();
 
   const uploads = await rest("/uploaded_videos", {
     project_id: `eq.${projectId}`,

@@ -17,7 +17,10 @@ class RevisionConflictError(Exception):
         super().__init__(f"Revision conflict: expected {expected}, actual {actual}")
 
 
-async def revision_conflict_error_handler(request: Request, exc: RevisionConflictError) -> JSONResponse:
+async def revision_conflict_error_handler(
+    request: Request,
+    exc: RevisionConflictError,
+) -> JSONResponse:
     """Return a machine-parseable 409 response for revision conflicts."""
     return JSONResponse(
         status_code=409,

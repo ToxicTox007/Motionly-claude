@@ -7,6 +7,7 @@ import {
   MediaUrlPolicyError,
   assertSafeOutboundMediaUrl,
   safeFetchMedia,
+  sanitizeManualElementProperties,
   validateRenderMediaManifest,
 } from "./media-url-policy.mjs";
 
@@ -236,5 +237,51 @@ test("safe media fetch revalidates redirects and bounds redirect count", async (
       maxRedirects: 1,
     }),
     /redirect limit exceeded/,
+  );
+});
+
+
+test("worker validates manual graphic and CSS background URLs and sanitizes legacy visual CSS", async () => {
+  const legacy = sanitizeManualElementProperties({
+    type: "graphic",
+    properties: {
+      imageUrl: "https://media.example.com/legacy.png",
+      background: "url(http://169.254.169.254/latest/meta-data/)",
+    },
+  });
+  assert.equal(legacy.assetUrl, "https://media.example.com/legacy.png");
+  assert.equal(legacy.imageUrl, undefined);
+  assert.equal(legacy.background, "transparent");
+
+  const props = {
+    editPlan: {
+      manual_elements: [
+        {
+          type: "graphic",
+          properties: { assetUrl: "https://media.example.com/graphic.png" },
+        },
+        {
+          type: "overlay",
+          properties: { background: "linear-gradient(135deg,#0f172a,#f59e0b)" },
+        },
+      ],
+    },
+  };
+  await validateRenderMediaManifest(props, { lookup: publicLookup });
+
+  props.editPlan.manual_elements[0].properties.assetUrl =
+    "http://169.254.169.254/latest/meta-data/";
+  await assert.rejects(
+    validateRenderMediaManifest(props, { lookup: publicLookup }),
+    MediaUrlPolicyError,
+  );
+
+  props.editPlan.manual_elements[0].properties.assetUrl =
+    "https://media.example.com/graphic.png";
+  props.editPlan.manual_elements[1].properties.background =
+    "url('http://127.0.0.1/private.png')";
+  await assert.rejects(
+    validateRenderMediaManifest(props, { lookup: publicLookup }),
+    MediaUrlPolicyError,
   );
 });

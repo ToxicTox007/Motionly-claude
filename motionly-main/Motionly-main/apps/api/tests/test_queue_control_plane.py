@@ -24,11 +24,53 @@ def test_api_and_worker_bridges_have_one_exact_contract() -> None:
         assert (api_bridge / filename).read_bytes() == (worker_bridge / filename).read_bytes()
 
 
-def test_railway_workers_explicitly_use_worker_process_role() -> None:
-    railway = (ROOT / ".railway/railway.ts").read_text(encoding="utf-8")
-    worker_env = railway.split("const workerEnv = {", 1)[1].split("};", 1)[0]
-    assert 'PROCESS_ROLE: "worker"' in worker_env
+def test_bullmq_registry_serializes_canonical_workflow_retry_fields(monkeypatch) -> None:
+    captured = {}
 
+    def bridge(command, payload):
+        assert command == "enqueue"
+        captured.update(payload)
+        return {
+            **payload,
+            "attempts": 0,
+            "status": "queued",
+            "enqueued_at": "2026-08-08T12:00:00+00:00",
+        }
+
+    registry = BullMQQueueRegistry(redis_url="redis://queue.test")
+    monkeypatch.setattr(registry, "_bridge", bridge)
+    run_id = uuid4()
+    step_id = uuid4()
+    job = registry.enqueue(
+        job_id="workflow-transport-job",
+        kind="video_preprocess",
+        queue_name="upload_preprocess",
+        workflow_run_id=run_id,
+        workflow_step_id=step_id,
+        step_key="preprocess-source-v1",
+        step_kind="preprocess_source",
+        attempt_key="temporal-attempt:preprocess:0002",
+        workflow_attempt_number=2,
+        workflow_max_attempts=3,
+        input_hash="a" * 64,
+        max_attempts=1,
+    )
+
+    assert captured["max_attempts"] == 1
+    assert captured["workflow_attempt_number"] == 2
+    assert captured["workflow_max_attempts"] == 3
+    assert job.max_attempts == 1
+    assert job.workflow_attempt_number == 2
+    assert job.workflow_max_attempts == 3
+    assert job.attempt_key == "temporal-attempt:preprocess:0002"
+
+
+def test_compose_workers_explicitly_use_worker_process_role() -> None:
+    compose = (ROOT / "infra/docker-compose.gpu.yml").read_text(encoding="utf-8")
+    worker_env = compose.split("x-media-environment:", 1)[1].split("x-media-volumes:", 1)[0]
+
+    assert "PROCESS_ROLE: worker" in worker_env
+    assert "WORKER_API_TOKEN_FILE: /run/secrets/worker_api_token" in worker_env
 
 def test_bullmq_snapshots_reject_invalid_payload_without_scanning_jobs(monkeypatch) -> None:
     registry = BullMQQueueRegistry(redis_url="redis://queue.test")
@@ -158,7 +200,6 @@ def test_api_shipped_bridge_round_trips_job_jobs_and_snapshots_with_redis() -> N
             registry.close()
 
 
-
 def _run_worker_node(script: str, *, redis_url: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "REDIS_URL": redis_url}
     return subprocess.run(
@@ -198,9 +239,7 @@ await connection.quit();
             queue_name="maintenance",
         )
         _run_worker_node(pause_script, redis_url=redis_url)
-        snapshot = next(
-            item for item in registry.snapshots() if item.queue_name == "maintenance"
-        )
+        snapshot = next(item for item in registry.snapshots() if item.queue_name == "maintenance")
         assert snapshot.queued >= 1
         assert snapshot.canceled == 0
     finally:
@@ -281,6 +320,7 @@ await connection.quit();
 """,
             redis_url=redis_url,
         )
+
 
 def test_bullmq_transitions_use_direct_job_lookup(monkeypatch) -> None:
     record = {

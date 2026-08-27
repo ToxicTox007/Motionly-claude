@@ -9,6 +9,8 @@ from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.music import (
     MusicProviderKey,
     MusicRegion,
+    MusicRightsResponse,
+    MusicRightsStatus,
     MusicSelectionResponse,
     MusicSelectionStatus,
     MusicTrackResponse,
@@ -21,8 +23,40 @@ MUSIC_TRACK_COLUMNS = (
 )
 MUSIC_SELECTION_COLUMNS = (
     "id,workspace_id,project_id,edit_plan_id,version,schema_version,status,music_track_id,"
-    "music_volume,sfx_intensity,rights_confirmed,cache_key,regions,created_at,updated_at"
+    "music_volume,sfx_intensity,rights_confirmed,rights_snapshot,cache_key,regions,created_at,updated_at"
 )
+
+
+def music_rights_response(snapshot: dict[str, object] | None) -> MusicRightsResponse:
+    value = snapshot or {}
+    status_value = str(value.get("status") or MusicRightsStatus.UNVERIFIED.value)
+    try:
+        status = MusicRightsStatus(status_value)
+    except ValueError:
+        status = MusicRightsStatus.UNVERIFIED
+    return MusicRightsResponse(
+        status=status,
+        verified=bool(value.get("verified"))
+        and status
+        in {
+            MusicRightsStatus.VERIFIED,
+            MusicRightsStatus.NOT_APPLICABLE,
+        },
+        provider_track_id=(
+            str(value["provider_track_id"]) if value.get("provider_track_id") else None
+        ),
+        grant_id=str(value["grant_id"]) if value.get("grant_id") else None,
+        grant_version=str(value["grant_version"]) if value.get("grant_version") else None,
+        valid_from=value.get("valid_from"),
+        valid_until=value.get("valid_until"),
+        permitted_uses=[
+            str(item) for item in value.get("permitted_uses", []) if isinstance(item, str)
+        ],
+        evidence_fingerprint=(
+            str(value["evidence_fingerprint"]) if value.get("evidence_fingerprint") else None
+        ),
+        verified_at=value.get("verified_at"),
+    )
 
 
 @dataclass
@@ -78,7 +112,8 @@ class MusicSelectionRecord:
     music_volume: float
     sfx_intensity: float
     rights_confirmed: bool
-    cache_key: str | None
+    rights_snapshot: dict[str, object] = field(default_factory=dict)
+    cache_key: str | None = None
     regions: list[MusicRegion] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -93,6 +128,7 @@ class MusicSelectionRecord:
             music_volume=self.music_volume,
             sfx_intensity=self.sfx_intensity,
             rights_confirmed=self.rights_confirmed,
+            rights=music_rights_response(self.rights_snapshot),
             status=self.status,
             cache_key=self.cache_key,
             created_at=self.created_at,
@@ -208,7 +244,8 @@ class InMemoryMusicRepository:
         music_volume: float,
         sfx_intensity: float,
         rights_confirmed: bool,
-        cache_key: str | None,
+        rights_snapshot: dict[str, object] | None = None,
+        cache_key: str | None = None,
         regions: list[MusicRegion] | None = None,
     ) -> MusicSelectionRecord:
         version = (
@@ -233,7 +270,8 @@ class InMemoryMusicRepository:
             music_track_id=music_track_id,
             music_volume=music_volume,
             sfx_intensity=sfx_intensity,
-            rights_confirmed=rights_confirmed,
+            rights_confirmed=bool((rights_snapshot or {}).get("verified")),
+            rights_snapshot=rights_snapshot or {},
             cache_key=cache_key,
             regions=regions or [],
         )
@@ -375,7 +413,8 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         music_volume: float,
         sfx_intensity: float,
         rights_confirmed: bool,
-        cache_key: str | None,
+        rights_snapshot: dict[str, object] | None = None,
+        cache_key: str | None = None,
         regions: list[MusicRegion] | None = None,
     ) -> MusicSelectionRecord:
         version = self._next_selection_version(project_id=project_id, workspace_id=workspace_id)
@@ -389,7 +428,8 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
             "music_track_id": str(music_track_id) if music_track_id else None,
             "music_volume": music_volume,
             "sfx_intensity": sfx_intensity,
-            "rights_confirmed": rights_confirmed,
+            "rights_confirmed": bool((rights_snapshot or {}).get("verified")),
+            "rights_snapshot": rights_snapshot or {},
             "cache_key": cache_key,
             "regions": [region.model_dump(mode="json") for region in (regions or [])],
         }
@@ -413,7 +453,8 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
         music_volume: float,
         sfx_intensity: float,
         rights_confirmed: bool,
-        cache_key: str | None,
+        rights_snapshot: dict[str, object] | None = None,
+        cache_key: str | None = None,
         regions: list[MusicRegion] | None = None,
     ) -> MusicSelectionRecord:
         version = await self._next_selection_version_async(
@@ -430,7 +471,8 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
             "music_track_id": str(music_track_id) if music_track_id else None,
             "music_volume": music_volume,
             "sfx_intensity": sfx_intensity,
-            "rights_confirmed": rights_confirmed,
+            "rights_confirmed": bool((rights_snapshot or {}).get("verified")),
+            "rights_snapshot": rights_snapshot or {},
             "cache_key": cache_key,
             "regions": [region.model_dump(mode="json") for region in (regions or [])],
         }
@@ -725,6 +767,9 @@ class SupabaseMusicRepository(InMemoryMusicRepository):
             music_volume=float(row["music_volume"]),
             sfx_intensity=float(row["sfx_intensity"]),
             rights_confirmed=bool(row["rights_confirmed"]),
+            rights_snapshot=(
+                row.get("rights_snapshot") if isinstance(row.get("rights_snapshot"), dict) else {}
+            ),
             cache_key=row.get("cache_key"),
             regions=regions,
             created_at=row["created_at"],

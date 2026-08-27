@@ -10,6 +10,7 @@ from app.api.errors import ApiError
 class SignedUpload:
     url: str
     headers: dict[str, str]
+    expires_in_seconds: int
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,9 @@ class SignedDownload:
 
 class StorageSigner:
     MAX_DOWNLOAD_TTL_SECONDS = 300
+    MAX_WORKER_DOWNLOAD_TTL_SECONDS = 7200
     MAX_UPLOAD_TTL_SECONDS = 900
+    SUPABASE_SIGNED_UPLOAD_TTL_SECONDS = 7200
 
     def __init__(
         self,
@@ -48,11 +51,13 @@ class StorageSigner:
                     "content-type": mime_type,
                     "x-upsert": "false",
                 },
+                expires_in_seconds=self.SUPABASE_SIGNED_UPLOAD_TTL_SECONDS,
             )
 
         return SignedUpload(
             url=self._local_object_url(bucket=bucket, path=path),
             headers={"content-type": mime_type},
+            expires_in_seconds=expires_in_seconds,
         )
 
     def create_signed_download(
@@ -62,7 +67,37 @@ class StorageSigner:
         path: str,
         expires_in_seconds: int,
     ) -> SignedDownload:
-        expires_in_seconds = max(1, min(expires_in_seconds, self.MAX_DOWNLOAD_TTL_SECONDS))
+        return self._create_signed_download_with_cap(
+            bucket=bucket,
+            path=path,
+            expires_in_seconds=expires_in_seconds,
+            maximum_ttl_seconds=self.MAX_DOWNLOAD_TTL_SECONDS,
+        )
+
+    def create_signed_worker_download(
+        self,
+        *,
+        bucket: str,
+        path: str,
+        expires_in_seconds: int,
+    ) -> SignedDownload:
+        """Sign a worker fetch explicitly; browser callers retain the 300-second cap."""
+        return self._create_signed_download_with_cap(
+            bucket=bucket,
+            path=path,
+            expires_in_seconds=expires_in_seconds,
+            maximum_ttl_seconds=self.MAX_WORKER_DOWNLOAD_TTL_SECONDS,
+        )
+
+    def _create_signed_download_with_cap(
+        self,
+        *,
+        bucket: str,
+        path: str,
+        expires_in_seconds: int,
+        maximum_ttl_seconds: int,
+    ) -> SignedDownload:
+        expires_in_seconds = max(1, min(expires_in_seconds, maximum_ttl_seconds))
         if self.supabase_url and self.service_role_key:
             signed_url = self._create_supabase_signed_download_url(
                 bucket=bucket,

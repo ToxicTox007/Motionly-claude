@@ -15,6 +15,23 @@ import { Button } from "@/components/button";
 import { buildApiHeaders } from "@/lib/client-api";
 import { env, resolveProxiedUrl } from "@/lib/env";
 import { shouldToast } from "@/lib/notification-taxonomy";
+import {
+  SignedUploadError,
+  authoritativeProgress,
+  fileFingerprint,
+  parseUploadSession,
+  partByteRange,
+  putBlobWithProgress,
+  sameFile,
+  serializeUploadSession,
+  uploadSessionStorageKey,
+  type MultipartPartCompleteResponse,
+  type MultipartPartUrl,
+  type MultipartUploadCompleteResponse,
+  type MultipartUploadInitResponse,
+  type MultipartUploadSessionResponse,
+  type PersistedUploadSession,
+} from "@/lib/resumable-upload";
 import { uploadStatusMessage } from "@/lib/product-flow-status";
 import { cn } from "@/lib/utils";
 import { useToast } from "./toast";
@@ -99,7 +116,11 @@ export function UploadPanel({
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const cancelRequestedRef = useRef(false);
   const operationIdRef = useRef(0);
+  const storageKey = uploadSessionStorageKey(workspaceId, projectId);
+  const [persistedSession, setPersistedSession] =
+    useState<PersistedUploadSession | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [mediaProbe, setMediaProbe] = useState<BrowserMediaProbe>(idleProbe);
   const [phase, setPhase] = useState<UploadPhase>("idle");
@@ -108,11 +129,26 @@ export function UploadPanel({
   const [videoId, setVideoId] = useState<string | null>(null);
 
   useEffect(() => {
+    const saved = parseUploadSession(window.localStorage.getItem(storageKey));
+    if (saved && Date.parse(saved.expiresAt) > Date.now()) {
+      // File bytes cannot be persisted; the user must reselect this exact file.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage is browser-only discovery state
+      setPersistedSession(saved);
+      setVideoId(saved.videoId);
+      setMessage(
+        `An interrupted upload for ${saved.file.name} is available. Reselect the same file to resume.`,
+      );
+    } else if (saved) {
+      window.localStorage.removeItem(storageKey);
+    }
+
     return () => {
       operationIdRef.current += 1;
+      // Unmount only interrupts the browser request. It must not abort the
+      // durable server session, which remains resumable after navigation.
       abortRef.current?.abort();
     };
-  }, []);
+  }, [storageKey]);
 
   const preflight = useMemo<Preflight | null>(() => {
     if (!file) return null;
@@ -147,6 +183,12 @@ export function UploadPanel({
       );
     }
 
+    if (persistedSession && !sameFile(file, persistedSession.file)) {
+      blockingWarnings.push(
+        `This does not match the interrupted upload (${persistedSession.file.name}). Reselect that file or cancel the saved upload first.`,
+      );
+    }
+
     return {
       filename: file.name,
       extension,
@@ -156,12 +198,20 @@ export function UploadPanel({
       blockingWarnings,
       warnings: [...blockingWarnings, ...mediaProbe.warnings],
     };
-  }, [file, mediaProbe.warnings]);
+  }, [file, mediaProbe.warnings, persistedSession]);
 
   const hasBlockingPreflightIssue = Boolean(preflight?.blockingWarnings.length);
+  const hasPersistedMismatch = Boolean(
+    file && persistedSession && !sameFile(file, persistedSession.file),
+  );
   const isCheckingMedia = mediaProbe.status === "loading";
   const isWorking = phase === "uploading" || phase === "processing";
-  const uploadButtonLabel = hasExistingSource ? "Upload replacement" : "Upload";
+  const uploadButtonLabel =
+    persistedSession && file && sameFile(file, persistedSession.file)
+      ? "Resume upload"
+      : hasExistingSource
+        ? "Upload replacement"
+        : "Upload";
 
   useEffect(() => {
     if (!file) return;
@@ -240,31 +290,52 @@ export function UploadPanel({
     );
     setPhase(nextFile ? "preflight" : "idle");
     setProgress(0);
-    setMessage(null);
-    setVideoId(null);
+    setMessage(
+      nextFile && persistedSession
+        ? sameFile(nextFile, persistedSession.file)
+          ? "File matched. Upload will resume from server-confirmed progress."
+          : `This file does not match ${persistedSession.file.name}. Reselect it or cancel the saved upload.`
+        : persistedSession
+          ? `Reselect ${persistedSession.file.name} to resume. File bytes are never stored in this browser.`
+          : null,
+    );
+    setVideoId(persistedSession?.videoId ?? null);
     if (!nextFile && inputRef.current) inputRef.current.value = "";
+  }
+
+  function rememberSession(session: PersistedUploadSession) {
+    window.localStorage.setItem(storageKey, serializeUploadSession(session));
+    setPersistedSession(session);
+  }
+
+  function clearRememberedSession() {
+    window.localStorage.removeItem(storageKey);
+    setPersistedSession(null);
   }
 
   async function startUpload() {
     if (!file || !preflight || abortRef.current) return;
-    if (hasBlockingPreflightIssue || isCheckingMedia) {
+    if (hasBlockingPreflightIssue || hasPersistedMismatch || isCheckingMedia) {
       setPhase("preflight");
       setMessage(
         isCheckingMedia
           ? "Metadata checks are still running."
-          : "Choose a supported, non-empty video within the upload limit.",
+          : hasPersistedMismatch
+            ? "Reselect the original file or cancel the saved upload before starting another."
+            : "Choose a supported, non-empty video within the upload limit.",
       );
       return;
     }
 
     const operationId = ++operationIdRef.current;
     const isCurrentOperation = () => operationIdRef.current === operationId;
+    cancelRequestedRef.current = false;
     setPhase("uploading");
-    setProgress(4);
-    setMessage("Registering upload...");
+    setProgress(0);
+    setMessage(persistedSession ? "Checking saved upload..." : "Registering upload...");
     const controller = new AbortController();
     abortRef.current = controller;
-    let registeredVideoId: string | null = null;
+    let sessionRecord = persistedSession;
     let requestHeaders: Record<string, string> | null = null;
 
     try {
@@ -274,116 +345,288 @@ export function UploadPanel({
         accessToken: apiAccessToken,
       });
       requestHeaders = headers;
-      const initResponse = await fetch(
-        `${env.apiBaseUrl}/projects/${projectId}/uploads/init`,
-        {
-          method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({
-            filename: preflight.filename,
-            mime_type: preflight.mimeType,
-            file_size_bytes: preflight.sizeBytes,
-          }),
-          signal: controller.signal,
-        },
-      );
-      const initPayload = await readJson(initResponse);
-      if (!initResponse.ok)
-        throw new Error(
-          initPayload.error?.message ?? "Upload could not be initialized.",
-        );
 
-      registeredVideoId = initPayload.video_id;
-      setVideoId(initPayload.video_id);
-      setProgress(12);
-      setMessage("Uploading source video...");
+      let totalParts: number;
+      let partSizeBytes: number;
+      let completedParts: number;
+      let serverUploadedBytes: number;
+      let partUrls: MultipartPartUrl[];
+      let activeVideoId: string;
+      let activeSessionId: string;
 
-      await uploadToSignedUrl(
-        resolveProxiedUrl(initPayload.signed_upload_url) || initPayload.signed_upload_url,
-        file,
-        initPayload.upload_headers,
-        controller.signal,
-        (loaded, total) => {
-          if (!isCurrentOperation()) return;
-          if (total > 0)
-            setProgress(Math.min(78, Math.round(12 + (loaded / total) * 66)));
-        },
-      );
-      setProgress(80);
-      setMessage("Confirming upload...");
-
-      const completeResponse = await fetch(
-        `${env.apiBaseUrl}/projects/${projectId}/uploads/${initPayload.video_id}/complete`,
-        {
-          method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({ observed_file_size_bytes: file.size }),
-          signal: controller.signal,
-        },
-      );
-      const completePayload = await readJson(completeResponse);
-      if (!completeResponse.ok)
-        throw new Error(
-          completePayload.error?.message ?? "Upload could not be completed.",
-        );
-
-      setPhase("processing");
-      setProgress(86);
-      setMessage("Running server media validation...");
-      let readyUpload = null;
-      if (completePayload.status !== "ready") {
-        readyUpload = await waitForUploadReady(
+      if (sessionRecord) {
+        if (!sameFile(file, sessionRecord.file)) {
+          throw new Error("The selected file does not match the saved upload session.");
+        }
+        const resumed = await fetchMultipartSession(
           projectId,
-          initPayload.video_id,
+          sessionRecord.sessionId,
           headers,
           controller.signal,
-          (status) => {
-            if (!isCurrentOperation()) return;
-            setProgress(status === "ready" ? 100 : 90);
-            setMessage(
-              status === "ready"
-                ? "Server validation passed."
-                : statusMessage(status),
-            );
-          },
+        );
+        if (
+          resumed.session_id !== sessionRecord.sessionId ||
+          resumed.video_id !== sessionRecord.videoId ||
+          resumed.file_size_bytes !== file.size ||
+          resumed.total_parts !== sessionRecord.totalParts ||
+          resumed.part_size_bytes !== sessionRecord.partSizeBytes
+        ) {
+          throw new Error("The saved upload fingerprint no longer matches the server session.");
+        }
+        if (["aborted", "expired", "failed"].includes(resumed.status)) {
+          clearRememberedSession();
+          throw new Error(`The saved upload session is ${resumed.status}. Start a new upload.`);
+        }
+        activeVideoId = resumed.video_id;
+        activeSessionId = resumed.session_id;
+        totalParts = resumed.total_parts;
+        partSizeBytes = resumed.part_size_bytes;
+        completedParts = resumed.completed_parts;
+        serverUploadedBytes = resumed.uploaded_bytes;
+        partUrls = resumed.pending_part_urls;
+        sessionRecord = {
+          ...sessionRecord,
+          expiresAt: resumed.expires_at,
+        };
+        rememberSession(sessionRecord);
+        setMessage(
+          completedParts > 0
+            ? `Resuming after ${completedParts} confirmed part${completedParts === 1 ? "" : "s"}...`
+            : "Resuming saved upload...",
         );
       } else {
-        readyUpload = await fetchUpload(
-          projectId,
-          initPayload.video_id,
-          headers,
-          controller.signal,
+        const initResponse = await fetch(
+          `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/init`,
+          {
+            method: "POST",
+            headers: { ...headers, "content-type": "application/json" },
+            body: JSON.stringify({
+              filename: preflight.filename,
+              mime_type: preflight.mimeType,
+              file_size_bytes: preflight.sizeBytes,
+            }),
+            signal: controller.signal,
+          },
         );
+        const initialized = (await readJson(initResponse)) as MultipartUploadInitResponse;
+        if (!initResponse.ok) {
+          throw new Error(apiErrorMessage(initialized, "Upload could not be initialized."));
+        }
+        activeVideoId = initialized.video_id;
+        activeSessionId = initialized.session_id;
+        totalParts = initialized.total_parts;
+        partSizeBytes = initialized.part_size_bytes;
+        completedParts = 0;
+        serverUploadedBytes = 0;
+        partUrls = initialized.part_urls;
+        sessionRecord = {
+          version: 1,
+          sessionId: initialized.session_id,
+          videoId: initialized.video_id,
+          expiresAt: initialized.expires_at,
+          totalParts: initialized.total_parts,
+          partSizeBytes: initialized.part_size_bytes,
+          file: fileFingerprint(file),
+        };
+        // Persist immediately after init, before any signed URL is used.
+        rememberSession(sessionRecord);
       }
-      if (!isCurrentOperation()) return;
-      setProgress(100);
-      setPhase("complete");
-      const completeMsg = serverValidationMessage(
-        readyUpload?.metadata?.warnings,
+
+      setVideoId(activeVideoId);
+      setProgress(
+        authoritativeProgress(serverUploadedBytes, file.size).percent,
       );
-      setMessage(completeMsg);
+
+      while (completedParts < totalParts) {
+        controller.signal.throwIfAborted();
+        if (!partUrls.length) {
+          const refreshed = await fetchMultipartSession(
+            projectId,
+            activeSessionId,
+            headers,
+            controller.signal,
+          );
+          if (["aborted", "expired", "failed"].includes(refreshed.status)) {
+            throw new Error(`Upload session is ${refreshed.status}.`);
+          }
+          completedParts = refreshed.completed_parts;
+          serverUploadedBytes = refreshed.uploaded_bytes;
+          partUrls = refreshed.pending_part_urls;
+          setProgress(
+            authoritativeProgress(serverUploadedBytes, file.size).percent,
+          );
+          if (completedParts >= totalParts) break;
+          if (!partUrls.length) {
+            throw new Error("The server did not return the next pending upload part.");
+          }
+        }
+
+        for (const initialPartUrl of partUrls) {
+          controller.signal.throwIfAborted();
+          const range = partByteRange(
+            initialPartUrl.part_number,
+            partSizeBytes,
+            file.size,
+          );
+          const partBlob = file.slice(range.start, range.end);
+          let partUrl = initialPartUrl;
+          setMessage(
+            `Uploading part ${partUrl.part_number} of ${totalParts}...`,
+          );
+
+          const uploadPart = () =>
+            putBlobWithProgress(
+              resolveProxiedUrl(partUrl.upload_url) ?? partUrl.upload_url,
+              partBlob,
+              partUrl.upload_headers,
+              controller.signal,
+              (loadedBytes) => {
+                if (!isCurrentOperation()) return;
+                setProgress(
+                  authoritativeProgress(
+                    serverUploadedBytes,
+                    file.size,
+                    loadedBytes,
+                  ).percent,
+                );
+              },
+            );
+
+          let uploadedPart;
+          try {
+            uploadedPart = await uploadPart();
+          } catch (error) {
+            if (
+              error instanceof SignedUploadError &&
+              (error.status === 401 || error.status === 403)
+            ) {
+              setMessage(`Refreshing upload URL for part ${partUrl.part_number}...`);
+              const refreshed = await fetchMultipartSession(
+                projectId,
+                activeSessionId,
+                headers,
+                controller.signal,
+              );
+              const replacement = refreshed.pending_part_urls.find(
+                (candidate) => candidate.part_number === partUrl.part_number,
+              );
+              if (!replacement) {
+                throw new Error("The server did not refresh the expired upload URL.");
+              }
+              partUrl = replacement;
+              // A signed URL is refreshed and retried at most once per part.
+              uploadedPart = await uploadPart();
+            } else {
+              throw error;
+            }
+          }
+
+          setMessage(`Confirming part ${partUrl.part_number} of ${totalParts}...`);
+          const confirmResponse = await fetch(
+            `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${activeSessionId}/parts/${partUrl.part_number}/complete`,
+            {
+              method: "POST",
+              headers: { ...headers, "content-type": "application/json" },
+              body: JSON.stringify(
+                uploadedPart.etag ? { etag: uploadedPart.etag } : {},
+              ),
+              signal: controller.signal,
+            },
+          );
+          const confirmed = (await readJson(confirmResponse)) as MultipartPartCompleteResponse;
+          if (!confirmResponse.ok) {
+            throw new Error(apiErrorMessage(confirmed, `Part ${partUrl.part_number} could not be confirmed.`));
+          }
+          completedParts = confirmed.completed_parts;
+          serverUploadedBytes = confirmed.uploaded_bytes;
+          setProgress(
+            authoritativeProgress(serverUploadedBytes, file.size).percent,
+          );
+        }
+
+        // The server returns at most five URLs, so fetch its next authoritative
+        // pending window rather than deriving completion from local state.
+        partUrls = [];
+      }
+
+      setProgress(100);
+      setMessage("Completing multipart upload...");
+      const completeResponse = await fetch(
+        `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${activeSessionId}/complete`,
+        {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({}),
+          signal: controller.signal,
+        },
+      );
+      const completePayload = (await readJson(completeResponse)) as MultipartUploadCompleteResponse;
+      if (!completeResponse.ok) {
+        throw new Error(apiErrorMessage(completePayload, "Upload could not be completed."));
+      }
+
+      // Completion is durable and idempotent. The processing page owns the
+      // upload from here, so no resumable browser record is needed.
+      clearRememberedSession();
+      setPhase("processing");
+      setMessage("Running server media validation...");
+      const readyUpload = await waitForUploadReady(
+        projectId,
+        completePayload.video_id,
+        headers,
+        controller.signal,
+        (status) => {
+          if (!isCurrentOperation()) return;
+          setProgress(100);
+          setMessage(
+            status === "ready"
+              ? "Server validation passed."
+              : statusMessage(status),
+          );
+        },
+      );
+      if (!isCurrentOperation()) return;
+      setPhase("complete");
+      setMessage(serverValidationMessage(readyUpload?.metadata?.warnings));
       router.refresh();
     } catch (error) {
       if (!isCurrentOperation()) return;
       if ((error as Error).name === "AbortError") {
-        if (registeredVideoId && requestHeaders) {
-          await cancelUploadRegistration(
-            projectId,
-            registeredVideoId,
-            requestHeaders,
-          ).catch(() => undefined);
+        if (!cancelRequestedRef.current) return;
+        const sessionId = sessionRecord?.sessionId;
+        try {
+          const headers =
+            requestHeaders ??
+            (await buildApiHeaders({
+              workspaceId,
+              userId,
+              accessToken: apiAccessToken,
+            }));
+          if (sessionId) {
+            await cancelUploadRegistration(projectId, sessionId, headers);
+          }
+        } catch {
+          setPhase("failed");
+          setProgress(0);
+          setMessage(
+            "Cancellation could not be confirmed. Your upload session was kept so you can retry cancellation.",
+          );
+          return;
         }
+        clearRememberedSession();
         setPhase("canceled");
         setProgress(0);
         setVideoId(null);
-        setMessage(
-          "Upload canceled. The incomplete source was not attached to this project.",
-        );
+        setMessage("Upload canceled. The multipart session was aborted.");
         return;
       }
       setPhase("failed");
       const failMsg = friendlyUploadError((error as Error).message);
-      setMessage(failMsg);
+      setMessage(
+        sessionRecord
+          ? `${failMsg} Your confirmed progress is saved; retry with the same file.`
+          : failMsg,
+      );
       if (shouldToast("short_action_feedback")) {
         toast({
           title: "Upload Failed",
@@ -393,12 +636,40 @@ export function UploadPanel({
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
+      cancelRequestedRef.current = false;
     }
   }
 
-  function cancelUpload() {
+  async function cancelUpload() {
     setMessage("Canceling upload...");
-    abortRef.current?.abort();
+    cancelRequestedRef.current = true;
+    if (abortRef.current) {
+      abortRef.current.abort();
+      return;
+    }
+    const sessionId = persistedSession?.sessionId;
+    try {
+      if (sessionId) {
+        const headers = await buildApiHeaders({
+          workspaceId,
+          userId,
+          accessToken: apiAccessToken,
+        });
+        await cancelUploadRegistration(projectId, sessionId, headers);
+      }
+      clearRememberedSession();
+      setPhase("canceled");
+      setProgress(0);
+      setVideoId(null);
+      setMessage("Upload canceled. The multipart session was aborted.");
+    } catch {
+      setPhase("failed");
+      setMessage(
+        "Cancellation could not be confirmed. Your upload session was kept so you can retry cancellation.",
+      );
+    } finally {
+      cancelRequestedRef.current = false;
+    }
   }
 
   return (
@@ -508,6 +779,11 @@ export function UploadPanel({
                 </span>
               ))}
             </div>
+            {persistedSession ? (
+              <p className="max-w-md border-2 border-foreground bg-primary/10 p-3 text-sm font-mono font-bold text-foreground rounded-md">
+                Reselect <span className="break-all text-primary">{persistedSession.file.name}</span> to resume from server-confirmed progress. File bytes are not stored locally.
+              </p>
+            ) : null}
             <div className="flex flex-wrap justify-center gap-3">
               <button
                 type="button"
@@ -526,6 +802,15 @@ export function UploadPanel({
                 >
                   <X className="mr-2 size-4" aria-hidden="true" strokeWidth={2.5} />
                   Clear
+                </button>
+              ) : null}
+              {persistedSession && !isWorking ? (
+                <button
+                  type="button"
+                  onClick={() => void cancelUpload()}
+                  className="inline-flex h-10 items-center justify-center bg-background text-danger border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] px-4 text-sm font-bold uppercase tracking-wider"
+                >
+                  Cancel saved upload
                 </button>
               ) : null}
             </div>
@@ -654,7 +939,10 @@ export function UploadPanel({
                 className="w-full h-11 bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] font-bold uppercase tracking-wider disabled:opacity-50 mt-4 inline-flex items-center justify-center"
                 onClick={startUpload}
                 disabled={
-                  hasBlockingPreflightIssue || isCheckingMedia || isWorking
+                  hasBlockingPreflightIssue ||
+                  hasPersistedMismatch ||
+                  isCheckingMedia ||
+                  isWorking
                 }
               >
                 {isWorking ? (
@@ -781,63 +1069,51 @@ async function readJson(response: Response) {
   return text ? JSON.parse(text) : {};
 }
 
-function uploadToSignedUrl(
-  url: string,
-  file: File,
+async function fetchMultipartSession(
+  projectId: string,
+  sessionId: string,
   headers: Record<string, string>,
   signal: AbortSignal,
-  onProgress: (loaded: number, total: number) => void,
-) {
-  return new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const onAbort = () => xhr.abort();
-    xhr.open("PUT", url);
-    for (const [key, value] of Object.entries(headers))
-      xhr.setRequestHeader(key, value);
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) onProgress(event.loaded, event.total);
-    };
-    xhr.onload = () => {
-      cleanup();
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(storageUploadErrorMessage(xhr.status, xhr.responseText)),
-      );
-    };
-    xhr.onerror = () => {
-      cleanup();
-      reject(
-        new Error(
-          "Storage upload failed. Check your connection and try again.",
-        ),
-      );
-    };
-    xhr.onabort = () => {
-      cleanup();
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) onAbort();
-    else xhr.send(file);
-  });
+): Promise<MultipartUploadSessionResponse> {
+  const response = await fetch(
+    `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${sessionId}`,
+    { headers, signal, cache: "no-store" },
+  );
+  const payload = (await readJson(response)) as MultipartUploadSessionResponse;
+  if (!response.ok) {
+    throw new Error(apiErrorMessage(payload, "Saved upload could not be resumed."));
+  }
+  return payload;
 }
 
 async function cancelUploadRegistration(
   projectId: string,
-  videoId: string,
+  sessionId: string,
   headers: Record<string, string>,
 ) {
-  await fetch(
-    `${env.apiBaseUrl}/projects/${projectId}/uploads/${videoId}/cancel`,
-    {
-      method: "POST",
-      headers,
-    },
+  const response = await fetch(
+    `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${sessionId}/abort`,
+    { method: "POST", headers },
   );
+  if (!response.ok) {
+    const payload = await readJson(response);
+    throw new Error(apiErrorMessage(payload, "Upload session could not be aborted."));
+  }
+}
+
+function apiErrorMessage(payload: unknown, fallback: string): string {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    payload.error &&
+    typeof payload.error === "object" &&
+    "message" in payload.error &&
+    typeof payload.error.message === "string"
+  ) {
+    return payload.error.message;
+  }
+  return fallback;
 }
 
 async function waitForUploadReady(
@@ -1015,11 +1291,6 @@ function gcd(left: number, right: number): number {
 
 function statusMessage(status: string) {
   return uploadStatusMessage(status);
-}
-
-function storageUploadErrorMessage(status: number, responseText: string) {
-  const details = responseText ? ` ${responseText.slice(0, 160)}` : "";
-  return `Storage rejected the upload (${status}).${details ? ` ${details}` : ""}`;
 }
 
 function friendlyUploadError(message: string) {

@@ -9,13 +9,15 @@ from pathlib import Path
 from time import perf_counter
 
 from app.core.config import get_settings
+from app.core.production import validate_production_settings
 
 
 def main() -> None:
+    settings = get_settings()
+    validate_production_settings(settings)
     if os.getenv("MODEL_PREFETCH", "false").lower() != "true":
         return
     started_at = perf_counter()
-    settings = get_settings()
     failures: list[str] = []
     attempted = 0
     tmp_cleanup = cleanup_worker_tmp()
@@ -24,18 +26,22 @@ def main() -> None:
         from huggingface_hub import snapshot_download
 
         models = [
-            settings.visual_clip_model,
-            settings.visual_blip_model,
-            settings.wav2vec_emotion_model,
+            (settings.visual_clip_model, settings.visual_clip_model_revision),
+            (settings.visual_blip_model, settings.visual_blip_model_revision),
+            (settings.wav2vec_emotion_model, settings.wav2vec_emotion_model_revision),
         ]
         if settings.pyannote_auth_token:
-            models.append(settings.pyannote_model)
-        for model in models:
+            models.append((settings.pyannote_model, settings.pyannote_model_revision))
+        for model, revision in models:
             attempted += 1
             try:
-                snapshot_download(repo_id=model, token=settings.pyannote_auth_token)
+                snapshot_download(
+                    repo_id=model,
+                    revision=revision,
+                    token=settings.pyannote_auth_token,
+                )
             except Exception as exc:  # worker logs retain the exact provider failure
-                failures.append(f"{model}: {exc}")
+                failures.append(f"{model}@{revision}: {exc}")
 
     if importlib.util.find_spec("ultralytics"):
         attempted += 1

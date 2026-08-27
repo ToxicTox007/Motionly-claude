@@ -6,6 +6,7 @@ from fastapi import Header, Request
 
 from app.api.errors import ApiError
 from app.core.config import LOCAL_AUTH_BYPASS_ENVS, env_flag_enabled
+from app.repositories.ai_proposals import InMemoryAIProposalRepository
 from app.repositories.analytics import InMemoryAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
@@ -17,8 +18,13 @@ from app.repositories.projects import InMemoryProjectRepository
 from app.repositories.publishing import InMemoryPublishingRepository
 from app.repositories.regeneration import InMemoryRegenerationRepository
 from app.repositories.renders import InMemoryRenderRepository
+from app.repositories.reviews import InMemoryReviewRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.repositories.visual import InMemoryVisualRepository
+from app.repositories.workflows import (
+    InMemoryWorkflowRepository,
+    SupabaseWorkflowRepository,
+)
 from app.services.auth import (
     require_workspace_membership,
     verify_supabase_jwt,
@@ -38,6 +44,7 @@ from app.services.queue import (
     PublishQueue,
     RegenerationQueue,
     RenderQueue,
+    StockAssetEnrichmentQueue,
     TranscriptionQueue,
     VisualQueue,
 )
@@ -129,6 +136,10 @@ def get_preprocess_queue(request: Request) -> PreprocessQueue:
     return request.app.state.preprocess_queue
 
 
+def get_upload_session_service(request: Request):
+    return request.app.state.upload_session_service
+
+
 def get_transcription_queue(request: Request) -> TranscriptionQueue:
     return request.app.state.transcription_queue
 
@@ -147,6 +158,10 @@ def get_plan_queue(request: Request) -> PlanQueue:
 
 def get_broll_queue(request: Request) -> BrollQueue:
     return request.app.state.broll_queue
+
+
+def get_stock_asset_enrichment_queue(request: Request) -> StockAssetEnrichmentQueue:
+    return request.app.state.stock_asset_enrichment_queue
 
 
 def get_render_queue(request: Request) -> RenderQueue:
@@ -173,8 +188,16 @@ def get_regeneration_repository(request: Request) -> InMemoryRegenerationReposit
     return request.app.state.regeneration_repository
 
 
+def get_review_repository(request: Request) -> InMemoryReviewRepository:
+    return request.app.state.review_repository
+
+
 def get_plan_repository(request: Request) -> InMemoryPlanRepository:
     return request.app.state.plan_repository
+
+
+def get_proposal_repository(request: Request) -> InMemoryAIProposalRepository:
+    return request.app.state.proposal_repository
 
 
 def get_music_repository(request: Request) -> InMemoryMusicRepository:
@@ -195,6 +218,12 @@ def get_billing_repository(request: Request) -> InMemoryBillingRepository:
 
 def get_analytics_repository(request: Request) -> InMemoryAnalyticsRepository:
     return request.app.state.analytics_repository
+
+
+def get_workflow_repository(
+    request: Request,
+) -> InMemoryWorkflowRepository | SupabaseWorkflowRepository:
+    return request.app.state.workflow_repository
 
 
 def get_visual_repository(request: Request) -> InMemoryVisualRepository:

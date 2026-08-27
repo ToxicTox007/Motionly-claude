@@ -165,31 +165,3 @@ export function PixelIcon({
     </svg>
   );
 }
-
-export function MotionlyMark({
-  className,
-  ...props
-}: SVGProps<SVGSVGElement>) {
-  return (
-    <svg
-      viewBox="0 0 32 32"
-      fill="none"
-      aria-hidden="true"
-      shapeRendering="crispEdges"
-      className={cn("size-8 shrink-0", className)}
-      {...props}
-    >
-      <rect width="32" height="32" fill="currentColor" opacity="0.08" />
-      <rect x="2" y="2" width="28" height="28" fill="hsl(var(--primary))" />
-      <rect x="5" y="6" width="5" height="20" fill="hsl(var(--ink))" />
-      <rect x="22" y="6" width="5" height="20" fill="hsl(var(--ink))" />
-      <rect x="10" y="9" width="4" height="5" fill="hsl(var(--ink))" />
-      <rect x="14" y="13" width="4" height="5" fill="hsl(var(--ink))" />
-      <rect x="18" y="9" width="4" height="5" fill="hsl(var(--ink))" />
-      <rect x="11" y="23" width="12" height="2" fill="hsl(var(--ink))" />
-      <rect x="13" y="20" width="4" height="2" fill="hsl(var(--surface))" />
-      <rect x="18" y="19" width="2" height="4" fill="hsl(var(--surface))" />
-      <rect x="20" y="20" width="2" height="2" fill="hsl(var(--surface))" />
-    </svg>
-  );
-}

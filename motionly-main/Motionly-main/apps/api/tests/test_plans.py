@@ -27,6 +27,7 @@ from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import EDIT_PLAN_COLUMNS, InMemoryPlanRepository, SupabasePlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.repositories.visual import InMemoryVisualRepository
+from app.schemas.ai_proposals import ProposalDecisionRequest, ProposalDecisionType
 from app.schemas.captions import CaptionPresetKey, LanguageHint, TranscriptWord
 from app.schemas.plans import (
     EDIT_PLAN_PROMPT_VERSION,
@@ -110,6 +111,12 @@ async def create_plan(
 
     if response.status == "ready":
         return response
+    if response.status in {"approved", "partially_approved"}:
+        record = repository.active_plan(
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
+        return response.model_copy(update={"plan": record.to_response(), "status": "ready"})
 
     job_id = response.job_id
     job = plan_queue.registry.jobs[job_id]
@@ -118,7 +125,29 @@ async def create_plan(
 
     result = _execute_job(job=job, request=request)
 
-    plan_id = UUID(result["plan_id"])
+    proposal_repository = repository._proposal_repository
+    proposal_id = UUID(result["proposal_id"])
+    proposal = proposal_repository.get(
+        proposal_id=proposal_id,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    decision = proposal_repository.decide(
+        proposal_id=proposal_id,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+        payload=ProposalDecisionRequest(
+            decision=ProposalDecisionType.APPROVE,
+            expected_proposal_revision=proposal.revision,
+            expected_base_active_plan_id=proposal.artifacts.base_active_plan_id,
+            expected_base_active_plan_revision=proposal.artifacts.base_active_plan_revision,
+            idempotency_key=f"test-approve-{proposal.id}",
+            accepted_action_ids=[],
+        ),
+    )
+    plan_id = decision.edit_plan_id
+    assert plan_id is not None
     record = repository.get_plan(
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -1010,7 +1039,11 @@ def test_compile_timeline_endpoint_persists_caption_layers() -> None:
 
 def test_create_plan_reuses_cache_without_force() -> None:
     repository, project_id, workspace_id, user_id = make_plan_repository()
-    payload = PlanCreateRequest(style=EditPlanStyle.FOUNDER, target_duration_s=25)
+    payload = PlanCreateRequest(
+        style=EditPlanStyle.FOUNDER,
+        target_duration_s=25,
+        idempotency_key="cache-retry-0001",
+    )
 
     first = asyncio.run(
         create_plan(
@@ -2052,7 +2085,11 @@ def test_async_planner_fast_path_and_polling() -> None:
     response = asyncio.run(
         _create_plan_api(
             project_id=project_id,
-            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, force=True),
+            payload=PlanCreateRequest(
+                style=EditPlanStyle.LUXURY,
+                force=True,
+                idempotency_key="async-plan-0001",
+            ),
             actor=actor,
             repository=repository,
             planner_provider=MockFailurePlanner(),
@@ -2117,19 +2154,12 @@ def test_async_planner_fast_path_and_polling() -> None:
     # Execute
     result = _execute_job(job=job, request=execute_request)
     plan_queue.registry.complete(response.job_id)
-    
-    assert "plan_id" in result
-    assert result["status"] == "ready"
-    
-    # Proves the plan was persisted in repository
-    persisted_plan = repository.get_plan(
-        project_id=project_id,
-        workspace_id=workspace_id,
-        plan_id=UUID(result["plan_id"]),
-    )
-    assert persisted_plan.status == EditPlanStatus.READY
 
-    # 5. GET status is succeeded after worker completes
+    assert "proposal_id" in result
+    assert result["status"] == "awaiting_approval"
+    assert repository.list_plans(project_id=project_id, workspace_id=workspace_id) == []
+
+    # Worker output is visible for review but is not active until an explicit decision.
     status_response = asyncio.run(
         get_plan_job_status(
             project_id=project_id,
@@ -2139,16 +2169,45 @@ def test_async_planner_fast_path_and_polling() -> None:
             request=execute_request,
         )
     )
-    assert status_response.status == "succeeded"
+    assert status_response.status == "awaiting_approval"
     assert status_response.progress == 100
-    assert status_response.plan_id == persisted_plan.id
+    proposal_repository = repository._proposal_repository
+    proposal = proposal_repository.get(
+        proposal_id=UUID(result["proposal_id"]),
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    decision = proposal_repository.decide(
+        proposal_id=proposal.id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        payload=ProposalDecisionRequest(
+            decision=ProposalDecisionType.APPROVE,
+            expected_proposal_revision=proposal.revision,
+            expected_base_active_plan_id=None,
+            expected_base_active_plan_revision=None,
+            idempotency_key="async-decision-0001",
+            accepted_action_ids=[],
+        ),
+    )
+    persisted_plan = repository.active_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    assert decision.edit_plan_id == persisted_plan.id
+    assert persisted_plan.status == EditPlanStatus.READY
 
-    # 6. Cache hit still returns existing cached plan synchronously
+    # A retry with the same idempotency key returns the same terminal proposal.
     mock_response_cache = DummyResponse()
     cached_response = asyncio.run(
         _create_plan_api(
             project_id=project_id,
-            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, force=False),
+            payload=PlanCreateRequest(
+                style=EditPlanStyle.LUXURY,
+                force=False,
+                idempotency_key="async-plan-0001",
+            ),
             actor=actor,
             repository=repository,
             planner_provider=FixtureEditPlannerProvider(),
@@ -2158,8 +2217,9 @@ def test_async_planner_fast_path_and_polling() -> None:
         )
     )
     assert cached_response.cached is True
-    assert cached_response.status == "ready"
-    assert cached_response.plan.id == persisted_plan.id
+    assert cached_response.status == "approved"
+    assert cached_response.proposal_id == proposal.id
+    assert cached_response.plan is None
 
 
 def test_async_planner_failed_job() -> None:
@@ -2207,7 +2267,11 @@ def test_async_planner_failed_job() -> None:
     response = asyncio.run(
         _create_plan_api(
             project_id=project_id,
-            payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, force=True),
+            payload=PlanCreateRequest(
+                style=EditPlanStyle.LUXURY,
+                force=True,
+                idempotency_key="async-plan-0001",
+            ),
             actor=actor,
             repository=repository,
             planner_provider=BrokenPlanner(),
@@ -2238,19 +2302,20 @@ def test_async_planner_failed_job() -> None:
         )
     )
     assert status_response.status == "failed"
-    assert "OpenRouter failed!" in status_response.failure_reason
+    assert status_response.failure_reason == "RuntimeError"
 
     plans = repository.list_plans(project_id=project_id, workspace_id=workspace_id)
-    failed_plan = next(plan for plan in plans if plan.status == EditPlanStatus.FAILED)
     active_plan = repository.active_plan(project_id=project_id, workspace_id=workspace_id)
-    assert failed_plan.is_active is False
-    assert active_plan.id == ready_plan_id
-    assert active_plan.status == EditPlanStatus.READY
-    assert repository.find_cached_plan(
+    failed_proposal = repository._proposal_repository.get(
+        proposal_id=response.proposal_id,
         project_id=project_id,
         workspace_id=workspace_id,
-        cache_key=failed_plan.cache_key,
-    ) is None
+    )
+    assert len(plans) == 1
+    assert failed_proposal.state.value == "failed"
+    assert failed_proposal.failure_code == "RuntimeError"
+    assert active_plan.id == ready_plan_id
+    assert active_plan.status == EditPlanStatus.READY
 
 
 def test_phase9_cache_keys() -> None:

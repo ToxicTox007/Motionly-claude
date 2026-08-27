@@ -1159,14 +1159,20 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             },
         )
         if response.status_code >= 400:
-            body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            content_type = response.headers.get("content-type", "")
+            body = response.json() if content_type.startswith("application/json") else {}
             pg_code = body.get("code") or ""
             message = body.get("message") or ""
             if pg_code == "P0002" or "REVISION_CONFLICT" in message:
                 raise RevisionConflictError(
                     plan_id=str(plan_id),
                     expected=expected_revision,
-                    actual=self._extract_actual_revision(message, plan_id, workspace_id, project_id),
+                    actual=self._extract_actual_revision(
+                        message,
+                        plan_id,
+                        workspace_id,
+                        project_id,
+                    ),
                 )
             self._raise_for_supabase(response)
         # Re-fetch the updated plan to get the new revision and all fields
@@ -1207,18 +1213,28 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             },
         )
         if response.status_code >= 400:
-            body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            content_type = response.headers.get("content-type", "")
+            body = response.json() if content_type.startswith("application/json") else {}
             pg_code = body.get("code") or ""
             message = body.get("message") or ""
             if pg_code == "P0002" or "REVISION_CONFLICT" in message:
                 raise RevisionConflictError(
                     plan_id=str(plan_id),
                     expected=expected_revision,
-                    actual=await self._extract_actual_revision_async(message, plan_id, workspace_id, project_id),
+                    actual=await self._extract_actual_revision_async(
+                        message,
+                        plan_id,
+                        workspace_id,
+                        project_id,
+                    ),
                 )
             self._raise_for_supabase(response)
         # Re-fetch the updated plan to get the new revision and all fields
-        return await self.get_plan_async(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+        return await self.get_plan_async(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=plan_id,
+        )
 
     def _extract_actual_revision(
         self, message: str, plan_id: UUID, workspace_id: UUID, project_id: UUID
@@ -1230,7 +1246,11 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             return int(match.group(1))
         # Fallback: re-fetch
         try:
-            record = self.get_plan(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+            record = self.get_plan(
+                project_id=project_id,
+                workspace_id=workspace_id,
+                plan_id=plan_id,
+            )
             return record.revision
         except Exception:
             return -1
@@ -1245,7 +1265,11 @@ class SupabasePlanRepository(InMemoryPlanRepository):
             return int(match.group(1))
         # Fallback: re-fetch
         try:
-            record = await self.get_plan_async(project_id=project_id, workspace_id=workspace_id, plan_id=plan_id)
+            record = await self.get_plan_async(
+                project_id=project_id,
+                workspace_id=workspace_id,
+                plan_id=plan_id,
+            )
             return record.revision
         except Exception:
             return -1

@@ -10,7 +10,7 @@ from app.api.errors import ApiError
 from app.api.internal_jobs import run_queue_job
 from app.core.config import get_settings
 from app.schemas.broll import BrollGenerateRequest
-from app.services.queue import BrollQueue, QueueRegistry
+from app.services.queue import BrollQueue, QueueRegistry, StockAssetEnrichmentQueue
 from app.services.queue_guard import require_worker_queue
 from app.services.stock_video import FixtureStockVideoProvider
 from tests.test_broll import make_broll_repository, make_creator_billing_repository
@@ -88,6 +88,7 @@ def test_generate_broll_enqueues_and_worker_executes_stock_search() -> None:
                 billing_repository=billing_repository,
                 stock_video_providers=[provider],
                 storage_signer=SimpleNamespace(),
+                stock_asset_enrichment_queue=StockAssetEnrichmentQueue(registry),
             )
         )
     )
@@ -129,6 +130,7 @@ def test_generate_broll_enqueues_and_worker_executes_stock_search() -> None:
                         billing_repository=billing_repository,
                         stock_video_providers=[provider],
                         storage_signer=SimpleNamespace(),
+                        stock_asset_enrichment_queue=StockAssetEnrichmentQueue(registry),
                     )
                 )
             ),
@@ -171,10 +173,11 @@ def test_production_worker_rejects_unknown_ai_provider(
             "edit_planner_provider": "openrouter",
             "openrouter_api_key": "openrouter-key",
             "visual_intelligence_provider": "local_ml",
-            "audio_ml_provider": "disabled",
+            "audio_ml_provider": "local_ml",
             "music_provider": "licensed_catalog",
             "stock_video_provider": "pixabay",
             "pixabay_api_key": "pixabay-key",
+            "runway_api_key": "runway-key",
             field: value,
         }
     )
@@ -211,10 +214,11 @@ def test_production_worker_rejects_missing_ai_provider_credentials(
             "edit_planner_provider": "openrouter",
             "openrouter_api_key": "openrouter-key",
             "visual_intelligence_provider": "local_ml",
-            "audio_ml_provider": "disabled",
+            "audio_ml_provider": "local_ml",
             "music_provider": "licensed_catalog",
             "stock_video_provider": "pixabay",
             "pixabay_api_key": "pixabay-key",
+            "runway_api_key": "runway-key",
             key_field: None,
         }
     )

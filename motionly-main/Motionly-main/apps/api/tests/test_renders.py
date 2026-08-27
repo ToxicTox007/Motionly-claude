@@ -61,6 +61,7 @@ from app.schemas.music import MusicProviderKey, MusicSelectionStatus
 from app.schemas.plans import BrollDensity, EditPlanCut, ManualElement, PlanCreateRequest
 from app.schemas.renders import (
     CutSegment,
+    DurationPreset,
     ExportFraming,
     ExportOptions,
     OutputAspect,
@@ -138,6 +139,7 @@ def make_render_repository():
         file_size_bytes=1000,
     )
     upload.status = UploadStatus.READY
+    upload.source_object_reference_id = uuid4()
     upload.metadata.duration_ms = 7000
     upload.metadata.width = 1920
     upload.metadata.height = 1080
@@ -376,6 +378,16 @@ def test_render_create_completes_export_and_events() -> None:
     assert response.job.template_id == "luxury_reel_v1"
     assert response.job.render_engine == "ffmpeg_basic"
     assert response.job.props_hash == response.job.manifest["props_hash"]
+    source_reference_id = str(
+        repository.get_active_upload(
+            project_id=project_id,
+            workspace_id=workspace_id,
+        ).source_object_reference_id
+    )
+    assert response.job.manifest["source"]["reference_id"] == source_reference_id
+    assert (
+        response.job.manifest["render_props"]["sourceVideo"]["referenceId"] == source_reference_id
+    )
     assert response.job.artifact_path.endswith(".mp4")
     assert [event.to_status for event in response.job.events] == [
         "queued",
@@ -508,6 +520,64 @@ def test_bulk_render_create_queues_multiple_platform_targets() -> None:
     )
     assert response.jobs[1].manifest["render_props"]["exportSettings"]["width"] == 1920
     assert response.jobs[1].manifest["render_props"]["exportSettings"]["height"] == 1080
+
+
+def test_bulk_repurpose_targets_apply_per_platform_creative_controls() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    request = make_request(complete_locally=False)
+    request.app.state.settings.billing_enabled = False
+
+    response = asyncio.run(
+        create_bulk_render(
+            project_id=project_id,
+            payload=RenderBulkCreateRequest(
+                export_targets=[
+                    ExportOptions(
+                        platform=PlatformPreset.TIKTOK,
+                        duration_preset=DurationPreset.SHORT,
+                        include_captions=False,
+                        hook_text="Stop scrolling: this changes everything.",
+                        framing=ExportFraming(output_aspect=OutputAspect.VERTICAL_9_16),
+                    ),
+                    ExportOptions(
+                        platform=PlatformPreset.LINKEDIN,
+                        duration_preset=DurationPreset.MEDIUM,
+                        include_captions=False,
+                        hook_text="The practical lesson every team can use.",
+                        framing=ExportFraming(output_aspect=OutputAspect.PORTRAIT_4_5),
+                    ),
+                ],
+            ),
+            request=request,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+
+    tiktok_job, linkedin_job = response.jobs
+    assert tiktok_job.manifest["include_captions"] is False
+    assert tiktok_job.manifest["export_settings"]["duration_preset"] == "short"
+    assert tiktok_job.manifest["repurpose"] == {
+        "hook_text": "Stop scrolling: this changes everything.",
+        "caption_mode": "none",
+    }
+    assert (
+        tiktok_job.manifest["render_props"]["editPlan"]["manual_elements"][-1]["properties"][
+            "content"
+        ]
+        == "Stop scrolling: this changes everything."
+    )
+
+    assert linkedin_job.manifest["export_settings"]["platform"] == "linkedin"
+    assert (
+        linkedin_job.manifest["export_settings"]["platform_metadata"]["delivery"] == "linkedin_feed"
+    )
+    assert linkedin_job.manifest["export_settings"]["duration_preset"] == "medium"
+    assert linkedin_job.specs.width == 1536
+    assert linkedin_job.specs.height == 1920
 
 
 def test_render_create_applies_original_aspect_and_custom_framing() -> None:
@@ -645,6 +715,7 @@ def test_render_creation_uses_active_edit_plan_cuts_as_authority() -> None:
     repository, project_id, workspace_id, user_id = make_render_repository()
     plan_repository = InMemoryPlanRepository(repository.caption_repository)
     from tests.worker_job_test_helpers import seed_active_plan
+
     seed_active_plan(
         plan_repository=plan_repository,
         project_id=project_id,
@@ -905,7 +976,7 @@ def test_render_without_captions_does_not_require_caption_track(track_state: str
     assert response.job.manifest["timeline"]["captions"] == []
 
 
-def test_render_completion_falls_back_to_720p_after_ffmpeg_failure(
+def test_render_completion_fails_without_quality_downgrade_after_ffmpeg_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -967,11 +1038,11 @@ def test_render_completion_falls_back_to_720p_after_ffmpeg_failure(
         execute_ffmpeg=True,
     )
 
-    assert job.status == RenderJobStatus.COMPLETE
-    assert calls == [(1080, 1920), (720, 1280)]
-    assert job.specs.width == 720
-    assert "render_fallback=720x1280" in job.logs
-    assert repository.list_exports(project_id=project_id, workspace_id=workspace_id)[0].width == 720
+    assert job.status == RenderJobStatus.FAILED
+    assert calls == [(1080, 1920)]
+    assert job.specs.width == 1080
+    assert job.error_code == "ffmpeg_render_failed"
+    assert repository.list_exports(project_id=project_id, workspace_id=workspace_id) == []
 
 
 def test_render_completion_passes_effects_config_to_ffmpeg(
@@ -1085,10 +1156,9 @@ def test_render_preflight_fails_when_source_video_is_missing(tmp_path) -> None:
 
     assert job.status == RenderJobStatus.FAILED
     assert job.error_code == "missing_source_video"
-    assert (
-        [event.event_type for event in repository.events_for_job(job.id)][-1]
-        == "preflight_failed"
-    )
+    assert [event.event_type for event in repository.events_for_job(job.id)][
+        -1
+    ] == "preflight_failed"
 
 
 def test_render_preflight_catches_invalid_ass_before_render(
@@ -1177,8 +1247,7 @@ def test_cancel_render_marks_job_canceled_and_removes_queue_entry() -> None:
         workspace_id=workspace_id,
     )
     assert (
-        queue_job_id not in registry.jobs
-        or registry.jobs[queue_job_id].status.value == "canceled"
+        queue_job_id not in registry.jobs or registry.jobs[queue_job_id].status.value == "canceled"
     )
 
 
@@ -2343,3 +2412,77 @@ def test_render_blocks_ready_upload_that_is_not_media_ready() -> None:
     assert exc_info.value.status_code == 422
     assert exc_info.value.code == "video_not_render_ready"
     assert "No audio track was detected" in exc_info.value.message
+
+
+def test_render_creation_requires_durable_source_reference() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    upload = repository.get_active_upload(
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    upload.source_object_reference_id = None
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            create_render_api(
+                project_id=project_id,
+                payload=RenderCreateRequest(),
+                request=make_request(),
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                billing_repository=InMemoryBillingRepository(),
+                plan_repository=InMemoryPlanRepository(repository.caption_repository),
+                render_queue=RenderQueue(),
+            )
+        )
+
+    assert exc_info.value.code == "durable_media_reference_missing"
+
+
+def test_render_manifest_rejects_private_manual_graphic_url() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    plan_repository = InMemoryPlanRepository(repository.caption_repository)
+    from tests.worker_job_test_helpers import seed_active_plan
+
+    seed_active_plan(
+        plan_repository=plan_repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        payload=PlanCreateRequest(target_duration_s=10, broll_density=BrollDensity.NONE),
+    )
+    plan = plan_repository.active_plan(project_id=project_id, workspace_id=workspace_id)
+    plan.plan = plan.plan.model_copy(
+        update={
+            "manual_elements": [
+                ManualElement(
+                    id="unsafe-graphic",
+                    type="graphic",
+                    name="Unsafe graphic",
+                    zone="canvas",
+                    start_ms=0,
+                    end_ms=7_000,
+                    properties={
+                        "assetUrl": "http://169.254.169.254/latest/meta-data/",
+                    },
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            create_render(
+                project_id=project_id,
+                payload=RenderCreateRequest(edit_plan_id=plan.id),
+                request=make_request(complete_locally=False),
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                billing_repository=InMemoryBillingRepository(),
+                plan_repository=plan_repository,
+                render_queue=RenderQueue(),
+            )
+        )
+
+    assert exc_info.value.code == "unsafe_media_url"
+    assert "169.254" not in exc_info.value.message

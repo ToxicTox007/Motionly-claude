@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -39,6 +40,15 @@ class EnqueuedJob:
     workspace_id: UUID | None = None
     project_id: UUID | None = None
     resource_id: UUID | None = None
+    workflow_run_id: UUID | None = None
+    workflow_step_id: UUID | None = None
+    step_key: str | None = None
+    step_kind: str | None = None
+    attempt_key: str | None = None
+    workflow_attempt_number: int | None = None
+    workflow_max_attempts: int | None = None
+    input_hash: str | None = None
+    next_run_state: str | None = None
     # Render engine hint stored so the worker can route without a manifest fetch
     render_engine: str = "ffmpeg_basic"
     trace_id: str | None = None
@@ -81,6 +91,15 @@ class QueueRegistry:
         workspace_id: UUID | None = None,
         project_id: UUID | None = None,
         resource_id: UUID | None = None,
+        workflow_run_id: UUID | None = None,
+        workflow_step_id: UUID | None = None,
+        step_key: str | None = None,
+        step_kind: str | None = None,
+        attempt_key: str | None = None,
+        workflow_attempt_number: int | None = None,
+        workflow_max_attempts: int | None = None,
+        input_hash: str | None = None,
+        next_run_state: str | None = None,
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
@@ -94,6 +113,15 @@ class QueueRegistry:
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=resource_id,
+            workflow_run_id=workflow_run_id,
+            workflow_step_id=workflow_step_id,
+            step_key=step_key,
+            step_kind=step_kind,
+            attempt_key=attempt_key,
+            workflow_attempt_number=workflow_attempt_number,
+            workflow_max_attempts=workflow_max_attempts,
+            input_hash=input_hash,
+            next_run_state=next_run_state,
             render_engine=render_engine,
             trace_id=current_trace_id.get(),
         )
@@ -119,6 +147,15 @@ class QueueRegistry:
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             resource_id=job.resource_id,
+            workflow_run_id=job.workflow_run_id,
+            workflow_step_id=job.workflow_step_id,
+            step_key=job.step_key,
+            step_kind=job.step_kind,
+            attempt_key=job.attempt_key,
+            workflow_attempt_number=job.workflow_attempt_number,
+            workflow_max_attempts=job.workflow_max_attempts,
+            input_hash=job.input_hash,
+            next_run_state=job.next_run_state,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
             error_code=None,
@@ -168,6 +205,15 @@ class QueueRegistry:
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             resource_id=job.resource_id,
+            workflow_run_id=job.workflow_run_id,
+            workflow_step_id=job.workflow_step_id,
+            step_key=job.step_key,
+            step_kind=job.step_kind,
+            attempt_key=job.attempt_key,
+            workflow_attempt_number=job.workflow_attempt_number,
+            workflow_max_attempts=job.workflow_max_attempts,
+            input_hash=job.input_hash,
+            next_run_state=job.next_run_state,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
             error_code=error_code,
@@ -191,6 +237,15 @@ class QueueRegistry:
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             resource_id=job.resource_id,
+            workflow_run_id=job.workflow_run_id,
+            workflow_step_id=job.workflow_step_id,
+            step_key=job.step_key,
+            step_kind=job.step_kind,
+            attempt_key=job.attempt_key,
+            workflow_attempt_number=job.workflow_attempt_number,
+            workflow_max_attempts=job.workflow_max_attempts,
+            input_hash=job.input_hash,
+            next_run_state=job.next_run_state,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
             error_code=job.error_code,
@@ -220,6 +275,15 @@ class QueueRegistry:
                 workspace_id=job.workspace_id,
                 project_id=job.project_id,
                 resource_id=job.resource_id,
+                workflow_run_id=job.workflow_run_id,
+                workflow_step_id=job.workflow_step_id,
+                step_key=job.step_key,
+                step_kind=job.step_kind,
+                attempt_key=job.attempt_key,
+                workflow_attempt_number=job.workflow_attempt_number,
+                workflow_max_attempts=job.workflow_max_attempts,
+                input_hash=job.input_hash,
+                next_run_state=job.next_run_state,
                 render_engine=job.render_engine,
                 trace_id=job.trace_id,
                 error_code=job.error_code,
@@ -295,6 +359,15 @@ class QueueRegistry:
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             resource_id=job.resource_id,
+            workflow_run_id=job.workflow_run_id,
+            workflow_step_id=job.workflow_step_id,
+            step_key=job.step_key,
+            step_kind=job.step_kind,
+            attempt_key=job.attempt_key,
+            workflow_attempt_number=job.workflow_attempt_number,
+            workflow_max_attempts=job.workflow_max_attempts,
+            input_hash=job.input_hash,
+            next_run_state=job.next_run_state,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
             error_code=job.error_code,
@@ -369,6 +442,15 @@ class BullMQQueueRegistry:
         workspace_id: UUID | None = None,
         project_id: UUID | None = None,
         resource_id: UUID | None = None,
+        workflow_run_id: UUID | None = None,
+        workflow_step_id: UUID | None = None,
+        step_key: str | None = None,
+        step_kind: str | None = None,
+        attempt_key: str | None = None,
+        workflow_attempt_number: int | None = None,
+        workflow_max_attempts: int | None = None,
+        input_hash: str | None = None,
+        next_run_state: str | None = None,
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
@@ -381,6 +463,15 @@ class BullMQQueueRegistry:
             "workspace_id": str(workspace_id) if workspace_id else None,
             "project_id": str(project_id) if project_id else None,
             "resource_id": str(resource_id) if resource_id else None,
+            "workflow_run_id": str(workflow_run_id) if workflow_run_id else None,
+            "workflow_step_id": str(workflow_step_id) if workflow_step_id else None,
+            "step_key": step_key,
+            "step_kind": step_kind,
+            "attempt_key": attempt_key,
+            "workflow_attempt_number": workflow_attempt_number,
+            "workflow_max_attempts": workflow_max_attempts,
+            "input_hash": input_hash,
+            "next_run_state": next_run_state,
             "max_attempts": max_attempts or self.job_attempts,
             "render_engine": render_engine,
             "trace_id": current_trace_id.get(),
@@ -525,9 +616,7 @@ class BullMQQueueRegistry:
                 )
                 if not ready:
                     self.close()
-                    raise TimeoutError(
-                        f"BullMQ bridge timed out handling {command!r}"
-                    )
+                    raise TimeoutError(f"BullMQ bridge timed out handling {command!r}")
                 line = process.stdout.readline()
             if not line:
                 stderr = process.stderr.read() if process.stderr else ""
@@ -579,6 +668,27 @@ class BullMQQueueRegistry:
             workspace_id=UUID(str(data["workspace_id"])) if data.get("workspace_id") else None,
             project_id=UUID(str(data["project_id"])) if data.get("project_id") else None,
             resource_id=UUID(str(data["resource_id"])) if data.get("resource_id") else None,
+            workflow_run_id=(
+                UUID(str(data["workflow_run_id"])) if data.get("workflow_run_id") else None
+            ),
+            workflow_step_id=(
+                UUID(str(data["workflow_step_id"])) if data.get("workflow_step_id") else None
+            ),
+            step_key=str(data["step_key"]) if data.get("step_key") else None,
+            step_kind=str(data["step_kind"]) if data.get("step_kind") else None,
+            attempt_key=str(data["attempt_key"]) if data.get("attempt_key") else None,
+            workflow_attempt_number=(
+                int(data["workflow_attempt_number"])
+                if data.get("workflow_attempt_number") is not None
+                else None
+            ),
+            workflow_max_attempts=(
+                int(data["workflow_max_attempts"])
+                if data.get("workflow_max_attempts") is not None
+                else None
+            ),
+            input_hash=str(data["input_hash"]) if data.get("input_hash") else None,
+            next_run_state=(str(data["next_run_state"]) if data.get("next_run_state") else None),
             render_engine=str(data.get("render_engine") or "ffmpeg_basic"),
             trace_id=str(data["trace_id"]) if data.get("trace_id") else None,
             error_code=str(data["error_code"]) if data.get("error_code") else None,
@@ -605,6 +715,15 @@ class BullMQQueueRegistry:
             workspace_id=job.workspace_id,
             project_id=job.project_id,
             resource_id=job.resource_id,
+            workflow_run_id=job.workflow_run_id,
+            workflow_step_id=job.workflow_step_id,
+            step_key=job.step_key,
+            step_kind=job.step_kind,
+            attempt_key=job.attempt_key,
+            workflow_attempt_number=job.workflow_attempt_number,
+            workflow_max_attempts=job.workflow_max_attempts,
+            input_hash=job.input_hash,
+            next_run_state=job.next_run_state,
             render_engine=job.render_engine,
             trace_id=job.trace_id,
             error_code=error_code if error_code is not None else job.error_code,
@@ -794,13 +913,25 @@ class PlanQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         transcript_id: UUID,
+        proposal_id: UUID | None = None,
+        request_id: str | None = None,
+        context_digest: str | None = None,
         render_engine: str = "ffmpeg_basic",
     ) -> EnqueuedJob:
+        resource_id = proposal_id or transcript_id
+        identity = (
+            "plan",
+            project_id,
+            resource_id,
+            (request_id or "legacy")[:16],
+            (context_digest or "legacy")[:16],
+            workspace_id,
+        )
         return self._enqueue(
-            job_id=self._job_id("plan", project_id, transcript_id, workspace_id),
+            job_id=self._job_id(*identity),
             workspace_id=workspace_id,
             project_id=project_id,
-            resource_id=transcript_id,
+            resource_id=resource_id,
             render_engine=render_engine,
         )
 
@@ -838,11 +969,23 @@ class StockAssetEnrichmentQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         asset_id: UUID,
+        refresh_key: str = "initial",
         job_payload: str = "{}",
     ) -> EnqueuedJob:
+        normalized_refresh_key = str(refresh_key).strip()
+        if not normalized_refresh_key:
+            raise ValueError("stock asset enrichment refresh_key is required")
+        refresh_digest = hashlib.sha256(normalized_refresh_key.encode("utf-8")).hexdigest()[:24]
         return self._enqueue(
             job_id=":".join(
-                str(part) for part in ("stock-asset-enrichment", project_id, asset_id, workspace_id)
+                str(part)
+                for part in (
+                    "stock-asset-enrichment",
+                    project_id,
+                    asset_id,
+                    workspace_id,
+                    refresh_digest,
+                )
             ),
             workspace_id=workspace_id,
             project_id=project_id,

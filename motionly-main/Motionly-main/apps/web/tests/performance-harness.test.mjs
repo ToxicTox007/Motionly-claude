@@ -28,6 +28,9 @@ test("k6 performance harness covers required API workflows", async () => {
   ]) {
     assert.match(source, new RegExp(route.replace(/[/?]/g, "\\$&")));
   }
+  assert.match(source, /K6_STRICT_SLO/);
+  assert.match(source, /K6_SUMMARY_OUTPUT/);
+  assert.match(source, /handleSummary/);
   assert.match(source, /http_req_duration\{surface:projects\}/);
   assert.match(source, /http_req_failed/);
   assert.match(pkg, /"perf:k6": "k6 run scripts\/perf\/k6-api-workflows\.js"/);
@@ -42,6 +45,8 @@ test("BullMQ load harness seeds above 500 jobs per queue", async () => {
   assert.match(source, /jobsPerQueue > 500/);
   assert.match(source, /getJobsPaged\(queue, \["waiting", "prioritized", "delayed"\]\)/);
   assert.match(source, /RUN_BULLMQ_LOAD_TEST=1/);
+  assert.match(source, /BULLMQ_LOAD_OUTPUT/);
+  assert.match(source, /cleanup_verified/);
   assert.match(source, /job\.remove\(\)/);
   assert.match(pkg, /"perf:bullmq": "node scripts\/perf\/bullmq-queue-load\.mjs"/);
 });
@@ -68,6 +73,8 @@ test("browser performance harness covers required app surfaces", async () => {
     assert.match(source, new RegExp(`name: "${surface}"`));
   }
   assert.match(source, /RUN_BROWSER_PERF/);
+  assert.match(source, /PERF_ENFORCE/);
+  assert.match(source, /schema_version/);
   assert.match(source, /domContentLoadedMs/);
   assert.match(source, /firstContentfulPaintMs/);
   assert.match(source, /browser-performance\.json/);
@@ -103,4 +110,14 @@ test("golden media benchmark harness covers required media surfaces", async () =
   assert.match(source, /cache_dir/);
   assert.match(pkg, /"perf:media": "node scripts\/perf\/media-golden-benchmarks\.mjs"/);
   assert.match(docs, /Golden media benchmarks/);
+});
+
+test("SLO contract assertion has a fail-closed release mode", async () => {
+  const source = await readFile(new URL("scripts/perf/assert-slo.mjs", root), "utf8");
+  const contract = await readFile(new URL("scripts/perf/slo-contract.json", root), "utf8");
+  assert.match(source, /insufficient_samples/);
+  assert.match(source, /canary_revision_mismatch/);
+  assert.match(source, /mode === "enforce"/);
+  assert.match(contract, /"minimum_samples"/);
+  assert.match(contract, /"queue_backpressure_count"/);
 });

@@ -7,6 +7,7 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { CaptionSegment, CaptionStyle, TranscriptWord } from "@motionly/shared";
+import { millisecondsToFrameEnd, millisecondsToFrameStart } from "@motionly/shared";
 import type { TemplateDefinition } from "../types";
 
 type CaptionsProps = {
@@ -23,9 +24,9 @@ export function AnimatedCaptions({ segments, words, style, template }: CaptionsP
   const segment = segments.find((item) => timeMs >= item.start_ms && timeMs <= item.end_ms);
   if (!segment) return null;
 
-  const segmentStartFrame = Math.max(0, Math.round((segment.start_ms / 1000) * fps));
+  const segmentStartFrame = millisecondsToFrameStart(segment.start_ms, fps);
   const localFrame = Math.max(0, frame - segmentStartFrame);
-  const remainingFrames = Math.max(0, Math.round(((segment.end_ms - timeMs) / 1000) * fps));
+  const remainingFrames = millisecondsToFrameEnd(segment.end_ms - timeMs, fps);
   const activeWord = (segment.words.length ? segment.words : words).find(
     (word) => timeMs >= word.start_ms && timeMs <= word.end_ms,
   );

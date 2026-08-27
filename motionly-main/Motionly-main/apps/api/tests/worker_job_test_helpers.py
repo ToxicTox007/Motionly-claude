@@ -6,6 +6,7 @@ from app.api.dependencies import Actor
 from app.api.internal_jobs import run_queue_job
 from app.api.plans import create_plan
 from app.repositories.plans import InMemoryPlanRepository
+from app.schemas.ai_proposals import ProposalDecisionRequest, ProposalDecisionType
 from app.schemas.plans import PlanCreateRequest
 from app.services.edit_planner import FixtureEditPlannerProvider
 from app.services.queue import PlanQueue, QueueRegistry
@@ -60,14 +61,32 @@ def seed_active_plan(
             request=request,
         )
     )
-    if response.status == "queued":
-        asyncio.run(
-            run_queue_job(
-                queue_job_id=response.job_id,
-                request=request,
-                x_motionly_worker_token="worker-secret",
-            )
+    asyncio.run(
+        run_queue_job(
+            queue_job_id=response.job_id,
+            request=request,
+            x_motionly_worker_token="worker-secret",
         )
+    )
+    proposal_repository = plan_repository._proposal_repository
+    proposal = proposal_repository.get(
+        proposal_id=response.proposal_id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    )
+    proposal_repository.decide(
+        proposal_id=proposal.id,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        payload=ProposalDecisionRequest(
+            decision=ProposalDecisionType.APPROVE,
+            expected_proposal_revision=proposal.revision,
+            expected_base_active_plan_id=proposal.artifacts.base_active_plan_id,
+            expected_base_active_plan_revision=proposal.artifacts.base_active_plan_revision,
+            idempotency_key=f"seed-plan-{proposal.id}",
+        ),
+    )
 
 
 async def run_enqueued_job(

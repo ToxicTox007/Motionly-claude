@@ -17,11 +17,11 @@ from app.api.uploads import (
 from app.core.config import get_settings
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.uploads import (
-    UPLOAD_RESPONSE_COLUMNS,
     InMemoryUploadRepository,
     SupabaseUploadRepository,
 )
 from app.repositories.visual import InMemoryVisualRepository
+from app.repositories.workflows import InMemoryWorkflowRepository
 from app.schemas.uploads import (
     UploadCompleteRequest,
     UploadInitRequest,
@@ -60,7 +60,15 @@ def make_context() -> tuple[SimpleNamespace, InMemoryUploadRepository, str, str,
     user_id = uuid4()
     repository.seed_project(project_id=project_id, workspace_id=workspace_id)
     settings = get_settings()
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
+    settings.app_env = "test"
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=settings,
+                workflow_repository=InMemoryWorkflowRepository(),
+            )
+        )
+    )
     return request, repository, str(project_id), str(workspace_id), str(user_id)
 
 
@@ -108,12 +116,16 @@ def test_upload_init_and_complete_queues_processing_job() -> None:
             actor=actor(workspace_id, user_id),
             repository=repository,
             preprocess_queue=PreprocessQueue(),
+            workflow_repository=request.app.state.workflow_repository,
         )
     )
 
     assert complete_response.video_id == init_response.video_id
     assert complete_response.status == "processing"
-    assert complete_response.job_id == f"preprocess--{init_response.video_id}"
+    assert complete_response.job_id is None
+    assert complete_response.workflow_run_id is not None
+    assert complete_response.workflow_version == "first-draft-v2"
+    assert complete_response.workflow_status_url
 
 
 def test_supabase_upload_initialize_batches_final_path_and_uploading_status(
@@ -133,10 +145,26 @@ def test_supabase_upload_initialize_batches_final_path_and_uploading_status(
             return _supabase_response(
                 [{"id": str(project_id), "workspace_id": str(workspace_id), "title": "Launch"}]
             )
-        if method == "GET" and path == "/uploaded_videos":
-            return _supabase_response([], headers={"content-range": "0-0/0"})
-        if method == "POST" and path == "/uploaded_videos":
-            return _supabase_response([_upload_row(kwargs["json"])])
+        if method == "POST" and path == "/rpc/motionly_initialize_upload":
+            payload = kwargs["json"]
+            return _supabase_response(
+                [
+                    _upload_row(
+                        {
+                            "id": payload["p_upload_id"],
+                            "workspace_id": payload["p_workspace_id"],
+                            "project_id": payload["p_project_id"],
+                            "storage_bucket": payload["p_storage_bucket"],
+                            "storage_path": payload["p_storage_path"],
+                            "original_filename": payload["p_original_filename"],
+                            "mime_type": payload["p_mime_type"],
+                            "byte_size": payload["p_file_size_bytes"],
+                            "file_size_bytes": payload["p_file_size_bytes"],
+                            "status": "uploading",
+                        }
+                    )
+                ]
+            )
         raise AssertionError(f"unexpected Supabase call: {method} {path}")
 
     monkeypatch.setattr("app.repositories.uploads.SupabaseRestClient.request", fake_request)
@@ -158,12 +186,10 @@ def test_supabase_upload_initialize_batches_final_path_and_uploading_status(
     )
     assert [call[:2] for call in calls] == [
         ("GET", "/projects"),
-        ("GET", "/uploaded_videos"),
-        ("POST", "/uploaded_videos"),
+        ("POST", "/rpc/motionly_initialize_upload"),
     ]
-    assert calls[2][2]["params"] == {"select": UPLOAD_RESPONSE_COLUMNS}
-    assert calls[2][2]["json"]["status"] == "uploading"
-    assert calls[2][2]["json"]["storage_path"].endswith(f"{upload.id}.mp4")
+    assert calls[1][2]["json"]["p_max_active_uploads"] == 1
+    assert calls[1][2]["json"]["p_storage_path"].endswith(f"{upload.id}.mp4")
 
 
 def test_supabase_upload_complete_batches_processing_transition_and_active_video(
@@ -249,11 +275,27 @@ async def test_supabase_upload_async_init_and_complete_use_async_client(
                 [{"id": str(project_id), "workspace_id": str(workspace_id), "title": "Launch"}]
             )
         if method == "GET" and path == "/uploaded_videos":
-            if kwargs["params"].get("select") == "id":
-                return _supabase_response([], headers={"content-range": "0-0/0"})
             return _supabase_response([_upload_row({**base, "status": "uploading"})])
-        if method == "POST" and path == "/uploaded_videos":
-            return _supabase_response([_upload_row(kwargs["json"])])
+        if method == "POST" and path == "/rpc/motionly_initialize_upload":
+            payload = kwargs["json"]
+            return _supabase_response(
+                [
+                    _upload_row(
+                        {
+                            "id": payload["p_upload_id"],
+                            "workspace_id": payload["p_workspace_id"],
+                            "project_id": payload["p_project_id"],
+                            "storage_bucket": payload["p_storage_bucket"],
+                            "storage_path": payload["p_storage_path"],
+                            "original_filename": payload["p_original_filename"],
+                            "mime_type": payload["p_mime_type"],
+                            "byte_size": payload["p_file_size_bytes"],
+                            "file_size_bytes": payload["p_file_size_bytes"],
+                            "status": "uploading",
+                        }
+                    )
+                ]
+            )
         if method == "PATCH" and path == "/uploaded_videos":
             return _supabase_response([_upload_row({**base, "status": "processing"})])
         if method == "PATCH" and path == "/projects":
@@ -286,16 +328,15 @@ async def test_supabase_upload_async_init_and_complete_use_async_client(
     assert completed.status == UploadStatus.PROCESSING
     assert [call[:2] for call in calls] == [
         ("GET", "/projects"),
-        ("GET", "/uploaded_videos"),
-        ("POST", "/uploaded_videos"),
+        ("POST", "/rpc/motionly_initialize_upload"),
         ("GET", "/uploaded_videos"),
         ("PATCH", "/uploaded_videos"),
         ("PATCH", "/projects"),
     ]
-    assert calls[2][2]["params"] == {"select": UPLOAD_RESPONSE_COLUMNS}
-    assert calls[2][2]["json"]["status"] == "uploading"
-    assert calls[4][2]["json"]["status"] == "processing"
-    assert calls[5][2]["json"]["active_video_id"] == str(upload_id)
+    assert calls[1][2]["json"]["p_max_active_uploads"] == 1
+    assert calls[1][2]["json"]["p_storage_path"].endswith(f"{initialized.id}.mp4")
+    assert calls[3][2]["json"]["status"] == "processing"
+    assert calls[4][2]["json"]["active_video_id"] == str(upload_id)
 
 
 def test_upload_api_prefers_async_repository_methods() -> None:
@@ -384,6 +425,7 @@ def test_upload_api_prefers_async_repository_methods() -> None:
             actor=user,
             repository=repository,
             preprocess_queue=PreprocessQueue(),
+            workflow_repository=request.app.state.workflow_repository,
         )
     )
     canceled_init = asyncio.run(
@@ -404,6 +446,7 @@ def test_upload_api_prefers_async_repository_methods() -> None:
         cancel_upload(
             project_id=uuid4_from_string(project_id),
             video_id=canceled_init.video_id,
+            request=request,
             actor=user,
             repository=repository,
         )
@@ -413,6 +456,7 @@ def test_upload_api_prefers_async_repository_methods() -> None:
     assert repository.async_calls == [
         "init",
         "active",
+        "get",
         "get",
         "get",
         "complete",
@@ -484,11 +528,15 @@ def test_upload_sync_flag_cannot_run_media_inside_request(
             actor=actor(workspace_id, user_id),
             repository=repository,
             preprocess_queue=PreprocessQueue(),
+            workflow_repository=request.app.state.workflow_repository,
         )
     )
 
     assert complete_response.status == "processing"
-    assert complete_response.job_id == f"preprocess--{init_response.video_id}"
+    assert complete_response.job_id is None
+    assert complete_response.workflow_run_id is not None
+    assert complete_response.workflow_version == "first-draft-v2"
+    assert complete_response.workflow_status_url
     assert (
         request.app.state.caption_repository.latest_transcript(
             project_id=uuid4_from_string(project_id),
@@ -548,6 +596,7 @@ def test_complete_rejects_size_mismatch() -> None:
                 actor=actor(workspace_id, user_id),
                 repository=repository,
                 preprocess_queue=PreprocessQueue(),
+                workflow_repository=request.app.state.workflow_repository,
             )
         )
 
@@ -617,9 +666,222 @@ def test_upload_concurrency_limit_is_enforced() -> None:
     assert exc_info.value.code == "upload_concurrency_limit"
 
 
-def test_cancel_upload_marks_failed_and_releases_concurrency_slot() -> None:
+def test_concurrent_upload_init_respects_workspace_limit() -> None:
     request, repository, project_id, workspace_id, user_id = make_context()
     request.app.state.settings.upload_max_concurrent_per_workspace = 1
+
+    async def initialize(filename: str):
+        return await init_upload(
+            project_id=uuid4_from_string(project_id),
+            payload=UploadInitRequest(
+                filename=filename,
+                mime_type="video/mp4",
+                file_size_bytes=10_000,
+            ),
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            storage_signer=FakeStorageSigner(),
+        )
+
+    async def initialize_both():
+        return await asyncio.gather(
+            initialize("one.mp4"),
+            initialize("two.mp4"),
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(initialize_both())
+    successes = [result for result in results if not isinstance(result, Exception)]
+    failures = [result for result in results if isinstance(result, ApiError)]
+
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert failures[0].code == "upload_concurrency_limit"
+    assert repository.count_active_uploads(workspace_id=uuid4_from_string(workspace_id)) == 1
+
+
+def test_legacy_completion_transient_failure_remains_retryable(tmp_path) -> None:
+    from app.services.object_references import ObjectReferenceService
+    from app.services.storage_quota import StorageQuotaService
+
+    class FailOnceObjectReferenceService(ObjectReferenceService):
+        def __init__(self) -> None:
+            super().__init__(storage_signer=FakeStorageSigner(), in_memory=True)
+            self.failed = False
+
+        async def create_reference(self, **kwargs):
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("transient reference write failure")
+            return await super().create_reference(**kwargs)
+
+    request, repository, project_id, workspace_id, user_id = make_context()
+    storage = LocalObjectStorage(root=tmp_path)
+    quota = StorageQuotaService(in_memory=True)
+    request.app.state.object_storage = storage
+    request.app.state.storage_quota_service = quota
+    request.app.state.object_reference_service = FailOnceObjectReferenceService()
+    init_response = asyncio.run(
+        init_upload(
+            project_id=uuid4_from_string(project_id),
+            payload=UploadInitRequest(
+                filename="retry.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=10_000,
+            ),
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            storage_signer=FakeStorageSigner(),
+        )
+    )
+    upload = repository.uploads[init_response.video_id]
+    storage.write_object(
+        bucket=upload.storage_bucket,
+        path=upload.storage_path,
+        content=b"x" * upload.file_size_bytes,
+    )
+
+    with pytest.raises(RuntimeError, match="transient reference write failure"):
+        asyncio.run(
+            complete_upload(
+                project_id=uuid4_from_string(project_id),
+                video_id=init_response.video_id,
+                payload=UploadCompleteRequest(observed_file_size_bytes=10_000),
+                request=request,
+                actor=actor(workspace_id, user_id),
+                repository=repository,
+                preprocess_queue=PreprocessQueue(),
+                workflow_repository=request.app.state.workflow_repository,
+            )
+        )
+
+    held_usage = asyncio.run(quota.get_usage(uuid4_from_string(workspace_id)))
+    assert repository.uploads[init_response.video_id].status == UploadStatus.UPLOADING
+    assert held_usage.reserved_bytes == 10_000
+    assert held_usage.used_bytes == 0
+
+    completed = asyncio.run(
+        complete_upload(
+            project_id=uuid4_from_string(project_id),
+            video_id=init_response.video_id,
+            payload=UploadCompleteRequest(observed_file_size_bytes=10_000),
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            preprocess_queue=PreprocessQueue(),
+            workflow_repository=request.app.state.workflow_repository,
+        )
+    )
+    committed_usage = asyncio.run(quota.get_usage(uuid4_from_string(workspace_id)))
+
+    assert completed.status == UploadStatus.PROCESSING
+    assert committed_usage.reserved_bytes == 0
+    assert committed_usage.used_bytes == 10_000
+
+
+def test_legacy_post_commit_failure_recovers_after_deadline_and_cannot_cancel(
+    tmp_path,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.object_references import ObjectReferenceService
+    from app.services.storage_quota import StorageQuotaService
+
+    request, repository, project_id, workspace_id, user_id = make_context()
+    storage = LocalObjectStorage(root=tmp_path)
+    quota = StorageQuotaService(in_memory=True)
+    references = ObjectReferenceService(
+        storage_signer=FakeStorageSigner(),
+        in_memory=True,
+    )
+    request.app.state.object_storage = storage
+    request.app.state.storage_quota_service = quota
+    request.app.state.object_reference_service = references
+    init_response = asyncio.run(
+        init_upload(
+            project_id=uuid4_from_string(project_id),
+            payload=UploadInitRequest(
+                filename="post-commit.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=4,
+            ),
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            storage_signer=FakeStorageSigner(),
+        )
+    )
+    upload = repository.uploads[init_response.video_id]
+    stored_object = storage.write_object(
+        bucket=upload.storage_bucket,
+        path=upload.storage_path,
+        content=b"data",
+    )
+    original_complete = repository.complete_upload_for_processing
+    attempts = 0
+
+    async def fail_once(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient processing transition failure")
+        return original_complete(**kwargs)
+
+    repository.complete_upload_for_processing_async = fail_once
+    with pytest.raises(RuntimeError, match="transient processing transition failure"):
+        asyncio.run(
+            complete_upload(
+                project_id=uuid4_from_string(project_id),
+                video_id=init_response.video_id,
+                payload=UploadCompleteRequest(observed_file_size_bytes=4),
+                request=request,
+                actor=actor(workspace_id, user_id),
+                repository=repository,
+                preprocess_queue=PreprocessQueue(),
+                workflow_repository=request.app.state.workflow_repository,
+            )
+        )
+
+    usage = asyncio.run(quota.get_usage(uuid4_from_string(workspace_id)))
+    upload.legacy_upload_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    with pytest.raises(ApiError) as cancel_error:
+        asyncio.run(
+            cancel_upload(
+                project_id=uuid4_from_string(project_id),
+                video_id=init_response.video_id,
+                request=request,
+                actor=actor(workspace_id, user_id),
+                repository=repository,
+            )
+        )
+
+    recovered = asyncio.run(
+        complete_upload(
+            project_id=uuid4_from_string(project_id),
+            video_id=init_response.video_id,
+            payload=UploadCompleteRequest(observed_file_size_bytes=4),
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            preprocess_queue=PreprocessQueue(),
+            workflow_repository=request.app.state.workflow_repository,
+        )
+    )
+
+    assert usage.used_bytes == 4
+    assert usage.reserved_bytes == 0
+    assert cancel_error.value.code == "upload_not_cancelable"
+    assert stored_object.exists()
+    assert recovered.status == UploadStatus.PROCESSING
+
+
+def test_cancel_upload_deletes_object_and_releases_concurrency_slot(tmp_path) -> None:
+    request, repository, project_id, workspace_id, user_id = make_context()
+    request.app.state.settings.upload_max_concurrent_per_workspace = 1
+    storage = LocalObjectStorage(root=tmp_path)
+    request.app.state.object_storage = storage
     init_response = asyncio.run(
         init_upload(
             project_id=uuid4_from_string(project_id),
@@ -634,11 +896,18 @@ def test_cancel_upload_marks_failed_and_releases_concurrency_slot() -> None:
             storage_signer=FakeStorageSigner(),
         )
     )
+    upload = repository.uploads[init_response.video_id]
+    stored_object = storage.write_object(
+        bucket=upload.storage_bucket,
+        path=upload.storage_path,
+        content=b"uploaded bytes",
+    )
 
     canceled = asyncio.run(
         cancel_upload(
             project_id=uuid4_from_string(project_id),
             video_id=init_response.video_id,
+            request=request,
             actor=actor(workspace_id, user_id),
             repository=repository,
         )
@@ -660,7 +929,100 @@ def test_cancel_upload_marks_failed_and_releases_concurrency_slot() -> None:
 
     assert canceled.status == UploadStatus.FAILED
     assert canceled.error_code == "upload_canceled"
+    assert not stored_object.exists()
     assert replacement.status == UploadStatus.UPLOADING
+
+
+def test_cancel_upload_retries_reference_and_object_cleanup(tmp_path) -> None:
+    from app.services.object_references import ObjectReferenceService
+    from app.services.storage_quota import StorageQuotaService
+
+    request, repository, project_id, workspace_id, user_id = make_context()
+    storage = LocalObjectStorage(root=tmp_path)
+    quota = StorageQuotaService(in_memory=True)
+    references = ObjectReferenceService(
+        storage_signer=FakeStorageSigner(),
+        in_memory=True,
+    )
+    request.app.state.object_storage = storage
+    request.app.state.storage_quota_service = quota
+    request.app.state.object_reference_service = references
+    init_response = asyncio.run(
+        init_upload(
+            project_id=uuid4_from_string(project_id),
+            payload=UploadInitRequest(
+                filename="cancel-retry.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=4,
+            ),
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            storage_signer=FakeStorageSigner(),
+        )
+    )
+    upload = repository.uploads[init_response.video_id]
+    stored_object = storage.write_object(
+        bucket=upload.storage_bucket,
+        path=upload.storage_path,
+        content=b"data",
+    )
+
+    async def fail_commit(_reservation_id):
+        raise RuntimeError("transient quota commit failure")
+
+    quota.commit = fail_commit
+    with pytest.raises(RuntimeError, match="transient quota commit failure"):
+        asyncio.run(
+            complete_upload(
+                project_id=uuid4_from_string(project_id),
+                video_id=init_response.video_id,
+                payload=UploadCompleteRequest(observed_file_size_bytes=4),
+                request=request,
+                actor=actor(workspace_id, user_id),
+                repository=repository,
+                preprocess_queue=PreprocessQueue(),
+                workflow_repository=request.app.state.workflow_repository,
+            )
+        )
+    assert upload.source_object_reference_id is not None
+
+    original_delete = storage.delete_object
+    delete_attempts = 0
+
+    def fail_delete_once(*, bucket, path):
+        nonlocal delete_attempts
+        delete_attempts += 1
+        if delete_attempts == 1:
+            raise RuntimeError("transient object deletion failure")
+        return original_delete(bucket=bucket, path=path)
+
+    storage.delete_object = fail_delete_once
+    with pytest.raises(RuntimeError, match="transient object deletion failure"):
+        asyncio.run(
+            cancel_upload(
+                project_id=uuid4_from_string(project_id),
+                video_id=init_response.video_id,
+                request=request,
+                actor=actor(workspace_id, user_id),
+                repository=repository,
+            )
+        )
+    assert stored_object.exists()
+
+    retried = asyncio.run(
+        cancel_upload(
+            project_id=uuid4_from_string(project_id),
+            video_id=init_response.video_id,
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+        )
+    )
+    usage = asyncio.run(quota.get_usage(uuid4_from_string(workspace_id)))
+    assert retried.error_code == "upload_canceled"
+    assert usage.reserved_bytes == 0
+    assert not stored_object.exists()
 
 
 def test_upload_asset_urls_are_signed_after_workspace_check() -> None:
@@ -728,6 +1090,53 @@ def test_upload_asset_urls_keep_source_when_thumbnail_signing_fails() -> None:
         "/raw-uploads/workspaces/one/projects/two/raw/video.mp4?signed=1"
     )
     assert response.thumbnail_url is None
+
+
+def test_upload_asset_urls_keep_source_when_reference_thumbnail_signing_fails() -> None:
+    from app.services.object_references import ObjectReferenceService
+
+    class ThumbnailFailingReferenceService(ObjectReferenceService):
+        def __init__(self) -> None:
+            super().__init__(storage_signer=FakeStorageSigner(), in_memory=True)
+            self.sign_calls = 0
+
+        async def get_signed_url(self, **kwargs):
+            self.sign_calls += 1
+            if self.sign_calls == 2:
+                raise RuntimeError("thumbnail signing failed")
+            return await super().get_signed_url(**kwargs)
+
+    request, repository, project_id, workspace_id, user_id = make_context()
+    request.app.state.object_reference_service = ThumbnailFailingReferenceService()
+    upload = repository.create_upload(
+        project_id=uuid4_from_string(project_id),
+        workspace_id=uuid4_from_string(workspace_id),
+        storage_bucket="raw-uploads",
+        storage_path=(f"workspaces/{workspace_id}/projects/{project_id}/raw/video.mp4"),
+        original_filename="video.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=10_000,
+    )
+    upload.status = UploadStatus.READY
+    upload.thumbnail_path = f"workspaces/{workspace_id}/projects/{project_id}/thumbnails/video.jpg"
+    upload.metadata = VideoMetadata(duration_ms=3000, width=1080, height=1920)
+
+    response = asyncio.run(
+        get_upload_asset_urls(
+            project_id=uuid4_from_string(project_id),
+            video_id=upload.id,
+            request=request,
+            actor=actor(workspace_id, user_id),
+            repository=repository,
+            storage_signer=FakeStorageSigner(),
+        )
+    )
+
+    assert response.source_video_url.endswith("/raw/video.mp4?signed=1")
+    assert response.source_reference_id is not None
+    assert upload.source_object_reference_id == response.source_reference_id
+    assert response.thumbnail_url is None
+    assert response.thumbnail_reference_id is None
 
 
 def test_media_readiness_blocks_missing_audio_and_unsupported_codec() -> None:

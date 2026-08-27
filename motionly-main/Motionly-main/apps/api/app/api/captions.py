@@ -2,7 +2,6 @@ import json
 from typing import Annotated
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.dependencies import (
@@ -39,6 +38,13 @@ from app.services.layer_job_enqueue import (
     build_queued_layer_response_fields,
     prepare_heavy_job_enqueue,
     serialize_layer_job_payload,
+)
+from app.services.model_gateway import (
+    ChatMessage,
+    ModelCallContext,
+    ModelGateway,
+    PlanningOutput,
+    PlanningRequest,
 )
 from app.services.queue import TranscriptionQueue
 from app.services.transcript_quality import is_transcript_usable_for_planning
@@ -258,12 +264,39 @@ async def update_caption_track(
         if should_rechunk
         else track.segments
     )
+    requested_language = (payload.output_language or "original").strip().lower()
     segments = translate_segments_if_requested(
         segments=segments,
         source_language=transcript.language,
-        output_language=payload.output_language or "original",
-        settings=request.app.state.settings if request else None,
+        output_language=requested_language,
+        model_gateway=(getattr(request.app.state, "model_gateway", None) if request else None),
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
     )
+    if requested_language not in {
+        "",
+        "original",
+        "auto",
+        getattr(track, "language", transcript.language),
+    }:
+        translated = repository.create_caption_track(
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+            transcript_id=track.transcript_id,
+            preset=preset_key,
+            schema_version=track.schema_version,
+            style=style,
+            hide_filler_words=hide_filler_words,
+            language=requested_language,
+            source_track_id=track.id,
+            review_status="needs_review",
+            segments=segments,
+        )
+        return CaptionGenerateResponse(
+            track=translated.to_response(),
+            job_id=f"sync-complete--captions--{project_id}--{translated.id}",
+            status="ready",
+        )
     updated = await _repository_call(
         repository,
         "update_caption_track_async",
@@ -273,6 +306,9 @@ async def update_caption_track(
         style=style,
         hide_filler_words=hide_filler_words,
         segments=segments,
+        language=getattr(track, "language", transcript.language),
+        source_track_id=getattr(track, "source_track_id", None),
+        review_status=getattr(track, "review_status", "approved"),
     )
     record_ai_feedback(
         request=request,
@@ -364,59 +400,57 @@ def translate_segments_if_requested(
     segments,
     source_language: str,
     output_language: str,
-    settings,
+    model_gateway: ModelGateway | None = None,
+    workspace_id: object | None = None,
+    project_id: object | None = None,
 ):
     target = (output_language or "original").strip().lower()
     if target in {"original", "auto", source_language, ""}:
         return segments
     if target not in LANGUAGE_NAMES:
         raise ApiError(422, "caption_language_unsupported", "Choose a supported caption language.")
-    if settings is None or not settings.openrouter_api_key:
+    if model_gateway is None:
         raise ApiError(
             503,
             "caption_translation_unavailable",
             "Caption translation is not configured for production yet.",
         )
-    payload = {
-        "model": settings.edit_planner_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Translate short video caption segments. Return only JSON with key "
-                    "'segments', an array of translated strings in the same order. Keep meaning, "
-                    "creator tone, punctuation, and short caption length."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "source_language": source_language,
-                        "target_language": LANGUAGE_NAMES[target],
-                        "segments": [segment.text for segment in segments],
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.1,
-    }
     try:
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "authorization": f"Bearer {settings.openrouter_api_key}",
-                "content-type": "application/json",
-            },
-            json=payload,
-            timeout=30,
+        result = model_gateway.invoke(
+            PlanningRequest(
+                messages=(
+                    ChatMessage(
+                        role="system",
+                        content=(
+                            "Translate short video caption segments. Return only JSON with key "
+                            "'segments', an array of translated strings in the same order. Keep "
+                            "meaning, creator tone, punctuation, and short caption length."
+                        ),
+                    ),
+                    ChatMessage(
+                        role="user",
+                        content=json.dumps(
+                            {
+                                "source_language": source_language,
+                                "target_language": LANGUAGE_NAMES[target],
+                                "segments": [segment.text for segment in segments],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                ),
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                max_output_units=2048,
+            ),
+            context=ModelCallContext(
+                workspace_id=workspace_id,
+                project_id=project_id,
+            ),
         )
-        response.raise_for_status()
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        translated = json.loads(content).get("segments", [])
+        if not isinstance(result.output, PlanningOutput):
+            raise TypeError("caption translation route returned the wrong typed output")
+        translated = json.loads(result.output.content).get("segments", [])
     except Exception as exc:
         raise ApiError(
             502,

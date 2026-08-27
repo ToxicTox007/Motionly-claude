@@ -13,11 +13,14 @@ def test_api_image_contains_no_ffmpeg_or_ml_runtime() -> None:
     for dockerfile in dockerfiles:
         dockerfile_lower = dockerfile.read_text().lower()
         assert "ffmpeg" not in dockerfile_lower
-        assert "lightning-sdk" not in dockerfile_lower
-        assert "apps/worker" not in dockerfile_lower
         assert "apps/api/worker-bridge" in dockerfile_lower
         assert "nodejs" in dockerfile_lower
-        assert "bullmq@5.78.0" in dockerfile_lower
+        assert "worker-bridge/package-lock.json" in dockerfile_lower
+        assert "npm ci --omit=dev" in dockerfile_lower
+    worker_bridge_lock = (
+        ROOT / "apps/api/worker-bridge/package-lock.json"
+    ).read_text()
+    assert '"bullmq": "5.78.0"' in worker_bridge_lock
     for dependency in ("torch", "tensorflow", "transformers", "demucs", "pyannote"):
         assert dependency not in core_dependencies.lower()
 

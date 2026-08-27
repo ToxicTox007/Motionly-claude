@@ -2,6 +2,7 @@ import hashlib
 import os
 import subprocess
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from shutil import which
 from urllib.parse import urlsplit
@@ -11,7 +12,7 @@ import httpx
 
 from app.api.errors import ApiError
 from app.repositories.renders import ExportRecord, InMemoryRenderRepository, RenderJobRecord
-from app.schemas.renders import RenderJobStatus, RenderSpecs
+from app.schemas.renders import RenderJobStatus
 from app.services.ffmpeg_render import FFmpegCaptionRenderer
 from app.services.local_storage import LocalObjectStorage, create_object_storage
 from app.services.media_url_policy import (
@@ -21,6 +22,7 @@ from app.services.media_url_policy import (
     validate_outbound_media_url,
     validate_render_media_manifest,
 )
+from app.services.worker_media import materialize_worker_object
 
 
 def complete_render_job(
@@ -97,54 +99,22 @@ def complete_render_job(
                 message=_rendering_message(job),
                 event_type="rendering_started",
             )
-            try:
-                _ensure_render_not_cancelled(job=job, repository=repository)
-                benchmark_ms, file_size_bytes = renderer.render(
-                    source_path=source_path,
-                    ass_path=ass_path,
-                    output_path=output_path,
-                    specs=job.specs,
-                    broll_assets=broll_assets,
-                    effects_config=effects_config,
-                    manual_elements=_manual_elements_from_manifest(job.manifest),
-                    framing=_framing_from_manifest(job.manifest),
-                    keep_segments=job.keep_segments,
-                    video_encoder=_video_encoder_from_manifest(job.manifest),
-                    watermark=_watermark_from_manifest(job.manifest),
-                    matte_path=matte_path,
-                    **audio_mix,
-                )
-            except ApiError as exc:
-                if exc.code == "render_cancelled":
-                    raise
-                if not _can_retry_with_720p(exc=exc, specs=job.specs):
-                    raise
-                job.logs = [
-                    *job.logs,
-                    _render_failure_log(exc),
-                ]
-                output_path.unlink(missing_ok=True)
-                fallback_specs = _fallback_specs_for(job.specs)
-                job.logs = [
-                    *job.logs,
-                    f"render_fallback={fallback_specs.width}x{fallback_specs.height}",
-                ]
-                benchmark_ms, file_size_bytes = renderer.render(
-                    source_path=source_path,
-                    ass_path=ass_path,
-                    output_path=output_path,
-                    specs=fallback_specs,
-                    broll_assets=broll_assets,
-                    effects_config=effects_config,
-                    manual_elements=_manual_elements_from_manifest(job.manifest),
-                    framing=_framing_from_manifest(job.manifest),
-                    keep_segments=job.keep_segments,
-                    video_encoder=_video_encoder_from_manifest(job.manifest),
-                    watermark=_watermark_from_manifest(job.manifest),
-                    matte_path=matte_path,
-                    **audio_mix,
-                )
-                job.specs = fallback_specs
+            _ensure_render_not_cancelled(job=job, repository=repository)
+            benchmark_ms, file_size_bytes = renderer.render(
+                source_path=source_path,
+                ass_path=ass_path,
+                output_path=output_path,
+                specs=job.specs,
+                broll_assets=broll_assets,
+                effects_config=effects_config,
+                manual_elements=_manual_elements_from_manifest(job.manifest),
+                framing=_framing_from_manifest(job.manifest),
+                keep_segments=job.keep_segments,
+                video_encoder=_video_encoder_from_manifest(job.manifest),
+                watermark=_watermark_from_manifest(job.manifest),
+                matte_path=matte_path,
+                **audio_mix,
+            )
             _ensure_render_not_cancelled(job=job, repository=repository)
             job = repository.transition_job(
                 job=job,
@@ -179,9 +149,7 @@ def complete_render_job(
                 error_code=exc.code,
                 error_message=exc.message,
                 event_type=(
-                    "preflight_failed"
-                    if job.status == RenderJobStatus.PREPARING
-                    else "failed"
+                    "preflight_failed" if job.status == RenderJobStatus.PREPARING else "failed"
                 ),
             )
         finally:
@@ -304,10 +272,6 @@ def complete_render_job_by_id(
     )
 
 
-def _can_retry_with_720p(*, exc: ApiError, specs: RenderSpecs) -> bool:
-    return exc.code == "ffmpeg_render_failed" and max(specs.width, specs.height) > 1280
-
-
 def _ensure_render_not_cancelled(
     *,
     job: RenderJobRecord,
@@ -344,9 +308,22 @@ def _run_render_preflight(
             "Source video is missing from the render manifest.",
         )
     try:
-        source_path = storage.ensure_object(
+        source_reference_id = source.get("reference_id")
+        source_path = materialize_worker_object(
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            reference_id=(UUID(str(source_reference_id)) if source_reference_id else None),
+            storage=storage,
             bucket=str(source["bucket"]),
             path=str(source["path"]),
+            expected_size_bytes=(
+                int(source["verified_size_bytes"])
+                if source.get("verified_size_bytes") is not None
+                else None
+            ),
+            expected_sha256=(
+                str(source["verified_sha256"]) if source.get("verified_sha256") else None
+            ),
         )
     except ApiError as exc:
         if exc.code in {"storage_object_missing", "storage_download_failed"}:
@@ -361,6 +338,7 @@ def _run_render_preflight(
     _ensure_export_path_writable(output_path=output_path)
     _ensure_ffmpeg_available()
     _validate_render_props_manifest(job.manifest)
+    _validate_music_rights(job.manifest, allow_fixture_media=allow_fixture_media)
     _validate_caption_payload(job.manifest, ass_path=ass_path)
     _validate_media_assets(job.manifest, storage=storage, allow_fixture_media=allow_fixture_media)
     return {
@@ -470,9 +448,45 @@ def _validate_caption_payload(manifest: dict, *, ass_path: Path | None) -> None:
     )
     if result.returncode != 0:
         raise ApiError(
+            409, "ass_compile_failed", "Caption styling could not be compiled for FFmpeg."
+        )
+
+
+def _validate_music_rights(manifest: dict, *, allow_fixture_media: bool) -> None:
+    render_props = manifest.get("render_props")
+    if not isinstance(render_props, dict):
+        return
+    selection = render_props.get("musicSelection")
+    if not isinstance(selection, dict) or not selection.get("music_track_id"):
+        return
+    track = selection.get("track")
+    if allow_fixture_media and isinstance(track, dict) and track.get("provider") == "fixture":
+        return
+    rights = selection.get("rights")
+    if (
+        not isinstance(rights, dict)
+        or not rights.get("verified")
+        or rights.get("status") != "verified"
+    ):
+        raise ApiError(
             409,
-            "ass_compile_failed",
-            "Caption styling could not be compiled for FFmpeg.",
+            "music_rights_unverified",
+            "Render music requires a verified licensed catalog grant.",
+        )
+    valid_until = rights.get("valid_until")
+    try:
+        expires = datetime.fromisoformat(str(valid_until).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        raise ApiError(
+            409,
+            "music_rights_unverified",
+            "Render music is missing a verifiable rights expiry.",
+        ) from None
+    if expires.tzinfo is None or expires <= datetime.now(UTC):
+        raise ApiError(
+            409,
+            "music_rights_expired",
+            "The licensed music grant expired before rendering.",
         )
 
 
@@ -537,22 +551,6 @@ def _music_track_has_renderable_source(track: object) -> bool:
         if raw.get("audio_bucket") and raw.get("audio_path"):
             return True
     return bool(track.get("full_track_url") or track.get("preview_url"))
-
-
-def _fallback_specs_for(specs: RenderSpecs) -> RenderSpecs:
-    if specs.width <= 0 or specs.height <= 0:
-        return RenderSpecs(width=720, height=1280)
-    if specs.height >= specs.width:
-        height = 1280
-        width = _even(round(height * specs.width / specs.height))
-    else:
-        width = 1280
-        height = _even(round(width * specs.height / specs.width))
-    return RenderSpecs(width=width, height=height, fps=specs.fps, format=specs.format)
-
-
-def _even(value: int) -> int:
-    return max(2, int(round(value / 2) * 2))
 
 
 def _rendering_message(job: RenderJobRecord) -> str:
@@ -1234,55 +1232,33 @@ def complete_remotion_render_job(
     fps: int,
     duration_ms: int | None,
 ) -> tuple[RenderJobRecord, ExportRecord]:
-    """
-    Finalises a render job whose MP4 has already been rendered and uploaded
-    by the Remotion worker service. Unlike complete_render_job() this function
-    performs no I/O — it only updates the in-memory / DB state.
-
-    Returns (updated_job, export_record).
-    """
-    if job.status == RenderJobStatus.CANCELED:
-        raise ApiError(409, "render_canceled", "Canceled renders cannot be completed.")
-
-    # If somehow already COMPLETE (idempotent worker retry), bail out early.
-    if job.status == RenderJobStatus.COMPLETE:
-        exports = repository.list_exports(
-            project_id=job.project_id,
-            workspace_id=job.workspace_id,
+    """Publish a Remotion artifact through the authoritative completion CAS."""
+    if (width, height, fps) != (job.specs.width, job.specs.height, job.specs.fps):
+        raise ApiError(
+            409,
+            "render_output_specs_mismatch",
+            "Rendered output does not match the requested width, height, and FPS.",
         )
-        latest_export = next(
-            (e for e in reversed(exports) if e.render_job_id == job.id),
-            None,
-        )
-        if latest_export is not None:
-            return job, latest_export
-
-    job = repository.transition_job(
-        job=job,
-        status=RenderJobStatus.RENDERING,
-        progress_pct=70,
-        message="Remotion premium render in progress.",
-    )
-    job = repository.transition_job(
-        job=job,
-        status=RenderJobStatus.UPLOADING,
-        progress_pct=90,
-        message="Registering Remotion export.",
-    )
 
     output_duration_ms = (
         duration_ms
         if duration_ms is not None
         else sum(seg.end_ms - seg.start_ms for seg in (job.keep_segments or []))
     )
-
-    export = repository.create_export(
+    job.logs = [
+        *(job.logs or []),
+        f"remotion render completed in {benchmark_ms}ms",
+        f"export_path={export_storage_path}",
+        f"file_size_bytes={file_size_bytes}",
+        f"dimensions={width}x{height}@{fps}fps",
+    ]
+    completed, exported = repository.complete_render(
         workspace_id=job.workspace_id,
         project_id=job.project_id,
         render_job_id=job.id,
         storage_bucket=export_bucket,
         storage_path=export_storage_path,
-        format=getattr(job.specs, "format", "mp4"),
+        format=job.specs.format,
         width=width,
         height=height,
         fps=fps,
@@ -1293,24 +1269,7 @@ def complete_remotion_render_job(
             "render_engine": "remotion_premium",
             "renderer_version": "remotion-timeline-v2",
         },
-    )
-
-    job.artifact_path = export.storage_path
-    job.benchmark_ms = benchmark_ms
-    job.logs = [
-        *(job.logs or []),
-        f"remotion render completed in {benchmark_ms}ms",
-        f"export_path={export.storage_path}",
-        f"file_size_bytes={file_size_bytes}",
-        f"dimensions={width}x{height}@{fps}fps",
-    ]
-
-    job = repository.transition_job(
-        job=job,
-        status=RenderJobStatus.COMPLETE,
-        progress_pct=100,
-        message="Export is ready to download.",
-        metadata={"export_id": str(export.id)},
+        benchmark_ms=benchmark_ms,
     )
     _record_render_metrics(metrics_registry, benchmark_ms=benchmark_ms)
     _record_export_metrics(
@@ -1318,4 +1277,4 @@ def complete_remotion_render_job(
         export_duration_ms=benchmark_ms,
         export_file_size_bytes=file_size_bytes,
     )
-    return job, export
+    return completed, exported

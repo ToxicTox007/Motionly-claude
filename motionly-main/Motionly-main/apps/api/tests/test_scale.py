@@ -1,8 +1,9 @@
 import asyncio
+import hashlib
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -10,26 +11,56 @@ from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.api.plans import _apply_phase5_learning
 from app.api.scale import (
+    complete_style_reference,
+    create_brand_kit,
+    create_style_profile,
+    delete_brand_kit,
     get_collaboration_manifest,
+    init_style_reference,
+    list_brand_kits,
     list_project_scale_resources,
     list_saved_templates,
+    train_style_profile,
+    update_brand_kit,
     update_collaboration_manifest,
 )
-from app.repositories.analytics import InMemoryAnalyticsRepository
+from app.repositories.editorial_learning import InMemoryEditorialLearningRepository
 from app.repositories.scale import (
     SCALE_RESOURCE_COLUMNS,
     InMemoryScaleRepository,
+    ScaleResourceRecord,
     SupabaseScaleRepository,
 )
-from app.schemas.analytics import AIEditFeedbackEventType, AIEditLayer
+from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.plans import PlanCreateRequest
-from app.schemas.scale import CollaborationManifestUpdateRequest, ScaleResourceStatus
+from app.schemas.scale import (
+    BrandKitCreateRequest,
+    BrandKitSettings,
+    BrandKitUpdateRequest,
+    CollaborationManifestUpdateRequest,
+    ScaleResourceStatus,
+    StyleProfileCreateRequest,
+    StyleReferenceCompleteRequest,
+    StyleReferenceInitRequest,
+    StyleTrainRequest,
+)
+from app.services.generic_media_upload import GenericMediaUploadSessionService
+from app.services.local_storage import LocalObjectStorage
+from app.services.model_domain_adapters import register_stem_route
+from app.services.model_gateway import ModelGateway, OperationsGatewayTelemetry
+from app.services.object_references import ObjectReferenceService
+from app.services.operations import OperationsRepository
 from app.services.queue import QueueRegistry, ScaleQueue
 from app.services.scale import (
     FixtureRunwayProvider,
+    FixtureStemSeparator,
     _remove_stem_temp_directory,
+    _separate_stems,
+    _train_style,
     execute_scale_resource,
 )
+from app.services.storage import StorageSigner
+from app.services.storage_quota import StorageQuotaService
 
 
 def test_scale_repository_and_queue_persist_phase5_jobs() -> None:
@@ -144,9 +175,7 @@ def test_supabase_scale_async_reads_use_bounded_projections(monkeypatch) -> None
             limit=25,
         )
     )
-    record = asyncio.run(
-        repository.get_async(resource_id=resource_id, workspace_id=workspace_id)
-    )
+    record = asyncio.run(repository.get_async(resource_id=resource_id, workspace_id=workspace_id))
 
     assert listed == []
     assert record.id == resource_id
@@ -332,20 +361,41 @@ def test_list_saved_templates_passes_limit_to_repository() -> None:
     assert first.id != second.id
 
 
-def test_model_training_turns_override_events_into_applied_preferences() -> None:
+def test_model_training_uses_frozen_consented_dataset_and_promoted_memory() -> None:
     workspace_id = uuid4()
     project_id = uuid4()
     user_id = uuid4()
-    analytics = InMemoryAnalyticsRepository()
-    analytics.record_event(
+    learning = InMemoryEditorialLearningRepository()
+    learning.set_policy_if_revision(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        memory_enabled=True,
+        training_enabled=True,
+        policy_version="editorial-consent/v1",
+        retention_days=None,
+        expected_revision=None,
+    )
+    learning.capture_delta(
         workspace_id=workspace_id,
         project_id=project_id,
         user_id=user_id,
-        event_type=AIEditFeedbackEventType.CHANGED,
-        layer=AIEditLayer.CUTS,
-        source="manual_editor",
-        ai_payload={"pace": "slow"},
-        user_payload={"pace": "fast"},
+        source_event_id=uuid4(),
+        layer="cuts",
+        delta={
+            "layer": "cuts",
+            "outcome": "changed",
+            "before": {"pace": "slow"},
+            "after": {"pace": "fast"},
+        },
+        normalizer_version="editorial-delta/v1",
+        memory_eligible=True,
+        training_eligible=True,
+    )
+    dataset = learning.freeze_dataset(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        user_id=user_id,
+        minimum_examples=1,
     )
     scale = InMemoryScaleRepository()
     training = scale.create(
@@ -354,7 +404,11 @@ def test_model_training_turns_override_events_into_applied_preferences() -> None
         kind="model_training",
         name="Preference adapter",
         status=ScaleResourceStatus.QUEUED,
-        payload={"minimum_examples": 1},
+        payload={
+            "minimum_examples": 1,
+            "editorial_dataset_id": str(dataset.id),
+            "editorial_user_id": str(user_id),
+        },
     )
 
     completed = execute_scale_resource(
@@ -365,20 +419,38 @@ def test_model_training_turns_override_events_into_applied_preferences() -> None
         upload_repository=None,
         broll_repository=None,
         visual_provider=None,
-        analytics_repository=analytics,
+        analytics_repository=None,
+        editorial_learning_repository=learning,
         stem_separator=None,
         runway_provider=None,
     )
-    adapted = _apply_phase5_learning(
-        payload=PlanCreateRequest(),
-        request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(scale_repository=scale))),
+    learning.promote(
         workspace_id=workspace_id,
         project_id=project_id,
+        user_id=user_id,
+        dataset_id=dataset.id,
+        expected_revision=0,
+    )
+    adapted = _apply_phase5_learning(
+        payload=PlanCreateRequest(),
+        request=SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    scale_repository=scale,
+                    editorial_learning_repository=learning,
+                    settings=SimpleNamespace(editorial_learning_enabled=True),
+                )
+            )
+        ),
+        workspace_id=workspace_id,
+        project_id=project_id,
+        user_id=user_id,
     )
 
     assert completed.status == ScaleResourceStatus.READY
     assert completed.result["preferences"]["cuts"] == {"pace": "fast"}
-    assert "Project learned preferences" in adapted.prompt
+    assert completed.result["dataset_id"] == str(dataset.id)
+    assert "Consented editorial memory provenance" in adapted.prompt
 
 
 def test_collaboration_manifest_rejects_stale_revision() -> None:
@@ -432,6 +504,119 @@ def test_fixture_runway_provider_returns_renderable_asset_url() -> None:
     )
     assert result.task_id.startswith("fixture-")
     assert result.video_url.startswith("fixture://runway/")
+
+
+def _stem_context(tmp_path):
+    workspace_id = uuid4()
+    project_id = uuid4()
+    uploads = InMemoryUploadRepository()
+    uploads.seed_project(project_id=project_id, workspace_id=workspace_id)
+    upload = uploads.create_upload(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        storage_bucket="raw-uploads",
+        storage_path="source.wav",
+        original_filename="source.wav",
+        mime_type="audio/wav",
+        file_size_bytes=10,
+    )
+    uploads.attach_active_video(project_id=project_id, video_id=upload.id)
+    upload.source_object_reference_id = uuid4()
+    LocalObjectStorage(root=tmp_path).write_object(
+        bucket=upload.storage_bucket,
+        path=upload.storage_path,
+        content=b"RIFF-audio",
+    )
+    record = ScaleResourceRecord(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        project_id=project_id,
+        kind="stem_separation",
+        name="Stems",
+        status=ScaleResourceStatus.QUEUED,
+        payload={"model": "htdemucs"},
+    )
+    settings = SimpleNamespace(
+        app_env="production",
+        media_work_dir=str(tmp_path),
+        supabase_url=None,
+        supabase_service_role_key=None,
+        upload_storage_bucket="raw-uploads",
+        demucs_model="htdemucs",
+    )
+    return uploads, record, settings
+
+
+def test_production_stems_route_through_gateway_and_persist_provenance(
+    monkeypatch, tmp_path
+) -> None:
+    uploads, record, settings = _stem_context(tmp_path)
+    operations = OperationsRepository()
+    gateway = ModelGateway(
+        adapters={},
+        routes=[],
+        telemetry=OperationsGatewayTelemetry(
+            metrics_registry=None,
+            operations_repository=operations,
+        ),
+    )
+    separator = FixtureStemSeparator()
+    route = register_stem_route(
+        gateway,
+        separator=separator,
+        model="htdemucs",
+        revision="demucs==4.1.0",
+    )
+
+    materialized = []
+
+    def fake_materialize(*, upload, storage):
+        materialized.append(upload.source_object_reference_id)
+        return storage.ensure_object(
+            bucket=upload.storage_bucket,
+            path=upload.storage_path,
+        )
+
+    monkeypatch.setattr("app.services.scale.materialize_upload_source", fake_materialize)
+
+    result = _separate_stems(
+        record=record,
+        settings=settings,
+        upload_repository=uploads,
+        stem_separator=separator,
+        model_gateway=gateway,
+        stem_gateway_route=route,
+    )
+
+    assert materialized == [
+        uploads.get_active_upload(
+            project_id=record.project_id,
+            workspace_id=record.workspace_id,
+        ).source_object_reference_id
+    ]
+    assert result["model_gateway"]["route_id"] == route.route_id
+    assert result["model_gateway"]["model_revision"] == "demucs==4.1.0"
+    assert operations.provider_events[0]["operation"] == "audio.stem_separation"
+    assert operations.provider_events[0]["workspace_id"] == record.workspace_id
+    assert operations.provider_events[0]["project_id"] == record.project_id
+
+
+def test_production_stems_fail_closed_before_direct_separator(tmp_path) -> None:
+    uploads, record, settings = _stem_context(tmp_path)
+
+    class ForbiddenSeparator:
+        def separate(self, **_kwargs):
+            raise AssertionError("production stems must not call Demucs directly")
+
+    with pytest.raises(ApiError) as exc_info:
+        _separate_stems(
+            record=record,
+            settings=settings,
+            upload_repository=uploads,
+            stem_separator=ForbiddenSeparator(),
+        )
+
+    assert exc_info.value.code == "stem_gateway_route_required"
 
 
 def test_stem_cleanup_only_removes_motionly_temp_directory(tmp_path) -> None:
@@ -500,3 +685,353 @@ def test_custom_style_and_saved_template_change_future_plan_requests() -> None:
     assert adapted.target_duration_s == 28
     assert "hard cuts" in adapted.prompt.lower()
     assert "quiet editorial captions" in adapted.prompt
+
+
+def test_brand_kit_crud_persists_workspace_defaults_and_validates_references() -> None:
+    workspace_id = uuid4()
+    other_workspace_id = uuid4()
+    actor = Actor(user_id=uuid4(), workspace_id=workspace_id)
+    repository = InMemoryScaleRepository()
+    profile = repository.create(
+        workspace_id=workspace_id,
+        project_id=uuid4(),
+        kind="style_profile",
+        name="Studio profile",
+        status=ScaleResourceStatus.READY,
+    )
+    template = repository.create(
+        workspace_id=workspace_id,
+        project_id=None,
+        kind="saved_template",
+        name="Studio template",
+        status=ScaleResourceStatus.READY,
+    )
+    foreign_profile = repository.create(
+        workspace_id=other_workspace_id,
+        project_id=uuid4(),
+        kind="style_profile",
+        name="Foreign profile",
+        status=ScaleResourceStatus.READY,
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(scale_repository=repository))
+    )
+    payload = BrandKitCreateRequest(
+        name="Acme Studio",
+        settings=BrandKitSettings(
+            colors=["#111111", "#ff5500", "#111111"],
+            font_family="Inter",
+            style_profile_id=profile.id,
+            saved_template_id=template.id,
+            creator_template="founder_reel_v1",
+            logo_asset={
+                "label": "Acme logo",
+                "asset_url": "https://cdn.example.com/acme-logo.png",
+            },
+            tone_rules={"voice": "Confident and clear", "do_rules": ["Lead with proof"]},
+            default_export={"platform": "tiktok", "resolution": "1080p"},
+        ),
+    )
+
+    created = asyncio.run(create_brand_kit(payload=payload, actor=actor, request=request))
+    assert created.kind == "brand_kit"
+    assert created.payload["settings"]["colors"] == ["#111111", "#ff5500"]
+    assert created.payload["settings"]["default_export"]["platform"] == "tiktok"
+
+    listed = asyncio.run(list_brand_kits(actor=actor, request=request))
+    assert [item.id for item in listed.resources] == [created.id]
+
+    updated = asyncio.run(
+        update_brand_kit(
+            brand_kit_id=created.id,
+            payload=BrandKitUpdateRequest(
+                name="Acme Social",
+                settings=payload.settings.model_copy(update={"font_family": "Montserrat"}),
+                expected_revision=created.revision,
+            ),
+            actor=actor,
+            request=request,
+        )
+    )
+    assert updated.name == "Acme Social"
+    assert updated.revision == created.revision + 1
+    assert updated.payload["settings"]["font_family"] == "Montserrat"
+
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            create_brand_kit(
+                payload=BrandKitCreateRequest(
+                    name="Invalid",
+                    settings=BrandKitSettings(style_profile_id=foreign_profile.id),
+                ),
+                actor=actor,
+                request=request,
+            )
+        )
+    assert error.value.code == "workspace_access_denied"
+
+    asyncio.run(delete_brand_kit(brand_kit_id=created.id, actor=actor, request=request))
+    assert asyncio.run(list_brand_kits(actor=actor, request=request)).resources == []
+
+
+def make_style_upload_request(repository: InMemoryScaleRepository) -> SimpleNamespace:
+    signer = StorageSigner(base_url="http://localhost:8000")
+    storage = LocalObjectStorage(root=tempfile.mkdtemp(prefix="motionly-style-media-"))
+    quota = StorageQuotaService(in_memory=True)
+    references = ObjectReferenceService(storage_signer=signer, in_memory=True)
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(upload_storage_bucket="raw-uploads"),
+                project_repository=SimpleNamespace(get_project=lambda **_: object()),
+                scale_repository=repository,
+                scale_queue=ScaleQueue(QueueRegistry()),
+                storage_signer=signer,
+                object_storage=storage,
+                storage_quota_service=quota,
+                object_reference_service=references,
+                media_upload_session_service=GenericMediaUploadSessionService(
+                    storage_signer=signer,
+                    object_storage=storage,
+                    quota_service=quota,
+                    object_reference_service=references,
+                ),
+            )
+        )
+    )
+
+
+def write_style_part(
+    request: SimpleNamespace,
+    *,
+    session_id,
+    workspace_id,
+    project_id,
+    content: bytes,
+) -> None:
+    session = asyncio.run(
+        request.app.state.media_upload_session_service.get(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+    )
+    request.app.state.object_storage.write_object(
+        bucket=session.final_storage_bucket,
+        path=session.parts[0].object_path,
+        content=content,
+    )
+
+
+def test_style_reference_compatibility_requires_verified_media_and_training_refs() -> None:
+    workspace_id, project_id = uuid4(), uuid4()
+    actor = Actor(user_id=uuid4(), workspace_id=workspace_id)
+    repository = InMemoryScaleRepository()
+    request = make_style_upload_request(repository)
+    profile = asyncio.run(
+        create_style_profile(
+            project_id=project_id,
+            payload=StyleProfileCreateRequest(name="Creator style"),
+            actor=actor,
+            request=request,
+        )
+    )
+
+    first_content = b"first style sample"
+    first = asyncio.run(
+        init_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleReferenceInitRequest(
+                filename="first.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=len(first_content),
+                sha256_hash=hashlib.sha256(first_content).hexdigest(),
+            ),
+            actor=actor,
+            request=request,
+        )
+    )
+    assert first.session_id
+    assert ".mp4.parts/" in first.signed_upload_url
+
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            complete_style_reference(
+                project_id=project_id,
+                profile_id=profile.id,
+                payload=StyleReferenceCompleteRequest(reference_id=first.reference_id),
+                actor=actor,
+                request=request,
+            )
+        )
+    assert error.value.code == "upload_parts_incomplete"
+    assert first.profile.payload["references"][0]["status"] == "uploading"
+
+    write_style_part(
+        request,
+        session_id=first.session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        content=first_content,
+    )
+    completed = asyncio.run(
+        complete_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleReferenceCompleteRequest(reference_id=first.reference_id),
+            actor=actor,
+            request=request,
+        )
+    )
+
+    for index in range(2, 6):
+        content = f"style sample {index}".encode()
+        initialized = asyncio.run(
+            init_style_reference(
+                project_id=project_id,
+                profile_id=profile.id,
+                payload=StyleReferenceInitRequest(
+                    filename=f"sample-{index}.mp4",
+                    mime_type="video/mp4",
+                    file_size_bytes=len(content),
+                    sha256_hash=hashlib.sha256(content).hexdigest(),
+                ),
+                actor=actor,
+                request=request,
+            )
+        )
+        write_style_part(
+            request,
+            session_id=initialized.session_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            content=content,
+        )
+        completed = asyncio.run(
+            complete_style_reference(
+                project_id=project_id,
+                profile_id=profile.id,
+                payload=StyleReferenceCompleteRequest(reference_id=initialized.reference_id),
+                actor=actor,
+                request=request,
+            )
+        )
+
+    references = completed.payload["references"]
+    assert len(references) == 5
+    assert all(item["status"] == "verified" for item in references)
+    assert all(item["object_reference_id"] for item in references)
+    assert all("storage_bucket" not in item and "storage_path" not in item for item in references)
+
+    trained = asyncio.run(
+        train_style_profile(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleTrainRequest(),
+            actor=actor,
+            request=request,
+        )
+    )
+    assert trained.status == ScaleResourceStatus.QUEUED
+    assert len(request.app.state.scale_queue.registry.jobs) == 1
+
+    asyncio.run(
+        request.app.state.object_reference_service.mark_deleted(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            reference_id=UUID(str(references[0]["object_reference_id"])),
+        )
+    )
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            train_style_profile(
+                project_id=project_id,
+                profile_id=profile.id,
+                payload=StyleTrainRequest(),
+                actor=actor,
+                request=request,
+            )
+        )
+    assert error.value.code == "object_reference_not_found"
+
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            init_style_reference(
+                project_id=project_id,
+                profile_id=profile.id,
+                payload=StyleReferenceInitRequest(
+                    filename="other.mp4",
+                    mime_type="video/mp4",
+                    file_size_bytes=1,
+                ),
+                actor=Actor(user_id=uuid4(), workspace_id=uuid4()),
+                request=request,
+            )
+        )
+    assert error.value.code == "workspace_access_denied"
+
+
+def test_style_training_worker_rechecks_active_durable_references() -> None:
+    workspace_id, project_id = uuid4(), uuid4()
+    repository = InMemoryScaleRepository()
+    profile = repository.create(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        kind="style_profile",
+        name="Worker validation",
+        status=ScaleResourceStatus.QUEUED,
+        payload={"references": []},
+    )
+    signer = StorageSigner(base_url="http://localhost:8000")
+    references = ObjectReferenceService(storage_signer=signer, in_memory=True)
+    digest = hashlib.sha256(b"x").hexdigest()
+    payload_references = []
+    for _ in range(5):
+        stable_id = uuid4()
+        durable = asyncio.run(
+            references.create_reference(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                storage_bucket="raw-uploads",
+                storage_path=(
+                    f"workspaces/{workspace_id}/projects/{project_id}/style-references/"
+                    f"{profile.id}/{stable_id}.mp4"
+                ),
+                owner_type="style_profile",
+                owner_id=profile.id,
+                object_type="style_reference",
+                mime_type="video/mp4",
+                size_bytes=1,
+                sha256=digest,
+            )
+        )
+        payload_references.append(
+            {
+                "id": str(stable_id),
+                "status": "verified",
+                "object_reference_id": str(durable.id),
+                "verified_size_bytes": 1,
+                "verified_sha256": digest,
+                # The worker must not trust these legacy-shaped payload values.
+                "storage_bucket": "attacker-controlled",
+                "storage_path": "attacker-controlled",
+            }
+        )
+    profile.payload["references"] = payload_references
+    asyncio.run(
+        references.mark_deleted(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            reference_id=UUID(payload_references[0]["object_reference_id"]),
+        )
+    )
+
+    with pytest.raises(ApiError) as error:
+        _train_style(
+            record=profile,
+            settings=SimpleNamespace(upload_storage_bucket="raw-uploads"),
+            visual_provider=None,
+            object_reference_service=references,
+        )
+    assert error.value.code == "object_reference_not_found"

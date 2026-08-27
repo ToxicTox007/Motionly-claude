@@ -45,14 +45,15 @@ test("Toast system defines provider, hook, and styled status alerts", async () =
 
 test("Focus traps are implemented inside responsive drawers and modals", async () => {
   const layoutSource = await readFile(
-    new URL("components/editor-layout.tsx", root),
+    new URL("components/editor/layout/EditorWorkspaces.tsx", root),
     "utf8",
   );
 
   // Verify focus trap hooks in editor layout drawers
   assert.match(layoutSource, /useFocusTrap\(/);
-  assert.match(layoutSource, /ref=\{leftTrapRef\}/);
-  assert.match(layoutSource, /ref=\{rightTrapRef\}/);
+  assert.match(layoutSource, /panelRef=\{leftTrapRef\}/);
+  assert.match(layoutSource, /panelRef=\{rightTrapRef\}/);
+  assert.match(layoutSource, /ref=\{panelRef\}/);
 });
 
 test("Keyboard controls and visible focus indicators exist on UI elements", async () => {

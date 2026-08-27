@@ -11,6 +11,7 @@ from app.repositories.uploads import SupabaseUploadRepository
 from app.schemas.projects import ProjectStatus
 from app.schemas.scale import ScaleResourceStatus
 from app.schemas.uploads import UploadStatus
+from app.services.operations import OperationsRepository
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_SUPABASE_CONTRACTS") != "1",
@@ -100,3 +101,59 @@ def test_project_upload_and_scale_repositories_round_trip(supabase_contract_cont
         projects.get_project(project_id=project.id, workspace_id=uuid4())
     scale.delete(resource_id=resource.id, workspace_id=workspace_id)
     projects.delete_project(project_id=project.id, workspace_id=workspace_id)
+
+
+
+def test_model_gateway_telemetry_round_trips_through_supabase(
+    supabase_contract_context,
+) -> None:
+    url, key, _user_id, workspace_id = supabase_contract_context
+    operations = OperationsRepository(supabase_url=url, service_role_key=key)
+    request_id = f"task10-contract-{uuid4()}"
+    operations.record_provider_slo(
+        workspace_id=workspace_id,
+        project_id=None,
+        provider="azure",
+        operation="planning.chat",
+        success=True,
+        latency_ms=42,
+        error_code=None,
+        model="planner-deployment",
+        model_revision="planner-2026-07-14",
+        route_id="azure-planning-primary",
+        request_id=request_id,
+        fallback_count=1,
+        estimated_cost_usd=0.03,
+        actual_cost_usd=0.02,
+        usage={"input_units": 100, "output_units": 50},
+    )
+
+    response = httpx.get(
+        f"{url}/rest/v1/provider_slo_events",
+        headers={"apikey": key, "authorization": f"Bearer {key}"},
+        params={
+            "request_id": f"eq.{request_id}",
+            "select": (
+                "workspace_id,provider,operation,model,model_revision,route_id,request_id,"
+                "fallback_count,estimated_cost_usd,actual_cost_usd,usage"
+            ),
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    rows = response.json()
+
+    assert len(rows) == 1
+    assert rows[0] == {
+        "workspace_id": str(workspace_id),
+        "provider": "azure",
+        "operation": "planning.chat",
+        "model": "planner-deployment",
+        "model_revision": "planner-2026-07-14",
+        "route_id": "azure-planning-primary",
+        "request_id": request_id,
+        "fallback_count": 1,
+        "estimated_cost_usd": 0.03,
+        "actual_cost_usd": 0.02,
+        "usage": {"input_units": 100, "output_units": 50},
+    }

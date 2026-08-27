@@ -1,7 +1,6 @@
 import hashlib
 import math
 import sys
-import tempfile
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -18,13 +17,12 @@ from app.schemas.visual import (
     ObjectDetection,
     SceneSegment,
     SceneType,
-    SegmentationMatte,
     VideoManifest,
     VisualManifestStatus,
 )
 from app.services.local_storage import create_object_storage
 from app.services.ml_failures import CudaOomFailure, clear_cuda_cache, is_cuda_oom_error
-from app.services.segmentation_matte import generate_selfie_segmentation_matte
+from app.services.worker_media import materialize_upload_source
 
 
 class VisualIntelligenceProvider(Protocol):
@@ -119,10 +117,16 @@ class LocalMLVisualIntelligenceProvider:
         clip_model: str,
         blip_model: str,
         yolo_model: str,
+        clip_revision: str | None = None,
+        blip_revision: str | None = None,
+        yolo_revision: str | None = None,
     ) -> None:
         self.clip_model_name = clip_model
         self.blip_model_name = blip_model
         self.yolo_model_name = yolo_model
+        self.clip_revision = clip_revision
+        self.blip_revision = blip_revision
+        self.yolo_revision = yolo_revision
         self.model = f"{clip_model}|{blip_model}|{yolo_model}"
         self._loaded: dict[str, object] | None = None
 
@@ -224,9 +228,9 @@ class LocalMLVisualIntelligenceProvider:
                 frame_count=len(samples),
                 provider=self.provider_name,
                 model_versions={
-                    "clip": self.clip_model_name,
-                    "blip": self.blip_model_name,
-                    "object_detection": self.yolo_model_name,
+                    "clip": self.clip_revision or self.clip_model_name,
+                    "blip": self.blip_revision or self.blip_model_name,
+                    "object_detection": self.yolo_revision or self.yolo_model_name,
                     "face_detection": "mediapipe-face-detection",
                     "segmentation": "mediapipe-selfie-segmentation",
                 },
@@ -280,11 +284,21 @@ class LocalMLVisualIntelligenceProvider:
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = torch.float16 if device == "cuda" else torch.float32
-        clip_processor = CLIPProcessor.from_pretrained(self.clip_model_name)
-        clip_model = CLIPModel.from_pretrained(self.clip_model_name).to(device)
-        blip_processor = Blip2Processor.from_pretrained(self.blip_model_name)
+        clip_processor = CLIPProcessor.from_pretrained(
+            self.clip_model_name,
+            revision=self.clip_revision,
+        )
+        clip_model = CLIPModel.from_pretrained(
+            self.clip_model_name,
+            revision=self.clip_revision,
+        ).to(device)
+        blip_processor = Blip2Processor.from_pretrained(
+            self.blip_model_name,
+            revision=self.blip_revision,
+        )
         blip_model = Blip2ForConditionalGeneration.from_pretrained(
             self.blip_model_name,
+            revision=self.blip_revision,
             torch_dtype=dtype,
         ).to(device)
         yolo_model = YOLO(self.yolo_model_name)
@@ -377,15 +391,26 @@ def run_visual_analysis_for_upload(
         supabase_url=supabase_url,
         service_role_key=service_role_key,
     )
-    source_path = storage.ensure_object(bucket=upload.storage_bucket, path=upload.storage_path)
+    source_path = materialize_upload_source(upload=upload, storage=storage)
     try:
         print("VISUAL_DEBUG provider_analyze_start", file=sys.stderr, flush=True)
-        manifest = provider.analyze(
-            source_path=source_path,
-            metadata=upload.metadata,
-            sample_rate_fps=sample_rate_fps,
-            scene_threshold=scene_threshold,
-        )
+        contextual_analyze = getattr(provider, "analyze_with_context", None)
+        if callable(contextual_analyze):
+            manifest = contextual_analyze(
+                source_path=source_path,
+                metadata=upload.metadata,
+                sample_rate_fps=sample_rate_fps,
+                scene_threshold=scene_threshold,
+                workspace_id=workspace_id,
+                project_id=project_id,
+            )
+        else:
+            manifest = provider.analyze(
+                source_path=source_path,
+                metadata=upload.metadata,
+                sample_rate_fps=sample_rate_fps,
+                scene_threshold=scene_threshold,
+            )
         print("VISUAL_DEBUG provider_analyze_done", file=sys.stderr, flush=True)
     except CudaOomFailure as exc:
         repository.transition_manifest(
@@ -426,50 +451,6 @@ def run_visual_analysis_for_upload(
         status=VisualManifestStatus.READY,
         manifest=manifest,
     )
-
-
-def _attach_segmentation_matte(
-    *,
-    manifest: VideoManifest,
-    provider: VisualIntelligenceProvider,
-    source_path: Path,
-    storage,
-    upload_bucket: str,
-    workspace_id: UUID,
-    project_id: UUID,
-    video_id: UUID,
-) -> VideoManifest:
-    if not isinstance(provider, LocalMLVisualIntelligenceProvider):
-        return manifest
-    models = provider._load_models()
-    matte_path = (
-        f"workspaces/{workspace_id}/projects/{project_id}/segmentation/{video_id}/matte.mp4"
-    )
-    with tempfile.TemporaryDirectory(prefix="motionly-matte-upload-") as temp_dir:
-        local_matte = Path(temp_dir) / "matte.mp4"
-        stats = generate_selfie_segmentation_matte(
-            cv2=models["cv2"],
-            np=models["np"],
-            selfie_segmentation=models["selfie_segmentation"],
-            source_path=source_path,
-            output_path=local_matte,
-        )
-        storage.upload_file(
-            bucket=upload_bucket,
-            path=matte_path,
-            source_path=local_matte,
-            content_type="video/mp4",
-        )
-    matte = SegmentationMatte(
-        bucket=upload_bucket,
-        path=matte_path,
-        model="mediapipe-selfie-segmentation",
-        fps=float(stats["fps"]),
-        width=int(stats["width"]),
-        height=int(stats["height"]),
-        frame_count=int(stats["frame_count"]),
-    )
-    return manifest.model_copy(update={"segmentation_matte": matte})
 
 
 def _fixture_timestamps(*, duration_ms: int, sample_rate_fps: float) -> list[int]:

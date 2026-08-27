@@ -13,7 +13,8 @@ COST_ATTRIBUTION_SUMMARY_COLUMNS = (
     "workspace_id,render_job_id,export_id,provider,category,quantity,unit_cost_usd,approved_at"
 )
 PROVIDER_SLO_SUMMARY_COLUMNS = (
-    "provider,operation,success,latency_ms,error_code,created_at"
+    "provider,operation,success,latency_ms,error_code,model,model_revision,route_id,"
+    "request_id,fallback_count,estimated_cost_usd,actual_cost_usd,usage,created_at"
 )
 
 
@@ -152,6 +153,10 @@ class OperationsRepository:
                 ),
                 None,
             )
+            latest_event = max(
+                events,
+                key=lambda item: _datetime_value(item.get("created_at")),
+            )
             summary.append(
                 {
                     "provider": provider,
@@ -165,6 +170,11 @@ class OperationsRepository:
                     ),
                     "p95_latency_ms": latencies[p95_index] if latencies else None,
                     "last_error_code": last_error_code,
+                    "model": latest_event.get("model"),
+                    "model_revision": latest_event.get("model_revision"),
+                    "route_id": latest_event.get("route_id"),
+                    "last_actual_cost_usd": latest_event.get("actual_cost_usd"),
+                    "last_fallback_count": latest_event.get("fallback_count", 0),
                 }
             )
         return summary

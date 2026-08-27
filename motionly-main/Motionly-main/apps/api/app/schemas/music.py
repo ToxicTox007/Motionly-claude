@@ -52,13 +52,41 @@ class MusicSelectionStatus(StrEnum):
     FAILED = "failed"
 
 
+class MusicRightsStatus(StrEnum):
+    NOT_APPLICABLE = "not_applicable"
+    VERIFIED = "verified"
+    UNVERIFIED = "unverified"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
+class MusicRightsResponse(BaseModel):
+    status: MusicRightsStatus
+    verified: bool = False
+    provider_track_id: str | None = None
+    grant_id: str | None = None
+    grant_version: str | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    permitted_uses: list[str] = Field(default_factory=list)
+    evidence_fingerprint: str | None = None
+    verified_at: datetime | None = None
+
+
 class MusicSelectRequest(JsonStringBodyMixin, BaseModel):
     music_track_id: UUID | None = None
     mood: str | None = None
     include_music: bool = True
     music_volume: float = Field(default=0.25, ge=0, le=1)
     sfx_intensity: float = Field(default=0.25, ge=0, le=1)
-    rights_confirmed: bool = Field(default=False)
+    # A user can acknowledge the catalog license, but this never establishes
+    # rights; the server derives that from a current catalog grant.
+    rights_decision: bool = Field(default=False)
+    rights_confirmed: bool | None = Field(
+        default=None,
+        description="Deprecated compatibility input. It is ignored by the server.",
+        json_schema_extra={"deprecated": True},
+    )
     force: bool = False
 
     @model_validator(mode="before")
@@ -76,6 +104,7 @@ class MusicSelectionResponse(BaseModel):
     music_volume: float = Field(ge=0, le=1)
     sfx_intensity: float = Field(ge=0, le=1)
     rights_confirmed: bool
+    rights: MusicRightsResponse
     status: MusicSelectionStatus
     cache_key: str | None = None
     created_at: datetime

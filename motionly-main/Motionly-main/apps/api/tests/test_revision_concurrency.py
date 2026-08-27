@@ -10,7 +10,7 @@ Tests cover:
 import asyncio
 import os
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -20,15 +20,9 @@ from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.renders import InMemoryRenderRepository
 from app.repositories.uploads import InMemoryUploadRepository
-from app.schemas.plans import (
-    BrollDensity,
-    EditPlanCut,
-    EditPlanStatus,
-    PlanCreateRequest,
-)
-from app.services.transcription_provider import FixtureTranscriptionProvider
 from app.schemas.captions import LanguageHint
-
+from app.schemas.plans import BrollDensity, EditPlanCut, PlanCreateRequest
+from app.services.transcription_provider import FixtureTranscriptionProvider
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -264,7 +258,7 @@ class TestAPIEndpointRevision:
         )
 
     def test_update_cuts_with_revision(self, active_plan):
-        """PATCH /plans/{id}/cuts with expected_revision → success, response includes new revision."""
+        """PATCH cuts with expected_revision succeeds and returns the new revision."""
         from app.api.plans import update_plan_cuts
         from app.schemas.plans import PlanCutsUpdateRequest
 
@@ -527,13 +521,14 @@ class TestAPIEndpointRevision:
         """POST /renders stores source_plan_revision in manifest."""
         from app.api.renders import create_render as create_render_api
         from app.repositories.billing import InMemoryBillingRepository
+        from app.schemas.captions import CaptionPresetKey
         from app.schemas.renders import RenderCreateRequest
-        from app.services.queue import RenderQueue
         from app.services.caption_chunking import chunk_caption_words
         from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
-        from app.schemas.captions import CaptionPresetKey
+        from app.services.queue import RenderQueue
 
         env = seeded_environment
+        env.upload.source_object_reference_id = uuid4()
         # Create a caption track in the caption repository (needed by render)
         preset = get_caption_preset(CaptionPresetKey.BOLD_INFLUENCER)
         env.caption_repository.create_caption_track(
@@ -697,7 +692,12 @@ class TestHTTPIntegration:
         app.state.effects_repository = None
 
         # Override dependencies
-        from app.api.dependencies import get_actor as get_actor_dep, get_plan_repository
+        from app.api.dependencies import (
+            get_actor as get_actor_dep,
+        )
+        from app.api.dependencies import (
+            get_plan_repository,
+        )
 
         app.dependency_overrides[get_plan_repository] = lambda: env.plan_repository
         app.dependency_overrides[get_actor_dep] = lambda: Actor(
@@ -745,3 +745,32 @@ class TestHTTPIntegration:
         assert body["current_revision"] == 1
         assert body["plan_id"] == str(record.id)
         assert "message" in body
+
+    def test_http_get_plan_returns_the_authoritative_plan_shape(self, client_and_env):
+        client, env, record = client_and_env
+
+        response = client.get(f"/projects/{env.project_id}/plans/{record.id}")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {"plan"}
+        assert body["plan"]["id"] == str(record.id)
+        assert body["plan"]["project_id"] == str(env.project_id)
+        assert body["plan"]["revision"] == record.revision
+
+    def test_http_get_plan_returns_not_found_and_enforces_workspace_scope(self, client_and_env):
+        client, env, record = client_and_env
+
+        missing = client.get(f"/projects/{env.project_id}/plans/{uuid4()}")
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "edit_plan_not_found"
+
+        from app.api.dependencies import get_actor as get_actor_dep
+
+        client.app.dependency_overrides[get_actor_dep] = lambda: Actor(
+            user_id=uuid4(),
+            workspace_id=uuid4(),
+        )
+        denied = client.get(f"/projects/{env.project_id}/plans/{record.id}")
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "workspace_access_denied"

@@ -227,7 +227,7 @@ def _score_audio(
     speech_metrics = audio.get("speech_metrics")
     if isinstance(speech_metrics, dict):
         wpm = speech_metrics.get("words_per_minute")
-        if isinstance(wpm, (int, float)):
+        if isinstance(wpm, int | float):
             if wpm >= 185:
                 scores[EditPlanStyle.FAST_PACED] += 0.28
             elif 0 < wpm <= 105:

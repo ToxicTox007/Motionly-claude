@@ -45,7 +45,7 @@ def record_ai_feedback(
         "metadata": metadata,
     }
     try:
-        repository.record_event(
+        event = repository.record_event(
             workspace_id=workspace_id,
             project_id=project_id,
             user_id=user_id,
@@ -59,6 +59,29 @@ def record_ai_feedback(
             user_payload=user_payload,
             metadata=metadata,
         )
+        learning_repository = getattr(getattr(request, "app", None), "state", None)
+        learning_repository = getattr(learning_repository, "editorial_learning_repository", None)
+        settings = getattr(getattr(request, "app", None), "state", None)
+        if learning_repository is not None and getattr(
+            getattr(settings, "settings", None), "editorial_learning_enabled", False
+        ):
+            from app.services.editorial_learning import capture_consented_feedback
+
+            try:
+                capture_consented_feedback(
+                    repository=learning_repository,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                    source_event_id=getattr(event, "id", None),
+                    layer=layer,
+                    event_type=event_type,
+                    ai_payload=ai_payload,
+                    user_payload=user_payload,
+                )
+            except Exception:
+                # Learning material is optional and must never block an edit.
+                logger.exception("editorial_learning_capture_failed")
     except Exception as exc:
         recovery = getattr(request.app.state, "analytics_recovery_queue", None)
         if recovery is not None:

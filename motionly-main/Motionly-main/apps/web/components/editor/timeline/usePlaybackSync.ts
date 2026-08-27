@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect } from "react";
+import { resolveSourceClipAtOutputMs } from "@motionly/shared";
 import type { ProjectTimelineSourceClip } from "@motionly/shared";
 
 /**
  * Keeps a numeric `playheadMs` state in sync with a <video> element.
  * Fires `setPlayheadMs` on every `timeupdate` and `seeked` event so the
  * timeline playhead moves in real time during playback and after scrubbing.
+ *
+ * Clip resolution uses the shared canonical source-timeline evaluator so the
+ * preview playhead advances through removed source gaps exactly as the export
+ * renderer assembles them (no browser-only boundary fudge).
  *
  * Usage:
  *   const [playheadMs, setPlayheadMs] = useState(0);
@@ -29,12 +34,8 @@ export function usePlaybackSync(
         return;
       }
       const currentClip =
-        sourceClips.find(
-          (clip) =>
-            playheadMs >= clip.output_start_ms &&
-            playheadMs < clip.output_end_ms,
-        ) ?? sourceClips[0];
-      if (sourceMs >= currentClip.source_end_ms - 20) {
+        resolveSourceClipAtOutputMs(playheadMs, sourceClips) ?? sourceClips[0];
+      if (sourceMs >= currentClip.source_end_ms) {
         const nextIndex = sourceClips.indexOf(currentClip) + 1;
         const next = sourceClips[nextIndex];
         if (!next) {

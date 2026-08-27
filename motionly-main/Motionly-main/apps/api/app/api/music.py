@@ -127,7 +127,7 @@ async def select_music(
             workspace_id=actor.workspace_id,
             cache_key=cache_key,
         )
-        if cached:
+        if cached and bool(getattr(cached, "rights_snapshot", {}).get("verified")):
             return MusicSelectResponse(
                 selection=await _response_for_selection(repository, cached),
                 job_id=f"sync-complete--music--{project_id}--{plan.id}",

@@ -12,6 +12,113 @@ const LOCAL_NAMES = new Set(["localhost", "localhost.localdomain", "ip6-localhos
 const LOCAL_SUFFIXES = [".localhost", ".local", ".localdomain", ".internal", ".lan", ".home"];
 const STORAGE_BUCKET = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const HOST_LABEL = /^[a-z0-9-]+$/;
+const MANUAL_MEDIA_TYPES = Object.freeze({
+  broll: false,
+  graphic: false,
+  music: true,
+  sfx: true,
+});
+const MANUAL_MEDIA_PROPERTY_KEYS = ["assetUrl", "src", "imageUrl"];
+const CSS_BACKGROUND_PROPERTY_KEYS = [
+  "background",
+  "backgroundColor",
+  "backgroundImage",
+  "background_color",
+  "background_image",
+];
+const CSS_URL = /url\s*\(\s*(?:['\"]([^'\"]*)['\"]|([^\s)]+))\s*\)/gi;
+const SAFE_CSS_BACKGROUND = /^[A-Za-z0-9#(),.%+\-\s]*$/;
+
+export function manualElementMediaReferences(element) {
+  if (!element || typeof element !== "object" || Array.isArray(element)) {
+    throw new MediaUrlPolicyError("Manual media element is invalid.");
+  }
+  const properties = element.properties;
+  if (properties === null || properties === undefined) return [];
+  if (typeof properties !== "object" || Array.isArray(properties)) {
+    throw new MediaUrlPolicyError("Manual media properties are invalid.");
+  }
+
+  const references = [];
+  const hasKnownMediaType = Object.hasOwn(MANUAL_MEDIA_TYPES, element.type);
+  const allowDataAudio = hasKnownMediaType ? MANUAL_MEDIA_TYPES[element.type] : undefined;
+  if (hasKnownMediaType) {
+    for (const key of MANUAL_MEDIA_PROPERTY_KEYS) {
+      if (!Object.hasOwn(properties, key)) continue;
+      const value = properties[key];
+      if (value === null || value === undefined || value === "") continue;
+      if (typeof value !== "string") {
+        throw new MediaUrlPolicyError("Manual media URL must be a string.");
+      }
+      references.push({ key, value, allowDataAudio });
+    }
+  }
+
+  for (const key of CSS_BACKGROUND_PROPERTY_KEYS) {
+    if (!Object.hasOwn(properties, key)) continue;
+    const value = properties[key];
+    if (typeof value !== "string") {
+      throw new MediaUrlPolicyError("Manual CSS background must be a string.");
+    }
+    for (const reference of cssUrlReferences(value)) {
+      references.push({ key, value: reference, allowDataAudio: false });
+    }
+  }
+  return references;
+}
+
+export function sanitizeManualElementProperties(element) {
+  const properties = element?.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return {};
+  const sanitized = { ...properties };
+  const fallback = element?.type === "shape" ? "#14b8a6" : "transparent";
+  for (const key of CSS_BACKGROUND_PROPERTY_KEYS) {
+    if (!Object.hasOwn(sanitized, key)) continue;
+    const safeValue = sanitizeCssBackground(sanitized[key], fallback);
+    if (key === "backgroundImage" || key === "background_image") {
+      delete sanitized[key];
+      sanitized.background = safeValue;
+    } else if (key === "background_color") {
+      delete sanitized[key];
+      sanitized.backgroundColor = safeValue;
+    } else {
+      sanitized[key] = safeValue;
+    }
+  }
+
+  if (!Object.hasOwn(MANUAL_MEDIA_TYPES, element?.type)) {
+    for (const key of MANUAL_MEDIA_PROPERTY_KEYS) delete sanitized[key];
+  }
+  if (element?.type === "graphic" && Object.hasOwn(sanitized, "imageUrl")) {
+    if (!Object.hasOwn(sanitized, "assetUrl")) sanitized.assetUrl = sanitized.imageUrl;
+    delete sanitized.imageUrl;
+  }
+  return sanitized;
+}
+
+function cssUrlReferences(value) {
+  const references = [];
+  CSS_URL.lastIndex = 0;
+  let match;
+  while ((match = CSS_URL.exec(value)) !== null) {
+    const reference = String(match[1] ?? match[2] ?? "").trim();
+    if (!reference) throw new MediaUrlPolicyError("Manual CSS background URL is invalid.");
+    references.push(reference);
+  }
+  return references;
+}
+
+function sanitizeCssBackground(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const candidate = value.trim();
+  if (
+    !candidate ||
+    candidate.length > 1000 ||
+    !SAFE_CSS_BACKGROUND.test(candidate) ||
+    /url\s*\(/i.test(candidate)
+  ) return fallback;
+  return candidate;
+}
 
 const forbiddenIpv4 = new BlockList();
 const forbiddenIpv6 = new BlockList();
@@ -141,11 +248,8 @@ export async function validateRenderMediaManifest(renderProps, options = {}) {
     if (["video", "audio", "image"].includes(asset?.kind)) await check(asset.src);
   }
   for (const element of renderProps?.editPlan?.manual_elements ?? []) {
-    if (!["broll", "music", "sfx"].includes(element?.type)) continue;
-    for (const key of ["assetUrl", "src"]) {
-      if (Object.hasOwn(element?.properties ?? {}, key)) {
-        await check(element.properties[key], { allowDataAudio: ["music", "sfx"].includes(element.type) });
-      }
+    for (const reference of manualElementMediaReferences(element)) {
+      await check(reference.value, { allowDataAudio: reference.allowDataAudio });
     }
   }
   const track = renderProps?.musicSelection?.track;

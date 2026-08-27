@@ -17,6 +17,7 @@ MIN_RECOMMENDED_SHORT_EDGE_PX = 720
 MIN_RENDERABLE_DIMENSION_PX = 240
 MIN_RECOMMENDED_FPS = 15
 MAX_RECOMMENDED_FPS = 60
+MAX_UPLOAD_FILE_SIZE_BYTES = 512 * 1024 * 1024
 MAX_RENDERABLE_FPS = 120
 
 
@@ -62,11 +63,15 @@ def validate_upload_preflight(
             "The file extension does not match the declared video type.",
         )
 
-    if file_size_bytes > max_file_size_bytes:
+    effective_max_file_size_bytes = min(
+        max_file_size_bytes,
+        MAX_UPLOAD_FILE_SIZE_BYTES,
+    )
+    if file_size_bytes > effective_max_file_size_bytes:
         raise ApiError(413, "upload_file_too_large", "This file exceeds your plan limit.")
 
     warnings: list[str] = []
-    if file_size_bytes > max_file_size_bytes * 0.8:
+    if file_size_bytes > effective_max_file_size_bytes * 0.8:
         warnings.append("large_file")
 
     return UploadValidationResult(extension=extension.lstrip("."), warnings=warnings)

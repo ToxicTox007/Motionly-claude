@@ -101,7 +101,7 @@ export default function HomePage() {
               Motionly turns rough clips into editable reels.
             </h1>
             <p className="mt-6 max-w-xl text-lg font-bold leading-relaxed text-muted-foreground">
-              Upload a talking-head video, let AI populate the timeline, then
+              Upload a talking-head video, review the AI edit proposal, then
               tune captions, B-roll, music, and export from one hard-edged
               creator workspace.
             </p>

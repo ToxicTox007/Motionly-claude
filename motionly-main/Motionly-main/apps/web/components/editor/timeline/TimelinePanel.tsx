@@ -31,6 +31,7 @@ import { env } from "@/lib/env";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useTimeline } from "./useTimeline";
 import { usePlaybackSync } from "./usePlaybackSync";
+import { useTimelineKeyboardShortcuts } from "./useTimelineKeyboardShortcuts";
 import { useEditorHistory, type HistoryEntry } from "../history-context";
 import type {
   BrollSlotSummary,
@@ -378,7 +379,7 @@ export function TimelinePanel({
 
       await requestQueue.current;
     },
-    [pushHistory, toast],
+    [onConflictDetected, pushHistory, toast],
   );
 
   function cloneCuts(cuts: EditPlanCut[]) {
@@ -1078,35 +1079,12 @@ export function TimelinePanel({
     [seekBy, videoRef],
   );
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      const isTyping = ["INPUT", "TEXTAREA", "SELECT"].includes(
-        target?.tagName ?? "",
-      );
-      if (isTyping) return;
-      if (event.key.toLowerCase() === "j") {
-        event.preventDefault();
-        togglePlayback("backward");
-      } else if (event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        togglePlayback("pause");
-      } else if (event.key.toLowerCase() === "l") {
-        event.preventDefault();
-        togglePlayback("forward");
-      } else if (event.key === "[") {
-        event.preventDefault();
-        if (selectedClip) commitTrim(selectedClip, "left", playheadMs);
-      } else if (event.key === "]") {
-        event.preventDefault();
-        if (selectedClip) commitTrim(selectedClip, "right", playheadMs);
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-    // commitTrim intentionally comes from render scope so bracket trim shortcuts use current clip state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playheadMs, selectedClip, togglePlayback]);
+  useTimelineKeyboardShortcuts({
+    playheadMs,
+    selectedClip,
+    togglePlayback,
+    trimSelectedClip: commitTrim,
+  });
 
   const ticks = useMemo(() => rulerTicks(totalDurationMs), [totalDurationMs]);
   const selectedCopy = selectedClip

@@ -3,7 +3,7 @@ x-worker-depends-on: &worker-depends-on
   volume-permissions: { condition: service_completed_successfully }
 
 x-media-environment: &media-environment
-  REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required for production Compose}@redis:6379/0
   SUPABASE_URL: http://supabase-gateway:8000
   SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
   SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
@@ -25,6 +25,45 @@ x-media-environment: &media-environment
   GPU_MAX_WORKER_COUNT: ${GPU_MAX_WORKER_COUNT:-4}
   GPU_OOM_ALERT_THRESHOLD: ${GPU_OOM_ALERT_THRESHOLD:-2}
   GPU_LONG_JOB_TIMEOUT_SECONDS: ${GPU_LONG_JOB_TIMEOUT_SECONDS:-1800}
+  MODEL_GATEWAY_ENABLED: "true"
+  MODEL_GATEWAY_MONTHLY_BUDGET_USD: ${MODEL_GATEWAY_MONTHLY_BUDGET_USD:-100}
+  MODEL_GATEWAY_REQUEST_BUDGET_USD: ${MODEL_GATEWAY_REQUEST_BUDGET_USD:-5}
+  MODEL_GATEWAY_FAILURE_THRESHOLD: ${MODEL_GATEWAY_FAILURE_THRESHOLD:-3}
+  MODEL_GATEWAY_CIRCUIT_COOLDOWN_SECONDS: ${MODEL_GATEWAY_CIRCUIT_COOLDOWN_SECONDS:-60}
+  TRANSCRIPTION_PROVIDER: groq
+  TRANSCRIPTION_MODEL: whisper-large-v3-turbo
+  TRANSCRIPTION_MODEL_REVISION: whisper-large-v3-turbo-2025-02-01
+  TRANSCRIPTION_ESTIMATED_COST_PER_REQUEST_USD: ${TRANSCRIPTION_ESTIMATED_COST_PER_REQUEST_USD:-0.25}
+  GROQ_API_KEY_FILE: /run/secrets/groq_api_key
+  EDIT_PLANNER_PROVIDER: openrouter
+  EDIT_PLANNER_MODEL: openai/gpt-4.1-mini
+  EDIT_PLANNER_MODEL_REVISION: openai/gpt-4.1-mini-2025-04-14
+  EDIT_PLANNER_INPUT_COST_PER_MILLION_USD: ${EDIT_PLANNER_INPUT_COST_PER_MILLION_USD:-2}
+  EDIT_PLANNER_OUTPUT_COST_PER_MILLION_USD: ${EDIT_PLANNER_OUTPUT_COST_PER_MILLION_USD:-2}
+  OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+  AUDIO_ML_PROVIDER: local_ml
+  ALLOW_FIXTURE_PROVIDERS: "false"
+  PYANNOTE_MODEL_REVISION: 84fd25912480287da0247647c3d2b4853cb3ee5d
+  WAV2VEC_EMOTION_MODEL_REVISION: 441a7599c3b22107314dcbd9166621c5c83f2cc5
+  VISUAL_CLIP_MODEL_REVISION: 3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268
+  VISUAL_BLIP_MODEL_REVISION: 59a1ef6c1e5117b3f65523d1c6066825bcf315e3
+  VISUAL_YOLO_MODEL_REVISION: ultralytics-assets-v8.3.0
+  RUNWAY_API_KEY_FILE: /run/secrets/runway_api_key
+  # Azure OpenAI remains an optional model provider; a blank host-managed file disables it.
+  AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+  AZURE_OPENAI_API_KEY_FILE: /run/secrets/azure_openai_api_key
+  RUNWAY_MODEL: gen3a_turbo
+  RUNWAY_MODEL_REVISION: gen3a_turbo-2024-11-06
+  RUNWAY_ESTIMATED_COST_PER_REQUEST_USD: ${RUNWAY_ESTIMATED_COST_PER_REQUEST_USD:-0.5}
+
+x-temporal-environment: &temporal-environment
+  TEMPORAL_DEPLOYMENT_MODE: self_hosted
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-motionly}
+  TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-motionly-orchestration}
+  TEMPORAL_TLS_ENABLED: "true"
+  TEMPORAL_SERVER_ROOT_CA_PATH: /run/secrets/temporal_ca_cert
+  TEMPORAL_SERVER_NAME: temporal
 
 x-media-volumes: &media-volumes
   - motionly-media:/var/data/motionly
@@ -32,7 +71,7 @@ x-media-volumes: &media-volumes
 
 services:
   volume-permissions:
-    image: alpine:3.21.3
+    image: alpine:3.21.3@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
     user: "0:0"
     restart: "no"
     network_mode: none
@@ -49,7 +88,7 @@ services:
     volumes: *media-volumes
 
   postgres:
-    image: supabase/postgres:15.8.1.060
+    image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -58,60 +97,170 @@ services:
     volumes:
       - supabase-db:/var/lib/postgresql/data
       - ../supabase/migrations:/docker-entrypoint-initdb.d:ro
+    networks: [app]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 20
 
-  redis:
-    image: redis:7.4-alpine
+  # Temporal persistence is deliberately separate from Supabase PostgreSQL so no
+  # application service can join the Temporal persistence network.
+  temporal-postgres:
+    image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
     restart: unless-stopped
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
-    volumes: [redis-data:/data]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: postgres
+    secrets: [postgres_password]
+    volumes: [temporal-db:/var/lib/postgresql/data]
+    networks: [temporal-persistence]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  temporal-db-init:
+    image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/motionly-temporal/init-postgres.sh"]
+    depends_on: { temporal-postgres: { condition: service_healthy } }
+    secrets: [postgres_password, temporal_db_password]
+    volumes:
+      - ./temporal:/opt/motionly-temporal:ro
+    networks: [temporal-persistence]
+
+  temporal-schema:
+    image: ${TEMPORAL_ADMIN_TOOLS_IMAGE:?TEMPORAL_ADMIN_TOOLS_IMAGE must be a digest-pinned Temporal image}
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/motionly-temporal/apply-schema.sh"]
+    depends_on:
+      temporal-db-init: { condition: service_completed_successfully }
+    secrets: [temporal_db_password]
+    volumes:
+      - ./temporal:/opt/motionly-temporal:ro
+    networks: [temporal-persistence]
+
+  temporal:
+    image: ${MOTIONLY_TEMPORAL_SERVER_IMAGE:?MOTIONLY_TEMPORAL_SERVER_IMAGE must be a digest-pinned GHCR custom Temporal image}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/motionly-temporal/start-server.sh"]
+    environment:
+      MOTIONLY_TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-motionly}
+      MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL: ${TEMPORAL_BOOTSTRAP_ADMIN_UNTIL:?TEMPORAL_BOOTSTRAP_ADMIN_UNTIL must be a short-lived RFC3339 timestamp}
+    depends_on:
+      temporal-schema: { condition: service_completed_successfully }
+    secrets:
+      [
+        temporal_db_password,
+        temporal_ca_cert,
+        temporal_server_cert,
+        temporal_server_key,
+        temporal_internode_cert,
+        temporal_internode_key,
+        temporal_diagnostics_cert,
+        temporal_diagnostics_key,
+      ]
+    volumes:
+      - ./temporal:/opt/motionly-temporal:ro
+    networks: [temporal-control, temporal-persistence]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "temporal operator cluster health --address 127.0.0.1:7233 --tls --tls-ca-path /run/secrets/temporal_ca_cert --tls-cert-path /run/secrets/temporal_diagnostics_cert --tls-key-path /run/secrets/temporal_diagnostics_key --tls-server-name temporal",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  temporal-namespace:
+    image: ${TEMPORAL_ADMIN_TOOLS_IMAGE:?TEMPORAL_ADMIN_TOOLS_IMAGE must be a digest-pinned Temporal image}
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/motionly-temporal/bootstrap-namespace.sh"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_SERVER_NAME: temporal
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-motionly}
+      TEMPORAL_NAMESPACE_RETENTION: ${TEMPORAL_NAMESPACE_RETENTION:-7d}
+    depends_on:
+      temporal: { condition: service_healthy }
+    secrets:
+      [temporal_ca_cert, temporal_namespace_bootstrap_cert, temporal_namespace_bootstrap_key]
+    volumes:
+      - ./temporal:/opt/motionly-temporal:ro
+    networks: [temporal-control]
+
+  redis:
+    image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    restart: unless-stopped
+    # Redis has no *_FILE option for requirepass.  Build an ephemeral local
+    # config from the mounted secret so the password never appears in argv.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        printf 'requirepass %s\nappendonly yes\n' "$(cat /run/secrets/redis_password)" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf
+    secrets: [redis_password]
+    volumes: [redis-data:/data]
+    networks: [app]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "REDISCLI_AUTH=$$(cat /run/secrets/redis_password) redis-cli ping",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
 
   supabase-auth:
-    image: supabase/gotrue:v2.170.0
+    image: supabase/gotrue:v2.170.0@sha256:0cfa54e096dcae4ed30162811fa8794f7c443708c41973329e07f7d44c1cc3e7
     depends_on: { postgres: { condition: service_healthy } }
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@postgres:5432/postgres
-      GOTRUE_SITE_URL: https://${APP_DOMAIN}
-      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
-      API_EXTERNAL_URL: https://${SUPABASE_DOMAIN}
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production Compose}@postgres:5432/postgres
+      GOTRUE_SITE_URL: https://${APP_DOMAIN:?APP_DOMAIN is required for production Compose}
+      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required for production Compose}
+      API_EXTERNAL_URL: https://${SUPABASE_DOMAIN:?SUPABASE_DOMAIN is required for production Compose}
+
+    networks: [app]
 
   supabase-rest:
-    image: postgrest/postgrest:v12.2.8
+    image: postgrest/postgrest:v12.2.8@sha256:e5978740a590628f2114730bb942f35342ea70b8b7a86697a3df283c0caea109
     depends_on: { postgres: { condition: service_healthy } }
     environment:
-      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production Compose}@postgres:5432/postgres
       PGRST_DB_SCHEMAS: public,storage,graphql_public
       PGRST_DB_ANON_ROLE: anon
-      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required for production Compose}
+
+    networks: [app]
 
   supabase-storage:
-    image: supabase/storage-api:v1.14.5
+    image: supabase/storage-api:v1.14.5@sha256:ee0826bde4966c4cb70b79605ea5197d708dfa6ceeee7f427c4cad8b539ffda3
     depends_on: { postgres: { condition: service_healthy } }
     environment:
-      ANON_KEY: ${SUPABASE_ANON_KEY}
-      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required for production Compose}
+      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required for production Compose}
       POSTGREST_URL: http://supabase-rest:3000
-      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET}
-      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required for production Compose}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production Compose}@postgres:5432/postgres
       FILE_SIZE_LIMIT: 536870912
       STORAGE_BACKEND: file
       FILE_STORAGE_BACKEND_PATH: /var/lib/storage
     volumes: [supabase-storage:/var/lib/storage]
 
+    networks: [app]
+
   supabase-gateway:
-    image: kong:2.8.1
+    image: kong:2.8.1@sha256:1b53405d8680a09d6f44494b7990bf7da2ea43f84a258c59717d4539abf09f6d
     depends_on: [supabase-auth, supabase-rest, supabase-storage]
     environment:
       KONG_DATABASE: "off"
@@ -120,58 +269,167 @@ services:
       KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth
     volumes: [./supabase-kong.yml:/kong/kong.yml:ro]
 
+    networks: [app]
+
   api:
-    build:
-      context: ..
-      dockerfile: apps/api/Dockerfile
+    image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
     restart: unless-stopped
     environment:
-      <<: *media-environment
+      <<: [*media-environment, *temporal-environment]
       PROCESS_ROLE: api
       ADMIN_API_TOKEN_FILE: /run/secrets/admin_api_token
       PUBLISH_OAUTH_STATE_SECRET_FILE: /run/secrets/publish_oauth_state_secret
-      API_PUBLIC_BASE_URL: https://${API_DOMAIN}
-      API_CORS_ORIGINS: https://${APP_DOMAIN}
-      SENTRY_DSN: ${SENTRY_DSN}
+      METRICS_BEARER_TOKEN_FILE: /run/secrets/metrics_bearer_token
+      TEMPORAL_CLIENT_ROLE: api
+      TEMPORAL_IDENTITY: motionly-api
+      TEMPORAL_CLIENT_CERT_PATH: /run/secrets/temporal_api_cert
+      TEMPORAL_CLIENT_PRIVATE_KEY_PATH: /run/secrets/temporal_api_key
+      API_PUBLIC_BASE_URL: https://${API_DOMAIN:?API_DOMAIN is required for production Compose}
+      API_CORS_ORIGINS: https://${APP_DOMAIN:?APP_DOMAIN is required for production Compose}
+      SENTRY_DSN: ${SENTRY_DSN:?SENTRY_DSN is required for production Compose}
       WORKER_API_BASE_URL: http://api:8000
     secrets:
-      [supabase_service_role_key, supabase_jwt_secret, worker_api_token, admin_api_token, publish_token_encryption_key, publish_oauth_state_secret]
+      [
+        supabase_service_role_key,
+        supabase_jwt_secret,
+        worker_api_token,
+        admin_api_token,
+        publish_token_encryption_key,
+        publish_oauth_state_secret,
+        groq_api_key,
+        openrouter_api_key,
+        runway_api_key,
+        azure_openai_api_key,
+        metrics_bearer_token,
+        temporal_ca_cert,
+        temporal_api_cert,
+        temporal_api_key,
+      ]
     depends_on:
       volume-permissions: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       postgres: { condition: service_healthy }
     volumes: *media-volumes
 
+    networks: [app, temporal-control]
+
+  temporal-dispatcher:
+    image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - app.orchestration.main
+      - temporal-dispatcher
+    environment:
+      <<: *temporal-environment
+      APP_ENV: production
+      PROCESS_ROLE: temporal-dispatcher
+      SUPABASE_URL: http://supabase-gateway:8000
+      SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
+      SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
+      TEMPORAL_DISPATCHER_ID: compose-dispatcher
+      TEMPORAL_CLIENT_ROLE: dispatcher
+      TEMPORAL_IDENTITY: motionly-dispatcher
+      TEMPORAL_CLIENT_CERT_PATH: /run/secrets/temporal_dispatcher_cert
+      TEMPORAL_CLIENT_PRIVATE_KEY_PATH: /run/secrets/temporal_dispatcher_key
+    secrets:
+      [supabase_service_role_key, supabase_jwt_secret, temporal_ca_cert, temporal_dispatcher_cert, temporal_dispatcher_key]
+    depends_on:
+      temporal-namespace: { condition: service_completed_successfully }
+      supabase-gateway: { condition: service_started }
+
+    networks: [app, temporal-control]
+
+  temporal-worker:
+    image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - app.orchestration.main
+      - temporal-worker
+    environment:
+      <<: *temporal-environment
+      APP_ENV: production
+      PROCESS_ROLE: temporal-worker
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required for production Compose}@redis:6379/0
+      SUPABASE_URL: http://supabase-gateway:8000
+      SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
+      SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
+      WORKER_API_BASE_URL: http://api:8000
+      WORKER_API_TOKEN_FILE: /run/secrets/worker_api_token
+      TEMPORAL_CLIENT_ROLE: worker
+      TEMPORAL_IDENTITY: motionly-temporal-worker
+      TEMPORAL_CLIENT_CERT_PATH: /run/secrets/temporal_worker_cert
+      TEMPORAL_CLIENT_PRIVATE_KEY_PATH: /run/secrets/temporal_worker_key
+    secrets:
+      [supabase_service_role_key, supabase_jwt_secret, worker_api_token, temporal_ca_cert, temporal_worker_cert, temporal_worker_key]
+    depends_on:
+      temporal-namespace: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      api: { condition: service_started }
+
+    networks: [app, temporal-control]
+
+  workflow-reconciler:
+    image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - app.orchestration.main
+      - workflow-reconciler
+    environment:
+      <<: *temporal-environment
+      APP_ENV: production
+      PROCESS_ROLE: workflow-reconciler
+      SUPABASE_URL: http://supabase-gateway:8000
+      SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
+      SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
+      TEMPORAL_DISPATCHER_ID: compose-reconciler
+      TEMPORAL_CLIENT_ROLE: reconciler
+      TEMPORAL_IDENTITY: motionly-reconciler
+      TEMPORAL_CLIENT_CERT_PATH: /run/secrets/temporal_reconciler_cert
+      TEMPORAL_CLIENT_PRIVATE_KEY_PATH: /run/secrets/temporal_reconciler_key
+    secrets:
+      [supabase_service_role_key, supabase_jwt_secret, temporal_ca_cert, temporal_reconciler_cert, temporal_reconciler_key]
+    depends_on:
+      temporal-namespace: { condition: service_completed_successfully }
+      supabase-gateway: { condition: service_started }
+
+    networks: [app, temporal-control]
+
   web:
-    build:
-      context: ..
-      dockerfile: apps/web/Dockerfile
+    image: ${MOTIONLY_WEB_IMAGE:?MOTIONLY_WEB_IMAGE must be a digest-pinned GHCR image}
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_APP_URL: https://${APP_DOMAIN}
-      NEXT_PUBLIC_API_BASE_URL: https://${API_DOMAIN}
-      NEXT_PUBLIC_SUPABASE_URL: https://${SUPABASE_DOMAIN}
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_APP_URL: https://${APP_DOMAIN:?APP_DOMAIN is required for production Compose}
+      NEXT_PUBLIC_API_BASE_URL: https://${API_DOMAIN:?API_DOMAIN is required for production Compose}
+      NEXT_PUBLIC_SUPABASE_URL: https://${SUPABASE_DOMAIN:?SUPABASE_DOMAIN is required for production Compose}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required for production Compose}
     depends_on: [api]
 
+    networks: [app]
+
   ingress:
-    image: caddy:2.8-alpine
+    image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
-      APP_DOMAIN: ${APP_DOMAIN}
-      API_DOMAIN: ${API_DOMAIN}
-      SUPABASE_DOMAIN: ${SUPABASE_DOMAIN}
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required for production Compose}
+      API_DOMAIN: ${API_DOMAIN:?API_DOMAIN is required for production Compose}
+      SUPABASE_DOMAIN: ${SUPABASE_DOMAIN:?SUPABASE_DOMAIN is required for production Compose}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on: [web, api, supabase-gateway]
 
+    networks: [ingress, app]
+
   cpu-ffmpeg-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.python
+    image: ${MOTIONLY_CPU_FFMPEG_WORKER_IMAGE:?MOTIONLY_CPU_FFMPEG_WORKER_IMAGE must be a digest-pinned GHCR image}
     environment:
       <<: *media-environment
       WORKER_QUEUES: upload_preprocess,render
@@ -179,13 +437,22 @@ services:
     restart: unless-stopped
     depends_on: *worker-depends-on
     volumes: *media-volumes
-    secrets: &worker-secrets
-      [supabase_service_role_key, supabase_jwt_secret, worker_api_token, publish_token_encryption_key]
+    secrets:
+      &worker-secrets [
+        supabase_service_role_key,
+        supabase_jwt_secret,
+        worker_api_token,
+        publish_token_encryption_key,
+        groq_api_key,
+        openrouter_api_key,
+        runway_api_key,
+        azure_openai_api_key,
+      ]
+
+    networks: [app]
 
   gpu-inference-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.gpu
+    image: ${MOTIONLY_GPU_WORKER_IMAGE:?MOTIONLY_GPU_WORKER_IMAGE must be a digest-pinned GHCR image}
     gpus: all
     environment:
       <<: *media-environment
@@ -198,10 +465,10 @@ services:
     volumes: *media-volumes
     secrets: *worker-secrets
 
+    networks: [app]
+
   matte-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.gpu
+    image: ${MOTIONLY_GPU_WORKER_IMAGE:?MOTIONLY_GPU_WORKER_IMAGE must be a digest-pinned GHCR image}
     gpus: all
     environment:
       <<: *media-environment
@@ -214,10 +481,10 @@ services:
     volumes: *media-volumes
     secrets: *worker-secrets
 
+    networks: [app]
+
   gpu-ffmpeg-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.python
+    image: ${MOTIONLY_GPU_FFMPEG_WORKER_IMAGE:?MOTIONLY_GPU_FFMPEG_WORKER_IMAGE must be a digest-pinned GHCR image}
     gpus: all
     environment:
       <<: *media-environment
@@ -230,12 +497,10 @@ services:
     volumes: *media-volumes
     secrets: *worker-secrets
 
+    networks: [app]
+
   demucs-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.python
-      args:
-        API_EXTRAS: demucs
+    image: ${MOTIONLY_DEMUCS_WORKER_IMAGE:?MOTIONLY_DEMUCS_WORKER_IMAGE must be a digest-pinned GHCR image}
     environment:
       <<: *media-environment
       WORKER_QUEUES: audio_demucs
@@ -246,10 +511,10 @@ services:
     volumes: *media-volumes
     secrets: *worker-secrets
 
+    networks: [app]
+
   provider-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.python
+    image: ${MOTIONLY_PROVIDER_WORKER_IMAGE:?MOTIONLY_PROVIDER_WORKER_IMAGE must be a digest-pinned GHCR image}
     environment:
       <<: *media-environment
       WORKER_QUEUES: provider_calls
@@ -259,10 +524,10 @@ services:
     volumes: *media-volumes
     secrets: *worker-secrets
 
+    networks: [app]
+
   planning-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.python
+    image: ${MOTIONLY_PLANNING_WORKER_IMAGE:?MOTIONLY_PLANNING_WORKER_IMAGE must be a digest-pinned GHCR image}
     environment:
       <<: *media-environment
       WORKER_QUEUES: planning,stock_search,stock_asset_enrichment,audio,intelligence,maintenance
@@ -272,12 +537,18 @@ services:
     volumes: *media-volumes
     secrets: *worker-secrets
 
+    networks: [app]
+
   remotion-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile
+    image: ${MOTIONLY_REMOTION_WORKER_IMAGE:?MOTIONLY_REMOTION_WORKER_IMAGE must be a digest-pinned GHCR image}
     environment:
       <<: *media-environment
+      # Chromium receives only loopback URLs from the worker media proxy. Do not
+      # inherit host proxy settings that could create an alternate egress path.
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: 127.0.0.1,localhost,::1
       WORKER_QUEUES: render_remotion
       REMOTION_ENABLED: "true"
       WORKER_CONCURRENCY: "1"
@@ -286,10 +557,10 @@ services:
     volumes: *media-volumes
     secrets: *worker-secrets
 
+    networks: [app]
+
   publishing-worker:
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.python
+    image: ${MOTIONLY_PUBLISHING_WORKER_IMAGE:?MOTIONLY_PUBLISHING_WORKER_IMAGE must be a digest-pinned GHCR image}
     environment:
       <<: *media-environment
       WORKER_QUEUES: publish
@@ -298,11 +569,13 @@ services:
     depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets: *worker-secrets
+    networks: [app]
 
 volumes:
   motionly-media:
   motionly-model-cache:
   supabase-db:
+  temporal-db:
   supabase-storage:
   redis-data:
   caddy-data:
@@ -310,16 +583,76 @@ volumes:
 
 secrets:
   postgres_password:
-    file: ./secrets/postgres_password
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/postgres_password
+  redis_password:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/redis_password
+  temporal_db_password:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_db_password
   supabase_service_role_key:
-    file: ./secrets/supabase_service_role_key
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/supabase_service_role_key
   supabase_jwt_secret:
-    file: ./secrets/supabase_jwt_secret
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/supabase_jwt_secret
   admin_api_token:
-    file: ./secrets/admin_api_token
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/admin_api_token
   worker_api_token:
-    file: ./secrets/worker_api_token
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/worker_api_token
   publish_token_encryption_key:
-    file: ./secrets/publish_token_encryption_key
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/publish_token_encryption_key
   publish_oauth_state_secret:
-    file: ./secrets/publish_oauth_state_secret
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/publish_oauth_state_secret
+
+  groq_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/groq_api_key
+  openrouter_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/openrouter_api_key
+  runway_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/runway_api_key
+  azure_openai_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/azure_openai_api_key
+  metrics_bearer_token:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/metrics_bearer_token
+  temporal_ca_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_ca_cert
+  temporal_server_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_server_cert
+  temporal_server_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_server_key
+  temporal_internode_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_internode_cert
+  temporal_internode_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_internode_key
+  temporal_api_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_api_cert
+  temporal_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_api_key
+  temporal_dispatcher_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_dispatcher_cert
+  temporal_dispatcher_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_dispatcher_key
+  temporal_worker_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_worker_cert
+  temporal_worker_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_worker_key
+  temporal_reconciler_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_reconciler_cert
+  temporal_reconciler_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_reconciler_key
+  temporal_namespace_bootstrap_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_namespace_bootstrap_cert
+  temporal_namespace_bootstrap_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_namespace_bootstrap_key
+  temporal_diagnostics_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_diagnostics_cert
+  temporal_diagnostics_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the 0600 host secret directory}/temporal_diagnostics_key
+
+networks:
+  # Ingress is the sole public egress/edge network (Caddy needs ACME access).
+  # Every non-edge service network remains explicitly private.
+  ingress: {}
+  app:
+    internal: true
+  temporal-control:
+    internal: true
+  temporal-persistence:
+    internal: true

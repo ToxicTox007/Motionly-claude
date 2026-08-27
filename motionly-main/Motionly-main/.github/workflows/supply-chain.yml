@@ -1,0 +1,309 @@
+name: Supply chain
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  security-events: write
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: 9.15.4
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.12"
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  locked-dependencies:
+    name: Verify locked dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install JavaScript dependencies from the frozen lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify Python lockfiles and hashes
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-ml.lock --dry-run
+      - name: Verify Python package licenses
+        run: pip-licenses --fail-on='GPL;AGPL;LGPL'
+      - name: Verify npm lockfiles
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund --prefix apps/api/worker-bridge
+          npm ci --ignore-scripts --no-audit --no-fund --prefix apps/worker
+
+  sast:
+    name: CodeQL SAST
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  build-scan-sign:
+    name: Build, scan, attest, and sign ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    needs: [locked-dependencies]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: api
+            dockerfile: apps/api/Dockerfile
+            build_args: ""
+          - component: web
+            dockerfile: apps/web/Dockerfile
+            build_args: ""
+          - component: cpu-worker
+            dockerfile: apps/worker/Dockerfile.python
+            build_args: ""
+          - component: gpu-worker
+            dockerfile: apps/worker/Dockerfile.gpu
+            build_args: ""
+          - component: demucs-worker
+            dockerfile: apps/worker/Dockerfile.python
+            build_args: API_EXTRAS=demucs
+          - component: remotion-worker
+            dockerfile: apps/worker/Dockerfile
+            build_args: ""
+          - component: temporal-server
+            dockerfile: infra/temporal/server/Dockerfile
+            build_args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR before a release push
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the immutable linux/amd64 release candidate
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build_args }}
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: Scan image vulnerabilities and embedded secrets
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0.17.3
+        with:
+          image: ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
+          artifact-name: sbom-${{ matrix.component }}
+          output-file: sbom-${{ matrix.component }}.spdx.json
+      - name: Upload component SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.component }}
+          path: sbom-${{ matrix.component }}.spdx.json
+          if-no-files-found: error
+      - name: Record the immutable pushed digest
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p release-digests
+          test -n '${{ steps.build.outputs.digest }}'
+          printf '%s\n' '${{ steps.build.outputs.digest }}' > release-digests/${{ matrix.component }}.digest
+      - name: Upload component digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.component }}
+          path: release-digests/${{ matrix.component }}.digest
+          if-no-files-found: error
+      - name: Install Cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v3.8.1
+      - name: Sign the pushed digest with GitHub OIDC
+        if: github.event_name == 'push'
+        run: >-
+          cosign sign --yes
+          "${{ env.IMAGE_PREFIX }}/${{ matrix.component }}@${{ steps.build.outputs.digest }}"
+
+  release-manifest:
+    name: Generate signed immutable release manifest
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: [build-scan-sign]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all component digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: release-digests
+          merge-multiple: true
+      - name: Download all SBOM evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-*
+          path: release-sboms
+          merge-multiple: true
+      - name: Build canonical deployment bundle from Compose bind mounts
+        run: >-
+          python scripts/release/package_release_bundle.py
+          --output release-bundle.tar.gz
+          --layout-output release-bundle.layout.json
+      - name: Generate archive-bound Compose release manifest
+        env:
+          IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
+        run: |
+          set -euo pipefail
+          digest() { tr -d '\n' < "release-digests/$1.digest"; }
+          python scripts/release/generate_release_manifest.py \
+            --revision '${{ github.sha }}' \
+            --bundle release-bundle.tar.gz \
+            --bundle-layout release-bundle.layout.json \
+            --output release-manifest.json \
+            --image "MOTIONLY_API_IMAGE=${IMAGE_PREFIX}/api@$(digest api)" \
+            --image "MOTIONLY_WEB_IMAGE=${IMAGE_PREFIX}/web@$(digest web)" \
+            --image "MOTIONLY_CPU_FFMPEG_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_GPU_WORKER_IMAGE=${IMAGE_PREFIX}/gpu-worker@$(digest gpu-worker)" \
+            --image "MOTIONLY_GPU_FFMPEG_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_DEMUCS_WORKER_IMAGE=${IMAGE_PREFIX}/demucs-worker@$(digest demucs-worker)" \
+            --image "MOTIONLY_PROVIDER_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_PLANNING_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_REMOTION_WORKER_IMAGE=${IMAGE_PREFIX}/remotion-worker@$(digest remotion-worker)" \
+            --image "MOTIONLY_PUBLISHING_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_TEMPORAL_SERVER_IMAGE=${IMAGE_PREFIX}/temporal-server@$(digest temporal-server)" \
+            --sbom api=sbom-api.spdx.json \
+            --sbom web=sbom-web.spdx.json \
+            --sbom cpu-worker=sbom-cpu-worker.spdx.json \
+            --sbom gpu-worker=sbom-gpu-worker.spdx.json \
+            --sbom demucs-worker=sbom-demucs-worker.spdx.json \
+            --sbom remotion-worker=sbom-remotion-worker.spdx.json \
+            --sbom temporal-server=sbom-temporal-server.spdx.json
+      - name: Verify the archive against the unsigned manifest before signing
+        run: >-
+          python scripts/release/generate_release_manifest.py
+          --validate-bundle --manifest release-manifest.json --bundle release-bundle.tar.gz
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.1
+      - name: Sign release manifest with GitHub OIDC
+        run: >-
+          cosign sign-blob --yes
+          --output-signature release-manifest.sig
+          --output-certificate release-manifest.pem
+          release-manifest.json
+      - name: Upload signed release manifest and SBOM evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: |
+            release-manifest.json
+            release-manifest.sig
+            release-manifest.pem
+            release-bundle.tar.gz
+            release-bundle.layout.json
+            release-sboms/*.spdx.json
+          if-no-files-found: error
+
+  release-compose-integration:
+    name: Full ephemeral Compose integration (release only)
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
+    runs-on: [self-hosted, linux, x64, gpu]
+    needs: [release-manifest]
+    permissions:
+      contents: read
+      packages: read
+    env:
+      COMPOSE_PROJECT_NAME: motionly-release-${{ github.run_id }}
+      RELEASE_INPUT_ROOT: ${{ runner.temp }}/motionly-release-compose-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download signed release manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: release-artifacts
+      - name: Log in to GHCR with the workflow read token
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate, extract, and prepare the signed release topology
+        run: |
+          set -euo pipefail
+          python scripts/release/generate_release_manifest.py \
+            --validate-bundle \
+            --manifest release-artifacts/release-manifest.json \
+            --bundle release-artifacts/release-bundle.tar.gz
+          mkdir -p "$RELEASE_INPUT_ROOT/bundle"
+          tar -xzf release-artifacts/release-bundle.tar.gz -C "$RELEASE_INPUT_ROOT/bundle"
+          python scripts/release/write_compose_test_env.py \
+            --manifest release-artifacts/release-manifest.json \
+            --env-file "$RELEASE_INPUT_ROOT/compose.env" \
+            --secrets-dir "$RELEASE_INPUT_ROOT/secrets"
+      - name: Validate and pull the exact release topology
+        run: |
+          set -euo pipefail
+          docker compose --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" config -q
+          docker compose --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" pull
+      - name: Start and verify the full Compose release topology
+        run: |
+          set -euo pipefail
+          docker compose --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" up -d --wait --wait-timeout 240 --remove-orphans
+          docker compose --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" exec -T api \
+            python -c "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/health/live').status == 200"
+          docker compose --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" exec -T web \
+            node -e "fetch('http://127.0.0.1:3000/login').then(response => { if (!response.ok) process.exit(1) })"
+      - name: Collect Compose logs
+        if: always()
+        run: >-
+          docker compose --env-file "$RELEASE_INPUT_ROOT/compose.env"
+          -f infra/docker-compose.gpu.yml logs --no-color > "$RELEASE_INPUT_ROOT/compose.log" || true
+      - name: Upload release integration logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-compose-logs-${{ github.sha }}
+          path: ${{ runner.temp }}/motionly-release-compose-${{ github.run_id }}/compose.log
+          if-no-files-found: warn
+      - name: Remove ephemeral Compose resources and generated secrets
+        if: always()
+        run: |
+          docker compose --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" down -v --remove-orphans || true
+          rm -rf "$RELEASE_INPUT_ROOT"

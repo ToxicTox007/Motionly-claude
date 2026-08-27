@@ -11,8 +11,14 @@ from app.schemas.effects import BackgroundRemovalSettings
 from app.schemas.uploads import UploadStatus
 from app.schemas.visual import MatteStatus, SegmentationMatte
 from app.services.local_storage import create_object_storage
+from app.services.model_gateway import (
+    MatteSegmentationOutput,
+    MatteSegmentationRequest,
+    ModelCallContext,
+)
 from app.services.queue import MatteQueue
 from app.services.segmentation_matte import generate_selfie_segmentation_matte
+from app.services.worker_media import materialize_upload_source
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +177,9 @@ def run_matte_for_upload(
     supabase_url: str | None,
     service_role_key: str | None,
     provider_models: dict[str, object],
+    model_gateway=None,
+    matte_gateway_route=None,
+    production: bool = False,
 ) -> MatteRecord:
     upload = repository.get_upload(
         project_id=project_id,
@@ -212,7 +221,7 @@ def run_matte_for_upload(
         supabase_url=supabase_url,
         service_role_key=service_role_key,
     )
-    source_path = storage.ensure_object(bucket=upload.storage_bucket, path=upload.storage_path)
+    source_path = materialize_upload_source(upload=upload, storage=storage)
     source_hash = source_file_sha256(source_path)
     final_cache_key = build_matte_cache_key(
         upload_id=video_id,
@@ -242,7 +251,39 @@ def run_matte_for_upload(
         )
         with tempfile.TemporaryDirectory(prefix="motionly-matte-worker-") as temp_dir:
             local_matte = Path(temp_dir) / "matte.mp4"
-            if not provider_models or "cv2" not in provider_models:
+            matte_provenance = record.model_version
+            if model_gateway is not None and matte_gateway_route is not None:
+                segmented = model_gateway.invoke(
+                    MatteSegmentationRequest(
+                        source_path=source_path,
+                        output_path=local_matte,
+                        metadata=upload.metadata,
+                    ),
+                    context=ModelCallContext(
+                        workspace_id=workspace_id,
+                        project_id=project_id,
+                        required_route_id=matte_gateway_route.route_id,
+                        required_model_revision=matte_gateway_route.model_revision,
+                    ),
+                )
+                if not isinstance(segmented.output, MatteSegmentationOutput):
+                    raise TypeError("matte route returned the wrong typed output")
+                stats = {
+                    "fps": segmented.output.fps,
+                    "width": segmented.output.width,
+                    "height": segmented.output.height,
+                    "frame_count": segmented.output.frame_count,
+                }
+                matte_provenance = (
+                    f"{segmented.metadata.route_id}@{segmented.metadata.model_revision}"
+                )
+            elif production:
+                raise ApiError(
+                    503,
+                    "matte_gateway_route_required",
+                    "Production matte segmentation requires an executable gateway route.",
+                )
+            elif not provider_models or "cv2" not in provider_models:
                 import subprocess
 
                 duration_sec = (upload.metadata.duration_ms or 6000) / 1000.0
@@ -292,7 +333,7 @@ def run_matte_for_upload(
         matte = SegmentationMatte(
             bucket=upload.storage_bucket,
             path=matte_path,
-            model=record.model_version,
+            model=matte_provenance,
             fps=float(stats["fps"]),
             width=int(stats["width"]),
             height=int(stats["height"]),

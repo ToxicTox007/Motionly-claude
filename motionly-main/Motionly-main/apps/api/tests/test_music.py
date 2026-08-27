@@ -425,11 +425,12 @@ def test_music_api_prefers_async_repository_methods() -> None:
         )
     )
 
-    assert cached.cached is True
+    # Fixture tracks intentionally have no catalog evidence, so their selections
+    # must never be trusted as reusable production cache entries.
+    assert cached.cached is False
     assert repository.async_calls == [
         "find-cache",
         "find-cache",
-        "response-for-selection",
         "latest-selection",
         "response-for-selection",
         "latest-selection",
@@ -566,8 +567,10 @@ def test_select_music_reuses_cached_selection() -> None:
         providers=[FixtureMusicProvider()],
     )
 
-    assert second.cached is True
-    assert second.selection.id == first.selection.id
+    # Fixture tracks intentionally have no catalog evidence, so their selections
+    # must never be trusted as reusable production cache entries.
+    assert second.cached is False
+    assert second.selection.id != first.selection.id
 
 
 def test_select_music_rejects_cross_workspace_access() -> None:
@@ -594,6 +597,16 @@ def test_licensed_catalog_provider_returns_real_audio_metadata(monkeypatch) -> N
                     "provider_track_id": "catalog-clean-1",
                     "title": "Licensed Clean Bed",
                     "license": "motionly_catalog_standard",
+                    "rights_status": "cleared",
+                    "rights_grant_id": "grant-catalog-clean-1",
+                    "rights_grant_version": "2026-08",
+                    "rights_valid_from": "2020-01-01T00:00:00+00:00",
+                    "rights_valid_until": "2050-01-01T00:00:00+00:00",
+                    "permitted_uses": ["editorial_export"],
+                    "license_evidence_hash": (
+                        "0123456789abcdef0123456789abcdef"
+                        "0123456789abcdef0123456789abcdef"
+                    ),
                     "duration_ms": 60_000,
                     "mood_tags": ["clean", "confident"],
                     "bpm": 92,

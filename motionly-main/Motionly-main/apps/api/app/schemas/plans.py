@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.request_body import JsonStringBodyMixin
+from app.services.media_url_policy import sanitize_manual_element_properties
 
 EDIT_PLAN_SCHEMA_VERSION = 2
 EDIT_PLAN_PROMPT_VERSION = "edit-planner-prompt-v2"
@@ -145,6 +146,10 @@ class ManualElement(BaseModel):
     def validate_range(self) -> "ManualElement":
         if self.end_ms <= self.start_ms:
             raise ValueError("manual element end_ms must be greater than start_ms")
+        try:
+            self.properties = sanitize_manual_element_properties(self.type, self.properties)
+        except ValueError as exc:
+            raise ValueError("manual element properties are invalid") from exc
         return self
 
 
@@ -244,6 +249,12 @@ class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
     broll_density: BrollDensity = BrollDensity.MEDIUM
     feedback: str | None = Field(default=None, max_length=800)
     force: bool = False
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
     style_profile_id: UUID | None = None
     saved_template_id: UUID | None = None
 
@@ -312,23 +323,32 @@ class EditPlanResponse(BaseModel):
 
 class PlanCreateResponse(BaseModel):
     plan: EditPlanResponse | None = None
+    proposal_id: UUID | None = None
+    proposal_revision: int | None = None
     job_id: str
     status: str = "ready"
     cached: bool = False
     project_id: UUID | None = None
     status_url: str | None = None
+    proposal_url: str | None = None
 
 
 class PlanJobStatusResponse(BaseModel):
     status: str
     progress: int
     plan_id: UUID | None = None
+    proposal_id: UUID | None = None
+    proposal_revision: int | None = None
     failure_reason: str | None = None
 
 
 class PlanListResponse(BaseModel):
     plans: list[EditPlanResponse]
     active_plan_id: UUID | None = None
+
+
+class PlanGetResponse(BaseModel):
+    plan: EditPlanResponse
 
 
 class PlanActivateResponse(BaseModel):

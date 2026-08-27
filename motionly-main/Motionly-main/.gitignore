@@ -27,3 +27,7 @@ deployment-env/
 check_visual_intelligence.py
 studio_visual_intelligence.py
 start_deployment.py
+# Committed supply-chain lockfiles
+!package-lock.json
+# Release schema is runtime source, not generated test output.
+!infra/release-manifest.schema.json

@@ -32,9 +32,7 @@ COMPATIBLE_CLIP_MODEL_VERSION = "compatible-hash-clip-v1"
 logger = logging.getLogger(__name__)
 
 
-def ensure_owned_stock_asset(
-    *, asset, repository, settings, storage_signer: StorageSigner
-):
+def ensure_owned_stock_asset(*, asset, repository, settings, storage_signer: StorageSigner):
     if asset.provider not in {StockProviderKey.PEXELS, StockProviderKey.PIXABAY}:
         return asset
     if asset.raw_metadata.get("owned_copy"):
@@ -91,6 +89,7 @@ def ensure_owned_stock_asset(
         path=path,
         download_url=signed.url,
     )
+
 
 ABSTRACT_TERMS = {
     "growth",
@@ -330,14 +329,22 @@ class CandidateScoreDetails:
 
 
 class CompatibleClipEmbeddingProvider:
-    def __init__(self, *, model_name: str = "openai/clip-vit-base-patch32") -> None:
+    def __init__(
+        self,
+        *,
+        model_name: str = "openai/clip-vit-base-patch32",
+        allow_fallback: bool = True,
+        revision: str | None = None,
+    ) -> None:
         self.model_name = model_name
+        self.allow_fallback = allow_fallback
+        self.revision = revision
         self._loaded: dict[str, object] | None = None
         self._fallback = HashClipEmbeddingProvider(model_name=COMPATIBLE_CLIP_MODEL_VERSION)
 
     @property
     def model_version(self) -> str:
-        if self._loaded is None:
+        if self._loaded is None and self.allow_fallback:
             return self._fallback.model_version
         return self.model_name
 
@@ -347,7 +354,9 @@ class CompatibleClipEmbeddingProvider:
         try:
             models = self._load()
         except Exception:
-            return self._fallback.embed_text(text)
+            if self.allow_fallback:
+                return self._fallback.embed_text(text)
+            raise
         torch = models["torch"]
         device = models["device"]
         processor = models["processor"]
@@ -364,7 +373,12 @@ class CompatibleClipEmbeddingProvider:
         try:
             models = self._load()
         except Exception:
-            return self._fallback.embed_image(image_bytes=image_bytes, source_hint=source_hint)
+            if self.allow_fallback:
+                return self._fallback.embed_image(
+                    image_bytes=image_bytes,
+                    source_hint=source_hint,
+                )
+            raise
         Image = models["Image"]
         torch = models["torch"]
         device = models["device"]
@@ -385,8 +399,16 @@ class CompatibleClipEmbeddingProvider:
         from transformers import CLIPModel, CLIPProcessor
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        processor = CLIPProcessor.from_pretrained(self.model_name, local_files_only=True)
-        model = CLIPModel.from_pretrained(self.model_name, local_files_only=True).to(device)
+        processor = CLIPProcessor.from_pretrained(
+            self.model_name,
+            revision=self.revision,
+            local_files_only=True,
+        )
+        model = CLIPModel.from_pretrained(
+            self.model_name,
+            revision=self.revision,
+            local_files_only=True,
+        ).to(device)
         self._loaded = {
             "Image": Image,
             "torch": torch,
@@ -478,6 +500,45 @@ def build_broll_cache_key(
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def stock_asset_enrichment_refresh_key(asset) -> str:
+    """Return a stable source fingerprint for duplicate-safe enrichment dispatch."""
+    metadata = asset.raw_metadata
+    source_identity = {
+        "provider": asset.provider.value,
+        "provider_asset_id": asset.provider_asset_id,
+        "thumbnail_url": metadata.get("thumbnail_url") or asset.thumbnail_url,
+        "source_url": metadata.get("source_url") or asset.download_url or asset.preview_video_url,
+        "provider_url": metadata.get("provider_url"),
+        "query": metadata.get("query"),
+        "semantic_query": metadata.get("semantic_query"),
+        "target_shot_type": metadata.get("target_shot_type"),
+        "license_metadata": metadata.get("license_metadata"),
+        "attribution_metadata": metadata.get("attribution_metadata"),
+    }
+    serialized = json.dumps(
+        source_identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def enqueue_stock_asset_enrichment(*, queue, asset, clip_model_name: str):
+    """Enqueue the persisted asset for asynchronous, idempotent enrichment."""
+    return queue.enqueue_asset_enrichment(
+        project_id=asset.project_id,
+        workspace_id=asset.workspace_id,
+        asset_id=asset.id,
+        refresh_key=stock_asset_enrichment_refresh_key(asset),
+        job_payload=json.dumps(
+            {"clip_model_name": clip_model_name},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
 
 
 def keyword_query(request: BrollRequest, style: str) -> str:
@@ -619,7 +680,7 @@ def semantic_match_breakdown(
     embedding_score = 0.0
     raw_embedding = candidate.raw_metadata.get("embedding")
     candidate_embedding = (
-        [float(value) for value in raw_embedding if isinstance(value, (int, float))]
+        [float(value) for value in raw_embedding if isinstance(value, int | float)]
         if isinstance(raw_embedding, list)
         else []
     )
@@ -673,7 +734,7 @@ def diversity_signal(
         candidate_embedding = [
             float(value)
             for value in candidate.raw_metadata["embedding"]
-            if isinstance(value, (int, float))
+            if isinstance(value, int | float)
         ]
         similarities = [
             _cosine_similarity(candidate_embedding, embedding)
@@ -726,13 +787,21 @@ def ensure_candidate_semantic_embedding(
     candidate: StockVideoCandidate,
     semantic_query: str,
     clip_model_name: str = "openai/clip-vit-base-patch32",
+    embedding_provider=None,
+    workspace_id: object | None = None,
+    project_id: object | None = None,
 ) -> StockVideoCandidate:
     if isinstance(candidate.raw_metadata.get("embedding"), list):
         return candidate
-    provider = stock_embedding_provider(model_name=clip_model_name)
+    provider = embedding_provider or stock_embedding_provider(model_name=clip_model_name)
     metadata = {
         **candidate.raw_metadata,
-        "embedding": provider.embed_text(semantic_query),
+        "embedding": _provider_embed_text(
+            provider,
+            semantic_query,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        ),
         "embedding_model_version": provider.model_version,
         "enrichment_status": StockAssetEnrichmentStatus.COMPLETED.value,
     }
@@ -790,19 +859,34 @@ def enrich_stock_asset(
     asset,
     repository,
     clip_model_name: str,
+    embedding_provider=None,
+    workspace_id: object | None = None,
+    project_id: object | None = None,
     timeout_seconds: float = EMBEDDING_DOWNLOAD_TIMEOUT_SECONDS,
     max_attempts: int = EMBEDDING_DOWNLOAD_MAX_ATTEMPTS,
 ):
+    embedding_cache_version = getattr(
+        embedding_provider,
+        "cache_version",
+        clip_model_name,
+    )
     current_cache_key = build_stock_asset_embedding_cache_key(
         provider=asset.provider,
         provider_asset_id=asset.provider_asset_id,
-        embedding_model_version=clip_model_name,
+        embedding_model_version=embedding_cache_version,
     )
     existing_cache_key = asset.raw_metadata.get("embedding_cache_key")
+    preferred_revision = getattr(
+        embedding_provider,
+        "preferred_model_revision",
+        None,
+    )
+    selected_revision = asset.raw_metadata.get("embedding_model_version")
     if (
         asset.raw_metadata.get("enrichment_status") == StockAssetEnrichmentStatus.COMPLETED.value
         and existing_cache_key == current_cache_key
         and isinstance(asset.raw_metadata.get("embedding"), list)
+        and (preferred_revision is None or selected_revision == preferred_revision)
     ):
         logger.info(
             "stock_asset_enrichment_cache_hit",
@@ -854,7 +938,7 @@ def enrich_stock_asset(
             "enrichment_cache_hit": False,
         },
     )
-    provider = stock_embedding_provider(model_name=clip_model_name)
+    provider = embedding_provider or stock_embedding_provider(model_name=clip_model_name)
     started = time.perf_counter()
     last_reason = "embedding_unavailable"
     for attempt in range(1, max(1, max_attempts) + 1):
@@ -862,9 +946,12 @@ def enrich_stock_asset(
             with safe_http_stream(thumbnail_url, timeout=timeout_seconds) as response:
                 response.raise_for_status()
                 image_bytes = _read_bounded_thumbnail(response)
-            embedding = provider.embed_image(
+            embedding = _provider_embed_image(
+                provider,
                 image_bytes=image_bytes,
                 source_hint=thumbnail_url,
+                workspace_id=workspace_id,
+                project_id=project_id,
             )
             if not embedding:
                 last_reason = "embedding_empty"
@@ -932,11 +1019,53 @@ def query_embedding(
     *,
     semantic_query: str,
     clip_model_name: str = "openai/clip-vit-base-patch32",
+    embedding_provider=None,
+    workspace_id: object | None = None,
+    project_id: object | None = None,
 ) -> list[float]:
     if not semantic_query.strip():
         return []
-    provider = stock_embedding_provider(model_name=clip_model_name)
-    return provider.embed_text(semantic_query)
+    provider = embedding_provider or stock_embedding_provider(model_name=clip_model_name)
+    return _provider_embed_text(
+        provider,
+        semantic_query,
+        workspace_id=workspace_id,
+        project_id=project_id,
+    )
+
+
+def _provider_embed_text(
+    provider,
+    text: str,
+    *,
+    workspace_id: object | None,
+    project_id: object | None,
+) -> list[float]:
+    if hasattr(provider, "gateway"):
+        return provider.embed_text(
+            text,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+    return provider.embed_text(text)
+
+
+def _provider_embed_image(
+    provider,
+    *,
+    image_bytes: bytes,
+    source_hint: str | None,
+    workspace_id: object | None,
+    project_id: object | None,
+) -> list[float]:
+    if hasattr(provider, "gateway"):
+        return provider.embed_image(
+            image_bytes=image_bytes,
+            source_hint=source_hint,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+    return provider.embed_image(image_bytes=image_bytes, source_hint=source_hint)
 
 
 def _slug(value: str) -> str:

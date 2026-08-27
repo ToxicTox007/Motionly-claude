@@ -36,6 +36,8 @@ import {
   ChevronLeft,
   History,
   Network,
+  MessageSquare,
+  Languages,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "./toast";
@@ -48,18 +50,22 @@ import {
   startAdaptivePolling,
   RevisionConflictError,
 } from "@/lib/client-api";
-import { env } from "@/lib/env";
+import { env, resolveProxiedUrl } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
 import { useRevisionTracking } from "@/hooks/useRevisionTracking";
+import { useWorkflowStatus } from "@/hooks/useWorkflowStatus";
 import type { ConflictState } from "@/hooks/useRevisionTracking";
 import { ConflictDialog } from "./editor/ConflictDialog";
 import {
   PRODUCT_FLOW_STAGES,
   productFlowStageIndex,
-  renderStatusLabel,
   uploadStatusMessage,
 } from "@/lib/product-flow-status";
-import { EditorLayout, type CreatorTask } from "./editor-layout";
+import { EditorLayout } from "./editor-layout";
+import {
+  buildCreatorTasks,
+  inspectorTabForCreatorTask,
+} from "./editor/creator-flow";
 import { ThemeMenu } from "./theme-menu";
 import { UploadPanel } from "./upload-panel";
 import { type PaletteElement } from "./editor/dnd/element-catalog";
@@ -95,6 +101,7 @@ import type {
   UploadedVideoSummary,
   VisualPresetKey,
   VisualAnalysisStatusSummary,
+  WorkflowDetail,
 } from "@motionly/shared";
 
 // ── Props (unchanged from old editor — project page needs no changes) ─────────
@@ -109,6 +116,10 @@ interface EditorClientProps {
   uploadAssetUrls: {
     source_video_url: string | null;
     thumbnail_url: string | null;
+    source_reference_id?: string | null;
+    thumbnail_reference_id?: string | null;
+    expires_at?: string | null;
+    expires_in_seconds?: number;
   };
   transcript: TranscriptSummary | null;
   captionTracks: CaptionTrackSummary[];
@@ -121,6 +132,7 @@ interface EditorClientProps {
   exports: ExportSummary[];
   maxExportResolution: ExportResolution;
   visualStatus: VisualAnalysisStatusSummary;
+  initialWorkflow: WorkflowDetail | null;
 }
 
 type InspectorTab =
@@ -131,7 +143,15 @@ type InspectorTab =
   | "look"
   | "history"
   | "scale"
+  | "review"
+  | "publish"
   | "export";
+
+type PendingReviewProposal = {
+  proposalId: string;
+  proposalRevision: number;
+  statusUrl: string | null;
+};
 
 type EditorUiState = {
   title: string;
@@ -182,6 +202,13 @@ const ExportStep = dynamic(
   () => import("./editor/export-step").then((mod) => mod.ExportStep),
   { loading: () => <InspectorLoading /> },
 );
+const PublishingLibraryPanel = dynamic(
+  () =>
+    import("./editor/PublishingLibraryPanel").then(
+      (mod) => mod.PublishingLibraryPanel,
+    ),
+  { loading: () => <InspectorLoading /> },
+);
 const VersionHistoryPanel = dynamic(
   () =>
     import("./editor/VersionHistoryPanel").then(
@@ -191,6 +218,10 @@ const VersionHistoryPanel = dynamic(
 );
 const ScalePanel = dynamic(
   () => import("./editor/ScalePanel").then((mod) => mod.ScalePanel),
+  { loading: () => <InspectorLoading /> },
+);
+const ReviewPanel = dynamic(
+  () => import("./editor/ReviewPanel").then((mod) => mod.ReviewPanel),
   { loading: () => <InspectorLoading /> },
 );
 const ElementPalette = dynamic(
@@ -228,6 +259,8 @@ export function EditorClient(props: EditorClientProps) {
     selectedClipId: null,
     inspectorTab: props.activePlanId ? "captions" : "ai",
   });
+  const [pendingReviewProposal, setPendingReviewProposal] =
+    useState<PendingReviewProposal | null>(null);
   const {
     title: localTitle,
     saveStatus,
@@ -350,7 +383,12 @@ export function EditorClient(props: EditorClientProps) {
       selectedSourceClipStartMs: selectedTimelineClip.startMs,
       selectedSourceClipEndMs: selectedTimelineClip.endMs,
     };
-  }, [localEffectsConfig, previewLook, selectedTimelineClip, visualStatus.matte_preview]);
+  }, [
+    localEffectsConfig,
+    previewLook,
+    selectedTimelineClip,
+    visualStatus.matte_preview,
+  ]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- server refresh can replace transcript props while local polling owns interim state
@@ -434,20 +472,28 @@ export function EditorClient(props: EditorClientProps) {
   );
 
   const revisionTracking = useRevisionTracking(projectId, localActivePlanId);
-  const { updateRevision, handleConflict, clearConflict, conflictState, getExpectedRevision } =
-    revisionTracking;
+  const {
+    updateRevision,
+    handleConflict,
+    clearConflict,
+    conflictState,
+    getExpectedRevision,
+  } = revisionTracking;
 
-  const handlePlanUpdated = useCallback((plan: EditPlanRecordSummary) => {
-    setLocalEditPlans((prev) => {
-      const without = prev.filter((p) => p.id !== plan.id);
-      return [plan, ...without];
-    });
-    setLocalActivePlanId(plan.id);
-    // Track revision from API response (backward compatible — ignores null)
-    if ((plan as any).revision != null) {
-      updateRevision((plan as any).revision, "plan");
-    }
-  }, [updateRevision]);
+  const handlePlanUpdated = useCallback(
+    (plan: EditPlanRecordSummary) => {
+      setLocalEditPlans((prev) => {
+        const without = prev.filter((p) => p.id !== plan.id);
+        return [plan, ...without];
+      });
+      setLocalActivePlanId(plan.id);
+      // Track revision from API response (backward compatible — ignores null)
+      if ((plan as any).revision != null) {
+        updateRevision((plan as any).revision, "plan");
+      }
+    },
+    [updateRevision],
+  );
 
   const synchronizeCanonicalTimeline = useCallback(async () => {
     if (!localActivePlanId) return;
@@ -526,7 +572,8 @@ export function EditorClient(props: EditorClientProps) {
 
   const executeHistoryAction = useCallback(
     async (action: DurableHistoryAction) => {
-      const expectedRev = action.resultKind === "plan" ? getExpectedRevision() : undefined;
+      const expectedRev =
+        action.resultKind === "plan" ? getExpectedRevision() : undefined;
       const payload = await editorApiRequest<Record<string, any>>(
         `${env.apiBaseUrl}${action.path}`,
         {
@@ -706,6 +753,8 @@ export function EditorClient(props: EditorClientProps) {
         getExpectedRevision={getExpectedRevision}
         onConflictDetected={handleConflict}
         planRevision={revisionTracking.planRevision}
+        pendingReviewProposal={pendingReviewProposal}
+        setPendingReviewProposal={setPendingReviewProposal}
       />
     </EditorHistoryProvider>
   );
@@ -782,6 +831,10 @@ interface EditorClientEditorProps extends EditorClientProps {
   getExpectedRevision: () => number | undefined;
   onConflictDetected: (error: unknown, source: string) => boolean;
   planRevision: number | null;
+  pendingReviewProposal: PendingReviewProposal | null;
+  setPendingReviewProposal: React.Dispatch<
+    React.SetStateAction<PendingReviewProposal | null>
+  >;
 }
 
 function EditorClientEditor(props: EditorClientEditorProps) {
@@ -854,15 +907,182 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     getExpectedRevision,
     onConflictDetected,
     planRevision,
+    pendingReviewProposal,
+    setPendingReviewProposal,
   } = props;
   const router = useRouter();
   const { toast } = useToast();
   const { undo, redo, canUndo, canRedo, pushHistory } = useEditorHistory();
+  const workflowStatus = useWorkflowStatus({
+    projectId,
+    workspaceId,
+    userId,
+    apiAccessToken,
+    initialWorkflow: props.initialWorkflow,
+  });
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [mediaAssetUrls, setMediaAssetUrls] = useState(uploadAssetUrls);
+  const mediaRefreshPromiseRef = useRef<Promise<boolean> | null>(null);
+  const sourceErrorRefreshUsedRef = useRef(false);
+  const posterErrorRefreshUsedRef = useRef(false);
   const aiElementAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     return () => aiElementAbortRef.current?.abort();
   }, []);
+
+  const refreshMediaUrls = useCallback((): Promise<boolean> => {
+    if (mediaRefreshPromiseRef.current) return mediaRefreshPromiseRef.current;
+    const referenceIds = [
+      uploadAssetUrls.source_reference_id,
+      uploadAssetUrls.thumbnail_reference_id,
+    ].filter((value): value is string => Boolean(value));
+    if (!referenceIds.length) return Promise.resolve(false);
+
+    const request = (async () => {
+      try {
+        const response = await fetch(
+          `${env.apiBaseUrl}/projects/${projectId}/media/refresh-urls`,
+          {
+            method: "POST",
+            headers: {
+              ...(await buildApiHeaders({
+                workspaceId,
+                userId,
+                accessToken: apiAccessToken,
+              })),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ reference_ids: referenceIds }),
+            cache: "no-store",
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as {
+          refreshed?: Array<{
+            reference_id: string;
+            url: string;
+            expires_at: string;
+            object_type: string;
+          }>;
+          error?: { message?: string };
+        } | null;
+        if (!response.ok) {
+          throw new Error(
+            payload?.error?.message ??
+              `Media URLs could not be refreshed (${response.status}).`,
+          );
+        }
+        const refreshed = payload?.refreshed ?? [];
+        if (!refreshed.length) return false;
+        setMediaAssetUrls((current) => {
+          const source = refreshed.find(
+            (item) =>
+              item.reference_id === uploadAssetUrls.source_reference_id ||
+              (!uploadAssetUrls.source_reference_id &&
+                item.object_type === "source_video"),
+          );
+          const thumbnail = refreshed.find(
+            (item) =>
+              item.reference_id === uploadAssetUrls.thumbnail_reference_id ||
+              (!uploadAssetUrls.thumbnail_reference_id &&
+                item.object_type === "thumbnail"),
+          );
+          const expiries = refreshed
+            .map((item) => item.expires_at)
+            .filter((value) => Number.isFinite(Date.parse(value)))
+            .sort((left, right) => Date.parse(left) - Date.parse(right));
+          return {
+            ...current,
+            source_video_url:
+              resolveProxiedUrl(source?.url) ?? current.source_video_url,
+            thumbnail_url:
+              resolveProxiedUrl(thumbnail?.url) ?? current.thumbnail_url,
+            expires_at: expiries[0] ?? current.expires_at,
+          };
+        });
+        return true;
+      } catch (error) {
+        console.error("Failed to refresh browser media URLs:", error);
+        return false;
+      }
+    })();
+    mediaRefreshPromiseRef.current = request;
+    void request.finally(() => {
+      if (mediaRefreshPromiseRef.current === request) {
+        mediaRefreshPromiseRef.current = null;
+      }
+    });
+    return request;
+  }, [
+    apiAccessToken,
+    projectId,
+    uploadAssetUrls.source_reference_id,
+    uploadAssetUrls.thumbnail_reference_id,
+    userId,
+    workspaceId,
+  ]);
+
+  useEffect(() => {
+    const hasReferences = Boolean(
+      uploadAssetUrls.source_reference_id ||
+      uploadAssetUrls.thumbnail_reference_id,
+    );
+    if (!hasReferences || !mediaAssetUrls.expires_at) return;
+    const expiresAt = Date.parse(mediaAssetUrls.expires_at);
+    if (!Number.isFinite(expiresAt)) return;
+    const refreshInMs = Math.max(0, expiresAt - Date.now() - 60_000);
+    const timeout = window.setTimeout(() => {
+      void refreshMediaUrls();
+    }, refreshInMs);
+    return () => window.clearTimeout(timeout);
+  }, [
+    mediaAssetUrls.expires_at,
+    refreshMediaUrls,
+    uploadAssetUrls.source_reference_id,
+    uploadAssetUrls.thumbnail_reference_id,
+  ]);
+
+  useEffect(() => {
+    const hasReferences = Boolean(
+      uploadAssetUrls.source_reference_id ||
+      uploadAssetUrls.thumbnail_reference_id,
+    );
+    if (!hasReferences) return;
+    const refreshAfterSleep = () => {
+      const expiry = mediaAssetUrls.expires_at
+        ? Date.parse(mediaAssetUrls.expires_at)
+        : Number.NaN;
+      if (!Number.isFinite(expiry) || expiry <= Date.now() + 60_000) {
+        void refreshMediaUrls();
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshAfterSleep();
+    };
+    window.addEventListener("focus", refreshAfterSleep);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshAfterSleep);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    mediaAssetUrls.expires_at,
+    refreshMediaUrls,
+    uploadAssetUrls.source_reference_id,
+    uploadAssetUrls.thumbnail_reference_id,
+  ]);
+
+  const handlePreviewSourceError = useCallback(() => {
+    if (sourceErrorRefreshUsedRef.current) return;
+    sourceErrorRefreshUsedRef.current = true;
+    void refreshMediaUrls();
+  }, [refreshMediaUrls]);
+
+  const handlePreviewPosterError = useCallback(() => {
+    if (posterErrorRefreshUsedRef.current) return;
+    posterErrorRefreshUsedRef.current = true;
+    void refreshMediaUrls();
+  }, [refreshMediaUrls]);
+
   const [selectedElementId, setSelectedElementId] = useState<string | null>(
     null,
   );
@@ -898,6 +1118,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         musicSelection: localMusicSelection,
         renderJobs,
         exports,
+        workflow: workflowStatus.workflow,
       }),
     [
       activePlan,
@@ -909,6 +1130,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       renderJobs,
       upload,
       visualStatus,
+      workflowStatus.workflow,
     ],
   );
   const activeCreatorTask =
@@ -921,19 +1143,19 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       creatorTasks.length) *
       100,
   );
-  const latestRenderJob = renderJobs[0] ?? null;
-  const hasCancelableRender = Boolean(
-    latestRenderJob &&
-      ["queued", "processing", "preparing", "rendering", "uploading"].includes(
-        latestRenderJob.status,
-      ),
+  const canonicalWorkflow = workflowStatus.workflow;
+  const hasCancelableWorkflow = Boolean(
+    canonicalWorkflow?.allowed_actions.includes("cancel"),
   );
-  const hasRetryableTask = creatorTasks.some(
-    (task) => task.status === "blocked",
+  const hasRetryableWorkflow = Boolean(
+    canonicalWorkflow?.allowed_actions.includes("retry"),
   );
-  const jobLabel = latestRenderJob
-    ? renderStatusLabel(latestRenderJob.status)
-    : activeCreatorTask?.label ?? "No active job";
+  const workflowStateLabel = canonicalWorkflow
+    ? canonicalWorkflow.state.replaceAll("_", " ")
+    : "Discovering workflow";
+  const jobLabel = canonicalWorkflow?.draft_render
+    ? `${workflowStateLabel} · ${canonicalWorkflow.draft_render.progress_pct}%`
+    : workflowStateLabel;
 
   const setPlayheadMsWrapped = useCallback(
     (ms: number | ((prev: number) => number)) => {
@@ -1095,7 +1317,12 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             submission: payload,
             immediate: payload.track,
             apiBaseUrl: env.apiBaseUrl,
-            options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+            options: {
+              workspaceId,
+              userId,
+              accessToken: apiAccessToken,
+              signal,
+            },
             load: async () => {
               const result = await editorApiRequest<{
                 tracks: CaptionTrackSummary[];
@@ -1117,23 +1344,25 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             slots?: BrollSlotSummary[] | null;
             status: "ready" | "queued";
             status_url?: string | null;
-          }>(
-            `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
-            {
-              method: "POST",
-              workspaceId,
-              userId,
-              accessToken: apiAccessToken,
-              signal,
-              friendlyError: "Smart B-roll fill failed.",
-              body: { density: "from_plan" },
-            },
-          );
+          }>(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, {
+            method: "POST",
+            workspaceId,
+            userId,
+            accessToken: apiAccessToken,
+            signal,
+            friendlyError: "Smart B-roll fill failed.",
+            body: { density: "from_plan" },
+          });
           const slots = await resolveQueuedLayer({
             submission: payload,
             immediate: payload.slots,
             apiBaseUrl: env.apiBaseUrl,
-            options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+            options: {
+              workspaceId,
+              userId,
+              accessToken: apiAccessToken,
+              signal,
+            },
             load: async () => {
               const result = await editorApiRequest<{
                 slots: BrollSlotSummary[];
@@ -1167,14 +1396,19 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               include_music: true,
               music_volume: 0.25,
               sfx_intensity: 0.25,
-              rights_confirmed: true,
+              rights_decision: false,
             },
           });
           const selection = await resolveQueuedLayer({
             submission: payload,
             immediate: payload.selection,
             apiBaseUrl: env.apiBaseUrl,
-            options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+            options: {
+              workspaceId,
+              userId,
+              accessToken: apiAccessToken,
+              signal,
+            },
             load: () =>
               editorApiRequest<MusicSelectionSummary | null>(
                 `${env.apiBaseUrl}/projects/${projectId}/music/selection`,
@@ -1578,6 +1812,13 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           tasks: creatorTasks,
           activeTaskKey: activeCreatorTask?.key ?? creatorTasks[0].key,
           progressPct: creatorProgressPct,
+          workflowStatusLabel: canonicalWorkflow
+            ? `Workflow: ${workflowStateLabel}`
+            : "Workflow: discovering latest run",
+          workflowStatusDetail:
+            workflowStatus.error ??
+            canonicalWorkflow?.draft_render?.error_message ??
+            jobLabel,
           onTaskSelect: (task) =>
             setInspectorTabWrapped(inspectorTabForCreatorTask(task.key)),
         }}
@@ -1586,14 +1827,12 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           canRedo,
           onUndo: () => void undo(),
           onRedo: () => void redo(),
-          onRetry: () => {
-            setInspectorTabWrapped(
-              latestRenderJob?.status === "failed" ? "export" : "ai",
-            );
-          },
-          onCancel: () => setInspectorTabWrapped("export"),
-          hasRetry: hasRetryableTask,
-          hasCancel: hasCancelableRender,
+          onRetry: () => void workflowStatus.runCommand("retry"),
+          onCancel: () => void workflowStatus.runCommand("cancel"),
+          hasRetry: hasRetryableWorkflow,
+          hasCancel: hasCancelableWorkflow,
+          isPending: workflowStatus.pendingCommand !== null,
+          error: workflowStatus.error,
           jobLabel,
         }}
       >
@@ -1610,11 +1849,12 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           centerPanel: (
             <VideoPreview
               videoRef={videoRef}
-              sourceUrl={uploadAssetUrls.source_video_url}
-              thumbnailUrl={uploadAssetUrls.thumbnail_url}
+              sourceUrl={mediaAssetUrls.source_video_url}
+              thumbnailUrl={mediaAssetUrls.thumbnail_url}
+              onSourceError={handlePreviewSourceError}
+              onPosterError={handlePreviewPosterError}
               sourceWidth={upload.width}
               sourceHeight={upload.height}
-              sourceFps={upload.fps}
               playheadMs={playheadMs}
               captionSegments={
                 activePlan?.plan.timeline?.captions?.length
@@ -1682,6 +1922,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               exports={exports}
               maxExportResolution={maxExportResolution}
               visualStatus={visualStatus}
+              workflow={canonicalWorkflow}
+              onWorkflowRefresh={workflowStatus.refresh}
               onTranscriptUpdated={setLocalTranscript}
               onPlanGenerated={handlePlanGenerated}
               onPlanUpdated={handlePlanUpdated}
@@ -1695,7 +1937,16 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               onEffectsConfigUpdated={handleEffectsConfigUpdated}
               onPreviewLookUpdated={setPreviewLook}
               onPreviewExportUpdated={setPreviewExport}
+              onClipSelected={(startMs) => setPlayheadMsWrapped(startMs)}
               planRevision={planRevision}
+              mediaRevision={upload.mediaRevision}
+              playheadMs={playheadMs}
+              pendingReviewProposal={pendingReviewProposal}
+              onReviewProposalHandled={() => setPendingReviewProposal(null)}
+              onReviewProposalCreated={(proposal) => {
+                setPendingReviewProposal(proposal);
+                setInspectorTabWrapped("ai");
+              }}
             />
           ),
 
@@ -1783,6 +2034,8 @@ interface InspectorPanelProps {
   exports: ExportSummary[];
   maxExportResolution: ExportResolution;
   visualStatus: VisualAnalysisStatusSummary;
+  workflow: WorkflowDetail | null;
+  onWorkflowRefresh: () => Promise<WorkflowDetail | null>;
   onTranscriptUpdated: (transcript: TranscriptSummary | null) => void;
   onPlanGenerated: (plan: EditPlanRecordSummary) => void;
   onPlanUpdated: (plan: EditPlanRecordSummary) => void;
@@ -1796,7 +2049,13 @@ interface InspectorPanelProps {
   onEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
   onPreviewLookUpdated: (state: PreviewLookState | null) => void;
   onPreviewExportUpdated: (state: PreviewExportState | null) => void;
+  onClipSelected: (startMs: number) => void;
   planRevision?: number | null;
+  mediaRevision?: number | null;
+  playheadMs: number;
+  pendingReviewProposal: PendingReviewProposal | null;
+  onReviewProposalHandled: () => void;
+  onReviewProposalCreated: (proposal: PendingReviewProposal) => void;
 }
 
 const INSPECTOR_TABS: Array<{
@@ -1811,7 +2070,9 @@ const INSPECTOR_TABS: Array<{
   { id: "audio", label: "Audio", icon: Music2, requiresPlan: false },
   { id: "look", label: "Look", icon: Palette, requiresPlan: false },
   { id: "history", label: "History", icon: History, requiresPlan: true },
+  { id: "review", label: "Review", icon: MessageSquare, requiresPlan: true },
   { id: "scale", label: "Scale", icon: Network, requiresPlan: false },
+  { id: "publish", label: "Publish", icon: Languages, requiresPlan: false },
   { id: "export", label: "Export", icon: Download, requiresPlan: false },
 ];
 
@@ -1837,6 +2098,8 @@ function InspectorPanel({
   exports,
   maxExportResolution,
   visualStatus,
+  workflow,
+  onWorkflowRefresh,
   onTranscriptUpdated,
   onPlanGenerated,
   onPlanUpdated,
@@ -1850,7 +2113,13 @@ function InspectorPanel({
   onEffectsConfigUpdated,
   onPreviewLookUpdated,
   onPreviewExportUpdated,
+  onClipSelected,
   planRevision,
+  mediaRevision,
+  playheadMs,
+  pendingReviewProposal,
+  onReviewProposalHandled,
+  onReviewProposalCreated,
 }: InspectorPanelProps) {
   const brollDensity = activePlan?.broll_density ?? null;
   const musicMood = activePlan?.summary?.music_mood ?? null;
@@ -1963,11 +2232,16 @@ function InspectorPanel({
             activePlanId={localActivePlanId}
             transcript={transcript}
             initialVisualStatus={visualStatus}
+            workflow={workflow}
+            onWorkflowRefresh={onWorkflowRefresh}
             onTranscriptUpdated={onTranscriptUpdated}
             onPlanGenerated={onPlanGenerated}
             onCaptionTrackUpdated={onCaptionTrackUpdated}
             onBrollSlotsUpdated={onBrollSlotsUpdated}
             onMusicSelectionUpdated={onMusicSelectionUpdated}
+            onClipSelected={onClipSelected}
+            externalProposal={pendingReviewProposal}
+            onExternalProposalHandled={onReviewProposalHandled}
           />
         )}
         {tab === "captions" && (
@@ -2022,6 +2296,16 @@ function InspectorPanel({
             onPreviewLookUpdated={onPreviewLookUpdated}
           />
         )}
+        {tab === "publish" && (
+          <PublishingLibraryPanel
+            projectId={projectId}
+            workspaceId={workspaceId}
+            userId={userId}
+            apiAccessToken={apiAccessToken}
+            captionTrackId={captionTracks[0]?.id ?? null}
+            activePlanId={localActivePlanId}
+          />
+        )}
         {tab === "export" && (
           <ExportStep
             projectId={projectId}
@@ -2047,6 +2331,22 @@ function InspectorPanel({
             apiAccessToken={apiAccessToken}
             activePlan={activePlan}
             onPlanRestored={onPlanUpdated}
+          />
+        )}
+        {tab === "review" && (
+          <ReviewPanel
+            projectId={projectId}
+            workspaceId={workspaceId}
+            userId={userId}
+            apiAccessToken={apiAccessToken}
+            activePlan={activePlan}
+            mediaRevision={mediaRevision}
+            uploadedVideoId={upload.id}
+            sourceObjectReferenceId={upload.sourceObjectReferenceId}
+            sourceSha256={upload.verifiedSha256}
+            playheadMs={playheadMs}
+            onSeek={onClipSelected}
+            onProposalCreated={onReviewProposalCreated}
           />
         )}
         {tab === "scale" && (
@@ -2211,182 +2511,6 @@ function selectedElementInsight({
     detail: null,
     confidence: null,
   };
-}
-
-function buildCreatorTasks({
-  upload,
-  transcript,
-  visualStatus,
-  activePlan,
-  captionTracks,
-  brollSlots,
-  musicSelection,
-  renderJobs,
-  exports,
-}: {
-  upload: UploadedVideoSummary;
-  transcript: TranscriptSummary | null;
-  visualStatus: VisualAnalysisStatusSummary;
-  activePlan: EditPlanRecordSummary | null;
-  captionTracks: CaptionTrackSummary[];
-  brollSlots: BrollSlotSummary[];
-  musicSelection: MusicSelectionSummary | null;
-  renderJobs: RenderJobSummary[];
-  exports: ExportSummary[];
-}): CreatorTask[] {
-  const latestRenderJob = renderJobs[0] ?? null;
-  const hasExport = exports.length > 0 || latestRenderJob?.status === "complete";
-  const transcriptProgress = transcript?.progress_pct ?? 0;
-  const transcriptFailed =
-    transcript?.status === "failed" ||
-    transcript?.status === "captions_unavailable";
-  const transcriptReady = transcript?.status === "ready";
-  const visualReady = visualStatus.status === "ready";
-  const visualBlocked =
-    visualStatus.status === "unavailable";
-  const planReady = Boolean(activePlan);
-  const captionsReady = captionTracks.length > 0;
-  const brollReady =
-    activePlan?.broll_density === "none" || brollSlots.length > 0;
-  const musicReady = Boolean(musicSelection);
-  const renderActive = latestRenderJob
-    ? ["queued", "processing", "preparing", "rendering", "uploading"].includes(
-        latestRenderJob.status,
-      )
-    : false;
-  const renderBlocked = latestRenderJob?.status === "failed";
-
-  return [
-    {
-      key: "upload",
-      label: "Upload",
-      shortLabel: "Upload",
-      description: "Source video is received and ready for editing.",
-      status: upload.status === "ready" ? "done" : "active",
-      progress: upload.status === "ready" ? 100 : 65,
-      detail: uploadStatusMessage(upload.status),
-      actionLabel: null,
-    },
-    {
-      key: "prepare",
-      label: "Prepare",
-      shortLabel: "Prepare",
-      description: "Transcript and visual context are prepared as small recoverable tasks.",
-      status: transcriptFailed
-        ? "blocked"
-        : transcriptReady && (visualReady || visualBlocked)
-          ? "done"
-          : "active",
-      progress: transcriptReady ? 100 : Math.max(5, transcriptProgress),
-      detail: transcriptFailed
-        ? transcript?.error_message || "Transcription needs a retry."
-        : visualBlocked
-          ? "Visual context skipped; transcript can keep the edit moving."
-          : transcriptReady
-            ? "Transcript ready."
-            : "Preparing transcript and visual context.",
-      actionLabel: transcriptFailed ? "Retry" : null,
-    },
-    {
-      key: "draft",
-      label: "Draft",
-      shortLabel: "Draft",
-      description: "AI edit plan, cuts, pacing, and story structure.",
-      status: planReady ? "done" : transcriptReady ? "active" : "waiting",
-      progress: planReady ? 100 : transcriptReady ? 25 : 0,
-      detail: planReady
-        ? `Timeline v${activePlan?.version ?? 1} is ready.`
-        : transcriptReady
-          ? "Ready to generate the first AI edit."
-          : "Waiting for transcript.",
-      actionLabel: planReady ? "Review" : "Generate",
-    },
-    {
-      key: "review",
-      label: "Review",
-      shortLabel: "Review",
-      description: "Captions, cuts, B-roll, and music are checked before polish.",
-      status:
-        captionsReady && brollReady && musicReady
-          ? "done"
-          : planReady
-            ? "active"
-            : "waiting",
-      progress: Math.round(
-        ((captionsReady ? 1 : 0) + (brollReady ? 1 : 0) + (musicReady ? 1 : 0)) /
-          3 *
-          100,
-      ),
-      detail: `${captionsReady ? "Captions ready" : "Captions pending"} · ${
-        brollReady ? "B-roll ready" : "B-roll pending"
-      } · ${musicReady ? "Music ready" : "Music pending"}`,
-      actionLabel: planReady ? "Open" : null,
-    },
-    {
-      key: "polish",
-      label: "Polish",
-      shortLabel: "Polish",
-      description: "Quick fixes, look, audio, and timeline refinements stay optional.",
-      status: planReady ? "active" : "waiting",
-      progress: planReady ? 40 : 0,
-      detail: planReady
-        ? "Use focused tools only when the draft needs changes."
-        : "Waiting for a draft.",
-      actionLabel: planReady ? "Fix" : null,
-    },
-    {
-      key: "export",
-      label: "Export",
-      shortLabel: "Export",
-      description: "Render progress, retry, cancel, download, and publish live here.",
-      status: hasExport
-        ? "done"
-        : renderBlocked
-          ? "blocked"
-          : renderActive
-            ? "active"
-            : planReady
-              ? "waiting"
-              : "waiting",
-      progress: hasExport
-        ? 100
-        : latestRenderJob?.progress_pct ?? (renderActive ? 12 : 0),
-      detail: latestRenderJob
-        ? renderStatusLabel(latestRenderJob.status)
-        : planReady
-          ? "Ready when the timeline is approved."
-          : "Waiting for a draft.",
-      actionLabel: renderBlocked ? "Retry" : hasExport ? "Download" : "Render",
-    },
-    {
-      key: "publish",
-      label: "Publish",
-      shortLabel: "Publish",
-      description: "Publishing is last, after a verified export exists.",
-      status: hasExport ? "active" : "waiting",
-      progress: hasExport ? 25 : 0,
-      detail: hasExport ? "Export can be published." : "Waiting for export.",
-      actionLabel: hasExport ? "Publish" : null,
-    },
-  ];
-}
-
-function inspectorTabForCreatorTask(taskKey: string): InspectorTab {
-  switch (taskKey) {
-    case "upload":
-    case "prepare":
-    case "draft":
-      return "ai";
-    case "review":
-      return "captions";
-    case "polish":
-      return "look";
-    case "export":
-    case "publish":
-      return "export";
-    default:
-      return "ai";
-  }
 }
 
 function InspectorLoading() {
@@ -2564,7 +2688,8 @@ function UploadScreen({
             <h1 className="text-2xl font-bold">Upload your footage</h1>
             <p className="mt-2 text-sm text-muted-foreground">
               Drop in your raw talking-head video. We&apos;ll transcribe it and
-              build the first AI edit directly on the timeline.
+              prepare an AI edit proposal for you to review before it reaches
+              the timeline.
             </p>
           </div>
           <UploadPanel

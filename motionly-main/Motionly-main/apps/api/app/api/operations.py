@@ -164,6 +164,6 @@ async def run_gpu_autoscaling(
     await require_worker_token(request, x_motionly_worker_token)
     service = getattr(request.app.state, "gpu_scaling_service", None)
     if service is None:
-        return {"status": "disabled", "reason": "lightning_not_configured"}
+        return {"status": "disabled", "reason": "compute_backend_unconfigured"}
     snapshots = await run_blocking(request.app.state.queue_registry.snapshots)
     return await run_blocking(service.run, snapshots)

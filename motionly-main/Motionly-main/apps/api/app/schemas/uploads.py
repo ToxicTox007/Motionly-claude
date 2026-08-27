@@ -18,7 +18,7 @@ class UploadStatus(StrEnum):
 class UploadInitRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     mime_type: str
-    file_size_bytes: int = Field(gt=0)
+    file_size_bytes: int = Field(gt=0, le=536_870_912)
 
     @field_validator("filename")
     @classmethod
@@ -44,7 +44,11 @@ class UploadCompleteRequest(BaseModel):
 class UploadCompleteResponse(BaseModel):
     video_id: UUID
     status: UploadStatus
-    job_id: str
+    job_id: str | None = None
+    workflow_run_id: UUID | None = None
+    workflow_version: str | None = None
+    workflow_state: str | None = None
+    workflow_status_url: str | None = None
 
 
 class UploadAssetUrlsResponse(BaseModel):
@@ -52,6 +56,9 @@ class UploadAssetUrlsResponse(BaseModel):
     source_video_url: str
     thumbnail_url: str | None = None
     expires_in_seconds: int
+    expires_at: datetime | None = None
+    source_reference_id: UUID | None = None
+    thumbnail_reference_id: UUID | None = None
 
 
 class VideoMetadata(BaseModel):
@@ -78,6 +85,11 @@ class UploadReadResponse(BaseModel):
     original_filename: str
     mime_type: str
     file_size_bytes: int
+    media_revision: int = Field(default=1, ge=1)
+    source_object_reference_id: UUID | None = None
+    verified_size_bytes: int | None = None
+    verified_sha256: str | None = None
+    workflow_version: str | None = None
     thumbnail_path: str | None = None
     metadata: VideoMetadata = Field(default_factory=VideoMetadata)
     error_code: str | None = None

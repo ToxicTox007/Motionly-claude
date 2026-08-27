@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from threading import RLock
 from uuid import UUID, uuid4
 
 import httpx
@@ -21,7 +22,8 @@ from app.schemas.renders import (
 from app.services.supabase import SupabaseRestClient
 
 RENDER_JOB_COLUMNS = (
-    "id,workspace_id,project_id,uploaded_video_id,caption_track_id,status,planner_version,"
+    "id,workspace_id,project_id,uploaded_video_id,caption_track_id,workflow_run_id,edit_plan_id,"
+    "source_plan_revision,timeline_revision_id,source_media_revision,status,planner_version,"
     "manifest,keep_segments,specs,template_id,render_engine,renderer_version,props_hash,"
     "artifact_path,benchmark_ms,logs,progress_pct,error_code,error_message,created_at,updated_at"
 )
@@ -30,9 +32,9 @@ RENDER_JOB_EVENT_COLUMNS = (
     "message,error_code,latency_ms,metadata,created_at"
 )
 EXPORT_COLUMNS = (
-    "id,workspace_id,project_id,render_job_id,version,storage_bucket,storage_path,format,width,"
-    "height,fps,duration_ms,file_size_bytes,thumbnail_url,settings_summary,"
-    "restored_from_export_id,created_at"
+    "id,workspace_id,project_id,render_job_id,workflow_run_id,source_plan_revision,version,"
+    "storage_bucket,storage_path,format,width,height,fps,duration_ms,file_size_bytes,thumbnail_url,"
+    "settings_summary,restored_from_export_id,created_at"
 )
 
 
@@ -81,6 +83,11 @@ class RenderJobRecord:
     planner_version: str
     manifest: dict[str, object]
     keep_segments: list[CutSegment]
+    workflow_run_id: UUID | None = None
+    edit_plan_id: UUID | None = None
+    source_plan_revision: int | None = None
+    timeline_revision_id: UUID | None = None
+    source_media_revision: int | None = None
     specs: RenderSpecs = field(default_factory=RenderSpecs)
     template_id: RenderTemplateId | None = None
     render_engine: RenderEngine | None = None
@@ -102,6 +109,11 @@ class RenderJobRecord:
             project_id=self.project_id,
             uploaded_video_id=self.uploaded_video_id,
             caption_track_id=self.caption_track_id,
+            workflow_run_id=self.workflow_run_id,
+            edit_plan_id=self.edit_plan_id,
+            source_plan_revision=self.source_plan_revision,
+            timeline_revision_id=self.timeline_revision_id,
+            source_media_revision=self.source_media_revision,
             status=self.status,
             planner_version=self.planner_version,
             manifest=self.manifest,
@@ -136,6 +148,8 @@ class ExportRecord:
     width: int
     height: int
     fps: int
+    workflow_run_id: UUID | None = None
+    source_plan_revision: int | None = None
     duration_ms: int | None = None
     file_size_bytes: int | None = None
     thumbnail_url: str | None = None
@@ -149,6 +163,8 @@ class ExportRecord:
             workspace_id=self.workspace_id,
             project_id=self.project_id,
             render_job_id=self.render_job_id,
+            workflow_run_id=self.workflow_run_id,
+            source_plan_revision=self.source_plan_revision,
             version=self.version,
             storage_bucket=self.storage_bucket,
             storage_path=self.storage_path,
@@ -171,6 +187,8 @@ class InMemoryRenderRepository:
         self.render_jobs: dict[UUID, RenderJobRecord] = {}
         self.render_job_events: dict[UUID, RenderJobEventRecord] = {}
         self.exports: dict[UUID, ExportRecord] = {}
+        self.workflow_repository: object | None = None
+        self._lock = RLock()
 
     def get_active_upload(self, *, project_id: UUID, workspace_id: UUID) -> UploadRecord:
         return self.caption_repository.get_active_upload(
@@ -211,6 +229,103 @@ class InMemoryRenderRepository:
             message="Render queued.",
         )
         return job
+
+    def get_workflow_draft_render(
+        self,
+        *,
+        workflow_run_id: UUID,
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> RenderJobRecord | None:
+        return next(
+            (
+                job
+                for job in self.render_jobs.values()
+                if job.workflow_run_id == workflow_run_id
+                and job.workspace_id == workspace_id
+                and job.project_id == project_id
+            ),
+            None,
+        )
+
+    def ensure_workflow_draft_render(
+        self,
+        *,
+        workflow_repository: object,
+        **values: object,
+    ) -> RenderJobRecord:
+        workflow_run_id = values.get("workflow_run_id")
+        workspace_id = values.get("workspace_id")
+        project_id = values.get("project_id")
+        if not isinstance(workflow_run_id, UUID):
+            raise ApiError(422, "workflow_render_lineage_invalid", "Workflow render ID is missing.")
+        if not isinstance(workspace_id, UUID) or not isinstance(project_id, UUID):
+            raise ApiError(
+                422,
+                "workflow_render_scope_invalid",
+                "Workflow render scope is missing.",
+            )
+        workflow_lock = getattr(workflow_repository, "_lock", self._lock)
+        workflow_repository.render_repository = self  # type: ignore[attr-defined]
+        self.workflow_repository = workflow_repository
+        with workflow_lock, self._lock:
+            existing = self.get_workflow_draft_render(
+                workflow_run_id=workflow_run_id,
+                workspace_id=workspace_id,
+                project_id=project_id,
+            )
+            if existing is not None:
+                expected = (
+                    values.get("edit_plan_id"),
+                    values.get("source_plan_revision"),
+                    values.get("timeline_revision_id"),
+                    values.get("source_media_revision"),
+                    values.get("props_hash"),
+                    values.get("render_engine"),
+                )
+                actual = (
+                    existing.edit_plan_id,
+                    existing.source_plan_revision,
+                    existing.timeline_revision_id,
+                    existing.source_media_revision,
+                    existing.props_hash,
+                    existing.render_engine,
+                )
+                if actual != expected:
+                    raise ApiError(
+                        409,
+                        "workflow_render_identity_conflict",
+                        "Canonical draft render identity conflicts with the existing target.",
+                    )
+                return existing
+            bind = getattr(workflow_repository, "bind_draft_render", None)
+            if bind is None:
+                raise ApiError(
+                    500,
+                    "workflow_render_repository_invalid",
+                    "Workflow render persistence is unavailable.",
+                )
+            render_id = uuid4()
+            bind(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                workflow_run_id=workflow_run_id,
+                render_job_id=render_id,
+                edit_plan_id=values.get("edit_plan_id"),
+                source_plan_revision=values.get("source_plan_revision"),
+                timeline_revision_id=values.get("timeline_revision_id"),
+                source_media_revision=values.get("source_media_revision"),
+            )
+            job = RenderJobRecord(id=render_id, **values)
+            self.render_jobs[job.id] = job
+            self.add_event(
+                job=job,
+                event_type="queued",
+                to_status=job.status,
+                progress_pct=job.progress_pct,
+                message="Workflow draft render queued.",
+            )
+            return job
 
     def add_event(
         self,
@@ -254,6 +369,38 @@ class InMemoryRenderRepository:
         error_message: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> RenderJobRecord:
+        if status == RenderJobStatus.COMPLETE and job.workflow_run_id is not None:
+            workflow_repository = self.workflow_repository
+            get_workflow = getattr(workflow_repository, "get_workflow", None)
+            run = (
+                get_workflow(
+                    workflow_run_id=job.workflow_run_id,
+                    workspace_id=job.workspace_id,
+                    project_id=job.project_id,
+                )
+                if get_workflow is not None
+                else None
+            )
+            base_exports = [
+                exported
+                for exported in self.exports.values()
+                if exported.render_job_id == job.id
+                and exported.workflow_run_id == job.workflow_run_id
+                and exported.source_plan_revision == job.source_plan_revision
+                and exported.restored_from_export_id is None
+            ]
+            if getattr(getattr(run, "state", None), "value", None) != "draft_rendering":
+                raise ApiError(
+                    409,
+                    "workflow_render_run_not_active",
+                    "Workflow render completion is no longer active.",
+                )
+            if len(base_exports) != 1:
+                raise ApiError(
+                    409,
+                    "workflow_render_export_missing",
+                    "Workflow render completion requires one canonical export.",
+                )
         from_status = job.status
         job.status = status
         job.progress_pct = progress_pct
@@ -367,20 +514,23 @@ class InMemoryRenderRepository:
         )
 
     def cancel_render_job_by_id(self, *, render_job_id: UUID) -> RenderJobRecord:
-        job = self.get_render_job_by_id(render_job_id=render_job_id)
-        if job.status in {
-            RenderJobStatus.COMPLETE,
-            RenderJobStatus.FAILED,
-            RenderJobStatus.CANCELED,
-        }:
-            raise ApiError(409, "render_not_cancelable", "This render can no longer be canceled.")
-        return self.transition_job(
-            job=job,
-            status=RenderJobStatus.CANCELED,
-            progress_pct=job.progress_pct,
-            message="Render canceled by admin.",
-            event_type="admin_cancel",
-        )
+        with self._lock:
+            job = self.get_render_job_by_id(render_job_id=render_job_id)
+            if job.status in {
+                RenderJobStatus.COMPLETE,
+                RenderJobStatus.FAILED,
+                RenderJobStatus.CANCELED,
+            }:
+                raise ApiError(
+                    409, "render_not_cancelable", "This render can no longer be canceled."
+                )
+            return self.transition_job(
+                job=job,
+                status=RenderJobStatus.CANCELED,
+                progress_pct=job.progress_pct,
+                message="Render canceled by admin.",
+                event_type="admin_cancel",
+            )
 
     def events_for_job(
         self,
@@ -398,6 +548,47 @@ class InMemoryRenderRepository:
         )[-limit:]
 
     def create_export(self, **values: object) -> ExportRecord:
+        render_job_id = values.get("render_job_id")
+        render = self.render_jobs.get(render_job_id) if isinstance(render_job_id, UUID) else None
+        if render is not None:
+            if render.workspace_id != values.get("workspace_id") or render.project_id != values.get(
+                "project_id"
+            ):
+                raise ApiError(
+                    409,
+                    "export_render_lineage_invalid",
+                    "Export render scope conflicts.",
+                )
+            requested_run_id = values.get("workflow_run_id", render.workflow_run_id)
+            if requested_run_id != render.workflow_run_id:
+                raise ApiError(
+                    409,
+                    "export_workflow_lineage_invalid",
+                    "Export workflow lineage conflicts with its render.",
+                )
+            values["workflow_run_id"] = render.workflow_run_id
+            values["source_plan_revision"] = render.source_plan_revision
+            if render.workflow_run_id is not None and values.get("restored_from_export_id") is None:
+                workflow_repository = self.workflow_repository
+                get_workflow = getattr(workflow_repository, "get_workflow", None)
+                run = (
+                    get_workflow(
+                        workflow_run_id=render.workflow_run_id,
+                        workspace_id=render.workspace_id,
+                        project_id=render.project_id,
+                    )
+                    if get_workflow is not None
+                    else None
+                )
+                if getattr(getattr(run, "state", None), "value", None) != "draft_rendering":
+                    raise ApiError(
+                        409,
+                        "workflow_draft_export_run_not_active",
+                        "Workflow draft export persistence is no longer active.",
+                    )
+        else:
+            values.setdefault("workflow_run_id", None)
+            values.setdefault("source_plan_revision", None)
         if values.get("restored_from_export_id") is None:
             existing = next(
                 (
@@ -438,6 +629,221 @@ class InMemoryRenderRepository:
         export = ExportRecord(id=uuid4(), version=version, **values)
         self.exports[export.id] = export
         return export
+
+    def complete_render(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        render_job_id: UUID,
+        storage_bucket: str,
+        storage_path: str,
+        format: RenderOutputFormat | str,
+        width: int,
+        height: int,
+        fps: int,
+        duration_ms: int | None,
+        file_size_bytes: int,
+        thumbnail_url: str | None = None,
+        settings_summary: dict[str, object] | None = None,
+        benchmark_ms: int,
+    ) -> tuple[RenderJobRecord, ExportRecord]:
+        """Atomically publish a rendered artifact or return its exact prior result.
+
+        Supabase delegates this compare-and-set to ``motionly_complete_render``;
+        the in-memory branch mirrors terminal, specs, canonical-export, and
+        exact-replay behavior for local execution and API tests.
+        """
+        format_value = format.value if isinstance(format, RenderOutputFormat) else str(format)
+        summary = settings_summary or {}
+        client = getattr(self, "client", None)
+        if client is not None:
+            response = client.request(
+                "POST",
+                "/rpc/motionly_complete_render",
+                json={
+                    "p_workspace_id": str(workspace_id),
+                    "p_project_id": str(project_id),
+                    "p_render_job_id": str(render_job_id),
+                    "p_storage_bucket": storage_bucket,
+                    "p_storage_path": storage_path,
+                    "p_format": format_value,
+                    "p_width": width,
+                    "p_height": height,
+                    "p_fps": fps,
+                    "p_duration_ms": duration_ms,
+                    "p_file_size_bytes": file_size_bytes,
+                    "p_thumbnail_url": thumbnail_url,
+                    "p_settings_summary": self._json_safe(summary),
+                    "p_benchmark_ms": benchmark_ms,
+                },
+            )
+            self._raise_for_supabase(response)
+            rows = response.json()
+            if not isinstance(rows, list) or len(rows) != 1 or not rows[0].get("export_id"):
+                raise ApiError(
+                    502,
+                    "render_completion_response_invalid",
+                    "Render completion returned no canonical export.",
+                )
+            completed = self.get_render_job(
+                project_id=project_id,
+                render_job_id=render_job_id,
+                workspace_id=workspace_id,
+            )
+            exported = self.get_export(
+                export_id=UUID(str(rows[0]["export_id"])),
+                workspace_id=workspace_id,
+            )
+            return completed, exported
+
+        with self._lock:
+            job = self.get_render_job(
+                project_id=project_id,
+                render_job_id=render_job_id,
+                workspace_id=workspace_id,
+            )
+            if (width, height, fps, format_value) != (
+                job.specs.width,
+                job.specs.height,
+                job.specs.fps,
+                job.specs.format.value,
+            ):
+                raise ApiError(
+                    409,
+                    "render_output_specs_mismatch",
+                    "Rendered output does not match the requested output specifications.",
+                )
+            canonical = next(
+                (
+                    export
+                    for export in self.exports.values()
+                    if export.render_job_id == job.id
+                    and export.workspace_id == workspace_id
+                    and export.project_id == project_id
+                    and export.restored_from_export_id is None
+                ),
+                None,
+            )
+            expected = (
+                storage_bucket,
+                storage_path,
+                format_value,
+                width,
+                height,
+                fps,
+                duration_ms,
+                file_size_bytes,
+                thumbnail_url,
+                summary,
+                benchmark_ms,
+            )
+            if job.status == RenderJobStatus.COMPLETE:
+                actual = (
+                    canonical.storage_bucket if canonical else None,
+                    canonical.storage_path if canonical else None,
+                    canonical.format.value if canonical else None,
+                    canonical.width if canonical else None,
+                    canonical.height if canonical else None,
+                    canonical.fps if canonical else None,
+                    canonical.duration_ms if canonical else None,
+                    canonical.file_size_bytes if canonical else None,
+                    canonical.thumbnail_url if canonical else None,
+                    canonical.settings_summary if canonical else None,
+                    job.benchmark_ms,
+                )
+                if canonical is None or actual != expected:
+                    raise ApiError(
+                        409,
+                        "render_completion_idempotency_conflict",
+                        "Completed render output differs from the canonical artifact.",
+                    )
+                return job, canonical
+            if job.status in {RenderJobStatus.CANCELED, RenderJobStatus.FAILED}:
+                raise ApiError(
+                    409,
+                    "render_terminal_state",
+                    "Canceled or failed renders cannot be completed.",
+                )
+            if job.status not in {
+                RenderJobStatus.QUEUED,
+                RenderJobStatus.PREPARING,
+                RenderJobStatus.RENDERING,
+                RenderJobStatus.UPLOADING,
+            }:
+                raise ApiError(
+                    409,
+                    "render_completion_status_invalid",
+                    "Render is not in a completable state.",
+                )
+            if canonical is not None:
+                actual = (
+                    canonical.storage_bucket,
+                    canonical.storage_path,
+                    canonical.format.value,
+                    canonical.width,
+                    canonical.height,
+                    canonical.fps,
+                    canonical.duration_ms,
+                    canonical.file_size_bytes,
+                    canonical.thumbnail_url,
+                    canonical.settings_summary,
+                    benchmark_ms,
+                )
+                if actual != expected:
+                    raise ApiError(
+                        409,
+                        "render_completion_idempotency_conflict",
+                        "Canonical export conflicts with the completion output.",
+                    )
+            else:
+                canonical = ExportRecord(
+                    id=uuid4(),
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                    render_job_id=job.id,
+                    workflow_run_id=job.workflow_run_id,
+                    source_plan_revision=job.source_plan_revision,
+                    version=(
+                        len(
+                            [
+                                export
+                                for export in self.exports.values()
+                                if export.workspace_id == workspace_id
+                                and export.project_id == project_id
+                            ]
+                        )
+                        + 1
+                    ),
+                    storage_bucket=storage_bucket,
+                    storage_path=storage_path,
+                    format=RenderOutputFormat(format_value),
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    duration_ms=duration_ms,
+                    file_size_bytes=file_size_bytes,
+                    thumbnail_url=thumbnail_url,
+                    settings_summary=summary,
+                )
+                self.exports[canonical.id] = canonical
+
+            job.artifact_path = storage_path
+            job.benchmark_ms = benchmark_ms
+            completed = self.transition_job(
+                job=job,
+                status=RenderJobStatus.COMPLETE,
+                progress_pct=100,
+                message="Export is ready to download.",
+                event_type="complete",
+                error_code=None,
+                error_message=None,
+                metadata={
+                    "export_id": str(canonical.id),
+                    "completion_rpc": "motionly_complete_render",
+                },
+            )
+            return completed, canonical
 
     def restore_export(
         self,
@@ -539,6 +945,71 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             message="Render queued.",
         )
         return job
+
+    def get_workflow_draft_render(
+        self,
+        *,
+        workflow_run_id: UUID,
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> RenderJobRecord | None:
+        response = self.client.request(
+            "GET",
+            "/render_jobs",
+            params={
+                "workflow_run_id": f"eq.{workflow_run_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": RENDER_JOB_COLUMNS,
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._job_from_row(rows[0]) if rows else None
+
+    def ensure_workflow_draft_render(
+        self,
+        *,
+        workflow_repository: object,
+        **values: object,
+    ) -> RenderJobRecord:
+        del workflow_repository
+        payload = self._json_safe(values)
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_ensure_workflow_draft_render",
+            json={
+                "p_workspace_id": payload["workspace_id"],
+                "p_project_id": payload["project_id"],
+                "p_workflow_run_id": payload["workflow_run_id"],
+                "p_uploaded_video_id": payload["uploaded_video_id"],
+                "p_edit_plan_id": payload["edit_plan_id"],
+                "p_source_plan_revision": payload["source_plan_revision"],
+                "p_timeline_revision_id": payload["timeline_revision_id"],
+                "p_source_media_revision": payload["source_media_revision"],
+                "p_caption_track_id": payload.get("caption_track_id"),
+                "p_planner_version": payload["planner_version"],
+                "p_manifest": payload["manifest"],
+                "p_keep_segments": payload["keep_segments"],
+                "p_specs": payload["specs"],
+                "p_template_id": payload.get("template_id"),
+                "p_render_engine": payload["render_engine"],
+                "p_renderer_version": payload["renderer_version"],
+                "p_props_hash": payload["props_hash"],
+                "p_logs": payload.get("logs") or [],
+                "p_progress_pct": payload.get("progress_pct") or 0,
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not isinstance(rows, list) or not rows:
+            raise ApiError(
+                502,
+                "workflow_render_response_invalid",
+                "Canonical draft render persistence returned no target.",
+            )
+        return self._job_from_row(rows[0])
 
     def add_event(self, **values: object) -> RenderJobEventRecord:
         job = values.pop("job")
@@ -665,67 +1136,54 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         return updated
 
     def create_export(self, **values: object) -> ExportRecord:
+        payload = self._json_safe(values)
         if values.get("restored_from_export_id") is None:
-            existing = next(
-                (
-                    export
-                    for export in self.list_exports(
-                        project_id=values["project_id"],
-                        workspace_id=values["workspace_id"],
-                    )
-                    if export.render_job_id == values["render_job_id"]
-                    and export.restored_from_export_id is None
-                ),
-                None,
+            response = self.client.request(
+                "POST",
+                "/rpc/motionly_upsert_base_export",
+                json={
+                    "p_workspace_id": payload["workspace_id"],
+                    "p_project_id": payload["project_id"],
+                    "p_render_job_id": payload["render_job_id"],
+                    "p_storage_bucket": payload["storage_bucket"],
+                    "p_storage_path": payload["storage_path"],
+                    "p_format": payload["format"],
+                    "p_width": payload["width"],
+                    "p_height": payload["height"],
+                    "p_fps": payload["fps"],
+                    "p_duration_ms": payload.get("duration_ms"),
+                    "p_file_size_bytes": payload.get("file_size_bytes"),
+                    "p_thumbnail_url": payload.get("thumbnail_url"),
+                    "p_settings_summary": payload.get("settings_summary") or {},
+                },
             )
-            if existing is not None:
-                payload = self._json_safe(
-                    {
-                        "storage_bucket": values["storage_bucket"],
-                        "storage_path": values["storage_path"],
-                        "format": values["format"],
-                        "width": values["width"],
-                        "height": values["height"],
-                        "fps": values["fps"],
-                        "duration_ms": values.get("duration_ms"),
-                        "file_size_bytes": values.get("file_size_bytes"),
-                        "settings_summary": values.get(
-                            "settings_summary",
-                            existing.settings_summary,
-                        ),
-                    }
+            self._raise_for_supabase(response)
+            rows = response.json()
+            if not isinstance(rows, list) or not rows:
+                raise ApiError(
+                    502,
+                    "export_response_invalid",
+                    "Export persistence returned no row.",
                 )
-                response = self.client.request(
-                    "PATCH",
-                    "/exports",
-                    params={"id": f"eq.{existing.id}", "select": EXPORT_COLUMNS},
-                    json=payload,
-                )
-                if self._is_missing_column_error(response):
-                    response = self.client.request(
-                        "PATCH",
-                        "/exports",
-                        params={"id": f"eq.{existing.id}", "select": EXPORT_COLUMNS},
-                        json=self._compat_export_payload(payload),
-                    )
-                self._raise_for_supabase(response)
-                return self._export_from_row(response.json()[0])
+            return self._export_from_row(rows[0])
+
+        render = self.get_render_job(
+            project_id=values["project_id"],
+            render_job_id=values["render_job_id"],
+            workspace_id=values["workspace_id"],
+        )
         existing = self.list_exports(
             project_id=values["project_id"],
             workspace_id=values["workspace_id"],
         )
-        payload = {**self._json_safe(values), "version": len(existing) + 1}
-        response = self.client.request(
-            "POST",
-            "/exports",
-            json=payload,
+        payload.update(
+            {
+                "workflow_run_id": str(render.workflow_run_id) if render.workflow_run_id else None,
+                "source_plan_revision": render.source_plan_revision,
+                "version": len(existing) + 1,
+            }
         )
-        if self._is_missing_column_error(response):
-            response = self.client.request(
-                "POST",
-                "/exports",
-                json=self._compat_export_payload(payload),
-            )
+        response = self.client.request("POST", "/exports", json=payload)
         self._raise_for_supabase(response)
         return self._export_from_row(response.json()[0])
 
@@ -1030,6 +1488,23 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
                 if row.get("caption_track_id") or compat.get("caption_track_id")
                 else None
             ),
+            workflow_run_id=(
+                UUID(str(row["workflow_run_id"])) if row.get("workflow_run_id") else None
+            ),
+            edit_plan_id=UUID(str(row["edit_plan_id"])) if row.get("edit_plan_id") else None,
+            source_plan_revision=(
+                int(row["source_plan_revision"])
+                if row.get("source_plan_revision") is not None
+                else None
+            ),
+            timeline_revision_id=(
+                UUID(str(row["timeline_revision_id"])) if row.get("timeline_revision_id") else None
+            ),
+            source_media_revision=(
+                int(row["source_media_revision"])
+                if row.get("source_media_revision") is not None
+                else None
+            ),
             status=self._app_status(row.get("status"), progress_pct=compat.get("progress_pct")),
             planner_version=str(
                 row.get("planner_version") or compat.get("planner_version") or "unknown",
@@ -1089,6 +1564,14 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             workspace_id=UUID(str(row["workspace_id"])),
             project_id=UUID(str(row["project_id"])),
             render_job_id=UUID(str(row["render_job_id"])),
+            workflow_run_id=(
+                UUID(str(row["workflow_run_id"])) if row.get("workflow_run_id") else None
+            ),
+            source_plan_revision=(
+                int(row["source_plan_revision"])
+                if row.get("source_plan_revision") is not None
+                else None
+            ),
             version=int(row["version"]),
             storage_bucket=str(row["storage_bucket"]),
             storage_path=str(row["storage_path"]),

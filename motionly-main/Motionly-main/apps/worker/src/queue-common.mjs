@@ -22,6 +22,134 @@ export const allQueueNames = [
 ];
 const defaultQueueNames = ["render_remotion"];
 
+export const workflowJobFieldNames = Object.freeze([
+  "workflow_run_id",
+  "workflow_step_id",
+  "step_key",
+  "step_kind",
+  "attempt_key",
+  "workflow_attempt_number",
+  "workflow_max_attempts",
+  "input_hash",
+  "next_run_state",
+]);
+
+const workflowIntegerFields = new Set([
+  "workflow_attempt_number",
+  "workflow_max_attempts",
+]);
+
+const workflowFieldMaxLengths = Object.freeze({
+  workflow_run_id: 128,
+  workflow_step_id: 128,
+  step_key: 200,
+  step_kind: 80,
+  attempt_key: 200,
+  input_hash: 128,
+  next_run_state: 64,
+});
+
+const forbiddenPayloadKeys = new Set([
+  "api_key",
+  "authorization",
+  "credentials",
+  "password",
+  "secret",
+  "service_role_key",
+  "signed_url",
+  "signed_urls",
+  "source_bytes",
+  "source_data",
+  "media_bytes",
+  "media_data",
+  "model_blob",
+  "model_bytes",
+  "model_data",
+  "token",
+  "access_token",
+  "auth_token",
+  "refresh_token",
+  "worker_token",
+]);
+
+function isForbiddenPayloadKey(key) {
+  const normalized = String(key).toLowerCase().replaceAll("-", "_");
+  return forbiddenPayloadKeys.has(normalized)
+    || normalized.endsWith("_credential")
+    || normalized.endsWith("_credentials")
+    || normalized.endsWith("_secret")
+    || normalized.endsWith("_blob");
+}
+
+function isSignedOrInlineMedia(value) {
+  if (typeof value !== "string") return false;
+  if (/^data:(?:audio|video|image|application\/octet-stream)[;,]/i.test(value)) return true;
+  if (!/^https?:\/\//i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    for (const key of url.searchParams.keys()) {
+      if (/^(?:token|signature|sig|x-amz-|x-goog-|expires$)/i.test(key)) return true;
+    }
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+export function assertQueuePayloadSafe(value, path = "payload", seen = new Set()) {
+  if (value === null || value === undefined) return;
+  if (typeof value === "string") {
+    if (isSignedOrInlineMedia(value)) {
+      throw new Error(`${path} must not contain signed URLs or inline media`);
+    }
+    return;
+  }
+  if (["boolean", "number"].includes(typeof value)) return;
+  if (["bigint", "function", "symbol"].includes(typeof value)) {
+    throw new Error(`${path} must contain only JSON-safe values`);
+  }
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    throw new Error(`${path} must not contain binary data`);
+  }
+  if (typeof value !== "object") return;
+  if (seen.has(value)) throw new Error(`${path} must not contain circular data`);
+  seen.add(value);
+  try {
+    for (const key of Object.keys(value)) {
+      if (isForbiddenPayloadKey(key)) {
+        throw new Error(`${path}.${key} is forbidden in queue payloads`);
+      }
+      assertQueuePayloadSafe(value[key], `${path}.${key}`, seen);
+    }
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function workflowJobFields(payload = {}) {
+  assertQueuePayloadSafe(payload);
+  const fields = {};
+  for (const name of workflowJobFieldNames) {
+    const value = payload[name];
+    if (value === undefined || value === null) continue;
+    if (workflowIntegerFields.has(name)) {
+      if (!Number.isInteger(value) || value < 1 || value > 20) {
+        throw new Error(`${name} must be an integer between 1 and 20`);
+      }
+      fields[name] = value;
+      continue;
+    }
+    if (typeof value !== "string" || value.length < 1 || value.length > workflowFieldMaxLengths[name]) {
+      throw new Error(`${name} must be a non-empty identifier no longer than ${workflowFieldMaxLengths[name]} characters`);
+    }
+    if (/[\u0000-\u001f\u007f]/.test(value)) {
+      throw new Error(`${name} must not contain control characters`);
+    }
+    fields[name] = value;
+  }
+  return fields;
+}
+
 export const queueNames = env("WORKER_QUEUES")
   ? env("WORKER_QUEUES").split(",").map((name) => name.trim()).filter((name) => allQueueNames.includes(name))
   : defaultQueueNames;
@@ -120,6 +248,10 @@ export function positiveIntValue(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+export function bullTransportAttempts(payload = {}, fallback = defaultJobOptions().attempts) {
+  return payload.workflow_run_id ? 1 : positiveIntValue(payload.max_attempts, fallback);
+}
+
 export function bullPriority(priority) {
   const parsed = Number.parseInt(String(priority || "0"), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
@@ -146,6 +278,15 @@ export function normalizeJobRecord(job, state) {
     trace_id: data.trace_id || null,
     error_code: data.error_code || null,
     error_message: data.error_message || null,
+    workflow_run_id: data.workflow_run_id || null,
+    workflow_step_id: data.workflow_step_id || null,
+    step_key: data.step_key || null,
+    step_kind: data.step_kind || null,
+    attempt_key: data.attempt_key || null,
+    workflow_attempt_number: data.workflow_attempt_number || null,
+    workflow_max_attempts: data.workflow_max_attempts || null,
+    input_hash: data.input_hash || null,
+    next_run_state: data.next_run_state || null,
   };
 }
 

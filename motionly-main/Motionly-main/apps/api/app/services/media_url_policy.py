@@ -34,6 +34,142 @@ class ValidatedMediaUrl:
 
 Resolver = Callable[..., list[tuple[Any, ...]]]
 
+_MANUAL_MEDIA_PROPERTY_KEYS = ("assetUrl", "src", "imageUrl")
+_MANUAL_MEDIA_TYPES = {
+    "broll": False,
+    "graphic": False,
+    "music": True,
+    "sfx": True,
+}
+_CSS_BACKGROUND_PROPERTY_KEYS = (
+    "background",
+    "backgroundColor",
+    "backgroundImage",
+    "background_color",
+    "background_image",
+)
+_CSS_URL_RE = re.compile(
+    r"url\s*\(\s*(?:['\"](?P<quoted>[^'\"]*)['\"]|(?P<bare>[^)\s]+))\s*\)",
+    re.IGNORECASE,
+)
+# This permits the color and gradient subset used by the editor while excluding
+# quotes, escapes, URLs, and declarations that can make Chromium load a resource.
+_SAFE_CSS_BACKGROUND_RE = re.compile(r"[A-Za-z0-9#(),.%+\-\s]*")
+
+
+def sanitize_manual_element_properties(
+    element_type: object,
+    properties: object,
+) -> dict[str, Any]:
+    """Return a type-specific, non-networking manual-element property bag.
+
+    The editor's historical ``properties`` bag was intentionally extensible.
+    Keep non-media controls forward compatible, but normalize the media and CSS
+    controls the renderers consume. Legacy URL-bearing CSS degrades to a safe
+    visual fallback rather than becoming a Chromium network request.
+    """
+    if not isinstance(properties, dict):
+        raise ValueError("Manual element properties must be an object.")
+
+    sanitized = dict(properties)
+    fallback = "#14b8a6" if element_type == "shape" else "transparent"
+    for key in _CSS_BACKGROUND_PROPERTY_KEYS:
+        if key not in sanitized:
+            continue
+        safe_value = sanitize_css_background(sanitized[key], fallback=fallback)
+        if key in {"backgroundImage", "background_image"}:
+            # The renderer consumes a single safe background declaration.
+            sanitized.pop(key, None)
+            sanitized["background"] = safe_value
+        elif key == "background_color":
+            sanitized.pop(key, None)
+            sanitized["backgroundColor"] = safe_value
+        else:
+            sanitized[key] = safe_value
+
+    allows_data_audio = _MANUAL_MEDIA_TYPES.get(str(element_type))
+    for key in _MANUAL_MEDIA_PROPERTY_KEYS:
+        if key not in sanitized:
+            continue
+        value = sanitized[key]
+        if allows_data_audio is None:
+            # A visual/text element must not retain a hidden generic media URL.
+            sanitized.pop(key, None)
+            continue
+        if value is None or value == "":
+            sanitized.pop(key, None)
+            continue
+        if not isinstance(value, str):
+            raise ValueError("Manual element media references must be strings.")
+
+    # ``imageUrl`` was used by a pre-release graphic palette. Preserve that
+    # legacy payload only through the one graphic source field the renderers use.
+    if element_type == "graphic" and "imageUrl" in sanitized:
+        sanitized.setdefault("assetUrl", sanitized["imageUrl"])
+        sanitized.pop("imageUrl", None)
+
+    return sanitized
+
+
+def sanitize_css_background(value: object, *, fallback: str = "transparent") -> str:
+    """Allow only inert color/gradient CSS; never return a URL-bearing value."""
+    if not isinstance(value, str):
+        return fallback
+    candidate = value.strip()
+    if (
+        not candidate
+        or len(candidate) > 1_000
+        or not _SAFE_CSS_BACKGROUND_RE.fullmatch(candidate)
+        or _CSS_URL_RE.search(candidate)
+    ):
+        return fallback
+    return candidate
+
+
+def manual_element_media_references(element: object) -> list[tuple[str, str, bool]]:
+    """List typed URL-bearing manual properties for execution-time validation."""
+    if not isinstance(element, dict):
+        raise MediaUrlPolicyError("Manual media element is invalid.")
+    properties = element.get("properties")
+    if properties is None:
+        return []
+    if not isinstance(properties, dict):
+        raise MediaUrlPolicyError("Manual media properties are invalid.")
+
+    element_type = element.get("type")
+    references: list[tuple[str, str, bool]] = []
+    allows_data_audio = _MANUAL_MEDIA_TYPES.get(element_type)
+    if allows_data_audio is not None:
+        for key in _MANUAL_MEDIA_PROPERTY_KEYS:
+            if key not in properties:
+                continue
+            value = properties[key]
+            if value is None or value == "":
+                continue
+            if not isinstance(value, str):
+                raise MediaUrlPolicyError("Manual media URL must be a string.")
+            references.append((key, value, allows_data_audio))
+
+    for key in _CSS_BACKGROUND_PROPERTY_KEYS:
+        if key not in properties:
+            continue
+        value = properties[key]
+        if not isinstance(value, str):
+            raise MediaUrlPolicyError("Manual CSS background must be a string.")
+        for reference in _css_url_references(value):
+            references.append((key, reference, False))
+    return references
+
+
+def _css_url_references(value: str) -> tuple[str, ...]:
+    references: list[str] = []
+    for match in _CSS_URL_RE.finditer(value):
+        reference = (match.group("quoted") or match.group("bare") or "").strip()
+        if not reference:
+            raise MediaUrlPolicyError("Manual CSS background URL is invalid.")
+        references.append(reference)
+    return tuple(references)
+
 
 def validate_outbound_media_url(
     value: str,
@@ -143,20 +279,8 @@ def validate_render_media_manifest(
     elements = edit_plan.get("manual_elements") if isinstance(edit_plan, dict) else None
     if isinstance(elements, list):
         for element in elements:
-            if (
-                not isinstance(element, dict)
-                or element.get("type") not in {"broll", "music", "sfx"}
-            ):
-                continue
-            properties = element.get("properties")
-            if not isinstance(properties, dict):
-                continue
-            for key in ("assetUrl", "src"):
-                if key in properties:
-                    check(
-                        properties.get(key),
-                        allow_data_audio=element.get("type") in {"music", "sfx"},
-                    )
+            for _key, value, allow_data_audio in manual_element_media_references(element):
+                check(value, allow_data_audio=allow_data_audio)
 
     music_selection = render_props.get("musicSelection")
     track = music_selection.get("track") if isinstance(music_selection, dict) else None

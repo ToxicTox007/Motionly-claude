@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -22,16 +22,14 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY apps/api/pyproject.toml ./pyproject.toml
+COPY apps/api/requirements-ml.lock ./requirements-ml.lock
 COPY apps/api/app ./app
 COPY apps/worker/package.json ./apps/worker/package.json
+COPY apps/worker/package-lock.json ./apps/worker/package-lock.json
 COPY apps/worker/src ./apps/worker/src
 
-RUN cd apps/worker && npm install --omit=dev --no-audit --no-fund \
-    && pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir \
-      --index-url https://download.pytorch.org/whl/cu124 \
-      "torch>=2.5.0,<2.6" "torchaudio>=2.5.0,<2.6" \
-    && pip install --no-cache-dir "/app[audio-ml,visual-ml]"
+RUN cd apps/worker && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && pip install --no-cache-dir --require-hashes -r /app/requirements-ml.lock
 
 RUN useradd --create-home --uid 10001 motionly \
     && mkdir -p /var/cache/motionly/huggingface \

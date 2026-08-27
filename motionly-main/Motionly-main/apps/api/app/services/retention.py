@@ -1,10 +1,14 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 
 from app.api.errors import ApiError
 from app.services.local_storage import LocalObjectStorage
+from app.services.storage import StorageSigner
+
+SIGNED_UPLOAD_CLEANUP_GRACE_SECONDS = StorageSigner.SUPABASE_SIGNED_UPLOAD_TTL_SECONDS + 5 * 60
 
 
 class RetentionService:
@@ -20,6 +24,9 @@ class RetentionService:
             "content-type": "application/json",
             "prefer": "return=representation",
         }
+        # A service instance owns its queue leases. A crashed instance cannot
+        # acknowledge work after its bounded database lease is reclaimed.
+        self._queue_lease_owner = f"retention:{uuid4()}"
 
     def run_scheduled(self) -> dict[str, int]:
         if not self.rest_url or not self.settings.supabase_service_role_key:
@@ -62,20 +69,52 @@ class RetentionService:
             "transcripts": 0,
             "analytics_events": 0,
             "exports": 0,
+            "expired_performance_feedback_metrics": 0,
             "local_cache_files": 0,
             "local_cache_bytes": 0,
+            "expired_upload_sessions": 0,
+            "expired_generic_media_upload_sessions": 0,
+            "expired_storage_reservations": 0,
             "queued_storage_objects": 0,
         }
         if self.rest_url and self.settings.supabase_service_role_key:
-            # Drain deleted objects queued more than 30 days ago
+            # Expiry releases reservations, closes active upload rows, and queues
+            # every temporary part. Drain those part objects without the normal
+            # long retention delay.
+            counts["expired_upload_sessions"] = self._expire_upload_sessions()
+            counts["expired_generic_media_upload_sessions"] = (
+                self._expire_generic_media_upload_sessions()
+            )
+            counts["expired_storage_reservations"] = self._expire_storage_quota_reservations()
+            for source_table in (
+                "upload_session_parts",
+                "upload_sessions",
+                "generic_media_upload_session_parts",
+                "generic_media_upload_sessions",
+                "legacy_upload_expiry",
+                "legacy_upload_cancellation",
+            ):
+                counts["queued_storage_objects"] += self._drain_storage_deletion_queue(
+                    source_table=source_table,
+                    minimum_age_days=None,
+                    minimum_age_seconds=SIGNED_UPLOAD_CLEANUP_GRACE_SECONDS,
+                )
+
+            # Drain other deleted objects queued more than 30 days ago.
             counts["queued_storage_objects"] += self._drain_storage_deletion_queue()
-            
+
             # Delete exports older than retention_export_days (90 days)
             counts["exports"] = self._delete_media_rows(
                 table="exports",
                 older_than_days=self.settings.retention_export_days,
             )
-            
+            # Performance feedback uses its consent-time retention deadline rather than
+            # a deployment-wide analytics duration. It is aggregate-only, but still
+            # removed once the creator-selected expiry is reached.
+            counts["expired_performance_feedback_metrics"] = (
+                self._delete_expired_performance_feedback_metrics()
+            )
+
             # Redact/expire raw provider payloads in transcripts older than 30 days
             cutoff_30 = self._cutoff(30)
             self._request(
@@ -84,33 +123,125 @@ class RetentionService:
                 params={"created_at": f"lt.{cutoff_30}"},
                 json={"raw_payload": {}},
             )
-            
+
             counts["queued_storage_objects"] += self._drain_storage_deletion_queue()
-            
+
         evicted = self._evict_local_cache()
         counts["local_cache_files"] = evicted["removed_files"]
         counts["local_cache_bytes"] = evicted["removed_bytes"]
         return counts
 
-    def _drain_storage_deletion_queue(self) -> int:
-        cutoff = self._cutoff(30) # Only delete objects queued for 30+ days
+    def _delete_expired_performance_feedback_metrics(self) -> int:
         rows = self._request(
-            "GET",
-            "storage_deletion_queue",
-            params={
-                "queued_at": f"lt.{cutoff}",
-                "select": "id,storage_bucket,storage_path",
-                "order": "queued_at.asc"
+            "DELETE",
+            "performance_feedback_metrics",
+            params={"expires_at": f"lte.{datetime.now(UTC).isoformat()}"},
+        )
+        return len(rows) if isinstance(rows, list) else 0
+
+    def _expire_upload_sessions(self) -> int:
+        return self._rpc_count("motionly_expire_upload_sessions")
+
+    def _expire_generic_media_upload_sessions(self) -> int:
+        return self._rpc_count("motionly_expire_generic_media_upload_sessions")
+
+    def _expire_storage_quota_reservations(self) -> int:
+        return self._rpc_count("motionly_expire_storage_quota_reservations")
+
+    def _rpc_count(self, function_name: str) -> int:
+        result = self._request("POST", f"rpc/{function_name}", json={})
+        if isinstance(result, int):
+            return result
+        if isinstance(result, list) and result:
+            value = result[0]
+            if isinstance(value, int):
+                return value
+            if isinstance(value, dict):
+                scalar = value.get(function_name)
+                if scalar is not None:
+                    return int(scalar)
+        return 0
+
+    def _drain_storage_deletion_queue(
+        self,
+        *,
+        source_table: str | None = None,
+        minimum_age_days: int | None = 30,
+        minimum_age_seconds: int | None = None,
+    ) -> int:
+        before = None
+        if minimum_age_seconds is not None:
+            before = self._cutoff_seconds(minimum_age_seconds)
+        elif minimum_age_days is not None:
+            before = self._cutoff(minimum_age_days)
+        rows = self._request(
+            "POST",
+            "rpc/motionly_claim_storage_deletion_queue",
+            json={
+                "p_lease_owner": self._queue_lease_owner,
+                "p_limit": 100,
+                "p_source_table": source_table,
+                "p_before": before,
+                "p_lease_seconds": 300,
             },
         )
+        if not isinstance(rows, list):
+            raise ApiError(
+                502,
+                "retention_claim_invalid",
+                "Retention queue claim returned an invalid response.",
+            )
         for row in rows:
+            lease_token = row.get("lease_token")
+            if not isinstance(lease_token, str) or not lease_token:
+                raise ApiError(
+                    502,
+                    "retention_claim_invalid",
+                    "Retention queue claim omitted its fencing token.",
+                )
             self.storage_signer.delete_object(
                 bucket=str(row["storage_bucket"]), path=str(row["storage_path"])
             )
-            self._request(
-                "DELETE", "storage_deletion_queue", params={"id": f"eq.{row['id']}"}
+            reservation_id = row.get("quota_reservation_id")
+            if reservation_id is not None:
+                released = self._request(
+                    "POST",
+                    "rpc/motionly_delete_committed_storage_quota",
+                    json={"p_reservation_id": str(reservation_id)},
+                )
+                if not self._rpc_boolean(
+                    released,
+                    "motionly_delete_committed_storage_quota",
+                ):
+                    raise ApiError(
+                        502,
+                        "retention_quota_cleanup_failed",
+                        "Deleted storage quota could not be reconciled.",
+                    )
+            acknowledged = self._request(
+                "POST",
+                "rpc/motionly_ack_storage_deletion_queue",
+                json={"p_queue_id": str(row["id"]), "p_lease_token": lease_token},
             )
+            if not self._rpc_boolean(acknowledged, "motionly_ack_storage_deletion_queue"):
+                raise ApiError(
+                    409,
+                    "retention_claim_stale",
+                    "Retention queue lease expired before acknowledgement.",
+                )
         return len(rows)
+
+    @staticmethod
+    def _rpc_boolean(result: object, function_name: str) -> bool:
+        if isinstance(result, bool):
+            return result
+        if isinstance(result, list) and len(result) == 1:
+            value = result[0]
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, dict):
+                return bool(value.get(function_name))
+        return False
 
     def _delete_media_rows(self, *, table: str, older_than_days: int) -> int:
         cutoff = self._cutoff(older_than_days)
@@ -167,6 +298,10 @@ class RetentionService:
         if not response.content:
             return []
         return response.json()
+
+    @staticmethod
+    def _cutoff_seconds(seconds: int) -> str:
+        return (datetime.now(UTC) - timedelta(seconds=max(1, seconds))).isoformat()
 
     @staticmethod
     def _cutoff(days: int) -> str:

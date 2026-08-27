@@ -167,6 +167,11 @@ class CaptionSegment(BaseModel):
         return self
 
 
+class CaptionTrackReviewStatus(StrEnum):
+    NEEDS_REVIEW = "needs_review"
+    APPROVED = "approved"
+
+
 class CaptionTrackReadResponse(BaseModel):
     id: UUID
     workspace_id: UUID
@@ -176,6 +181,9 @@ class CaptionTrackReadResponse(BaseModel):
     schema_version: int
     style: CaptionStyle
     hide_filler_words: bool = False
+    language: str = Field(default="original", min_length=2, max_length=24)
+    source_track_id: UUID | None = None
+    review_status: CaptionTrackReviewStatus = CaptionTrackReviewStatus.APPROVED
     segments: list[CaptionSegment] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

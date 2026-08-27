@@ -1,5 +1,6 @@
 "use client";
 
+import { normalizeQueuedLayerStatusUrl } from "@/lib/queued-status-url.mjs";
 import { createClient } from "@/lib/supabase/browser";
 
 type BuildApiHeadersOptions = {
@@ -73,7 +74,7 @@ type EditorApiRequestOptions = {
   workspaceId: string;
   userId?: string;
   accessToken?: string;
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: Record<string, unknown>;
   friendlyError?: string;
   json?: boolean;
@@ -158,7 +159,8 @@ export async function editorApiRequest<T>(
     });
   } catch (err: any) {
     throw new EditorApiError({
-      message: err.message || "Authentication session expired. Please sign in again.",
+      message:
+        err.message || "Authentication session expired. Please sign in again.",
       status: 401,
       code: "auth_session_expired",
       technicalMessage: err.message,
@@ -184,7 +186,8 @@ export async function editorApiRequest<T>(
       });
     }
     throw new EditorApiError({
-      message: "Network connection lost. Please verify your internet connection.",
+      message:
+        "Network connection lost. Please verify your internet connection.",
       status: 0,
       code: "network_failure",
       technicalMessage: err.message,
@@ -199,7 +202,10 @@ export async function editorApiRequest<T>(
       | undefined;
 
     // Handle 409 revision conflict specifically
-    if (response.status === 409 && (payload as any)?.error === "revision_conflict") {
+    if (
+      response.status === 409 &&
+      (payload as any)?.error === "revision_conflict"
+    ) {
       throw new RevisionConflictError({
         expectedRevision: (payload as any)?.expected_revision ?? 0,
         currentRevision: (payload as any)?.current_revision ?? 0,
@@ -211,7 +217,9 @@ export async function editorApiRequest<T>(
     const shouldHideTechnical =
       error?.code === "request_validation_failed" ||
       /valid dictionary|extract fields|validation/i.test(technicalMessage);
-    const message = shouldHideTechnical ? friendlyError : technicalMessage || friendlyError;
+    const message = shouldHideTechnical
+      ? friendlyError
+      : technicalMessage || friendlyError;
     const apiError = new EditorApiError({
       message,
       status: response.status,
@@ -243,33 +251,71 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 export type PlanJobStatusResponse = {
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "running" | "succeeded" | "awaiting_approval" | "failed";
   progress: number;
   plan_id?: string;
+  proposal_id?: string;
+  proposal_revision?: number;
   failure_reason?: string;
 };
 
+export type PlanJobIdentity =
+  | { status: "succeeded"; planId: string }
+  | {
+      status: "awaiting_approval";
+      proposalId: string;
+      proposalRevision: number;
+    };
+
+export function pollPlanJob(
+  statusUrl: string,
+  options: EditorApiRequestOptions,
+  onProgress: ((progress: number) => void) | undefined,
+  returnIdentity: true,
+): Promise<PlanJobIdentity>;
+export function pollPlanJob(
+  statusUrl: string,
+  options: EditorApiRequestOptions,
+  onProgress?: (progress: number) => void,
+): Promise<string>;
 export async function pollPlanJob(
   statusUrl: string,
   options: EditorApiRequestOptions,
-  onProgress?: (progress: number) => void
-): Promise<string> {
+  onProgress?: (progress: number) => void,
+  returnIdentity = false,
+): Promise<string | PlanJobIdentity> {
   const maxRetries = 120;
   for (let i = 0; i < maxRetries; i++) {
     await waitForInteractivePollingTurn(options.signal);
-    const response = await editorApiRequest<PlanJobStatusResponse>(
-      statusUrl,
-      {
-        ...options,
-        method: "GET",
-        body: undefined,
+    const response = await editorApiRequest<PlanJobStatusResponse>(statusUrl, {
+      ...options,
+      method: "GET",
+      body: undefined,
+    });
+    if (response.status === "awaiting_approval") {
+      if (!response.proposal_id || response.proposal_revision == null) {
+        throw new Error(
+          "Plan proposal is ready but its approval identity is missing.",
+        );
       }
-    );
+      if (!returnIdentity) {
+        throw new Error(
+          "This plan requires approval before it can be applied.",
+        );
+      }
+      return {
+        status: "awaiting_approval",
+        proposalId: response.proposal_id,
+        proposalRevision: response.proposal_revision,
+      };
+    }
     if (response.status === "succeeded") {
       if (!response.plan_id) {
         throw new Error("Job succeeded but returned no plan ID.");
       }
-      return response.plan_id;
+      return returnIdentity
+        ? { status: "succeeded", planId: response.plan_id }
+        : response.plan_id;
     }
     if (response.status === "failed") {
       throw new Error(response.failure_reason || "Plan generation failed.");
@@ -310,7 +356,9 @@ export async function pollLayerJob(
     });
     if (response.status === "succeeded") return;
     if (response.status === "failed") {
-      throw new Error(response.failure_reason || "Background processing failed.");
+      throw new Error(
+        response.failure_reason || "Background processing failed.",
+      );
     }
     onProgress?.(response.progress);
     await delay(Math.min(3000, 1000 + attempt * 100), options.signal);
@@ -344,8 +392,10 @@ export async function resolveQueuedLayer<T>({
     if (!submission.status_url) {
       throw new Error(`${resourceLabel} was queued without a status URL.`);
     }
-    const base = apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`;
-    const statusUrl = new URL(submission.status_url, base).toString();
+    const statusUrl = normalizeQueuedLayerStatusUrl(
+      submission.status_url,
+      apiBaseUrl,
+    );
     await pollLayerJob(statusUrl, options, onProgress);
   }
   const resource = immediate ?? (await load());
@@ -418,7 +468,10 @@ export async function waitForInteractivePollingTurn(
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
-  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+  if (
+    typeof document !== "undefined" &&
+    document.visibilityState !== "visible"
+  ) {
     await waitForBrowserEvent(
       document,
       "visibilitychange",

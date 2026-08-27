@@ -685,7 +685,7 @@ class SupabasePublishingRepository(InMemoryPublishingRepository):
                 else value.isoformat()
                 if isinstance(value, datetime)
                 else list(value)
-                if isinstance(value, (tuple, list))
+                if isinstance(value, tuple | list)
                 else value
             )
             for key, value in values.items()
