@@ -1,0 +1,12 @@
+{
+  "name": "@motionly/api-worker-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node BullMQ/Redis bridge invoked by the Motionly API control plane.",
+  "main": "queue-bridge.mjs",
+  "dependencies": {
+    "bullmq": "5.78.0",
+    "ioredis": "5.11.1"
+  }
+}

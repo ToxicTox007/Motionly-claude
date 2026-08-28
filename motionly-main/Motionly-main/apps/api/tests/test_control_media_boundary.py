@@ -15,8 +15,19 @@ def test_api_image_contains_no_ffmpeg_or_ml_runtime() -> None:
         assert "ffmpeg" not in dockerfile_lower
         assert "apps/api/worker-bridge" in dockerfile_lower
         assert "nodejs" in dockerfile_lower
+        assert "worker-bridge/package.json" in dockerfile_lower
         assert "worker-bridge/package-lock.json" in dockerfile_lower
         assert "npm ci --omit=dev" in dockerfile_lower
+    # The npm island manifest must be committed (not gitignored) or `npm ci`
+    # fails in both Docker builds and the supply-chain CI job.
+    worker_bridge_manifest = ROOT / "apps/api/worker-bridge/package.json"
+    assert worker_bridge_manifest.exists(), (
+        "apps/api/worker-bridge/package.json is required by the API Dockerfiles "
+        "and supply-chain CI (`npm ci`); it must be committed."
+    )
+    manifest_text = worker_bridge_manifest.read_text()
+    assert '"bullmq": "5.78.0"' in manifest_text
+    assert '"ioredis": "5.11.1"' in manifest_text
     worker_bridge_lock = (
         ROOT / "apps/api/worker-bridge/package-lock.json"
     ).read_text()

@@ -29,5 +29,7 @@ studio_visual_intelligence.py
 start_deployment.py
 # Committed supply-chain lockfiles
 !package-lock.json
+# Worker-bridge manifest is a required Docker/CI build input, not generated output.
+!apps/api/worker-bridge/package.json
 # Release schema is runtime source, not generated test output.
 !infra/release-manifest.schema.json
