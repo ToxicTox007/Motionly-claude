@@ -9,6 +9,8 @@ from uuid import uuid4
 import pytest
 
 from app.api.dependencies import Actor
+from app.api.errors import ApiError
+from app.api.internal_jobs import run_queue_job
 from app.api.plans import get_plan_job_status
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob
 
@@ -322,36 +324,23 @@ await connection.quit();
         )
 
 
-def test_bullmq_transitions_use_direct_job_lookup(monkeypatch) -> None:
-    record = {
-        "id": "transition-job",
-        "kind": "render",
-        "queue_name": "render",
-        "priority": 0,
-        "attempts": 0,
-        "max_attempts": 3,
-        "status": "queued",
-        "enqueued_at": "2026-07-14T00:00:00+00:00",
-        "workspace_id": None,
-        "project_id": None,
-        "resource_id": None,
-        "render_engine": "ffmpeg_basic",
-    }
-    commands: list[tuple[str, dict[str, object]]] = []
+def test_bullmq_registry_rejects_api_execution_path(monkeypatch) -> None:
+    async def allow_worker_token(*_args, **_kwargs) -> None:
+        return None
 
-    def bridge(command: str, payload: dict[str, object]):
-        commands.append((command, payload))
-        return record
-
+    monkeypatch.setattr("app.api.internal_jobs.require_worker_token", allow_worker_token)
     registry = BullMQQueueRegistry(redis_url="redis://queue.test")
-    monkeypatch.setattr(registry, "_bridge", bridge)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(app_env="test"),
+                queue_registry=registry,
+            )
+        )
+    )
 
-    registry.start(record["id"])
-    registry.complete(record["id"])
-    registry.fail(record["id"])
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(run_queue_job("transition-job", request))
 
-    assert commands == [
-        ("job", {"id": "transition-job", "queue_name": None}),
-        ("job", {"id": "transition-job", "queue_name": None}),
-        ("job", {"id": "transition-job", "queue_name": None}),
-    ]
+    assert exc_info.value.status_code == 410
+    assert exc_info.value.code == "direct_worker_execution_required"

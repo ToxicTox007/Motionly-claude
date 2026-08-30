@@ -13,6 +13,11 @@ class BillingPlanKey(StrEnum):
     AGENCY = "agency"
 
 
+class BillingMode(StrEnum):
+    MANAGED = "managed"
+    PERSONAL = "personal"
+
+
 class SubscriptionStatus(StrEnum):
     NONE = "none"
     TRIALING = "trialing"
@@ -75,12 +80,15 @@ class UsageSummary(BaseModel):
     period_start: datetime
     period_end: datetime
     renders_used: int
-    renders_limit: int
-    remaining_renders: int
-    percent_used: int = Field(ge=0, le=100)
+    renders_limit: int | None
+    remaining_renders: int | None
+    percent_used: int | None = Field(default=None, ge=0, le=100)
 
 
 class BillingStatusResponse(BaseModel):
+    billing_enabled: bool
+    billing_mode: BillingMode
+    unmetered: bool
     subscription: SubscriptionSummary
     current_plan: PlanDefinition
     plans: list[PlanDefinition]

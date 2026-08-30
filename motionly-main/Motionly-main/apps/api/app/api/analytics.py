@@ -11,6 +11,8 @@ from app.schemas.analytics import (
     AIEditFeedbackEventResponse,
     AIEditLayer,
     FineTuningDatasetResponse,
+    FineTuningExample,
+    FineTuningSignal,
 )
 
 router = APIRouter(prefix="/projects/{project_id}/analytics", tags=["Analytics"])
@@ -106,9 +108,69 @@ async def get_fine_tuning_dataset(
     project_id: UUID,
     actor: ActorDep,
     repository: AnalyticsRepositoryDep,
+    request: Request,
     limit: Annotated[int, Query(ge=1, le=1000)] = 250,
 ) -> FineTuningDatasetResponse:
-    # Raw operational feedback is not a training export. Consented datasets are
-    # frozen and retained behind the editorial-learning governance service.
-    del repository, actor, limit
-    return FineTuningDatasetResponse(project_id=project_id, example_count=0, examples=[])
+    del repository
+    learning_repository = getattr(request.app.state, "editorial_learning_repository", None)
+    settings = getattr(request.app.state, "settings", None)
+    if learning_repository is None or not getattr(
+        settings, "editorial_learning_enabled", False
+    ):
+        return FineTuningDatasetResponse(project_id=project_id, example_count=0, examples=[])
+
+    policy = learning_repository.get_policy_or_default(
+        workspace_id=actor.workspace_id,
+        user_id=actor.user_id,
+    )
+    if not policy.training_enabled or policy.revoked_at:
+        return FineTuningDatasetResponse(project_id=project_id, example_count=0, examples=[])
+
+    datasets = learning_repository.list_datasets(
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+        user_id=actor.user_id,
+        limit=1,
+    )
+    if not datasets:
+        return FineTuningDatasetResponse(project_id=project_id, example_count=0, examples=[])
+
+    signal_by_outcome = {
+        "kept": FineTuningSignal.POSITIVE,
+        "changed": FineTuningSignal.CORRECTION,
+        "rejected": FineTuningSignal.REJECTION,
+    }
+    examples: list[FineTuningExample] = []
+    for delta in learning_repository.dataset_deltas(dataset=datasets[0])[:limit]:
+        payload = delta.delta if isinstance(delta.delta, dict) else {}
+        outcome = str(payload.get("outcome") or "")
+        signal = signal_by_outcome.get(outcome)
+        layer_value = str(payload.get("layer") or delta.layer)
+        if signal is None:
+            continue
+        try:
+            layer = AIEditLayer(layer_value)
+        except ValueError:
+            continue
+        before = payload.get("before")
+        after = payload.get("after")
+        input_payload = before if isinstance(before, dict) else {}
+        ideal_output = after if isinstance(after, dict) else {}
+        examples.append(
+            FineTuningExample(
+                event_id=delta.source_event_id or delta.id,
+                project_id=project_id,
+                layer=layer,
+                signal=signal,
+                weight=1.0,
+                input=input_payload,
+                ideal_output=ideal_output,
+                rejected_output=input_payload if signal == FineTuningSignal.REJECTION else None,
+                created_at=delta.created_at,
+            )
+        )
+    return FineTuningDatasetResponse(
+        project_id=project_id,
+        example_count=len(examples),
+        examples=examples,
+    )

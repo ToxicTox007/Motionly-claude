@@ -65,6 +65,12 @@ def complete_render_job(
     file_size_bytes = None
     benchmark_ms = 0
     rendered_broll_count = 0
+    storage = create_object_storage(
+        root=storage_root,
+        supabase_url=supabase_url,
+        service_role_key=service_role_key,
+    )
+    artifact_uploaded = False
     ass_path = None
     if execute_ffmpeg:
         if job.manifest.get("include_captions", True):
@@ -113,6 +119,10 @@ def complete_render_job(
                 video_encoder=_video_encoder_from_manifest(job.manifest),
                 watermark=_watermark_from_manifest(job.manifest),
                 matte_path=matte_path,
+                cancel_check=lambda: _ensure_render_not_cancelled(
+                    job=job,
+                    repository=repository,
+                ),
                 **audio_mix,
             )
             _ensure_render_not_cancelled(job=job, repository=repository)
@@ -129,17 +139,14 @@ def complete_render_job(
                 source_path=output_path,
                 content_type="video/mp4",
             )
+            artifact_uploaded = True
         except ApiError as exc:
             job.logs = [*job.logs, _render_failure_log(exc)]
             if exc.code == "render_cancelled":
-                return repository.transition_job(
+                return _return_cancelled_render_job(
                     job=job,
-                    status=RenderJobStatus.CANCELED,
-                    progress_pct=job.progress_pct,
+                    repository=repository,
                     message=exc.message,
-                    event_type="cancelled",
-                    error_code=exc.code,
-                    error_message=exc.message,
                 )
             return repository.transition_job(
                 job=job,
@@ -163,13 +170,7 @@ def complete_render_job(
             message=_rendering_message(job),
             event_type="rendering_started",
         )
-        file_size_bytes = _write_simulated_export(
-            export_bucket=export_bucket,
-            export_storage_path=export_storage_path,
-            storage_root=storage_root,
-            supabase_url=supabase_url,
-            service_role_key=service_role_key,
-        )
+        _ensure_render_not_cancelled(job=job, repository=repository)
         job = repository.transition_job(
             job=job,
             status=RenderJobStatus.UPLOADING,
@@ -177,7 +178,33 @@ def complete_render_job(
             message="Uploading render output.",
             event_type="upload_started",
         )
-    _ensure_render_not_cancelled(job=job, repository=repository)
+        file_size_bytes = _write_simulated_export(
+            export_bucket=export_bucket,
+            export_storage_path=export_storage_path,
+            storage_root=storage_root,
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+        )
+        artifact_uploaded = True
+    try:
+        _ensure_render_not_cancelled(job=job, repository=repository)
+    except ApiError as exc:
+        if exc.code != "render_cancelled":
+            raise
+        if artifact_uploaded:
+            try:
+                storage.delete_object(bucket=export_bucket, path=export_storage_path)
+            except Exception as cleanup_error:
+                raise ApiError(
+                    502,
+                    "render_cancellation_cleanup_failed",
+                    "Canceled render output could not be deleted.",
+                ) from cleanup_error
+        return _return_cancelled_render_job(
+            job=job,
+            repository=repository,
+            message=exc.message,
+        )
     export = repository.create_export(
         workspace_id=job.workspace_id,
         project_id=job.project_id,
@@ -269,6 +296,26 @@ def complete_render_job_by_id(
         service_role_key=service_role_key,
         execute_ffmpeg=execute_ffmpeg,
         allow_fixture_media=allow_fixture_media,
+    )
+
+
+def _return_cancelled_render_job(
+    *,
+    job: RenderJobRecord,
+    repository: InMemoryRenderRepository,
+    message: str,
+) -> RenderJobRecord:
+    latest = repository.get_render_job_by_id(render_job_id=job.id)
+    if latest.status == RenderJobStatus.CANCELED:
+        return latest
+    return repository.transition_job(
+        job=job,
+        status=RenderJobStatus.CANCELED,
+        progress_pct=job.progress_pct,
+        message=message,
+        event_type="cancelled",
+        error_code="render_cancelled",
+        error_message=message,
     )
 
 
@@ -1002,17 +1049,36 @@ def _stem_dialogue_source(*, render_props: dict, storage: LocalObjectStorage) ->
     stems = render_props.get("sourceStems")
     if not isinstance(stems, dict):
         return None
-    vocals = stems.get("vocals")
-    if not isinstance(vocals, dict):
-        return None
-    bucket = vocals.get("bucket")
-    path = vocals.get("path")
-    if not isinstance(bucket, str) or not isinstance(path, str):
-        return None
+    active_stem = stems.get("active", "vocals")
+    if active_stem not in {"vocals", "no_vocals"}:
+        raise ApiError(
+            422,
+            "render_selected_stem_unavailable",
+            "The selected source stem is unavailable for rendering.",
+        )
+    selected = stems.get(active_stem)
+    if not isinstance(selected, dict):
+        raise ApiError(
+            422,
+            "render_selected_stem_unavailable",
+            "The selected source stem is unavailable for rendering.",
+        )
+    bucket = selected.get("bucket")
+    path = selected.get("path")
+    if not isinstance(bucket, str) or not bucket or not isinstance(path, str) or not path:
+        raise ApiError(
+            422,
+            "render_selected_stem_unavailable",
+            "The selected source stem is unavailable for rendering.",
+        )
     try:
         return storage.ensure_object(bucket=bucket, path=path)
-    except ApiError:
-        return None
+    except ApiError as exc:
+        raise ApiError(
+            422,
+            "render_selected_stem_unavailable",
+            "The selected source stem is unavailable for rendering.",
+        ) from exc
 
 
 def _audio_source_from_metadata(

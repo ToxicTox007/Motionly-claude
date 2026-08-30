@@ -659,6 +659,8 @@ export function AIStep({
       return;
     }
 
+    // Snapshot workflow ownership before the decision request. Never recompute it
+    // from mutable workflow props after the durable decision is accepted.
     const workflowOwned =
       workflowOwnedProposalIdRef.current === proposal.id &&
       workflowProposalId === proposal.id &&

@@ -1,11 +1,10 @@
-import os
 from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import Header, Request
 
 from app.api.errors import ApiError
-from app.core.config import LOCAL_AUTH_BYPASS_ENVS, env_flag_enabled
+from app.core.config import LOCAL_AUTH_BYPASS_ENVS
 from app.repositories.ai_proposals import InMemoryAIProposalRepository
 from app.repositories.analytics import InMemoryAnalyticsRepository
 from app.repositories.billing import InMemoryBillingRepository
@@ -67,9 +66,7 @@ async def get_actor(
     x_motionly_workspace_id: str | None = Header(default=None),
 ) -> Actor:
     settings = request.app.state.settings
-    if env_flag_enabled(os.getenv("SKIP_API_AUTH")):
-        if settings.app_env not in LOCAL_AUTH_BYPASS_ENVS:
-            raise ApiError(500, "auth_not_configured", "API authentication is not configured.")
+    if getattr(settings, "api_auth_bypass_enabled", False):
         return Actor(
             user_id=UUID("00000000-0000-4000-8000-000000000001"),
             workspace_id=UUID("00000000-0000-4000-8000-000000000002"),

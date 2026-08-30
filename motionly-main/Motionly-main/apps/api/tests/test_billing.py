@@ -23,6 +23,7 @@ from app.repositories.billing import (
     SupabaseBillingRepository,
 )
 from app.schemas.billing import (
+    BillingMode,
     BillingPlanKey,
     CheckoutSessionRequest,
     SubscriptionStatus,
@@ -81,6 +82,49 @@ def test_agency_subscription_delivers_advertised_4k_exports() -> None:
 
     assert status.current_plan.key == BillingPlanKey.AGENCY
     assert status.entitlements.max_resolution == "4k"
+
+
+def test_billing_disabled_status_exposes_unmetered_personal_entitlements() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    for _ in range(4):
+        repository.record_usage(
+            workspace_id=workspace_id,
+            event_type=UsageEventType.RENDER_SUCCEEDED,
+        )
+
+    status = build_billing_status(workspace_id, repository, billing_enabled=False)
+
+    assert status.billing_enabled is False
+    assert status.billing_mode == BillingMode.PERSONAL
+    assert status.unmetered is True
+    assert status.current_plan.key == BillingPlanKey.AGENCY
+    assert status.entitlements.watermark is False
+    assert status.entitlements.premium_effects is True
+    assert status.usage.renders_limit is None
+    assert status.usage.remaining_renders is None
+    assert status.usage.percent_used is None
+    assert status.can_render is True
+
+
+def test_billing_status_endpoint_reports_personal_mode_when_disabled() -> None:
+    workspace_id = uuid4()
+    status = asyncio.run(
+        get_billing_status(
+            request=SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(settings=SimpleNamespace(billing_enabled=False))
+                )
+            ),
+            actor=Actor(user_id=uuid4(), workspace_id=workspace_id),
+            repository=InMemoryBillingRepository(),
+        )
+    )
+
+    assert status.billing_enabled is False
+    assert status.billing_mode == BillingMode.PERSONAL
+    assert status.unmetered is True
+    assert status.current_plan.key == BillingPlanKey.AGENCY
 
 
 def test_supabase_subscription_hydrates_legacy_plan_key_row() -> None:
@@ -282,6 +326,11 @@ def test_billing_api_prefers_async_repository_methods() -> None:
 
     status = asyncio.run(
         get_billing_status(
+            request=SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(settings=SimpleNamespace(billing_enabled=True))
+                )
+            ),
             actor=Actor(user_id=uuid4(), workspace_id=workspace_id),
             repository=repository,
         )

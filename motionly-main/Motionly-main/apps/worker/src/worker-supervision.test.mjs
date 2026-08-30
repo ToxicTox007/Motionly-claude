@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 
@@ -338,4 +339,50 @@ test("completed business work survives telemetry and terminal progress failures"
   assert.deepEqual(result, { status: "ready" });
   assert.equal(executions, 1);
   assert.deepEqual(progress, [1, 100]);
+});
+
+test("Python media supervisors use the configured application import directory", async () => {
+  let spawned;
+  const spawnImpl = (command, args, options) => {
+    const child = new MockChild({
+      onWrite: (request, callback) => {
+        callback?.(null);
+        child.respond({
+          id: request.id,
+          result: request.control === "ping" ? { ok: true } : { status: "ok" },
+        });
+      },
+    });
+    spawned = { command, args, options };
+    return child;
+  };
+
+  const result = await persistentPythonExecutor(
+    "domain",
+    "app.workers.domain_job",
+    { kind: "transcription" },
+    {
+      spawnImpl,
+      cwd: "/app",
+      heartbeatIntervalMs: 0,
+      requestTimeoutMs: 25,
+    },
+  );
+
+  assert.deepEqual(result, { status: "ok" });
+  assert.equal(spawned.command, "python");
+  assert.deepEqual(spawned.args, ["-m", "app.workers.domain_job", "--serve"]);
+  assert.equal(spawned.options.cwd, "/app");
+});
+
+test("Python worker Docker images configure the media import root", async () => {
+  for (const filename of [
+    "Dockerfile.python",
+    "Dockerfile.gpu",
+    "Dockerfile.python.demucs",
+  ]) {
+    const dockerfile = await readFile(new URL(`../${filename}`, import.meta.url), "utf8");
+    assert.match(dockerfile, /PYTHON_MEDIA_CWD=\/app/);
+    assert.match(dockerfile, /WORKDIR \/app\/apps\/worker/);
+  }
 });

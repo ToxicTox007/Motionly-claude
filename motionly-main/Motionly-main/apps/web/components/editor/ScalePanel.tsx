@@ -22,6 +22,7 @@ import {
   pollPlanJob,
   resolveQueuedLayer,
   startAdaptivePolling,
+  type PlanJobIdentity,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/browser";
@@ -50,6 +51,20 @@ type EditorialLearningPolicy = {
   revoked_at?: string | null;
 };
 
+function handoffPlanApproval(
+  identity: PlanJobIdentity,
+  statusUrl: string,
+  onProposalCreated: ScalePanelProps["onProposalCreated"],
+): identity is Extract<PlanJobIdentity, { status: "awaiting_approval" }> {
+  if (identity.status !== "awaiting_approval") return false;
+  onProposalCreated({
+    proposalId: identity.proposalId,
+    proposalRevision: identity.proposalRevision,
+    statusUrl,
+  });
+  return true;
+}
+
 interface ScalePanelProps {
   projectId: string;
   workspaceId: string;
@@ -59,6 +74,11 @@ interface ScalePanelProps {
   captionTrack: CaptionTrackSummary | null;
   effectsConfig: EffectsConfigSummary | null;
   onPlanUpdated: (plan: EditPlanRecordSummary) => void;
+  onProposalCreated: (proposal: {
+    proposalId: string;
+    proposalRevision: number;
+    statusUrl: string | null;
+  }) => void;
   onCaptionTrackUpdated: (track: CaptionTrackSummary) => void;
   onEffectsConfigUpdated: (config: EffectsConfigSummary) => void;
 }
@@ -347,13 +367,25 @@ export function ScalePanel(props: ScalePanelProps) {
     let plan: EditPlanRecordSummary;
     if (payload.status === "queued" && payload.status_url) {
       setMessage("Applying template: enqueued...");
-      const planId = await pollPlanJob(
+      const identity = await pollPlanJob(
         `${env.apiBaseUrl}${payload.status_url}`,
         auth(props, lifecycleController.signal),
         (progress) => {
           setMessage(`Applying template: ${progress}%`);
         },
+        true,
       );
+      if (
+        handoffPlanApproval(
+          identity,
+          payload.status_url,
+          props.onProposalCreated,
+        )
+      ) {
+        setMessage("Template proposal ready. Review it in the AI panel before applying it.");
+        return;
+      }
+      const planId = identity.planId;
       const planList = await editorApiRequest<{
         plans: EditPlanRecordSummary[];
       }>(
@@ -452,12 +484,26 @@ export function ScalePanel(props: ScalePanelProps) {
       });
       if (payload.status === "queued" && payload.status_url) {
         setMessage("Applying Brand Kit direction: enqueued…");
-        const planId = await pollPlanJob(
+        const identity = await pollPlanJob(
           `${env.apiBaseUrl}${payload.status_url}`,
           auth(props, lifecycleController.signal),
           (progress) =>
             setMessage(`Applying Brand Kit direction: ${progress}%`),
+          true,
         );
+        if (
+          handoffPlanApproval(
+            identity,
+            payload.status_url,
+            props.onProposalCreated,
+          )
+        ) {
+          setMessage(
+            "Brand Kit proposal ready. Review it in the AI panel before applying it.",
+          );
+          return;
+        }
+        const planId = identity.planId;
         const planList = await editorApiRequest<{
           plans: EditPlanRecordSummary[];
         }>(
@@ -619,13 +665,25 @@ export function ScalePanel(props: ScalePanelProps) {
     let plan: EditPlanRecordSummary;
     if (payload.status === "queued" && payload.status_url) {
       setMessage("Applying style: enqueued...");
-      const planId = await pollPlanJob(
+      const identity = await pollPlanJob(
         `${env.apiBaseUrl}${payload.status_url}`,
         auth(props, lifecycleController.signal),
         (progress) => {
           setMessage(`Applying style: ${progress}%`);
         },
+        true,
       );
+      if (
+        handoffPlanApproval(
+          identity,
+          payload.status_url,
+          props.onProposalCreated,
+        )
+      ) {
+        setMessage("Style proposal ready. Review it in the AI panel before applying it.");
+        return;
+      }
+      const planId = identity.planId;
       const planList = await editorApiRequest<{
         plans: EditPlanRecordSummary[];
       }>(

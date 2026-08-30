@@ -65,7 +65,8 @@ class QueueSnapshot:
     failed: int
     dead_letter: int
     canceled: int
-    oldest_queued_seconds: int | None
+    oldest_queued_seconds: int | None = None
+    failed_scan_truncated: bool = False
 
 
 class QueueRegistry:
@@ -131,6 +132,14 @@ class QueueRegistry:
     def retry(self, job_id: str) -> EnqueuedJob:
         increment_queue_calls()
         job = self.jobs[job_id]
+        if job.status in {
+            QueueJobStatus.CANCELED,
+            QueueJobStatus.SUCCEEDED,
+            QueueJobStatus.RUNNING,
+        }:
+            raise ValueError(f"Queue job cannot be retried in state {job.status}")
+        if job.status == QueueJobStatus.QUEUED:
+            return job
         attempts = job.attempts + 1
         status = (
             QueueJobStatus.DEAD_LETTER if attempts >= job.max_attempts else QueueJobStatus.QUEUED
@@ -225,6 +234,13 @@ class QueueRegistry:
     def cancel(self, job_id: str) -> EnqueuedJob:
         increment_queue_calls()
         job = self.jobs[job_id]
+        if job.status in {
+            QueueJobStatus.CANCELED,
+            QueueJobStatus.SUCCEEDED,
+            QueueJobStatus.FAILED,
+            QueueJobStatus.DEAD_LETTER,
+        }:
+            raise ValueError(f"Queue job cannot be canceled in state {job.status}")
         canceled = EnqueuedJob(
             id=job.id,
             kind=job.kind,
@@ -482,44 +498,6 @@ class BullMQQueueRegistry:
         increment_queue_calls()
         return self._job_from_bridge(self._bridge("retry", {"id": job_id}))
 
-    def _required_job(self, job_id: str) -> EnqueuedJob:
-        record = self._bridge("job", {"id": job_id, "queue_name": None})
-        if record is None:
-            raise KeyError(job_id)
-        return self._job_from_bridge(record)
-
-    def start(self, job_id: str) -> EnqueuedJob:
-        increment_queue_calls()
-        job = self._required_job(job_id)
-        return self._copy_job(job, status=QueueJobStatus.RUNNING)
-
-    def complete(self, job_id: str) -> EnqueuedJob:
-        increment_queue_calls()
-        job = self._required_job(job_id)
-        return self._copy_job(job, status=QueueJobStatus.SUCCEEDED)
-
-    def fail(
-        self,
-        job_id: str,
-        *,
-        error_code: str | None = None,
-        error_message: str | None = None,
-        backoff_seconds: int | None = None,
-    ) -> EnqueuedJob:
-        increment_queue_calls()
-        job = self._required_job(job_id)
-        status = (
-            QueueJobStatus.DEAD_LETTER
-            if job.attempts + 1 >= job.max_attempts
-            else QueueJobStatus.FAILED
-        )
-        return self._copy_job(
-            job,
-            status=status,
-            error_code=error_code,
-            error_message=error_message,
-        )
-
     def cancel(self, job_id: str) -> EnqueuedJob:
         increment_queue_calls()
         return self._job_from_bridge(self._bridge("cancel", {"id": job_id}))
@@ -578,6 +556,7 @@ class BullMQQueueRegistry:
                     failed=int(record.get("failed") or 0),
                     dead_letter=int(record.get("dead_letter") or 0),
                     canceled=int(record.get("canceled") or 0),
+                    failed_scan_truncated=bool(record.get("failed_scan_truncated", False)),
                     oldest_queued_seconds=(
                         int(record["oldest_queued_seconds"])
                         if record.get("oldest_queued_seconds") is not None
@@ -693,41 +672,6 @@ class BullMQQueueRegistry:
             trace_id=str(data["trace_id"]) if data.get("trace_id") else None,
             error_code=str(data["error_code"]) if data.get("error_code") else None,
             error_message=str(data["error_message"]) if data.get("error_message") else None,
-        )
-
-    def _copy_job(
-        self,
-        job: EnqueuedJob,
-        *,
-        status: QueueJobStatus,
-        error_code: str | None = None,
-        error_message: str | None = None,
-    ) -> EnqueuedJob:
-        return EnqueuedJob(
-            id=job.id,
-            kind=job.kind,
-            queue_name=job.queue_name,
-            priority=job.priority,
-            attempts=job.attempts,
-            max_attempts=job.max_attempts,
-            status=status,
-            enqueued_at=job.enqueued_at,
-            workspace_id=job.workspace_id,
-            project_id=job.project_id,
-            resource_id=job.resource_id,
-            workflow_run_id=job.workflow_run_id,
-            workflow_step_id=job.workflow_step_id,
-            step_key=job.step_key,
-            step_kind=job.step_kind,
-            attempt_key=job.attempt_key,
-            workflow_attempt_number=job.workflow_attempt_number,
-            workflow_max_attempts=job.workflow_max_attempts,
-            input_hash=job.input_hash,
-            next_run_state=job.next_run_state,
-            render_engine=job.render_engine,
-            trace_id=job.trace_id,
-            error_code=error_code if error_code is not None else job.error_code,
-            error_message=error_message if error_message is not None else job.error_message,
         )
 
 

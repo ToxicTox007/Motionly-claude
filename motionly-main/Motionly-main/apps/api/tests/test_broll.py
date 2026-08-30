@@ -1480,3 +1480,131 @@ def _longest_consecutive_broll_run(requests: list[BrollRequest]) -> int:
         longest = max(longest, current)
         previous_end_ms = request.end_ms
     return longest
+
+
+def test_broll_multipart_mutations_reject_foreign_sessions_before_side_effects() -> None:
+    from app.api.broll import (
+        abort_user_broll_multipart_upload,
+        confirm_user_broll_multipart_part,
+    )
+    from app.schemas.media_uploads import PartCompleteRequest
+
+    repository, project_id, workspace_id, user_id = make_broll_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    upload_storage_bucket="raw-uploads",
+                    upload_signed_url_ttl_seconds=900,
+                    media_work_dir="/tmp/motionly-tests",
+                )
+            )
+        )
+    )
+    attach_media_upload_services(request)
+    service = request.app.state.media_upload_session_service
+    style_session = asyncio.run(
+        service.initiate(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            owner_type="style_profile",
+            owner_id=uuid4(),
+            object_type="style_reference",
+            final_storage_bucket="raw-uploads",
+            final_storage_path=(
+                f"workspaces/{workspace_id}/projects/{project_id}/style-references/{uuid4()}/sample.mp4"
+            ),
+            filename="sample.mp4",
+            mime_type="video/mp4",
+            file_size_bytes=4,
+        )
+    )
+
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            confirm_user_broll_multipart_part(
+                project_id=project_id,
+                session_id=style_session.id,
+                part_number=1,
+                payload=PartCompleteRequest(),
+                request=request,
+                actor=actor,
+                repository=repository,
+            )
+        )
+    assert error.value.code == "media_upload_session_not_found"
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            abort_user_broll_multipart_upload(
+                project_id=project_id,
+                session_id=style_session.id,
+                request=request,
+                actor=actor,
+                repository=repository,
+            )
+        )
+    assert error.value.code == "media_upload_session_not_found"
+    untouched = asyncio.run(
+        service.inspect(
+            session_id=style_session.id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+    )
+    assert untouched.status.value == "active"
+    assert untouched.parts[0].status.value == "pending"
+
+
+def test_broll_init_compensates_when_owner_session_link_fails() -> None:
+    class FailingLinkRepository(InMemoryBrollRepository):
+        def set_library_media_session(self, **_kwargs):
+            raise RuntimeError("asset link write failed")
+
+    base_repository, project_id, workspace_id, user_id = make_broll_repository()
+    repository = FailingLinkRepository(base_repository.plan_repository)
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    upload_storage_bucket="raw-uploads",
+                    upload_signed_url_ttl_seconds=900,
+                    media_work_dir="/tmp/motionly-tests",
+                )
+            )
+        )
+    )
+    attach_media_upload_services(request)
+
+    with pytest.raises(RuntimeError, match="asset link write failed"):
+        asyncio.run(
+            init_user_broll_upload(
+                project_id=project_id,
+                payload=UserBrollUploadInitRequest(
+                    filename="failed-link.mp4",
+                    mime_type="video/mp4",
+                    file_size_bytes=4,
+                    width=1920,
+                    height=1080,
+                    duration_ms=1000,
+                ),
+                request=request,
+                actor=actor,
+                repository=repository,
+                storage_signer=StorageSigner(base_url="http://localhost:8000"),
+            )
+        )
+
+    service = request.app.state.media_upload_session_service
+    session = next(iter(service._sessions.values()))
+    assert session.status.value == "aborted"
+    assert (
+        asyncio.run(
+            request.app.state.storage_quota_service.get_reservation_state(
+                session.quota_reservation_id
+            )
+        )
+        == "released"
+    )
+    assert next(iter(repository.assets.values())).media_state == "failed"

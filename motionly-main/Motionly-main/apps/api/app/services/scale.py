@@ -414,7 +414,7 @@ def _separate_stems(
     else:
         stems = stem_separator.separate(source_path=source, model=model)
         provenance = None
-    result: dict[str, Any] = {"provider": "demucs", "model": model}
+    result: dict[str, Any] = {"provider": "demucs", "model": model, "active": "vocals"}
     if provenance is not None:
         result["model_gateway"] = provenance
     try:

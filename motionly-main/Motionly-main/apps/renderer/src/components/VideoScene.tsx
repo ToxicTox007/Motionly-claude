@@ -145,12 +145,19 @@ function SourceClipSurface({
       ? subjectIsolationStyle(input.effectsConfig!.background_removal!.feather_px)
       : {}),
   };
+  const selectedStemSource = input.sourceStems
+    ? input.sourceStems[input.sourceStems.active ?? "vocals"]?.src
+    : undefined;
+  if (input.sourceStems && !selectedStemSource) {
+    throw new Error("The selected source stem is unavailable for rendering.");
+  }
+
   return (
     <OffthreadVideo
       src={input.sourceVideo.src}
       startFrom={millisecondsToFrameStart(clip.source_start_ms, fps)}
       endAt={millisecondsToFrameEnd(clip.source_end_ms, fps)}
-      muted={Boolean(input.sourceStems?.vocals?.src)}
+      muted={Boolean(selectedStemSource)}
       playbackRate={sourceMotion.playbackRate}
       style={style}
     />

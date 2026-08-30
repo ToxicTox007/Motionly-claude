@@ -33,6 +33,7 @@ class QueueSnapshotResponse(BaseModel):
     failed: int = 0
     dead_letter: int
     canceled: int
+    failed_scan_truncated: bool = False
     oldest_queued_seconds: int | None = None
 
 

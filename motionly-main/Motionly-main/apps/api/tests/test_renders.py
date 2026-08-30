@@ -2486,3 +2486,58 @@ def test_render_manifest_rejects_private_manual_graphic_url() -> None:
 
     assert exc_info.value.code == "unsafe_media_url"
     assert "169.254" not in exc_info.value.message
+
+
+def test_post_upload_cancellation_deletes_uncommitted_export(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest(),
+            request=make_request(complete_locally=False),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+    queued_job = repository.get_render_job(
+        project_id=project_id,
+        render_job_id=response.job_id,
+        workspace_id=workspace_id,
+    )
+
+    def write_then_cancel(**kwargs) -> int:
+        storage = LocalObjectStorage(root=kwargs["storage_root"])
+        storage.write_object(
+            bucket=kwargs["export_bucket"],
+            path=kwargs["export_storage_path"],
+            content=b"mp4",
+        )
+        repository.cancel_render_job_by_id(render_job_id=queued_job.id)
+        return 3
+
+    monkeypatch.setattr("app.services.render_jobs._write_simulated_export", write_then_cancel)
+
+    result = complete_render_job(
+        job=queued_job,
+        repository=repository,
+        export_bucket="exports",
+        storage_root=str(tmp_path),
+        supabase_url=None,
+        service_role_key=None,
+        execute_ffmpeg=False,
+    )
+
+    export_path = (
+        f"workspaces/{workspace_id}/projects/{project_id}/exports/{queued_job.id}.mp4"
+    )
+    assert result.status == RenderJobStatus.CANCELED
+    assert not LocalObjectStorage(root=tmp_path).object_path(
+        bucket="exports", path=export_path
+    ).exists()
+    assert repository.list_exports(project_id=project_id, workspace_id=workspace_id) == []

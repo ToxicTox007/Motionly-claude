@@ -1,14 +1,23 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-export async function GET(request: NextRequest) {
-  const requestUrl = new URL(request.url);
-  const code = requestUrl.searchParams.get("code");
+function loginRedirect(request: NextRequest, error: "callback_missing" | "callback_failed") {
+  const loginUrl = new URL("/login", request.url);
+  loginUrl.searchParams.set("error", error);
+  return NextResponse.redirect(loginUrl, 303);
+}
 
-  if (code) {
+export async function GET(request: NextRequest) {
+  const code = new URL(request.url).searchParams.get("code");
+  if (!code) return loginRedirect(request, "callback_missing");
+
+  try {
     const supabase = await createClient();
-    await supabase.auth.exchangeCodeForSession(code);
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) return loginRedirect(request, "callback_failed");
+  } catch {
+    return loginRedirect(request, "callback_failed");
   }
 
-  return NextResponse.redirect(new URL("/dashboard", request.url));
+  return NextResponse.redirect(new URL("/dashboard", request.url), 303);
 }

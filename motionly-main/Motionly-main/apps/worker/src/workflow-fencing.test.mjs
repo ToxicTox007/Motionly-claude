@@ -567,3 +567,78 @@ test("workflow render_draft normalizes FFmpeg and Remotion results before fenced
     });
   }
 });
+
+test("returned domain failures fail ordinary BullMQ jobs instead of completing them", async () => {
+  const progress = [];
+  const providerReports = [];
+  const job = {
+    id: "ordinary-domain-job",
+    queueName: "matte_extraction",
+    timestamp: Date.now(),
+    attemptsMade: 0,
+    opts: { attempts: 1 },
+    data: { kind: "matte_extraction" },
+    async updateProgress(value) {
+      progress.push(value);
+    },
+    discard() {
+      assert.fail("a returned domain failure must use the normal failed-job path");
+    },
+  };
+
+  await assert.rejects(
+    runJob(job, {
+      executeJob: async () => ({
+        failed: true,
+        error_code: "matte_provider_failed",
+        error_message: "Matte provider rejected the source.",
+      }),
+      reportProviderSlo: async (_job, success) => providerReports.push(success),
+    }),
+    (error) =>
+      error.code === "matte_provider_failed" &&
+      error.message === "Matte provider rejected the source.",
+  );
+
+  assert.deepEqual(progress, [1]);
+  assert.deepEqual(providerReports, [false]);
+});
+
+test("returned workflow failures fail their claimed step without completing it", async () => {
+  const job = workflowJob({
+    data: {
+      kind: "render",
+      queue_name: "render",
+      step_key: "render-first-draft-v2",
+      step_kind: "render_draft",
+      resource_id: "77000000-0000-4000-8000-000000000099",
+    },
+  });
+  const calls = [];
+
+  await assert.rejects(
+    runJob(job, {
+      executeJob: async () => ({
+        failed: true,
+        error_code: "render_provider_failed",
+        error_message: "Render provider rejected the composition.",
+      }),
+      workflowRpc: async (name) => {
+        calls.push(name);
+        if (name === "motionly_begin_workflow_step") return activeBeginResult();
+        if (name === "motionly_fail_workflow_step") {
+          return { step: { id: IDS.step, state: "failed" }, terminal: false };
+        }
+        assert.fail(`failed results must not call ${name}`);
+      },
+      reportProviderSlo: noSlo,
+    }),
+    (error) => error.code === "render_provider_failed",
+  );
+
+  assert.deepEqual(calls, [
+    "motionly_begin_workflow_step",
+    "motionly_fail_workflow_step",
+  ]);
+  assert.deepEqual(job.progress, [1]);
+});

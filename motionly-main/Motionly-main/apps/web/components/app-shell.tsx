@@ -1,9 +1,11 @@
 import Image from "next/image";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { Progress } from "@/components/brutal-ui";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 import { ThemeMenu } from "@/components/theme-menu";
 import { env } from "@/lib/env";
+import { WORKSPACE_COOKIE_NAME } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import type { BillingStatusSummary } from "@motionly/shared";
 
@@ -125,11 +127,24 @@ async function loadShellState() {
     supabase.auth.getSession(),
   ]);
   if (!user || !session?.access_token) return fallback;
-  const [{ data: profile }, { data: membership }] = await Promise.all([
+  const [{ data: profile }, { data: memberships }] = await Promise.all([
     supabase.from("profiles").select("full_name").eq("id", user.id).maybeSingle(),
-    supabase.from("workspace_members").select("workspace_id").eq("user_id", user.id).eq("status", "active").limit(1).maybeSingle(),
+    supabase
+      .from("workspace_members")
+      .select("workspace_id, workspaces(name)")
+      .eq("user_id", user.id)
+      .eq("status", "active"),
   ]);
-  if (!membership?.workspace_id) return { ...fallback, creatorName: profile?.full_name || fallback.creatorName };
+  const selectedWorkspaceId = (await cookies()).get(WORKSPACE_COOKIE_NAME)?.value;
+  const workspaceId =
+    selectedWorkspaceId ??
+    (memberships?.length === 1 ? String(memberships[0].workspace_id) : null);
+  const membership = memberships?.find(
+    (item) => String(item.workspace_id) === workspaceId,
+  );
+  if (!membership?.workspace_id) {
+    return { ...fallback, creatorName: profile?.full_name || fallback.creatorName };
+  }
   const response = await fetch(`${env.apiBaseUrl}/billing/status`, {
     headers: {
       authorization: `Bearer ${session.access_token}`,

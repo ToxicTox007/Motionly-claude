@@ -173,19 +173,6 @@ class GenericMediaUploadSessionService:
         session_id = uuid4()
         reservation_id = uuid4()
         expires_at = now + self.SESSION_TTL
-        reservation = await self._quota_service.reserve(
-            reservation_id=reservation_id,
-            workspace_id=workspace_id,
-            byte_amount=file_size_bytes,
-            object_amount=1,
-            expires_at=expires_at,
-        )
-        if not reservation.allowed:
-            raise ApiError(
-                409,
-                "storage_quota_exceeded",
-                reservation.reason or "Storage quota would be exceeded.",
-            )
         part_count = (file_size_bytes + self.PART_SIZE_BYTES - 1) // self.PART_SIZE_BYTES
         parts = [
             GenericMediaUploadPart(
@@ -225,9 +212,45 @@ class GenericMediaUploadSessionService:
             created_at=now,
             updated_at=now,
         )
+
+        if self._db_client is not None:
+            try:
+                stored = await self._save_new_session(session)
+            except Exception as exc:
+                if isinstance(exc, ApiError):
+                    raise
+                raise ApiError(
+                    503,
+                    "media_upload_session_unavailable",
+                    "Multipart media state could not be created.",
+                ) from exc
+            if stored is None:
+                raise ApiError(
+                    409,
+                    "storage_quota_exceeded",
+                    "Storage byte or object quota would be exceeded.",
+                )
+            return stored
+
+        reservation = await self._quota_service.reserve(
+            reservation_id=reservation_id,
+            workspace_id=workspace_id,
+            byte_amount=file_size_bytes,
+            object_amount=1,
+            expires_at=expires_at,
+        )
+        if not reservation.allowed:
+            raise ApiError(
+                409,
+                "storage_quota_exceeded",
+                reservation.reason or "Storage quota would be exceeded.",
+            )
         try:
-            await self._save_new_session(session)
+            stored = await self._save_new_session(session)
         except Exception as exc:
+            # The in-memory path has no partial durable writes. Production uses the
+            # single creation RPC above, so it never releases a reservation while a
+            # partially persisted generic session could still exist.
             await self._quota_service.release_reservation(reservation_id)
             if isinstance(exc, ApiError):
                 raise
@@ -236,7 +259,21 @@ class GenericMediaUploadSessionService:
                 "media_upload_session_unavailable",
                 "Multipart media state could not be created.",
             ) from exc
-        return session
+        return stored or session
+
+    async def inspect(
+        self,
+        *,
+        session_id: UUID,
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> GenericMediaUploadSession:
+        """Read session ownership without triggering expiry or other lifecycle work."""
+        return await self._load_session(
+            session_id=UUID(str(session_id)),
+            workspace_id=UUID(str(workspace_id)),
+            project_id=UUID(str(project_id)),
+        )
 
     async def get(
         self,
@@ -483,6 +520,10 @@ class GenericMediaUploadSessionService:
                         session.final_storage_bucket, session.final_storage_path
                     )
                     raise ApiError(409, "upload_session_state_conflict", "Completion lost a race.")
+                # A finalizer response can be followed by a lost read response. Record
+                # the durable commit before any reload so exception cleanup never tries
+                # to terminally release a reservation that PostgreSQL already committed.
+                quota_committed = True
                 session = await self._load_session(
                     session_id=session.id,
                     workspace_id=session.workspace_id,
@@ -516,7 +557,8 @@ class GenericMediaUploadSessionService:
                             409, "upload_session_state_conflict", "Completion was not recorded."
                         )
                     session = current
-            await self._delete_parts_best_effort(session)
+            if self._db_client is None:
+                await self._delete_parts_best_effort(session)
             return GenericMediaUploadCompletion(session=session, reference=reference)
         except Exception as exc:
             if not quota_committed:
@@ -578,7 +620,7 @@ class GenericMediaUploadSessionService:
         workspace_id: UUID,
         project_id: UUID,
     ) -> None:
-        """Retire a finalized media object through the reference/quota lifecycle."""
+        """Durably request final-media deletion without releasing quota early."""
         session = await self.get(
             session_id=session_id,
             workspace_id=workspace_id,
@@ -586,17 +628,47 @@ class GenericMediaUploadSessionService:
         )
         if session.status != UploadSessionStatus.COMPLETED or session.object_reference_id is None:
             raise ApiError(409, "media_upload_not_completed", "Media is not a finalized upload.")
-        reference = await self._object_reference_service.get_active_reference(
-            workspace_id=workspace_id,
-            project_id=project_id,
-            reference_id=session.object_reference_id,
-        )
+
+        if self._db_client is not None:
+            if not await self._request_completed_deletion(session):
+                raise ApiError(
+                    409,
+                    "media_upload_not_completed",
+                    "Media deletion could not be requested for this upload.",
+                )
+            return
+
+        try:
+            reference = await self._object_reference_service.get_active_reference(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                reference_id=session.object_reference_id,
+            )
+        except ApiError:
+            if (
+                await self._quota_service.get_reservation_state(session.quota_reservation_id)
+                == "deleted"
+            ):
+                return
+            raise
+        try:
+            await self._delete_parts_required(session)
+            await self._delete_object_required(reference.storage_bucket, reference.storage_path)
+        except Exception as exc:
+            logger.warning(
+                "generic_media_upload_deletion_pending",
+                extra={"session_id": str(session.id), "error": type(exc).__name__},
+            )
+            raise ApiError(
+                503,
+                "media_deletion_pending",
+                "Media is still present in storage; deletion will need to be retried.",
+            ) from exc
         await self._object_reference_service.mark_deleted(
             workspace_id=workspace_id,
             project_id=project_id,
             reference_id=reference.id,
         )
-        await self._delete_object_best_effort(reference.storage_bucket, reference.storage_path)
         deleted = await self._quota_service.delete_committed(session.quota_reservation_id)
         if not deleted:
             raise ApiError(
@@ -613,7 +685,8 @@ class GenericMediaUploadSessionService:
             project_id=session.project_id,
             reference_id=session.object_reference_id,
         )
-        await self._delete_parts_best_effort(session)
+        if self._db_client is None:
+            await self._delete_parts_best_effort(session)
         return GenericMediaUploadCompletion(session=session, reference=reference)
 
     async def _terminate(
@@ -649,33 +722,46 @@ class GenericMediaUploadSessionService:
                 },
             )
             self._raise_db(response)
-            session = await self._load_session(
+            # Persistent cleanup is deliberately deferred to the leased retention
+            # queue. The RPC records the deletion job but does not release quota.
+            return await self._load_session(
                 session_id=session.id,
                 workspace_id=session.workspace_id,
                 project_id=session.project_id,
             )
-        else:
-            if session.status in {UploadSessionStatus.ACTIVE, UploadSessionStatus.COMPLETING}:
-                await self._transition(
-                    session,
-                    expected=session.status,
-                    status=status,
-                    aborted_at=datetime.now(UTC) if status == UploadSessionStatus.ABORTED else None,
-                    failed_at=datetime.now(UTC) if status != UploadSessionStatus.ABORTED else None,
-                    failure_code=code,
-                )
-            released = await self._quota_service.release_reservation(session.quota_reservation_id)
-            if not released and await self._quota_service.get_reservation_state(
-                session.quota_reservation_id
-            ) not in {None, "released"}:
-                raise ApiError(
-                    503, "upload_cleanup_incomplete", "Media quota cleanup must be retried."
-                )
-        await self._delete_parts_best_effort(session)
-        if delete_final:
-            await self._delete_object_best_effort(
+
+        if session.status in {UploadSessionStatus.ACTIVE, UploadSessionStatus.COMPLETING}:
+            await self._transition(
+                session,
+                expected=session.status,
+                status=status,
+                aborted_at=datetime.now(UTC) if status == UploadSessionStatus.ABORTED else None,
+                failed_at=datetime.now(UTC) if status != UploadSessionStatus.ABORTED else None,
+                failure_code=code,
+            )
+        try:
+            await self._delete_parts_required(session)
+            # Local mode has no durable deletion queue. Keep its behavior strict as
+            # well: the quota is released only after the final object is gone.
+            await self._delete_object_required(
                 session.final_storage_bucket, session.final_storage_path
             )
+        except Exception as exc:
+            logger.warning(
+                "generic_media_upload_cleanup_pending",
+                extra={"session_id": str(session.id), "error": type(exc).__name__},
+            )
+            raise ApiError(
+                503,
+                "upload_cleanup_incomplete",
+                "Media storage cleanup must be retried before quota is released.",
+            ) from exc
+
+        released = await self._quota_service.release_reservation(session.quota_reservation_id)
+        if not released and await self._quota_service.get_reservation_state(
+            session.quota_reservation_id
+        ) not in {None, "released"}:
+            raise ApiError(503, "upload_cleanup_incomplete", "Media quota cleanup must be retried.")
         if reference is not None:
             await self._object_reference_service.mark_deleted(
                 workspace_id=session.workspace_id,
@@ -733,25 +819,51 @@ class GenericMediaUploadSessionService:
         if any(value != digest for value in (session.expected_sha256, requested_hash) if value):
             raise ApiError(409, "upload_hash_mismatch", "Assembled SHA256 did not match.")
 
-    async def _save_new_session(self, session: GenericMediaUploadSession) -> None:
+    async def _save_new_session(
+        self, session: GenericMediaUploadSession
+    ) -> GenericMediaUploadSession | None:
         if self._db_client is None:
             async with self._lock:
                 self._sessions[session.id] = session
-            return
-        response = await self._db_client.async_request(
-            "POST",
-            "/generic_media_upload_sessions",
-            params={"select": "id"},
-            json=self._session_row(session),
-        )
-        self._raise_db(response)
-        response = await self._db_client.async_request(
-            "POST",
-            "/generic_media_upload_session_parts",
-            params={"select": "id"},
-            json=[self._part_row(part) for part in session.parts],
-        )
-        self._raise_db(response)
+            return session
+        try:
+            response = await self._db_client.async_request(
+                "POST",
+                "/rpc/motionly_create_generic_media_upload_session",
+                json={
+                    "p_session_id": str(session.id),
+                    "p_reservation_id": str(session.quota_reservation_id),
+                    "p_workspace_id": str(session.workspace_id),
+                    "p_project_id": str(session.project_id),
+                    "p_owner_type": session.owner_type,
+                    "p_owner_id": str(session.owner_id),
+                    "p_object_type": session.object_type,
+                    "p_final_storage_bucket": session.final_storage_bucket,
+                    "p_final_storage_path": session.final_storage_path,
+                    "p_original_filename": session.original_filename,
+                    "p_mime_type": session.mime_type,
+                    "p_declared_size_bytes": session.declared_size_bytes,
+                    "p_expected_sha256": session.expected_sha256,
+                    "p_part_size_bytes": session.part_size_bytes,
+                    "p_expires_at": session.expires_at.isoformat(),
+                    "p_parts": [self._part_row(part) for part in session.parts],
+                },
+            )
+            self._raise_db(response)
+        except Exception as exc:
+            # A transport failure can arrive after PostgreSQL committed the atomic
+            # RPC. Recover that exact session instead of releasing its reservation.
+            try:
+                return await self._load_session(
+                    session_id=session.id,
+                    workspace_id=session.workspace_id,
+                    project_id=session.project_id,
+                )
+            except ApiError as recovery:
+                if recovery.code == "media_upload_session_not_found":
+                    raise exc from recovery
+                raise
+        return session if self._rpc_boolean(response.json()) else None
 
     async def _load_session(
         self, *, session_id: UUID, workspace_id: UUID, project_id: UUID
@@ -918,15 +1030,35 @@ class GenericMediaUploadSessionService:
             },
         )
         self._raise_db(response)
-        return response.json() is True
+        return self._rpc_boolean(response.json())
+
+    async def _request_completed_deletion(self, session: GenericMediaUploadSession) -> bool:
+        response = await self._db_client.async_request(
+            "POST",
+            "/rpc/motionly_request_generic_media_deletion",
+            json={
+                "p_session_id": str(session.id),
+                "p_workspace_id": str(session.workspace_id),
+                "p_project_id": str(session.project_id),
+            },
+        )
+        self._raise_db(response)
+        return self._rpc_boolean(response.json())
 
     async def _delete_parts_best_effort(self, session: GenericMediaUploadSession) -> None:
         for part in session.parts:
             await self._delete_object_best_effort(session.final_storage_bucket, part.object_path)
 
+    async def _delete_parts_required(self, session: GenericMediaUploadSession) -> None:
+        for part in session.parts:
+            await self._delete_object_required(session.final_storage_bucket, part.object_path)
+
+    async def _delete_object_required(self, bucket: str, path: str) -> None:
+        await run_blocking(self._object_storage.delete_object, bucket=bucket, path=path)
+
     async def _delete_object_best_effort(self, bucket: str, path: str) -> None:
         try:
-            await run_blocking(self._object_storage.delete_object, bucket=bucket, path=path)
+            await self._delete_object_required(bucket, path)
         except Exception:
             logger.warning(
                 "generic_media_upload_cleanup_failed", extra={"bucket": bucket, "path": path}
@@ -1003,6 +1135,18 @@ class GenericMediaUploadSessionService:
                 "media_upload_session_unavailable",
                 "Multipart media state is temporarily unavailable.",
             )
+
+    @staticmethod
+    def _rpc_boolean(result: Any) -> bool:
+        if isinstance(result, bool):
+            return result
+        if isinstance(result, list) and len(result) == 1:
+            value = result[0]
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, dict) and len(value) == 1:
+                return bool(next(iter(value.values())))
+        return False
 
     @staticmethod
     def _session_row(session: GenericMediaUploadSession) -> dict[str, Any]:

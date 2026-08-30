@@ -5,8 +5,11 @@ from uuid import uuid4
 import httpx
 
 from app.api.errors import ApiError
+from app.core.logging import get_logger
 from app.services.local_storage import LocalObjectStorage
 from app.services.storage import StorageSigner
+
+logger = get_logger(__name__)
 
 SIGNED_UPLOAD_CLEANUP_GRACE_SECONDS = StorageSigner.SUPABASE_SIGNED_UPLOAD_TTL_SECONDS + 5 * 60
 
@@ -91,6 +94,7 @@ class RetentionService:
                 "upload_sessions",
                 "generic_media_upload_session_parts",
                 "generic_media_upload_sessions",
+                "generic_media_deletion",
                 "legacy_upload_expiry",
                 "legacy_upload_cancellation",
             ):
@@ -191,6 +195,7 @@ class RetentionService:
                 "retention_claim_invalid",
                 "Retention queue claim returned an invalid response.",
             )
+        processed = 0
         for row in rows:
             lease_token = row.get("lease_token")
             if not isinstance(lease_token, str) or not lease_token:
@@ -199,37 +204,70 @@ class RetentionService:
                     "retention_claim_invalid",
                     "Retention queue claim omitted its fencing token.",
                 )
-            self.storage_signer.delete_object(
-                bucket=str(row["storage_bucket"]), path=str(row["storage_path"])
-            )
-            reservation_id = row.get("quota_reservation_id")
-            if reservation_id is not None:
-                released = self._request(
-                    "POST",
-                    "rpc/motionly_delete_committed_storage_quota",
-                    json={"p_reservation_id": str(reservation_id)},
+            try:
+                self.storage_signer.delete_object(
+                    bucket=str(row["storage_bucket"]), path=str(row["storage_path"])
                 )
-                if not self._rpc_boolean(
-                    released,
-                    "motionly_delete_committed_storage_quota",
-                ):
-                    raise ApiError(
-                        502,
-                        "retention_quota_cleanup_failed",
-                        "Deleted storage quota could not be reconciled.",
+                generic_deletion_job_id = row.get("generic_media_deletion_job_id")
+                if generic_deletion_job_id is not None:
+                    acknowledged = self._request(
+                        "POST",
+                        "rpc/motionly_ack_generic_media_deletion_object",
+                        json={"p_queue_id": str(row["id"]), "p_lease_token": lease_token},
                     )
-            acknowledged = self._request(
-                "POST",
-                "rpc/motionly_ack_storage_deletion_queue",
-                json={"p_queue_id": str(row["id"]), "p_lease_token": lease_token},
-            )
-            if not self._rpc_boolean(acknowledged, "motionly_ack_storage_deletion_queue"):
-                raise ApiError(
-                    409,
-                    "retention_claim_stale",
-                    "Retention queue lease expired before acknowledgement.",
+                    if not self._rpc_boolean(
+                        acknowledged,
+                        "motionly_ack_generic_media_deletion_object",
+                    ):
+                        # The final object can be physically deleted before a claimed
+                        # part is acknowledged. Leave its durable row retryable; the
+                        # acknowledgement RPC prevents any early quota transition.
+                        logger.info(
+                            "retention_generic_media_ack_deferred",
+                            extra={
+                                "queue_id": str(row["id"]),
+                                "job_id": str(generic_deletion_job_id),
+                            },
+                        )
+                        continue
+                else:
+                    reservation_id = row.get("quota_reservation_id")
+                    if reservation_id is not None:
+                        released = self._request(
+                            "POST",
+                            "rpc/motionly_delete_committed_storage_quota",
+                            json={"p_reservation_id": str(reservation_id)},
+                        )
+                        if not self._rpc_boolean(
+                            released,
+                            "motionly_delete_committed_storage_quota",
+                        ):
+                            raise ApiError(
+                                502,
+                                "retention_quota_cleanup_failed",
+                                "Deleted storage quota could not be reconciled.",
+                            )
+                    acknowledged = self._request(
+                        "POST",
+                        "rpc/motionly_ack_storage_deletion_queue",
+                        json={"p_queue_id": str(row["id"]), "p_lease_token": lease_token},
+                    )
+                    if not self._rpc_boolean(acknowledged, "motionly_ack_storage_deletion_queue"):
+                        logger.info(
+                            "retention_claim_stale",
+                            extra={"queue_id": str(row["id"])},
+                        )
+                        continue
+                processed += 1
+            except Exception as exc:
+                # A failed external delete, quota transition, or acknowledgement
+                # leaves its leased row in place for fenced retry. Continue with
+                # unrelated queue rows instead of abandoning the whole retention run.
+                logger.warning(
+                    "retention_storage_deletion_failed",
+                    extra={"queue_id": str(row.get("id")), "error": type(exc).__name__},
                 )
-        return len(rows)
+        return processed
 
     @staticmethod
     def _rpc_boolean(result: object, function_name: str) -> bool:

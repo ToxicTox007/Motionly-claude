@@ -50,6 +50,7 @@ export type MotionlyRenderProps = {
   segmentationMatte?: import("@motionly/shared").SegmentationMatteRef | null;
   sourceStems?: {
     provider?: string;
+    active?: "vocals" | "no_vocals";
     vocals?: { src?: string; bucket?: string; path?: string };
     no_vocals?: { src?: string; bucket?: string; path?: string };
   } | null;

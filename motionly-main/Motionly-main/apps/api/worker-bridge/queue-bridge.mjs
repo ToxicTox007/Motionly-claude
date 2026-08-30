@@ -7,8 +7,11 @@ import {
   allQueueNames,
   bullPriority,
   bullTransportAttempts,
+  canceledJobsKey,
   defaultJobOptions,
+  env,
   normalizeJobRecord,
+  positiveInt,
   queueFor,
   workflowJobFields,
 } from "./queue-common.mjs";
@@ -102,11 +105,73 @@ export async function getJobsPaged(queue, states, { pageSize = JOB_SCAN_PAGE_SIZ
   return records;
 }
 
-async function snapshots(connection) {
+async function getJobsLimited(queue, states, limit) {
+  if (limit <= 0) return [];
+  return queue.getJobs(states, 0, limit - 1, true);
+}
+
+const CANCELED_JOB_MARKER_SCRIPT = `
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local expires_at = tonumber(ARGV[2])
+local retention_seconds = tonumber(ARGV[3])
+local job_id = ARGV[4]
+redis.call("ZREMRANGEBYSCORE", key, "-inf", now)
+if redis.call("ZSCORE", key, job_id) then
+  return 0
+end
+redis.call("ZADD", key, expires_at, job_id)
+redis.call("EXPIRE", key, retention_seconds)
+return 1
+`;
+
+function canceledJobRetentionSeconds() {
+  return positiveInt(
+    "QUEUE_CANCELED_RETENTION_SECONDS",
+    positiveInt("JOB_FAILED_RETENTION_SECONDS", 604_800),
+  );
+}
+
+export async function recordCanceledJob(
+  connection,
+  queueName,
+  jobId,
+  { now = Date.now(), retentionSeconds = canceledJobRetentionSeconds() } = {},
+) {
+  const key = canceledJobsKey(queueName);
+  const normalizedJobId = String(jobId || "").trim();
+  if (!normalizedJobId) throw new Error("Canceled queue job identity is required");
+  const expiresAt = now + retentionSeconds * 1000;
+  const result = await connection.eval(
+    CANCELED_JOB_MARKER_SCRIPT,
+    1,
+    key,
+    now,
+    expiresAt,
+    retentionSeconds,
+    normalizedJobId,
+  );
+  return Number(result) === 1;
+}
+
+async function retainedCanceledJobCount(connection, queueName, now) {
+  const key = canceledJobsKey(queueName);
+  await connection.zremrangebyscore(key, "-inf", now);
+  return Number((await connection.zcard(key)) || 0);
+}
+
+export async function snapshots(
+  connection,
+  {
+    queueNames: snapshotQueueNames = queueNames,
+    queueFactory = queueFor,
+    now = Date.now(),
+    failedScanLimit = positiveInt("QUEUE_SNAPSHOT_FAILED_SCAN_LIMIT", 500),
+  } = {},
+) {
   const records = [];
-  const now = Date.now();
-  for (const queueName of queueNames) {
-    const queue = queueFor(queueName, connection);
+  for (const queueName of snapshotQueueNames) {
+    const queue = queueFactory(queueName, connection);
     const counts = await queue.getJobCounts(
       "waiting",
       "prioritized",
@@ -122,7 +187,34 @@ async function snapshots(connection) {
     const paused = Number(counts.paused || 0);
     const active = Number(counts.active || 0);
     const completed = Number(counts.completed || 0);
-    const failed = Number(counts.failed || 0);
+    const failedCount = Number(counts.failed || 0);
+    const failedJobs = await getJobsLimited(
+      queue,
+      ["failed"],
+      Math.min(failedCount, Math.max(1, failedScanLimit)),
+    );
+    let retryableFailed = 0;
+    let deadLetter = 0;
+    for (const job of failedJobs) {
+      if (job.data?.status === "canceled") continue;
+      const attemptsMade = Number(job.attemptsMade || 0);
+      const maxAttempts = Number(
+        job.opts?.attempts || job.data?.max_attempts || env("JOB_ATTEMPTS", "3"),
+      );
+      if (job.data?.status === "dead_letter" || attemptsMade >= maxAttempts) {
+        deadLetter += 1;
+      } else {
+        retryableFailed += 1;
+      }
+    }
+    const failedScanTruncated = failedCount > failedJobs.length;
+    if (failedScanTruncated) {
+      // Uninspected retained failures remain visible as retryable until a
+      // bounded scan can classify them. The flag makes this approximation
+      // explicit to control-plane callers rather than doing an unbounded scan.
+      retryableFailed += failedCount - failedJobs.length;
+    }
+    const canceled = await retainedCanceledJobCount(connection, queueName, now);
     let oldestQueuedSeconds = null;
     const oldest = await queue.getJobs(
       ["waiting", "prioritized", "delayed", "paused"],
@@ -145,10 +237,10 @@ async function snapshots(connection) {
       queued: waiting + prioritized + delayed + paused,
       running: active,
       succeeded: completed,
-      failed: 0,
-      dead_letter: failed,
-      // Canceled non-active jobs are removed, not represented by BullMQ's paused state.
-      canceled: 0,
+      failed: retryableFailed,
+      dead_letter: deadLetter,
+      canceled,
+      failed_scan_truncated: failedScanTruncated,
       oldest_queued_seconds: oldestQueuedSeconds,
     });
   }
@@ -158,22 +250,49 @@ async function snapshots(connection) {
 async function retry(connection, payload) {
   const job = await findJob(connection, payload.id, payload.queue_name);
   if (!job) throw new Error(`Queue job was not found: ${payload.id}`);
-  await job.updateData({ ...job.data, status: "queued", enqueued_at: new Date().toISOString() });
   const state = await job.getState();
+  if (job.data?.status === "canceled") {
+    throw new Error(`Canceled queue job cannot be retried: ${payload.id}`);
+  }
+  if (state === "active" || state === "completed") {
+    throw new Error(`Queue job cannot be retried while ${state}: ${payload.id}`);
+  }
+  if (!["failed", "delayed", "waiting", "prioritized", "paused"].includes(state)) {
+    throw new Error(`Queue job is not retryable in state ${state}: ${payload.id}`);
+  }
+  await job.updateData({
+    ...job.data,
+    status: "queued",
+    enqueued_at: new Date().toISOString(),
+  });
   if (state === "failed") {
     await job.retry();
   } else if (state === "delayed") {
     await job.promote();
   }
   const refreshed = await findJob(connection, payload.id, payload.queue_name);
-  return normalizeJobRecord(refreshed, refreshed ? await refreshed.getState() : "waiting");
+  return normalizeJobRecord(
+    refreshed,
+    refreshed ? await refreshed.getState() : "waiting",
+  );
 }
 
 async function cancel(connection, payload) {
   const job = await findJob(connection, payload.id, payload.queue_name);
   if (!job) throw new Error(`Queue job was not found: ${payload.id}`);
-  await job.updateData({ ...job.data, status: "canceled" });
   const state = await job.getState();
+  if (state === "completed" || state === "failed") {
+    throw new Error(`Queue job can no longer be canceled in state ${state}: ${payload.id}`);
+  }
+  const wasCanceled = job.data?.status === "canceled";
+  await job.updateData({ ...job.data, status: "canceled" });
+  if (!wasCanceled) {
+    await recordCanceledJob(
+      connection,
+      job.queueName || payload.queue_name,
+      job.id,
+    );
+  }
   if (state !== "active") {
     await job.remove();
   }

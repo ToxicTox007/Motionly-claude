@@ -1,7 +1,6 @@
 import asyncio
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Annotated
 from uuid import UUID
 
@@ -24,7 +23,6 @@ from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.renders import InMemoryRenderRepository, RenderJobRecord
-from app.schemas.billing import BillingPlanKey
 from app.schemas.broll import BrollSlotStatus
 from app.schemas.captions import CaptionPresetKey, CaptionSegment, TranscriptWord
 from app.schemas.plans import EditPlan
@@ -44,9 +42,9 @@ from app.schemas.renders import (
     RenderJobStatus,
     RenderListResponse,
 )
+from app.schemas.scale import ScaleResourceStatus
 from app.schemas.uploads import UploadStatus
 from app.services.ass_captions import caption_track_to_ass
-from app.services.billing import PLAN_DEFINITIONS
 from app.services.caption_presets import get_caption_preset
 from app.services.cut_planning import PLANNER_VERSION, build_crop_warnings, plan_keep_segments
 from app.services.edit_plan_validation import (
@@ -56,6 +54,7 @@ from app.services.edit_plan_validation import (
 )
 from app.services.matte_jobs import matte_availability
 from app.services.media_url_policy import MediaUrlPolicyError, validate_render_media_manifest
+from app.services.offload import run_blocking
 from app.services.queue import RenderQueue
 from app.services.render_templates import (
     build_props_hash,
@@ -370,18 +369,11 @@ async def _create_render_target(
     timeline_revision_id: UUID | None = None,
     publish: bool = True,
 ) -> RenderCreateResponse | RenderJobRecord:
-    if request.app.state.settings.billing_enabled:
-        billing_status = enforce_render_entitlement(
-            workspace_id=actor.workspace_id,
-            repository=billing_repository,
-        )
-    else:
-        personal_plan = PLAN_DEFINITIONS[BillingPlanKey.AGENCY]
-        billing_status = SimpleNamespace(
-            current_plan=personal_plan,
-            entitlements=personal_plan.entitlements,
-            can_render=True,
-        )
+    billing_status = enforce_render_entitlement(
+        workspace_id=actor.workspace_id,
+        repository=billing_repository,
+        billing_enabled=bool(getattr(request.app.state.settings, "billing_enabled", True)),
+    )
     upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
     if upload.source_object_reference_id is None:
         reference_service = getattr(
@@ -847,7 +839,7 @@ async def _create_render_target(
                 "ai_reason": "platform-specific opening hook",
             }
         )
-    source_stems = _source_stems_for_render(
+    source_stems = await _source_stems_for_render(
         request=request,
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -1472,6 +1464,16 @@ async def stream_render_events(
     )
 
 
+def _render_queue_priority(job) -> int:
+    manifest = getattr(job, "manifest", None)
+    if not isinstance(manifest, dict):
+        return 0
+    billing = manifest.get("billing")
+    if isinstance(billing, dict) and billing.get("priority_queue") is True:
+        return 10
+    return 0
+
+
 @router.post(
     "/projects/{project_id}/renders/{render_job_id}/cancel",
     response_model=RenderJobResponse,
@@ -1501,6 +1503,7 @@ async def cancel_render(
                 render_job_id=job.id,
                 project_id=project_id,
                 workspace_id=actor.workspace_id,
+                priority=_render_queue_priority(job),
             )
         )
     except Exception:
@@ -1545,6 +1548,7 @@ async def retry_render(
         workspace_id=actor.workspace_id,
         render_engine=(job.render_engine or RenderEngine.FFMPEG_BASIC).value,
         compute_tier=str(job.manifest.get("compute_tier") or "cpu"),
+        priority=_render_queue_priority(job),
     )
     return RenderCreateResponse(
         job=job.to_response(repository.events_for_job(job.id)),
@@ -1647,17 +1651,76 @@ async def restore_export_version(
     )
 
 
-def _source_stems_for_render(
+async def _source_stems_for_render(
     *, request: Request, project_id: UUID, workspace_id: UUID
 ) -> dict[str, object] | None:
     scale_repository = getattr(request.app.state, "scale_repository", None)
     if scale_repository is None:
         return None
-    resource = scale_repository.latest(
+    result = await _repository_call(
+        scale_repository,
+        "latest_async",
+        "latest",
         workspace_id=workspace_id,
         project_id=project_id,
         kind="stem_separation",
+        status=ScaleResourceStatus.READY,
     )
-    if resource is None or resource.status.value != "ready":
+    if result is None:
         return None
-    return resource.result
+    raw = result.result
+    if not isinstance(raw, dict):
+        raise ApiError(
+            409,
+            "stem_artifact_unavailable",
+            "The selected source stem is unavailable for rendering.",
+        )
+    active = raw.get("active", "vocals")
+    if active not in {"vocals", "no_vocals"}:
+        raise ApiError(
+            409,
+            "stem_artifact_unavailable",
+            "The selected source stem is unavailable for rendering.",
+        )
+    selected = raw.get(active)
+    expected_path = (
+        f"workspaces/{workspace_id}/projects/{project_id}/stems/{result.id}/{active}.wav"
+    )
+    if (
+        not isinstance(selected, dict)
+        or not isinstance(selected.get("bucket"), str)
+        or not selected["bucket"]
+        or not isinstance(selected.get("path"), str)
+        or selected["path"] != expected_path
+    ):
+        raise ApiError(
+            409,
+            "stem_artifact_unavailable",
+            "The selected source stem is unavailable for rendering.",
+        )
+    object_storage = getattr(request.app.state, "object_storage", None)
+    if object_storage is None or not callable(getattr(object_storage, "inspect_object", None)):
+        raise ApiError(
+            503,
+            "stem_artifact_verification_unavailable",
+            "The selected source stem cannot be verified for rendering.",
+        )
+    try:
+        await run_blocking(
+            object_storage.inspect_object,
+            bucket=selected["bucket"],
+            path=selected["path"],
+        )
+    except ApiError as exc:
+        if exc.code in {"storage_object_missing", "storage_path_invalid"}:
+            raise ApiError(
+                409,
+                "stem_artifact_unavailable",
+                "The selected source stem is unavailable for rendering.",
+            ) from exc
+        raise ApiError(
+            502,
+            "stem_artifact_verification_failed",
+            "The selected source stem could not be verified for rendering.",
+        ) from exc
+    return {**raw, "active": active}

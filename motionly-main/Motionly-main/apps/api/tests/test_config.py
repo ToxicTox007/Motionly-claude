@@ -47,6 +47,8 @@ def test_skip_api_auth_allowed_only_in_exact_local_envs(
     settings = get_settings()
 
     assert settings.app_env == app_env
+    assert settings.skip_api_auth is True
+    assert settings.api_auth_bypass_enabled is True
 
 
 @pytest.mark.parametrize("truthy_value", ["1", "yes", "on", "TRUE", "Yes"])

@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -41,6 +41,11 @@ class ScaleResourceListResponse(BaseModel):
 
 class StemSeparationRequest(BaseModel):
     model: str = Field(default="htdemucs", max_length=80)
+
+
+class StemSelectionUpdateRequest(BaseModel):
+    active: Literal["vocals", "no_vocals"]
+    expected_revision: int = Field(ge=1)
 
 
 class GeneratedBrollRequest(BaseModel):

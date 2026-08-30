@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NODE_ENV=production \
     PROCESS_ROLE=worker \
     PYTHON_MEDIA_WORKER_ENABLED=true \
+    PYTHON_MEDIA_CWD=/app \
     MODEL_PREFETCH=true \
     STEM_SEPARATION_PROVIDER=demucs \
     DEMUCS_MODEL=htdemucs \

@@ -244,6 +244,7 @@ def _queue_snapshots(registry: QueueRegistry) -> list[QueueSnapshotResponse]:
             failed=snapshot.failed,
             dead_letter=snapshot.dead_letter,
             canceled=snapshot.canceled,
+            failed_scan_truncated=snapshot.failed_scan_truncated,
             oldest_queued_seconds=snapshot.oldest_queued_seconds,
         )
         for snapshot in registry.snapshots()

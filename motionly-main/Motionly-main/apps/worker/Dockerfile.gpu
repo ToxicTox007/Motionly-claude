@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PROCESS_ROLE=worker \
     ML_WORKER_ENABLED=true \
     PYTHON_MEDIA_WORKER_ENABLED=true \
+    PYTHON_MEDIA_CWD=/app \
     WORKER_QUEUES=visual_analysis,transcription \
     HF_HOME=/var/cache/motionly/huggingface \
     TORCH_HOME=/var/cache/motionly/torch \

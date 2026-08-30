@@ -147,6 +147,58 @@ def test_demucs_vocal_stem_is_resolved_from_render_manifest(tmp_path: Path) -> N
     assert Path(mix["dialogue_source"]).read_bytes() == b"vocal"
 
 
+def test_demucs_no_vocals_stem_is_resolved_from_render_manifest(tmp_path: Path) -> None:
+    storage = LocalObjectStorage(root=tmp_path)
+    storage.write_object(bucket="raw-uploads", path="stems/vocals.wav", content=b"vocal")
+    storage.write_object(
+        bucket="raw-uploads",
+        path="stems/no_vocals.wav",
+        content=b"instrumental",
+    )
+
+    mix = _audio_mix_from_manifest(
+        {
+            "render_props": {
+                "sourceStems": {
+                    "active": "no_vocals",
+                    "vocals": {"bucket": "raw-uploads", "path": "stems/vocals.wav"},
+                    "no_vocals": {
+                        "bucket": "raw-uploads",
+                        "path": "stems/no_vocals.wav",
+                    },
+                }
+            }
+        },
+        storage=storage,
+    )
+
+    assert Path(mix["dialogue_source"]).read_bytes() == b"instrumental"
+
+
+def test_missing_selected_no_vocals_stem_does_not_fallback_to_vocals(tmp_path: Path) -> None:
+    storage = LocalObjectStorage(root=tmp_path)
+    storage.write_object(bucket="raw-uploads", path="stems/vocals.wav", content=b"vocal")
+
+    with pytest.raises(ApiError) as exc_info:
+        _audio_mix_from_manifest(
+            {
+                "render_props": {
+                    "sourceStems": {
+                        "active": "no_vocals",
+                        "vocals": {"bucket": "raw-uploads", "path": "stems/vocals.wav"},
+                        "no_vocals": {
+                            "bucket": "raw-uploads",
+                            "path": "stems/no_vocals.wav",
+                        },
+                    }
+                }
+            },
+            storage=storage,
+        )
+
+    assert exc_info.value.code == "render_selected_stem_unavailable"
+
+
 def test_ffmpeg_renderer_mixes_sfx_without_unconnected_ducking_branch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -568,3 +620,121 @@ def test_ffmpeg_renderer_reports_missing_binary(
         )
 
     assert exc_info.value.code == "ffmpeg_unavailable"
+
+
+class _CancellablePopen:
+    def __init__(self, *, require_kill: bool) -> None:
+        self.require_kill = require_kill
+        self.returncode: int | None = None
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.wait_timeouts: list[float | None] = []
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        self.wait_timeouts.append(timeout)
+        if self.require_kill and self.kill_calls == 0:
+            raise subprocess.TimeoutExpired("ffmpeg", timeout)
+        self.returncode = -15 if self.terminate_calls else self.returncode
+        return self.returncode
+
+
+def test_cancellable_ffmpeg_uses_file_diagnostics_and_escalates_to_kill(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    process = _CancellablePopen(require_kill=True)
+    output_path = tmp_path / "out.mp4"
+    output_path.write_bytes(b"partial output")
+
+    def fake_popen(*_args, **kwargs):
+        captured.update(kwargs)
+        return process
+
+    def cancel() -> None:
+        raise ApiError(409, "render_cancelled", "Render canceled by user.")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(ffmpeg_render.subprocess, "Popen", fake_popen)
+
+    with pytest.raises(ApiError) as exc_info:
+        FFmpegCaptionRenderer().render(
+            source_path=tmp_path / "source.mp4",
+            ass_path=None,
+            output_path=output_path,
+            specs=RenderSpecs(),
+            cancel_check=cancel,
+        )
+
+    assert exc_info.value.code == "render_cancelled"
+    assert captured["stdout"] is subprocess.DEVNULL
+    assert captured["stderr"] is not subprocess.PIPE
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
+    assert not output_path.exists()
+
+
+def test_cancellable_ffmpeg_timeout_terminates_and_removes_partial_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    process = _CancellablePopen(require_kill=False)
+    output_path = tmp_path / "out.mp4"
+    output_path.write_bytes(b"partial output")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(ffmpeg_render.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(ffmpeg_render, "FFMPEG_RENDER_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(ffmpeg_render.time, "monotonic", lambda: 1.0)
+
+    with pytest.raises(ApiError) as exc_info:
+        FFmpegCaptionRenderer().render(
+            source_path=tmp_path / "source.mp4",
+            ass_path=None,
+            output_path=output_path,
+            specs=RenderSpecs(),
+            cancel_check=lambda: None,
+        )
+
+    assert exc_info.value.code == "ffmpeg_render_timeout"
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 0
+    assert not output_path.exists()
+
+
+def test_uncancellable_ffmpeg_timeout_is_normalized_and_removes_partial_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "out.mp4"
+    output_path.write_bytes(b"partial output")
+
+    monkeypatch.setattr(ffmpeg_render, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        ffmpeg_render.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired("ffmpeg", 600)
+        ),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        FFmpegCaptionRenderer().render(
+            source_path=tmp_path / "source.mp4",
+            ass_path=None,
+            output_path=output_path,
+            specs=RenderSpecs(),
+        )
+
+    assert exc_info.value.code == "ffmpeg_render_timeout"
+    assert not output_path.exists()

@@ -20,6 +20,7 @@ from app.api.scale import (
     list_brand_kits,
     list_project_scale_resources,
     list_saved_templates,
+    select_audio_stem,
     train_style_profile,
     update_brand_kit,
     update_collaboration_manifest,
@@ -39,6 +40,7 @@ from app.schemas.scale import (
     BrandKitUpdateRequest,
     CollaborationManifestUpdateRequest,
     ScaleResourceStatus,
+    StemSelectionUpdateRequest,
     StyleProfileCreateRequest,
     StyleReferenceCompleteRequest,
     StyleReferenceInitRequest,
@@ -284,6 +286,102 @@ def test_scale_api_prefers_async_repository_methods() -> None:
         "latest",
         "update-if-revision",
     ]
+
+
+def _ready_stem_selection_context(tmp_path: Path):
+    workspace_id = uuid4()
+    project_id = uuid4()
+    actor = Actor(user_id=uuid4(), workspace_id=workspace_id)
+    repository = InMemoryScaleRepository()
+    storage = LocalObjectStorage(root=tmp_path)
+    record = repository.create(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        kind="stem_separation",
+        name="Source audio stems",
+        status=ScaleResourceStatus.READY,
+        result={},
+    )
+    vocal_path = f"workspaces/{workspace_id}/projects/{project_id}/stems/{record.id}/vocals.wav"
+    no_vocals_path = (
+        f"workspaces/{workspace_id}/projects/{project_id}/stems/{record.id}/no_vocals.wav"
+    )
+    record.result = {
+        "provider": "demucs",
+        "model": "htdemucs",
+        "active": "vocals",
+        "vocals": {"bucket": "raw-uploads", "path": vocal_path},
+        "no_vocals": {"bucket": "raw-uploads", "path": no_vocals_path},
+    }
+    storage.write_object(bucket="raw-uploads", path=vocal_path, content=b"vocal")
+    storage.write_object(bucket="raw-uploads", path=no_vocals_path, content=b"instrumental")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                project_repository=SimpleNamespace(get_project=lambda **_kwargs: object()),
+                scale_repository=repository,
+                object_storage=storage,
+            )
+        )
+    )
+    return actor, project_id, repository, record, storage, request
+
+
+def test_select_audio_stem_persists_verified_no_vocals_with_cas(tmp_path: Path) -> None:
+    actor, project_id, repository, record, _storage, request = _ready_stem_selection_context(
+        tmp_path
+    )
+
+    response = asyncio.run(
+        select_audio_stem(
+            project_id=project_id,
+            resource_id=record.id,
+            payload=StemSelectionUpdateRequest(active="no_vocals", expected_revision=1),
+            actor=actor,
+            request=request,
+        )
+    )
+
+    assert response.revision == 2
+    assert response.result["active"] == "no_vocals"
+    assert response.result["vocals"] == record.result["vocals"]
+    assert response.result["no_vocals"] == record.result["no_vocals"]
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            select_audio_stem(
+                project_id=project_id,
+                resource_id=record.id,
+                payload=StemSelectionUpdateRequest(active="vocals", expected_revision=1),
+                actor=actor,
+                request=request,
+            )
+        )
+    assert exc_info.value.code == "collaboration_revision_conflict"
+    assert repository.get(resource_id=record.id, workspace_id=actor.workspace_id).result[
+        "active"
+    ] == ("no_vocals")
+
+
+def test_select_audio_stem_rejects_missing_selected_artifact(tmp_path: Path) -> None:
+    actor, project_id, _repository, record, storage, request = _ready_stem_selection_context(
+        tmp_path
+    )
+    selected = record.result["no_vocals"]
+    storage.delete_object(bucket=selected["bucket"], path=selected["path"])
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            select_audio_stem(
+                project_id=project_id,
+                resource_id=record.id,
+                payload=StemSelectionUpdateRequest(active="no_vocals", expected_revision=1),
+                actor=actor,
+                request=request,
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "stem_artifact_unavailable"
 
 
 def test_list_project_scale_resources_passes_limit_to_repository() -> None:
@@ -1035,3 +1133,274 @@ def test_style_training_worker_rechecks_active_durable_references() -> None:
             object_reference_service=references,
         )
     assert error.value.code == "object_reference_not_found"
+
+
+def test_style_multipart_mutations_reject_foreign_sessions_before_side_effects() -> None:
+    from app.api.scale import (
+        abort_style_reference_multipart,
+        confirm_style_reference_multipart_part,
+    )
+    from app.schemas.media_uploads import PartCompleteRequest
+
+    workspace_id, project_id = uuid4(), uuid4()
+    actor = Actor(user_id=uuid4(), workspace_id=workspace_id)
+    repository = InMemoryScaleRepository()
+    request = make_style_upload_request(repository)
+    profile = asyncio.run(
+        create_style_profile(
+            project_id=project_id,
+            payload=StyleProfileCreateRequest(name="Protected style"),
+            actor=actor,
+            request=request,
+        )
+    )
+    service = request.app.state.media_upload_session_service
+    foreign_session = asyncio.run(
+        service.initiate(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            owner_type="stock_asset",
+            owner_id=uuid4(),
+            object_type="broll_asset",
+            final_storage_bucket="raw-uploads",
+            final_storage_path=(
+                f"workspaces/{workspace_id}/projects/{project_id}/broll/{uuid4()}.mp4"
+            ),
+            filename="foreign.mp4",
+            mime_type="video/mp4",
+            file_size_bytes=4,
+        )
+    )
+
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            confirm_style_reference_multipart_part(
+                project_id=project_id,
+                profile_id=profile.id,
+                session_id=foreign_session.id,
+                part_number=1,
+                payload=PartCompleteRequest(),
+                actor=actor,
+                request=request,
+            )
+        )
+    assert error.value.code == "media_upload_session_not_found"
+    with pytest.raises(ApiError) as error:
+        asyncio.run(
+            abort_style_reference_multipart(
+                project_id=project_id,
+                profile_id=profile.id,
+                session_id=foreign_session.id,
+                actor=actor,
+                request=request,
+            )
+        )
+    assert error.value.code == "media_upload_session_not_found"
+    untouched = asyncio.run(
+        service.inspect(
+            session_id=foreign_session.id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+    )
+    assert untouched.status.value == "active"
+    assert untouched.parts[0].status.value == "pending"
+
+
+def test_style_reference_delete_uses_generic_media_lifecycle() -> None:
+    from app.api.scale import delete_style_reference
+
+    workspace_id, project_id = uuid4(), uuid4()
+    actor = Actor(user_id=uuid4(), workspace_id=workspace_id)
+    repository = InMemoryScaleRepository()
+    request = make_style_upload_request(repository)
+    profile = asyncio.run(
+        create_style_profile(
+            project_id=project_id,
+            payload=StyleProfileCreateRequest(name="Disposable style"),
+            actor=actor,
+            request=request,
+        )
+    )
+    content = b"disposable style sample"
+    initialized = asyncio.run(
+        init_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleReferenceInitRequest(
+                filename="disposable.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=len(content),
+                sha256_hash=hashlib.sha256(content).hexdigest(),
+            ),
+            actor=actor,
+            request=request,
+        )
+    )
+    write_style_part(
+        request,
+        session_id=initialized.session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        content=content,
+    )
+    asyncio.run(
+        complete_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleReferenceCompleteRequest(reference_id=initialized.reference_id),
+            actor=actor,
+            request=request,
+        )
+    )
+
+    deleted = asyncio.run(
+        delete_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            reference_id=initialized.reference_id,
+            actor=actor,
+            request=request,
+        )
+    )
+    assert deleted.payload["references"][0]["status"] == "deleted"
+    session = asyncio.run(
+        request.app.state.media_upload_session_service.inspect(
+            session_id=initialized.session_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+    )
+    assert (
+        asyncio.run(
+            request.app.state.storage_quota_service.get_reservation_state(
+                session.quota_reservation_id
+            )
+        )
+        == "deleted"
+    )
+
+    # Repeating a deletion after the first local completion is safe, mirroring the
+    # response-loss retry path of the durable database implementation.
+    repeated = asyncio.run(
+        delete_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            reference_id=initialized.reference_id,
+            actor=actor,
+            request=request,
+        )
+    )
+    assert repeated.payload["references"][0]["status"] == "deleted"
+
+
+def test_style_reference_deletion_allows_replacement_and_training() -> None:
+    from app.api.scale import delete_style_reference
+
+    workspace_id, project_id = uuid4(), uuid4()
+    actor = Actor(user_id=uuid4(), workspace_id=workspace_id)
+    repository = InMemoryScaleRepository()
+    request = make_style_upload_request(repository)
+    profile = asyncio.run(
+        create_style_profile(
+            project_id=project_id,
+            payload=StyleProfileCreateRequest(name="Replaceable style"),
+            actor=actor,
+            request=request,
+        )
+    )
+
+    reference_ids = []
+    for index in range(5):
+        content = f"style sample {index}".encode()
+        initialized = asyncio.run(
+            init_style_reference(
+                project_id=project_id,
+                profile_id=profile.id,
+                payload=StyleReferenceInitRequest(
+                    filename=f"sample-{index}.mp4",
+                    mime_type="video/mp4",
+                    file_size_bytes=len(content),
+                    sha256_hash=hashlib.sha256(content).hexdigest(),
+                ),
+                actor=actor,
+                request=request,
+            )
+        )
+        write_style_part(
+            request,
+            session_id=initialized.session_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            content=content,
+        )
+        profile = asyncio.run(
+            complete_style_reference(
+                project_id=project_id,
+                profile_id=profile.id,
+                payload=StyleReferenceCompleteRequest(reference_id=initialized.reference_id),
+                actor=actor,
+                request=request,
+            )
+        )
+        reference_ids.append(initialized.reference_id)
+
+    deleted = asyncio.run(
+        delete_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            reference_id=reference_ids[0],
+            actor=actor,
+            request=request,
+        )
+    )
+    assert sum(item["status"] != "deleted" for item in deleted.payload["references"]) == 4
+
+    replacement_content = b"replacement style sample"
+    replacement = asyncio.run(
+        init_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleReferenceInitRequest(
+                filename="replacement.mp4",
+                mime_type="video/mp4",
+                file_size_bytes=len(replacement_content),
+                sha256_hash=hashlib.sha256(replacement_content).hexdigest(),
+            ),
+            actor=actor,
+            request=request,
+        )
+    )
+    assert len(replacement.profile.payload["references"]) == 6
+    assert (
+        sum(item["status"] != "deleted" for item in replacement.profile.payload["references"]) == 5
+    )
+
+    write_style_part(
+        request,
+        session_id=replacement.session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        content=replacement_content,
+    )
+    completed = asyncio.run(
+        complete_style_reference(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleReferenceCompleteRequest(reference_id=replacement.reference_id),
+            actor=actor,
+            request=request,
+        )
+    )
+    assert sum(item["status"] == "verified" for item in completed.payload["references"]) == 5
+
+    trained = asyncio.run(
+        train_style_profile(
+            project_id=project_id,
+            profile_id=profile.id,
+            payload=StyleTrainRequest(),
+            actor=actor,
+            request=request,
+        )
+    )
+    assert trained.status == ScaleResourceStatus.QUEUED

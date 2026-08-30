@@ -150,8 +150,25 @@ export function workflowJobFields(payload = {}) {
   return fields;
 }
 
+function parseQueueNames(raw) {
+  const requested = String(raw)
+    .split(",")
+    .map((name) => name.trim());
+  const invalid = requested.filter((name) => !name || !allQueueNames.includes(name));
+  if (invalid.length > 0) {
+    throw new Error(
+      `WORKER_QUEUES contains unknown or empty queue names: ${invalid.join(", ")}`,
+    );
+  }
+  const unique = [...new Set(requested)];
+  if (unique.length === 0) {
+    throw new Error("WORKER_QUEUES must contain at least one queue name");
+  }
+  return unique;
+}
+
 export const queueNames = env("WORKER_QUEUES")
-  ? env("WORKER_QUEUES").split(",").map((name) => name.trim()).filter((name) => allQueueNames.includes(name))
+  ? parseQueueNames(env("WORKER_QUEUES"))
   : defaultQueueNames;
 
 export function env(name, fallback = "") {
@@ -195,8 +212,20 @@ export function bullConnection() {
   });
 }
 
+export function assertKnownQueueName(name) {
+  const queueName = String(name || "").trim();
+  if (!queueName || !allQueueNames.includes(queueName)) {
+    throw new Error(`Unknown queue name: ${queueName || "<empty>"}`);
+  }
+  return queueName;
+}
+
+export function canceledJobsKey(queueName) {
+  return `motionly:queue:${assertKnownQueueName(queueName)}:canceled:v2`;
+}
+
 export function queueFor(name, connection) {
-  return new Queue(name, {
+  return new Queue(assertKnownQueueName(name), {
     connection,
     defaultJobOptions: defaultJobOptions(),
   });

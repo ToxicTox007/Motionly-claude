@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NODE_ENV=production \
     PROCESS_ROLE=worker \
     PYTHON_MEDIA_WORKER_ENABLED=true \
+    PYTHON_MEDIA_CWD=/app \
     HF_HOME=/var/cache/motionly/huggingface \
     TORCH_HOME=/var/cache/motionly/torch \
     XDG_CACHE_HOME=/var/cache/motionly \

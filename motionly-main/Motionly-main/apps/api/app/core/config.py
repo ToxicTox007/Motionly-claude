@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     )
 
     app_env: str = Field(default="production", alias="APP_ENV")
+    skip_api_auth: bool = Field(default=False, alias="SKIP_API_AUTH")
     process_role: str = Field(default="api", alias="PROCESS_ROLE")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     api_cors_origins: str = Field(default="", alias="API_CORS_ORIGINS")
@@ -443,6 +444,11 @@ class Settings(BaseSettings):
         alias="RUNWAY_ESTIMATED_COST_PER_REQUEST_USD",
     )
 
+    @property
+    def api_auth_bypass_enabled(self) -> bool:
+        """Whether the explicitly configured local-only API auth bypass is active."""
+        return self.skip_api_auth and self.app_env in LOCAL_AUTH_BYPASS_ENVS
+
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
         if (
@@ -458,8 +464,7 @@ class Settings(BaseSettings):
                 "WORKFLOW_RECONCILER_INTERVAL_SECONDS cannot exceed "
                 "WORKFLOW_RECONCILER_STALENESS_SECONDS."
             )
-        skip_api_auth = os.getenv("SKIP_API_AUTH")
-        if env_flag_enabled(skip_api_auth) and self.app_env not in LOCAL_AUTH_BYPASS_ENVS:
+        if self.skip_api_auth and self.app_env not in LOCAL_AUTH_BYPASS_ENVS:
             raise ValueError(
                 "Security violation: SKIP_API_AUTH can only be enabled when "
                 "APP_ENV is exactly 'development' or 'local'."

@@ -143,6 +143,42 @@ async def _broll_session_response(session, service) -> MediaUploadSessionRespons
     )
 
 
+async def _require_owned_broll_session(
+    *,
+    service,
+    repository: InMemoryBrollRepository,
+    session_id: UUID,
+    workspace_id: UUID,
+    project_id: UUID,
+):
+    """Resolve an owner-bound B-roll session before any mutation."""
+    session = await service.inspect(
+        session_id=session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+    )
+    if session.owner_type != "stock_asset" or session.object_type != "broll_asset":
+        raise ApiError(
+            404, "media_upload_session_not_found", "B-roll upload session was not found."
+        )
+    asset = await _repository_call(
+        repository,
+        "get_asset_async",
+        "get_asset",
+        project_id=project_id,
+        workspace_id=workspace_id,
+        asset_id=session.owner_id,
+    )
+    if (
+        asset.provider != StockProviderKey.USER_LIBRARY
+        or asset.media_upload_session_id != session.id
+    ):
+        raise ApiError(
+            404, "media_upload_session_not_found", "B-roll upload session was not found."
+        )
+    return session, asset
+
+
 async def _init_broll_media_upload(
     *,
     project_id: UUID,
@@ -211,13 +247,49 @@ async def _init_broll_media_upload(
             asset=asset,
         )
         raise
-    asset = await _repository_call(
-        repository,
-        "set_library_media_session_async",
-        "set_library_media_session",
-        asset=asset,
-        media_upload_session_id=session.id,
-    )
+    try:
+        asset = await _repository_call(
+            repository,
+            "set_library_media_session_async",
+            "set_library_media_session",
+            asset=asset,
+            media_upload_session_id=session.id,
+        )
+    except Exception:
+        # A lost PATCH response can still have linked the owner. Re-read before
+        # compensating so we never abort a correctly linked upload.
+        try:
+            reconciled = await _repository_call(
+                repository,
+                "get_asset_async",
+                "get_asset",
+                project_id=project_id,
+                workspace_id=actor.workspace_id,
+                asset_id=asset.id,
+            )
+            if reconciled.media_upload_session_id == session.id:
+                return reconciled, session
+        except Exception:
+            pass
+        try:
+            await service.abort(
+                session_id=session.id,
+                workspace_id=actor.workspace_id,
+                project_id=project_id,
+            )
+        finally:
+            try:
+                await _repository_call(
+                    repository,
+                    "mark_library_asset_media_failed_async",
+                    "mark_library_asset_media_failed",
+                    asset=asset,
+                )
+            except Exception:
+                # The durable generic session remains terminal/retryable even if the
+                # cosmetic owner-state repair must be retried by a later request.
+                pass
+        raise
     return asset, session
 
 
@@ -244,24 +316,61 @@ async def _complete_broll_media_upload(
         raise ApiError(
             409, "library_upload_session_required", "Start a verified library upload first."
         )
-    completion = await _media_service(request).complete(
+    service = _media_service(request)
+    session, _ = await _require_owned_broll_session(
+        service=service,
+        repository=repository,
         session_id=asset.media_upload_session_id,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+    )
+    if session.owner_id != asset.id:
+        raise ApiError(409, "library_upload_session_invalid", "Library upload session is invalid.")
+    completion = await service.complete(
+        session_id=session.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
         sha256_hash=sha256_hash,
     )
     session = completion.session
-    asset = await _repository_call(
-        repository,
-        "mark_library_asset_verified_async",
-        "mark_library_asset_verified",
-        asset=asset,
-        object_reference_id=completion.reference.id,
-        media_upload_session_id=session.id,
-        verified_size_bytes=session.verified_size_bytes or completion.reference.size_bytes or 0,
-        verified_sha256=session.verified_sha256 or completion.reference.sha256 or "",
-        storage_quota_reservation_id=session.quota_reservation_id,
-    )
+    try:
+        asset = await _repository_call(
+            repository,
+            "mark_library_asset_verified_async",
+            "mark_library_asset_verified",
+            asset=asset,
+            object_reference_id=completion.reference.id,
+            media_upload_session_id=session.id,
+            verified_size_bytes=session.verified_size_bytes or completion.reference.size_bytes or 0,
+            verified_sha256=session.verified_sha256 or completion.reference.sha256 or "",
+            storage_quota_reservation_id=session.quota_reservation_id,
+        )
+    except Exception as exc:
+        # Completion is durable and idempotent. If an owner PATCH response was lost,
+        # recover its result; otherwise leave the linked session in place so the same
+        # completion request can safely reconcile it on retry.
+        try:
+            reconciled = await _repository_call(
+                repository,
+                "get_asset_async",
+                "get_asset",
+                project_id=project_id,
+                workspace_id=actor.workspace_id,
+                asset_id=asset.id,
+            )
+            if (
+                reconciled.media_state == "verified"
+                and reconciled.media_upload_session_id == session.id
+                and reconciled.object_reference_id == completion.reference.id
+            ):
+                return UserBrollUploadCompleteResponse(asset=reconciled.to_response())
+        except Exception:
+            pass
+        raise ApiError(
+            503,
+            "library_media_reconciliation_required",
+            "Media completed, but the library record must be reconciled by retrying.",
+        ) from exc
     return UserBrollUploadCompleteResponse(asset=asset.to_response())
 
 
@@ -325,15 +434,20 @@ async def get_user_broll_multipart_upload(
     session_id: UUID,
     request: Request,
     actor: ActorDep,
+    repository: BrollRepositoryDep,
 ) -> MediaUploadSessionResponse:
-    session = await _media_service(request).resume(
+    service = _media_service(request)
+    await _require_owned_broll_session(
+        service=service,
+        repository=repository,
+        session_id=session_id,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+    )
+    session = await service.resume(
         session_id=session_id, workspace_id=actor.workspace_id, project_id=project_id
     )
-    if session.owner_type != "stock_asset":
-        raise ApiError(
-            404, "media_upload_session_not_found", "B-roll upload session was not found."
-        )
-    return await _broll_session_response(session, _media_service(request))
+    return await _broll_session_response(session, service)
 
 
 @router.post(
@@ -347,8 +461,17 @@ async def confirm_user_broll_multipart_part(
     payload: PartCompleteRequest,
     request: Request,
     actor: ActorDep,
+    repository: BrollRepositoryDep,
 ) -> PartCompleteResponse:
-    confirmed = await _media_service(request).confirm_part(
+    service = _media_service(request)
+    await _require_owned_broll_session(
+        service=service,
+        repository=repository,
+        session_id=session_id,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+    )
+    confirmed = await service.confirm_part(
         session_id=session_id,
         part_number=part_number,
         workspace_id=actor.workspace_id,
@@ -376,13 +499,14 @@ async def complete_user_broll_multipart_upload(
     actor: ActorDep,
     repository: BrollRepositoryDep,
 ) -> UserBrollUploadCompleteResponse:
-    session = await _media_service(request).get(
-        session_id=session_id, workspace_id=actor.workspace_id, project_id=project_id
+    service = _media_service(request)
+    session, _asset = await _require_owned_broll_session(
+        service=service,
+        repository=repository,
+        session_id=session_id,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
     )
-    if session.owner_type != "stock_asset":
-        raise ApiError(
-            404, "media_upload_session_not_found", "B-roll upload session was not found."
-        )
     return await _complete_broll_media_upload(
         project_id=project_id,
         asset_id=session.owner_id,
@@ -402,20 +526,15 @@ async def abort_user_broll_multipart_upload(
     repository: BrollRepositoryDep,
 ) -> MediaUploadSessionResponse:
     service = _media_service(request)
-    session = await service.abort(
-        session_id=session_id, workspace_id=actor.workspace_id, project_id=project_id
-    )
-    if session.owner_type != "stock_asset":
-        raise ApiError(
-            404, "media_upload_session_not_found", "B-roll upload session was not found."
-        )
-    asset = await _repository_call(
-        repository,
-        "get_asset_async",
-        "get_asset",
-        project_id=project_id,
+    session, asset = await _require_owned_broll_session(
+        service=service,
+        repository=repository,
+        session_id=session_id,
         workspace_id=actor.workspace_id,
-        asset_id=session.owner_id,
+        project_id=project_id,
+    )
+    session = await service.abort(
+        session_id=session.id, workspace_id=actor.workspace_id, project_id=project_id
     )
     await _repository_call(
         repository,
@@ -511,11 +630,15 @@ async def delete_user_broll_library_asset(
             409, "library_upload_session_required", "Library media lacks a durable upload session."
         )
     service = _media_service(request)
-    session = await service.get(
+    session, owner_asset = await _require_owned_broll_session(
+        service=service,
+        repository=repository,
         session_id=asset.media_upload_session_id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
     )
+    if owner_asset.id != asset.id:
+        raise ApiError(409, "library_upload_session_invalid", "Library upload session is invalid.")
     if session.status == "completed":
         await service.delete_completed(
             session_id=session.id, workspace_id=actor.workspace_id, project_id=project_id

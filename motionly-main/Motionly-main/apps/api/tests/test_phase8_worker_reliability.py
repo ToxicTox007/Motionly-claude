@@ -542,6 +542,7 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
             "upload_sessions",
             "generic_media_upload_session_parts",
             "generic_media_upload_sessions",
+            "generic_media_deletion",
             "legacy_upload_expiry",
             "legacy_upload_cancellation",
         }
@@ -551,6 +552,7 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
         "upload_sessions",
         "generic_media_upload_session_parts",
         "generic_media_upload_sessions",
+        "generic_media_deletion",
         "legacy_upload_expiry",
         "legacy_upload_cancellation",
     }
@@ -565,3 +567,109 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
         and call[1] in ("uploaded_videos", "transcripts", "phase5_resources", "stock_assets")
         for call in calls
     )
+
+
+def test_retention_acknowledges_generic_media_only_after_storage_delete(
+    monkeypatch, tmp_path
+) -> None:
+    calls = []
+    deleted = []
+
+    def fake_request(method, url, headers, timeout, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "POST" and url.endswith("/rpc/motionly_claim_storage_deletion_queue"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "generic-queue-1",
+                        "storage_bucket": "raw-uploads",
+                        "storage_path": "workspaces/w/projects/p/broll/final.mp4",
+                        "quota_reservation_id": "66000000-0000-4000-8000-000000000123",
+                        "generic_media_deletion_job_id": "77000000-0000-4000-8000-000000000123",
+                        "lease_token": "lease-generic-1",
+                    }
+                ],
+            )
+        if method == "POST" and url.endswith("/rpc/motionly_ack_generic_media_deletion_object"):
+            assert deleted == [
+                {
+                    "bucket": "raw-uploads",
+                    "path": "workspaces/w/projects/p/broll/final.mp4",
+                }
+            ]
+            return httpx.Response(200, json=True)
+        if method == "POST" and url.endswith("/rpc/motionly_delete_committed_storage_quota"):
+            raise AssertionError("generic-media quota must be reconciled by its atomic ack RPC")
+        if method == "POST" and url.endswith("/rpc/motionly_ack_storage_deletion_queue"):
+            raise AssertionError("generic-media queue rows use the dedicated ack RPC")
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
+    service = RetentionService(
+        settings=SimpleNamespace(
+            supabase_url="https://supabase.example",
+            supabase_service_role_key="service-role",
+            retention_export_days=90,
+            retention_local_cache_days=7,
+            media_cache_max_bytes=1024,
+            media_work_dir=str(tmp_path),
+        ),
+        storage_signer=SimpleNamespace(delete_object=lambda **kwargs: deleted.append(kwargs)),
+    )
+
+    assert service._drain_storage_deletion_queue(minimum_age_days=None) == 1
+    assert any(
+        call[1].endswith("/rpc/motionly_ack_generic_media_deletion_object") for call in calls
+    )
+
+
+def test_retention_continues_after_one_storage_delete_failure(monkeypatch, tmp_path) -> None:
+    acknowledgements = []
+
+    def fake_request(method, url, headers, timeout, **kwargs):
+        if method == "POST" and url.endswith("/rpc/motionly_claim_storage_deletion_queue"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "blocked-queue",
+                        "storage_bucket": "raw-uploads",
+                        "storage_path": "blocked.mp4",
+                        "quota_reservation_id": None,
+                        "lease_token": "lease-blocked",
+                    },
+                    {
+                        "id": "healthy-queue",
+                        "storage_bucket": "raw-uploads",
+                        "storage_path": "healthy.mp4",
+                        "quota_reservation_id": None,
+                        "lease_token": "lease-healthy",
+                    },
+                ],
+            )
+        if method == "POST" and url.endswith("/rpc/motionly_ack_storage_deletion_queue"):
+            acknowledgements.append(kwargs["json"])
+            return httpx.Response(200, json=True)
+        return httpx.Response(200, json=[])
+
+    def delete_object(*, bucket, path):
+        del bucket
+        if path == "blocked.mp4":
+            raise OSError("storage offline")
+
+    monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
+    service = RetentionService(
+        settings=SimpleNamespace(
+            supabase_url="https://supabase.example",
+            supabase_service_role_key="service-role",
+            retention_export_days=90,
+            retention_local_cache_days=7,
+            media_cache_max_bytes=1024,
+            media_work_dir=str(tmp_path),
+        ),
+        storage_signer=SimpleNamespace(delete_object=delete_object),
+    )
+
+    assert service._drain_storage_deletion_queue(minimum_age_days=None) == 1
+    assert acknowledgements == [{"p_queue_id": "healthy-queue", "p_lease_token": "lease-healthy"}]

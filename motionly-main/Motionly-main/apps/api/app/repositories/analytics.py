@@ -160,7 +160,7 @@ class InMemoryAnalyticsRepository:
             )
         return AIEditAnalyticsSummary(
             total_events=len(events),
-            training_example_count=len(self.fine_tuning_examples(events=events)),
+            training_example_count=0,
             layers=layers,
         )
 
@@ -395,7 +395,7 @@ class SupabaseAnalyticsRepository(InMemoryAnalyticsRepository):
             )
         return AIEditAnalyticsSummary(
             total_events=len(events),
-            training_example_count=len(self.fine_tuning_examples(events=events)),
+            training_example_count=0,
             layers=layers,
         )
 

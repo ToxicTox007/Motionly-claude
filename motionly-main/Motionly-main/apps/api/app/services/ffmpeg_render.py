@@ -1,5 +1,6 @@
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from shutil import which
 from typing import Any
@@ -8,6 +9,9 @@ from app.api.errors import ApiError
 from app.schemas.renders import CutSegment, RenderSpecs
 
 AudioSource = str | Path
+
+FFMPEG_RENDER_TIMEOUT_SECONDS = 600
+FFMPEG_TERMINATE_GRACE_SECONDS = 10
 
 
 class FFmpegCaptionRenderer:
@@ -33,6 +37,7 @@ class FFmpegCaptionRenderer:
         video_encoder: str = "libx264",
         watermark: bool = False,
         matte_path: Path | None = None,
+        cancel_check: Callable[[], None] | None = None,
     ) -> tuple[int, int]:
         if which("ffmpeg") is None:
             raise ApiError(
@@ -142,17 +147,63 @@ class FFmpegCaptionRenderer:
             ]
         )
         started = time.perf_counter()
-        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=600)
+        stdout = ""
+        stderr = ""
+        if cancel_check is None:
+            try:
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=FFMPEG_RENDER_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                output_path.unlink(missing_ok=True)
+                raise ApiError(
+                    502,
+                    "ffmpeg_render_timeout",
+                    "FFmpeg render timed out.",
+                ) from exc
+            returncode = result.returncode
+            stdout = getattr(result, "stdout", "")
+            stderr = getattr(result, "stderr", "")
+        else:
+            # Do not leave FFmpeg's verbose output in undrained pipes while the
+            # cancellation loop polls.  A full pipe can otherwise deadlock a
+            # render indefinitely before its cancellation is observed.
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            deadline = time.monotonic() + FFMPEG_RENDER_TIMEOUT_SECONDS
+            try:
+                while process.poll() is None:
+                    cancel_check()
+                    if time.monotonic() >= deadline:
+                        raise ApiError(
+                            502,
+                            "ffmpeg_render_timeout",
+                            "FFmpeg render timed out.",
+                        )
+                    time.sleep(0.25)
+                returncode = process.wait()
+            except Exception:
+                _terminate_ffmpeg_process(process)
+                output_path.unlink(missing_ok=True)
+                raise
         benchmark_ms = round((time.perf_counter() - started) * 1000)
-        if result.returncode != 0:
-            stderr_tail = _tail_for_diagnostics(getattr(result, "stderr", ""))
-            stdout_tail = _tail_for_diagnostics(getattr(result, "stdout", ""))
+        if returncode != 0:
+            output_path.unlink(missing_ok=True)
+            stderr_tail = _tail_for_diagnostics(stderr)
+            stdout_tail = _tail_for_diagnostics(stdout)
             raise ApiError(
                 502,
                 "ffmpeg_render_failed",
                 "FFmpeg could not render the export.",
                 details={
-                    "returncode": result.returncode,
+                    "returncode": returncode,
                     "stderr_tail": stderr_tail,
                     "stdout_tail": stdout_tail,
                 },
@@ -161,6 +212,23 @@ class FFmpegCaptionRenderer:
         if file_size <= 0:
             raise ApiError(502, "render_output_empty", "Rendered export was empty.")
         return benchmark_ms, file_size
+
+
+def _terminate_ffmpeg_process(process: object) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=FFMPEG_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=FFMPEG_TERMINATE_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            # The original cancellation/timeout exception remains more useful
+            # than a cleanup timeout; the process has nevertheless received a
+            # non-recoverable kill signal.
+            pass
 
 
 def _video_encoder_args(video_encoder: str) -> list[str]:

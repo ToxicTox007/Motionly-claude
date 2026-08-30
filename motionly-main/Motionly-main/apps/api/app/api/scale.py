@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -28,6 +29,7 @@ from app.schemas.scale import (
     ScaleResourceListResponse,
     ScaleResourceResponse,
     ScaleResourceStatus,
+    StemSelectionUpdateRequest,
     StemSeparationRequest,
     StyleProfileCreateRequest,
     StyleReferenceCompleteRequest,
@@ -38,6 +40,7 @@ from app.schemas.scale import (
 )
 from app.services.billing import PLAN_DEFINITIONS
 from app.services.object_references import ObjectReferenceService
+from app.services.offload import run_blocking
 
 router = APIRouter(tags=["Phase 5 intelligence and scale"])
 ActorDep = Annotated[Actor, Depends(get_actor)]
@@ -221,6 +224,91 @@ async def separate_audio_stems(
     return record.to_response()
 
 
+@router.patch(
+    "/projects/{project_id}/phase5/stems/{resource_id}",
+    response_model=ScaleResourceResponse,
+)
+async def select_audio_stem(
+    project_id: UUID,
+    resource_id: UUID,
+    payload: StemSelectionUpdateRequest,
+    actor: ActorDep,
+    request: Request,
+) -> ScaleResourceResponse:
+    request.app.state.project_repository.get_project(
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    record = await _scale_get(
+        request,
+        resource_id=resource_id,
+        workspace_id=actor.workspace_id,
+    )
+    if record.project_id != project_id:
+        raise ApiError(404, "stem_separation_not_found", "Stem separation was not found.")
+    if record.kind != "stem_separation":
+        raise ApiError(409, "stem_resource_kind_invalid", "Resource is not a stem separation.")
+    if record.status != ScaleResourceStatus.READY:
+        raise ApiError(
+            409,
+            "stem_separation_not_ready",
+            "Wait for stem separation to finish before selecting an audio stem.",
+        )
+
+    selected = record.result.get(payload.active)
+    expected_path = (
+        f"workspaces/{record.workspace_id}/projects/{project_id}/stems/"
+        f"{record.id}/{payload.active}.wav"
+    )
+    if (
+        not isinstance(selected, dict)
+        or not isinstance(selected.get("bucket"), str)
+        or not selected["bucket"]
+        or not isinstance(selected.get("path"), str)
+        or selected["path"] != expected_path
+    ):
+        raise ApiError(
+            409,
+            "stem_artifact_unavailable",
+            "The selected stem does not have a durable audio artifact.",
+        )
+
+    object_storage = getattr(request.app.state, "object_storage", None)
+    if object_storage is None or not callable(getattr(object_storage, "inspect_object", None)):
+        raise ApiError(
+            503,
+            "stem_artifact_verification_unavailable",
+            "Stem artifact verification is temporarily unavailable.",
+        )
+    try:
+        await run_blocking(
+            object_storage.inspect_object,
+            bucket=selected["bucket"],
+            path=selected["path"],
+        )
+    except ApiError as exc:
+        if exc.code in {"storage_object_missing", "storage_path_invalid"}:
+            raise ApiError(
+                409,
+                "stem_artifact_unavailable",
+                "The selected stem does not have a durable audio artifact.",
+            ) from exc
+        raise ApiError(
+            502,
+            "stem_artifact_verification_failed",
+            "The selected stem could not be verified in storage.",
+        ) from exc
+
+    updated = await _scale_update_if_revision(
+        request,
+        record=record,
+        expected_revision=payload.expected_revision,
+        result={**record.result, "active": payload.active},
+        revision=record.revision + 1,
+    )
+    return updated.to_response()
+
+
 @router.post(
     "/projects/{project_id}/phase5/generated-broll",
     response_model=ScaleResourceResponse,
@@ -342,6 +430,34 @@ async def _style_session_response(session, service) -> MediaUploadSessionRespons
     )
 
 
+async def _require_owned_style_reference_session(
+    *,
+    service,
+    profile,
+    session_id: UUID,
+    workspace_id: UUID,
+    project_id: UUID,
+):
+    """Check profile/session linkage before a route can mutate multipart state."""
+    session = await service.inspect(
+        session_id=session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+    )
+    linked = any(
+        item.get("media_upload_session_id") == str(session.id)
+        for item in profile.payload.get("references", [])
+    )
+    if (
+        session.owner_type != "style_profile"
+        or session.owner_id != profile.id
+        or session.object_type != "style_reference"
+        or not linked
+    ):
+        raise ApiError(404, "media_upload_session_not_found", "Style upload session was not found.")
+    return session
+
+
 async def _init_style_reference_media(
     *,
     project_id: UUID,
@@ -357,7 +473,8 @@ async def _init_style_reference_media(
     if suffix not in {".mp4", ".mov", ".m4v", ".webm"}:
         raise ApiError(422, "style_reference_type_invalid", "Upload MP4, MOV, M4V, or WebM.")
     references = list(profile.payload.get("references") or [])
-    if len(references) >= 5:
+    active_reference_count = sum(item.get("status") != "deleted" for item in references)
+    if active_reference_count >= 5:
         raise ApiError(
             409, "style_reference_limit", "A style profile uses exactly five references."
         )
@@ -392,18 +509,36 @@ async def _init_style_reference_media(
         }
     )
     try:
-        profile = await _scale_update(
+        profile = await _scale_update_if_revision(
             request,
             record=profile,
+            expected_revision=profile.revision,
             payload={**profile.payload, "references": references},
             revision=profile.revision + 1,
         )
     except Exception:
-        await service.abort(
-            session_id=session.id,
-            workspace_id=actor.workspace_id,
-            project_id=project_id,
-        )
+        # Do not compensate a session when the profile PATCH merely lost its
+        # response. A fresh read proves whether its durable owner link committed.
+        try:
+            reconciled = _profile(request, profile_id=profile_id, workspace_id=actor.workspace_id)
+            if any(
+                item.get("id") == str(reference_id)
+                and item.get("media_upload_session_id") == str(session.id)
+                for item in reconciled.payload.get("references", [])
+            ):
+                return reconciled, reference_id, session
+        except Exception:
+            pass
+        try:
+            await service.abort(
+                session_id=session.id,
+                workspace_id=actor.workspace_id,
+                project_id=project_id,
+            )
+        except Exception:
+            # The generic session remains durable and will be retried by expiry/
+            # retention even if an immediate compensation call is unavailable.
+            pass
         raise
     return profile, reference_id, session
 
@@ -429,7 +564,7 @@ async def _complete_style_reference_media(
         raise ApiError(
             409, "style_reference_session_required", "Style reference lacks a durable session."
         )
-    session = await _style_media_service(request).get(
+    session = await _style_media_service(request).inspect(
         session_id=UUID(str(session_value)),
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -457,9 +592,10 @@ async def _complete_style_reference_media(
             "storage_quota_reservation_id": str(completion.session.quota_reservation_id),
         }
     )
-    profile = await _scale_update(
+    profile = await _scale_update_if_revision(
         request,
         record=profile,
+        expected_revision=profile.revision,
         payload={**profile.payload, "references": references},
         revision=profile.revision + 1,
     )
@@ -538,12 +674,18 @@ async def get_style_reference_multipart(
     profile = _profile(request, profile_id=profile_id, workspace_id=actor.workspace_id)
     if profile.project_id != project_id:
         raise ApiError(422, "style_profile_project_mismatch", "Style profile project differs.")
-    session = await _style_media_service(request).resume(
+    service = _style_media_service(request)
+    await _require_owned_style_reference_session(
+        service=service,
+        profile=profile,
+        session_id=session_id,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+    )
+    session = await service.resume(
         session_id=session_id, workspace_id=actor.workspace_id, project_id=project_id
     )
-    if session.owner_type != "style_profile" or session.owner_id != profile.id:
-        raise ApiError(404, "media_upload_session_not_found", "Style upload session was not found.")
-    return await _style_session_response(session, _style_media_service(request))
+    return await _style_session_response(session, service)
 
 
 @router.post(
@@ -562,7 +704,15 @@ async def confirm_style_reference_multipart_part(
     profile = _profile(request, profile_id=profile_id, workspace_id=actor.workspace_id)
     if profile.project_id != project_id:
         raise ApiError(422, "style_profile_project_mismatch", "Style profile project differs.")
-    confirmed = await _style_media_service(request).confirm_part(
+    service = _style_media_service(request)
+    await _require_owned_style_reference_session(
+        service=service,
+        profile=profile,
+        session_id=session_id,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+    )
+    confirmed = await service.confirm_part(
         session_id=session_id,
         part_number=part_number,
         workspace_id=actor.workspace_id,
@@ -627,6 +777,13 @@ async def abort_style_reference_multipart(
     if profile.project_id != project_id:
         raise ApiError(422, "style_profile_project_mismatch", "Style profile project differs.")
     service = _style_media_service(request)
+    await _require_owned_style_reference_session(
+        service=service,
+        profile=profile,
+        session_id=session_id,
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+    )
     session = await service.abort(
         session_id=session_id, workspace_id=actor.workspace_id, project_id=project_id
     )
@@ -634,9 +791,10 @@ async def abort_style_reference_multipart(
     for reference in references:
         if reference.get("media_upload_session_id") == str(session.id):
             reference["status"] = session.status.value
-    await _scale_update(
+    await _scale_update_if_revision(
         request,
         record=profile,
+        expected_revision=profile.revision,
         payload={**profile.payload, "references": references},
         revision=profile.revision + 1,
     )
@@ -664,6 +822,65 @@ async def complete_style_reference(
     )
 
 
+@router.delete(
+    "/projects/{project_id}/phase5/style-profiles/{profile_id}/references/{reference_id}",
+    response_model=ScaleResourceResponse,
+)
+async def delete_style_reference(
+    project_id: UUID,
+    profile_id: UUID,
+    reference_id: UUID,
+    actor: ActorDep,
+    request: Request,
+) -> ScaleResourceResponse:
+    """Retire a style reference while retaining quota until physical cleanup finishes."""
+    profile = _profile(request, profile_id=profile_id, workspace_id=actor.workspace_id)
+    if profile.project_id != project_id:
+        raise ApiError(422, "style_profile_project_mismatch", "Style profile project differs.")
+    references = list(profile.payload.get("references") or [])
+    reference = next((item for item in references if item.get("id") == str(reference_id)), None)
+    if reference is None:
+        raise ApiError(404, "style_reference_not_found", "Style reference was not found.")
+    session_value = reference.get("media_upload_session_id")
+    if not session_value:
+        raise ApiError(
+            409, "style_reference_session_required", "Style reference lacks a durable session."
+        )
+
+    service = _style_media_service(request)
+    session = await _require_owned_style_reference_session(
+        service=service,
+        profile=profile,
+        session_id=UUID(str(session_value)),
+        workspace_id=actor.workspace_id,
+        project_id=project_id,
+    )
+    if session.status.value == "completed":
+        await service.delete_completed(
+            session_id=session.id,
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+        )
+    else:
+        session = await service.abort(
+            session_id=session.id,
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+        )
+    reference["status"] = "deleted"
+    reference["deletion_requested_at"] = datetime.now(UTC).isoformat()
+    if session.status.value != "completed":
+        reference["failure_code"] = session.failure_code
+    profile = await _scale_update_if_revision(
+        request,
+        record=profile,
+        expected_revision=profile.revision,
+        payload={**profile.payload, "references": references},
+        revision=profile.revision + 1,
+    )
+    return profile.to_response()
+
+
 @router.post(
     "/projects/{project_id}/phase5/style-profiles/{profile_id}/train",
     response_model=ScaleResourceResponse,
@@ -678,7 +895,9 @@ async def train_style_profile(
 ) -> ScaleResourceResponse:
     del payload
     profile = _profile(request, profile_id=profile_id, workspace_id=actor.workspace_id)
-    references = list(profile.payload.get("references") or [])
+    references = [
+        item for item in profile.payload.get("references") or [] if item.get("status") != "deleted"
+    ]
     if len(references) != 5:
         raise ApiError(
             409,

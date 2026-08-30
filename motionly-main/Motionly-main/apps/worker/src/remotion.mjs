@@ -87,9 +87,10 @@ async function persistProgressDirect(
   payload,
   client = supabaseClient(),
 ) {
+  const status = payload.status || "rendering";
   const { data, error } = await client
     .from("render_jobs")
-    .update({ status: "rendering", progress_pct: payload.progressPct })
+    .update({ status, progress_pct: payload.progressPct })
     .eq("id", renderJobId)
     .eq("workspace_id", workspaceId)
     .eq("project_id", projectId)
@@ -103,7 +104,7 @@ async function persistProgressDirect(
     workspace_id: workspaceId,
     project_id: projectId,
     event_type: payload.eventType || "worker_progress",
-    to_status: "rendering",
+    to_status: status,
     progress_pct: payload.progressPct,
     message: payload.message,
     metadata: payload.metadata || {},
@@ -115,7 +116,7 @@ async function persistProgressDirect(
   return true;
 }
 
-async function loadRenderJobStatusDirect(
+async function loadRenderJobStateDirect(
   renderJobId,
   workspaceId,
   projectId,
@@ -123,7 +124,7 @@ async function loadRenderJobStatusDirect(
 ) {
   const { data, error } = await client
     .from("render_jobs")
-    .select("status")
+    .select("status,artifact_path")
     .eq("id", renderJobId)
     .eq("workspace_id", workspaceId)
     .eq("project_id", projectId)
@@ -132,7 +133,24 @@ async function loadRenderJobStatusDirect(
     throw new Error(
       `Failed to load render job status: ${error?.message || "missing"}`,
     );
-  return String(data.status || "");
+  return {
+    status: String(data.status || ""),
+    artifactPath:
+      typeof data.artifact_path === "string" && data.artifact_path
+        ? data.artifact_path
+        : null,
+  };
+}
+
+async function loadRenderJobStatusDirect(
+  renderJobId,
+  workspaceId,
+  projectId,
+  client = supabaseClient(),
+) {
+  return (
+    await loadRenderJobStateDirect(renderJobId, workspaceId, projectId, client)
+  ).status;
 }
 
 export function attemptStoragePaths({
@@ -260,10 +278,11 @@ export async function cleanupAttemptArtifacts(
   client,
   artifactBucket,
   attemptPaths,
+  { removeFinal = true } = {},
 ) {
-  const { error } = await client.storage
-    .from(artifactBucket)
-    .remove([attemptPaths.stagingPath, attemptPaths.finalPath]);
+  const paths = [attemptPaths.stagingPath];
+  if (removeFinal) paths.push(attemptPaths.finalPath);
+  const { error } = await client.storage.from(artifactBucket).remove(paths);
   if (error) {
     console.warn(
       JSON.stringify({
@@ -286,30 +305,44 @@ async function cleanupAttemptIfLost({
   error,
 }) {
   if (error?.attemptCleanupDone) return;
-  const knownLoss = new Set([
-    "render_cancelled",
-    "render_terminal_state",
-    "render_completion_lost",
-    "P0001",
-  ]).has(String(error?.code || ""));
-  let terminal = knownLoss;
+  let renderState;
+  try {
+    renderState = await loadRenderJobStateDirect(
+      renderJobId,
+      workspaceId,
+      projectId,
+      client,
+    );
+  } catch {
+    // The staging object is never canonical, but a final attempt artifact might
+    // have been committed by an RPC whose response was lost. Retain that final
+    // artifact for reconciliation until authoritative state is available.
+    await cleanupAttemptArtifacts(client, artifactBucket, attemptPaths, {
+      removeFinal: false,
+    });
+    return;
+  }
+
+  const terminal = ["canceled", "failed", "complete"].includes(
+    renderState.status,
+  );
   if (!terminal) {
-    try {
-      const status = await loadRenderJobStatusDirect(
-        renderJobId,
-        workspaceId,
-        projectId,
-        client,
-      );
-      terminal = ["canceled", "failed", "complete"].includes(status);
-    } catch {
-      // Do not delete an upload after an indeterminate transport/database failure.
-    }
+    await cleanupAttemptArtifacts(client, artifactBucket, attemptPaths, {
+      removeFinal: false,
+    });
+    return;
   }
-  if (terminal) {
-    await cleanupAttemptArtifacts(client, artifactBucket, attemptPaths);
-    if (error && typeof error === "object") error.attemptCleanupDone = true;
-  }
+
+  const completedWithAnotherArtifact =
+    renderState.status === "complete" &&
+    Boolean(renderState.artifactPath) &&
+    renderState.artifactPath !== attemptPaths.finalPath;
+  const removeFinal =
+    renderState.status !== "complete" || completedWithAnotherArtifact;
+  await cleanupAttemptArtifacts(client, artifactBucket, attemptPaths, {
+    removeFinal,
+  });
+  if (error && typeof error === "object") error.attemptCleanupDone = true;
 }
 
 export async function finalizeAttemptWithCas({
@@ -815,28 +848,58 @@ export async function assembleRenderProps(
   }
 
   let resolvedStems = renderProps.sourceStems ?? null;
-  if (resolvedStems?.vocals?.bucket && resolvedStems?.vocals?.path) {
-    resolvedStems = {
-      ...resolvedStems,
-      vocals: {
-        ...resolvedStems.vocals,
-        src: await resolveSrc(
-          `supabase://${resolvedStems.vocals.bucket}/${resolvedStems.vocals.path}`,
-          { mediaProxy, tenantScope },
-        ),
-      },
-    };
-  } else if (resolvedStems?.vocals?.src) {
-    resolvedStems = {
-      ...resolvedStems,
-      vocals: {
-        ...resolvedStems.vocals,
-        src: await resolveSrc(resolvedStems.vocals.src, {
-          mediaProxy,
-          tenantScope,
-        }),
-      },
-    };
+  const activeStem = resolvedStems?.active ?? "vocals";
+  if (
+    resolvedStems &&
+    !["vocals", "no_vocals"].includes(activeStem)
+  ) {
+    throw new StructuredRenderError(
+      "render_selected_stem_unavailable",
+      "The selected source stem is unavailable for rendering.",
+    );
+  }
+  const selectedStem = resolvedStems?.[activeStem];
+  if (
+    resolvedStems &&
+    (!selectedStem ||
+      ((!selectedStem.bucket || !selectedStem.path) && !selectedStem.src))
+  ) {
+    throw new StructuredRenderError(
+      "render_selected_stem_unavailable",
+      "The selected source stem is unavailable for rendering.",
+    );
+  }
+  for (const stemName of ["vocals", "no_vocals"]) {
+    const stem = resolvedStems?.[stemName];
+    if (stem?.bucket && stem?.path) {
+      resolvedStems = {
+        ...resolvedStems,
+        [stemName]: {
+          ...stem,
+          src: await resolveSrc(
+            `supabase://${stem.bucket}/${stem.path}`,
+            { mediaProxy, tenantScope },
+          ),
+        },
+      };
+    } else if (stem?.src) {
+      resolvedStems = {
+        ...resolvedStems,
+        [stemName]: {
+          ...stem,
+          src: await resolveSrc(stem.src, {
+            mediaProxy,
+            tenantScope,
+          }),
+        },
+      };
+    }
+  }
+  if (resolvedStems && !resolvedStems[activeStem]?.src) {
+    throw new StructuredRenderError(
+      "render_selected_stem_unavailable",
+      "The selected source stem is unavailable for rendering.",
+    );
   }
 
   return {
@@ -1231,8 +1294,14 @@ export async function runRemotionJob(
   const started = Date.now();
   let keyedServer = null;
   let mediaProxy = null;
-  const progress = async (progressPct, message, eventType, metadata = {}) => {
-    const payload = { progressPct, message, eventType, metadata };
+  const progress = async (
+    progressPct,
+    message,
+    eventType,
+    metadata = {},
+    status = "rendering",
+  ) => {
+    const payload = { progressPct, message, eventType, metadata, status };
     const applied = await persistProgressDirect(
       renderJobId,
       workspaceId,
@@ -1250,6 +1319,8 @@ export async function runRemotionJob(
       10,
       "Running premium render preflight.",
       "preflight_started",
+      {},
+      "preparing",
     );
     validateBrowserExecutable();
     await validateWritableTempDir(keyedWorkDir);
@@ -1269,7 +1340,13 @@ export async function runRemotionJob(
     }
 
     // 2. Revalidate and resolve all media references to signed / guarded URLs.
-    await progress(25, "Resolving render media assets.", "render_progress");
+    await progress(
+      25,
+      "Resolving render media assets.",
+      "render_progress",
+      {},
+      "preparing",
+    );
     validateRenderTenantScope(renderProps, tenantScope);
     await validateRenderMediaManifest(renderProps, {
       allowFixture: fixtureMediaAllowed(),
@@ -1336,7 +1413,13 @@ export async function runRemotionJob(
 
     // 6. Stage only this BullMQ attempt's output, then recheck before it can
     // become the attempt's final artifact or be published by the CAS RPC.
-    await progress(88, "Uploading premium export.", "upload_started");
+    await progress(
+      88,
+      "Uploading premium export.",
+      "upload_started",
+      {},
+      "uploading",
+    );
     let attemptArtifactUploaded = false;
     try {
       await uploadToStorage(

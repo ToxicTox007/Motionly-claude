@@ -1,8 +1,11 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { isAdminIdentityAllowed } from "@/lib/admin-auth.mjs";
 import { createClient } from "@/lib/supabase/server";
 
-export async function getWorkspaceApiContext() {
+export const WORKSPACE_COOKIE_NAME = "motionly_workspace_id";
+
+export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
   if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
     const mockUserId = "00000000-0000-4000-8000-000000000001";
     const mockWorkspaceId = "00000000-0000-4000-8000-000000000002";
@@ -28,25 +31,37 @@ export async function getWorkspaceApiContext() {
     return null;
   }
 
-  const { data: membership } = await supabase
+  const { data: memberships } = await supabase
     .from("workspace_members")
     .select("workspace_id")
     .eq("user_id", user.id)
-    .eq("status", "active")
-    .limit(1)
-    .maybeSingle();
+    .eq("status", "active");
 
-  if (!membership?.workspace_id) {
+  if (!memberships?.length) {
     redirect("/dashboard?error=workspace_missing");
   }
 
+  const cookieStore = await cookies();
+  const selectedWorkspaceId =
+    requestedWorkspaceId?.trim() ||
+    cookieStore.get(WORKSPACE_COOKIE_NAME)?.value?.trim() ||
+    (memberships.length === 1 ? String(memberships[0].workspace_id) : "");
+  const membership = memberships.find(
+    (item) => String(item.workspace_id) === selectedWorkspaceId,
+  );
+
+  if (!membership?.workspace_id) {
+    redirect("/dashboard?error=workspace_selection_required");
+  }
+
+  const workspaceId = String(membership.workspace_id);
   return {
     userId: user.id,
-    workspaceId: membership.workspace_id as string,
+    workspaceId,
     headers: {
       authorization: `Bearer ${session.access_token}`,
       "content-type": "application/json",
-      "x-motionly-workspace-id": membership.workspace_id as string,
+      "x-motionly-workspace-id": workspaceId,
     },
   };
 }

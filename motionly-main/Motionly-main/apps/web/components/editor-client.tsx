@@ -755,6 +755,10 @@ export function EditorClient(props: EditorClientProps) {
         planRevision={revisionTracking.planRevision}
         pendingReviewProposal={pendingReviewProposal}
         setPendingReviewProposal={setPendingReviewProposal}
+        onReviewProposalCreated={(proposal) => {
+          setPendingReviewProposal(proposal);
+          setInspectorTab("ai");
+        }}
       />
     </EditorHistoryProvider>
   );
@@ -835,6 +839,7 @@ interface EditorClientEditorProps extends EditorClientProps {
   setPendingReviewProposal: React.Dispatch<
     React.SetStateAction<PendingReviewProposal | null>
   >;
+  onReviewProposalCreated: (proposal: PendingReviewProposal) => void;
 }
 
 function EditorClientEditor(props: EditorClientEditorProps) {
@@ -909,6 +914,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     planRevision,
     pendingReviewProposal,
     setPendingReviewProposal,
+    onReviewProposalCreated,
   } = props;
   const router = useRouter();
   const { toast } = useToast();
@@ -1449,7 +1455,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           let plan: EditPlanRecordSummary;
           if (payload.status === "queued" && payload.status_url) {
             setDropMessage(`Running ${entry.name}…`);
-            const planId = await pollPlanJob(
+            const identity = await pollPlanJob(
               `${env.apiBaseUrl}${payload.status_url}`,
               {
                 workspaceId,
@@ -1460,7 +1466,20 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               (progress) => {
                 setDropMessage(`Running ${entry.name}: ${progress}%`);
               },
+              true,
             );
+            if (identity.status === "awaiting_approval") {
+              onReviewProposalCreated({
+                proposalId: identity.proposalId,
+                proposalRevision: identity.proposalRevision,
+                statusUrl: payload.status_url,
+              });
+              setDropMessage(
+                `${entry.name} proposal is ready for review in the AI panel.`,
+              );
+              return;
+            }
+            const planId = identity.planId;
             const planList = await editorApiRequest<{
               plans: EditPlanRecordSummary[];
             }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
@@ -1513,6 +1532,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       handleCaptionTrackUpdated,
       handleMusicSelectionUpdated,
       handlePlanGenerated,
+      onReviewProposalCreated,
       projectId,
       userId,
       workspaceId,
@@ -2359,6 +2379,7 @@ function InspectorPanel({
             captionTrack={captionTracks[0] ?? null}
             effectsConfig={effectsConfig}
             onPlanUpdated={onPlanUpdated}
+            onProposalCreated={onReviewProposalCreated}
             onCaptionTrackUpdated={onCaptionTrackUpdated}
             onEffectsConfigUpdated={onEffectsConfigUpdated}
           />

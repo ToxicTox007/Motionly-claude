@@ -9,9 +9,10 @@ const scope = {
   projectId: "44000000-0000-4000-8000-000000000001",
 };
 
-function mockClient({ statuses, rpcResult }) {
+function mockClient({ renderStates, rpcResult }) {
   const calls = [];
   const removals = [];
+  const states = [...renderStates];
   const client = {
     from(table) {
       assert.equal(table, "render_jobs");
@@ -24,7 +25,12 @@ function mockClient({ statuses, rpcResult }) {
         },
         async single() {
           calls.push("status");
-          return { data: { status: statuses.shift() }, error: null };
+          const state = states.shift();
+          assert.ok(state, "unexpected render-state lookup");
+          return {
+            data: typeof state === "string" ? { status: state } : state,
+            error: null,
+          };
         },
       };
       return query;
@@ -92,14 +98,14 @@ test("attempt paths are derived only from stable BullMQ identity and attempt", (
   );
 });
 
-test("cancellation before finalization never invokes CAS and removes only this attempt", async () => {
+test("cancellation before finalization removes only this attempt", async () => {
   const attemptPaths = attemptStoragePaths({
     ...scope,
     queueJobId: "render:cancel",
     attemptsMade: 0,
   });
   const { client, calls, removals } = mockClient({
-    statuses: ["canceled"],
+    renderStates: ["canceled", "canceled"],
     rpcResult: { data: null, error: null },
   });
 
@@ -114,20 +120,26 @@ test("cancellation before finalization never invokes CAS and removes only this a
     (error) => error.code === "render_cancelled",
   );
 
-  assert.deepEqual(calls, ["status", "remove"]);
+  assert.deepEqual(calls, ["status", "status", "remove"]);
   assert.deepEqual(removals, [
     [attemptPaths.stagingPath, attemptPaths.finalPath],
   ]);
 });
 
-test("CAS winner is retained and a losing attempt cleans only its own artifact", async () => {
+test("a completed winner with another artifact lets a losing attempt clean itself", async () => {
   const attemptPaths = attemptStoragePaths({
     ...scope,
     queueJobId: "render:loser",
     attemptsMade: 1,
   });
   const { client, calls, removals } = mockClient({
-    statuses: ["uploading"],
+    renderStates: [
+      "uploading",
+      {
+        status: "complete",
+        artifact_path: "workspaces/winner/projects/winner/exports/winner.mp4",
+      },
+    ],
     rpcResult: {
       data: null,
       error: {
@@ -151,11 +163,75 @@ test("CAS winner is retained and a losing attempt cleans only its own artifact",
   assert.equal(calls[0], "status");
   assert.equal(calls[1].name, "motionly_complete_render");
   assert.equal(calls[1].parameters.p_storage_path, attemptPaths.finalPath);
-  assert.equal(calls[2], "remove");
+  assert.equal(calls[2], "status");
+  assert.equal(calls[3], "remove");
   assert.deepEqual(removals, [
     [attemptPaths.stagingPath, attemptPaths.finalPath],
   ]);
   assert.ok(!removals.flat().some((path) => path.includes("render:cancel")));
+});
+
+test("an ambiguous completed response never deletes the canonical attempt artifact", async () => {
+  const attemptPaths = attemptStoragePaths({
+    ...scope,
+    queueJobId: "render:response-lost",
+    attemptsMade: 0,
+  });
+  const { client, calls, removals } = mockClient({
+    renderStates: [
+      "uploading",
+      { status: "complete", artifact_path: attemptPaths.finalPath },
+    ],
+    rpcResult: {
+      data: null,
+      error: { code: "ECONNRESET", message: "completion response was lost" },
+    },
+  });
+
+  await assert.rejects(
+    finalizeAttemptWithCas({
+      client,
+      ...scope,
+      artifactBucket: "exports",
+      attemptPaths,
+      completionDetails: completionDetails(),
+    }),
+    /completion response was lost/,
+  );
+
+  assert.deepEqual(
+    calls.map((entry) => (typeof entry === "string" ? entry : entry.name)),
+    ["status", "motionly_complete_render", "status", "remove"],
+  );
+  assert.deepEqual(removals, [[attemptPaths.stagingPath]]);
+});
+
+test("confirmed failed renders clean both attempt artifacts", async () => {
+  const attemptPaths = attemptStoragePaths({
+    ...scope,
+    queueJobId: "render:failed",
+    attemptsMade: 0,
+  });
+  const { client, calls, removals } = mockClient({
+    renderStates: ["failed", "failed"],
+    rpcResult: { data: null, error: null },
+  });
+
+  await assert.rejects(
+    finalizeAttemptWithCas({
+      client,
+      ...scope,
+      artifactBucket: "exports",
+      attemptPaths,
+      completionDetails: completionDetails(),
+    }),
+    (error) => error.code === "render_terminal_state",
+  );
+
+  assert.deepEqual(calls, ["status", "status", "remove"]);
+  assert.deepEqual(removals, [
+    [attemptPaths.stagingPath, attemptPaths.finalPath],
+  ]);
 });
 
 test("successful CAS returns its canonical result without cleanup", async () => {
@@ -165,7 +241,7 @@ test("successful CAS returns its canonical result without cleanup", async () => 
     attemptsMade: 0,
   });
   const { client, calls, removals } = mockClient({
-    statuses: ["uploading"],
+    renderStates: ["uploading"],
     rpcResult: {
       data: [
         {

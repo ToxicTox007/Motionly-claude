@@ -13,6 +13,7 @@ from app.api.dependencies import (
 from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository, SubscriptionRecord
 from app.schemas.billing import (
+    BillingMode,
     BillingPlanKey,
     BillingStatusResponse,
     CheckoutSessionRequest,
@@ -48,10 +49,15 @@ async def _repository_call(repository, async_name: str, sync_name: str, **kwargs
 
 @router.get("/billing/status", response_model=BillingStatusResponse)
 async def get_billing_status(
+    request: Request,
     actor: ActorDep,
     repository: BillingRepositoryDep,
 ) -> BillingStatusResponse:
-    return await build_billing_status_async(actor.workspace_id, repository)
+    return await build_billing_status_async(
+        actor.workspace_id,
+        repository,
+        billing_enabled=bool(request.app.state.settings.billing_enabled),
+    )
 
 
 @router.post("/billing/checkout", response_model=CheckoutSessionResponse)
@@ -164,27 +170,49 @@ async def handle_stripe_webhook(
     return StripeWebhookResponse(received=True)
 
 
-def build_billing_status(
+def _build_billing_status_response(
+    *,
     workspace_id: UUID,
-    repository: InMemoryBillingRepository,
+    subscription: SubscriptionRecord,
+    period_start: datetime,
+    period_end: datetime,
+    renders_used: int,
+    billing_enabled: bool,
 ) -> BillingStatusResponse:
-    subscription = repository.get_subscription(workspace_id=workspace_id)
+    if not billing_enabled:
+        plan = PLAN_DEFINITIONS[BillingPlanKey.AGENCY]
+        return BillingStatusResponse(
+            billing_enabled=False,
+            billing_mode=BillingMode.PERSONAL,
+            unmetered=True,
+            subscription=subscription_to_summary(subscription),
+            current_plan=plan,
+            plans=list(PLAN_DEFINITIONS.values()),
+            usage=UsageSummary(
+                workspace_id=workspace_id,
+                period_start=period_start,
+                period_end=period_end,
+                renders_used=renders_used,
+                renders_limit=None,
+                remaining_renders=None,
+                percent_used=None,
+            ),
+            can_render=True,
+            entitlements=plan.entitlements,
+        )
+
     effective_plan_key = plan_for_subscription_status(
         plan=subscription.plan,
         status=subscription.status,
     )
     plan = PLAN_DEFINITIONS[effective_plan_key]
-    period_start, period_end = monthly_period()
-    renders_used = repository.count_usage(
-        workspace_id=workspace_id,
-        event_type=UsageEventType.RENDER_SUCCEEDED,
-        period_start=period_start,
-        period_end=period_end,
-    )
     limit = plan.entitlements.monthly_renders
     remaining = max(0, limit - renders_used)
     percent = min(100, round((renders_used / limit) * 100)) if limit else 100
     return BillingStatusResponse(
+        billing_enabled=True,
+        billing_mode=BillingMode.MANAGED,
+        unmetered=False,
         subscription=subscription_to_summary(subscription),
         current_plan=plan,
         plans=list(PLAN_DEFINITIONS.values()),
@@ -202,9 +230,35 @@ def build_billing_status(
     )
 
 
+def build_billing_status(
+    workspace_id: UUID,
+    repository: InMemoryBillingRepository,
+    *,
+    billing_enabled: bool = True,
+) -> BillingStatusResponse:
+    subscription = repository.get_subscription(workspace_id=workspace_id)
+    period_start, period_end = monthly_period()
+    renders_used = repository.count_usage(
+        workspace_id=workspace_id,
+        event_type=UsageEventType.RENDER_SUCCEEDED,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    return _build_billing_status_response(
+        workspace_id=workspace_id,
+        subscription=subscription,
+        period_start=period_start,
+        period_end=period_end,
+        renders_used=renders_used,
+        billing_enabled=billing_enabled,
+    )
+
+
 async def build_billing_status_async(
     workspace_id: UUID,
     repository: InMemoryBillingRepository,
+    *,
+    billing_enabled: bool = True,
 ) -> BillingStatusResponse:
     subscription = await _repository_call(
         repository,
@@ -212,11 +266,6 @@ async def build_billing_status_async(
         "get_subscription",
         workspace_id=workspace_id,
     )
-    effective_plan_key = plan_for_subscription_status(
-        plan=subscription.plan,
-        status=subscription.status,
-    )
-    plan = PLAN_DEFINITIONS[effective_plan_key]
     period_start, period_end = monthly_period()
     renders_used = await _repository_call(
         repository,
@@ -227,24 +276,13 @@ async def build_billing_status_async(
         period_start=period_start,
         period_end=period_end,
     )
-    limit = plan.entitlements.monthly_renders
-    remaining = max(0, limit - renders_used)
-    percent = min(100, round((renders_used / limit) * 100)) if limit else 100
-    return BillingStatusResponse(
-        subscription=subscription_to_summary(subscription),
-        current_plan=plan,
-        plans=list(PLAN_DEFINITIONS.values()),
-        usage=UsageSummary(
-            workspace_id=workspace_id,
-            period_start=period_start,
-            period_end=period_end,
-            renders_used=renders_used,
-            renders_limit=limit,
-            remaining_renders=remaining,
-            percent_used=percent,
-        ),
-        can_render=remaining > 0,
-        entitlements=plan.entitlements,
+    return _build_billing_status_response(
+        workspace_id=workspace_id,
+        subscription=subscription,
+        period_start=period_start,
+        period_end=period_end,
+        renders_used=renders_used,
+        billing_enabled=billing_enabled,
     )
 
 
@@ -252,8 +290,13 @@ def enforce_render_entitlement(
     *,
     workspace_id: UUID,
     repository: InMemoryBillingRepository,
+    billing_enabled: bool = True,
 ) -> BillingStatusResponse:
-    status = build_billing_status(workspace_id, repository)
+    status = build_billing_status(
+        workspace_id,
+        repository,
+        billing_enabled=billing_enabled,
+    )
     if not status.can_render:
         raise ApiError(
             402,

@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
@@ -25,8 +25,6 @@ from app.services.visual_jobs import (
     visual_provider_identity,
 )
 
-router = APIRouter(prefix="/internal/jobs", tags=["internal jobs"])
-
 
 class WorkerJobRunResponse(BaseModel):
     queue_job_id: str
@@ -46,13 +44,19 @@ async def require_worker_token(
         raise ApiError(403, "worker_access_denied", "Worker access is required.")
 
 
+router = APIRouter(
+    prefix="/internal/jobs",
+    tags=["internal jobs"],
+    dependencies=[Depends(require_worker_token)],
+)
+
+
 @router.post("/{queue_job_id}/run", response_model=WorkerJobRunResponse)
 async def run_queue_job(
     queue_job_id: str,
     request: Request,
     x_motionly_worker_token: str | None = Header(default=None),
 ) -> WorkerJobRunResponse:
-    await require_worker_token(request, x_motionly_worker_token)
     if getattr(request.app.state.settings, "app_env", "test") == "production":
         raise ApiError(
             410,

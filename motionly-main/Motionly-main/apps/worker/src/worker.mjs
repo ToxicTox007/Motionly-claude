@@ -81,6 +81,9 @@ export function pythonExecutorConfig(overrides = {}) {
     ),
     sleep: overrides.sleep || sleep,
     spawnImpl: overrides.spawnImpl || spawn,
+    cwd:
+      overrides.cwd ||
+      env("PYTHON_MEDIA_CWD", resolve(import.meta.dirname, "../../api")),
     now: overrides.now || Date.now,
     log: overrides.log || ((event) => console.log(JSON.stringify(event))),
   };
@@ -168,7 +171,11 @@ async function startPythonExecutor(state) {
   const child = state.config.spawnImpl(
     env("PYTHON_MEDIA_COMMAND", "python"),
     ["-m", state.moduleName, "--serve"],
-    { stdio: ["pipe", "pipe", "pipe"], env: processEnv() },
+    {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: processEnv(),
+      cwd: state.config.cwd,
+    },
   );
   state.child = child;
   state.buffer = "";
@@ -1141,6 +1148,53 @@ export async function ensureUploadRecordExists(
   return rows[0];
 }
 
+async function latestJobData(job) {
+  if (typeof job?.getData === "function") {
+    try {
+      const data = await job.getData();
+      if (data && typeof data === "object") return data;
+    } catch {
+      // Fall through to the queue hash lookup. A read failure is not cancellation.
+    }
+  }
+  try {
+    const queue = job?.queue;
+    const client = queue?.client ? await queue.client : null;
+    const key = queue?.toKey?.(job.id);
+    if (!client || !key || typeof client.hget !== "function") return job?.data || {};
+    const raw = await client.hget(key, "data");
+    const data = raw ? JSON.parse(raw) : null;
+    return data && typeof data === "object" ? data : job?.data || {};
+  } catch {
+    return job?.data || {};
+  }
+}
+
+async function assertJobNotCanceled(job) {
+  const data = await latestJobData(job);
+  if (data?.status !== "canceled") return;
+  const error = new Error(`Queue job ${job.id} was canceled`);
+  error.code = "job_canceled";
+  throw error;
+}
+
+function throwIfJobResultFailed(job, result) {
+  if (!result?.failed) return;
+  const isRender = job?.data?.kind === "render";
+  const defaultCode = isRender ? "domain_render_failed" : "domain_job_failed";
+  const defaultMessage = isRender ? "Domain render failed." : "Domain job failed.";
+  const message =
+    typeof result.error_message === "string" && result.error_message.trim()
+      ? result.error_message
+      : defaultMessage;
+  const error = new Error(message);
+  error.code =
+    typeof result.error_code === "string" && result.error_code.trim()
+      ? result.error_code
+      : defaultCode;
+  throw error;
+}
+
 export async function runJob(job, testOverrides = {}) {
   const overrides =
     testOverrides && typeof testOverrides === "object" ? testOverrides : {};
@@ -1155,9 +1209,7 @@ export async function runJob(job, testOverrides = {}) {
     leaseSeconds: overrides.leaseSeconds,
     maxBytes: overrides.maxWorkflowResultBytes,
   };
-  if (job.data.status === "canceled") {
-    throw new Error(`Queue job ${job.id} was canceled`);
-  }
+  await assertJobNotCanceled(job);
 
   const startedAt = Date.now();
   const coldStartMs = firstJobStarted
@@ -1197,6 +1249,7 @@ export async function runJob(job, testOverrides = {}) {
       }
     }
 
+    await assertJobNotCanceled(job);
     if (!workflowContext || claimToken) {
       specializedExecutionStarted = true;
       result = executeJob
@@ -1216,30 +1269,22 @@ export async function runJob(job, testOverrides = {}) {
                   : job.data.kind === "matte_extraction"
                     ? await runMatteJob(job)
                     : await runDomainJob(job);
+      await assertJobNotCanceled(job);
+      if (workflowContext && workflowContext.stepKind === "render_draft") {
+        const normalizedRender = {
+          render_job_id: String(job.data.resource_id),
+          render_status: String(result?.render_status || result?.status || ""),
+          failed: Boolean(result?.failed),
+        };
+        if (normalizedRender.failed) {
+          normalizedRender.error_code = result?.error_code || "domain_render_failed";
+          normalizedRender.error_message =
+            result?.error_message || "Domain render failed.";
+        }
+        result = normalizedRender;
+      }
+      throwIfJobResultFailed(job, result);
       if (workflowContext) {
-        if (workflowContext.stepKind === "render_draft") {
-          const normalizedRender = {
-            render_job_id: String(job.data.resource_id),
-            render_status: String(
-              result?.render_status || result?.status || "",
-            ),
-            failed: Boolean(result?.failed),
-          };
-          if (normalizedRender.failed) {
-            normalizedRender.error_code =
-              result?.error_code || "domain_render_failed";
-            normalizedRender.error_message =
-              result?.error_message || "Domain render failed.";
-          }
-          result = normalizedRender;
-        }
-        if (result?.failed) {
-          const failure = new Error(
-            result.error_message || "Domain render failed.",
-          );
-          failure.code = result.error_code || "domain_render_failed";
-          throw failure;
-        }
         const completion = await completeWorkflowStep(
           job,
           claimToken,
@@ -1261,13 +1306,14 @@ export async function runJob(job, testOverrides = {}) {
   } catch (error) {
     const uploadMissing =
       error instanceof Error && error.code === "upload_not_found";
-    if (uploadMissing && typeof job.discard === "function") {
+    const canceled = error instanceof Error && error.code === "job_canceled";
+    if ((uploadMissing || canceled) && typeof job.discard === "function") {
       job.discard();
     }
     if (workflowContext && claimToken) {
       await failWorkflowStep(job, claimToken, error, {
         ...workflowOptions,
-        retryable: uploadMissing ? false : workflowRetryable(job),
+        retryable: uploadMissing || canceled ? false : workflowRetryable(job),
       }).catch((callbackError) => {
         console.error(
           JSON.stringify({
@@ -1301,6 +1347,7 @@ export async function runJob(job, testOverrides = {}) {
     }
     throw error;
   }
+  await assertJobNotCanceled(job);
   await job.updateProgress(100).catch((error) => {
     console.error(
       JSON.stringify({
@@ -1347,9 +1394,9 @@ function createWorker(queueName, connection) {
     const jobData = job?.data || {};
     const errorCode =
       error instanceof Error ? error.code || error.name : "worker_error";
-    const retrying = Boolean(
-      job && job.attemptsMade < Number(job.opts?.attempts || 1),
-    );
+    const canceled = errorCode === "job_canceled" || jobData.status === "canceled";
+    const retrying =
+      !canceled && Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
     console.error(
       JSON.stringify({
         event: "job_failed",
@@ -1381,8 +1428,9 @@ function createWorker(queueName, connection) {
     if (jobData.kind === "render" && jobData.resource_id) {
       try {
         const { persistRenderFailureDirect } = await import("./remotion.mjs");
-        const failureCode =
-          error instanceof Error && typeof error.code === "string"
+        const failureCode = canceled
+          ? "render_cancelled"
+          : error instanceof Error && typeof error.code === "string"
             ? error.code
             : "render_worker_failed";
         await persistRenderFailureDirect(

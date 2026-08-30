@@ -40,15 +40,30 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
   );
 }
 
+function activeStemName(input: MotionlyRenderProps): "vocals" | "no_vocals" {
+  return input.sourceStems?.active ?? "vocals";
+}
+
+function activeStemSource(input: MotionlyRenderProps) {
+  const stems = input.sourceStems;
+  if (!stems) return undefined;
+  const source = stems[activeStemName(input)]?.src;
+  if (!source) {
+    throw new Error("The selected source stem is unavailable for rendering.");
+  }
+  return source;
+}
+
 function CutMappedVocalStem({ input }: { input: MotionlyRenderProps }) {
-  const source = input.sourceStems?.vocals?.src;
+  const source = activeStemSource(input);
+  const stemName = activeStemName(input);
   const { fps } = useVideoConfig();
   if (!source) return null;
   return (
     <>
       {sourceTimelineClips(input).map((clip) => (
         <Sequence
-          key={`vocals-${clip.id}`}
+          key={`${stemName}-${clip.id}`}
           from={millisecondsToFrameStart(clip.output_start_ms, fps)}
           durationInFrames={durationMsToFrameCount(
             clip.output_end_ms - clip.output_start_ms,

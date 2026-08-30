@@ -36,14 +36,20 @@ def _production_settings(*, process_role: str = "api", **updates):
         "publish_token_encryption_key": "publish-token-encryption-key-with-32-bytes",
         "sentry_dsn": "https://public@example.ingest.sentry.io/1",
         "metrics_bearer_token": "metrics-token",
+        "skip_api_auth": False,
         "allow_fixture_providers": False,
+        "model_gateway_enabled": True,
+        "temporal_tls_enabled": True,
         "stem_separation_provider": "demucs",
         "transcription_provider": "groq",
         "groq_api_key": "groq-key",
         "edit_planner_provider": "openrouter",
         "edit_planner_model": "openai/gpt-4.1-mini",
         "edit_planner_model_revision": "openai/gpt-4.1-mini-2025-04-14",
+        "edit_planner_input_cost_per_million_usd": 2.0,
+        "edit_planner_output_cost_per_million_usd": 2.0,
         "transcription_model_revision": "whisper-large-v3-turbo-2025-02-01",
+        "transcription_estimated_cost_per_request_usd": 0.25,
         "openrouter_api_key": "openrouter-key",
         "visual_intelligence_provider": "local_ml",
         "audio_ml_provider": "local_ml",
@@ -267,6 +273,7 @@ def test_registered_internal_and_admin_routes_remain_separately_authorized() -> 
     import inspect
 
     from app.api.admin import require_admin
+    from app.api.internal_jobs import require_worker_token
     from app.main import app
 
     internal_routes = []
@@ -291,7 +298,10 @@ def test_registered_internal_and_admin_routes_remain_separately_authorized() -> 
     }.issubset({route.path for route in internal_routes})
     for route in internal_routes:
         endpoint_source = inspect.getsource(route.endpoint)
-        assert "require_worker_token" in endpoint_source, f"{route.path} was not protected"
+        dependencies = {dependency.call for dependency in route.dependant.dependencies}
+        assert require_worker_token in dependencies or "require_worker_token" in endpoint_source, (
+            f"{route.path} was not protected"
+        )
         assert "require_admin" not in endpoint_source, route.path
 
     assert admin_routes

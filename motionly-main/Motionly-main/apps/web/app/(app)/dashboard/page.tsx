@@ -1,10 +1,31 @@
+import { cookies } from "next/headers";
 import { AppShell } from "@/components/app-shell";
 import { createClient } from "@/lib/supabase/server";
-import { getWorkspaceApiContext } from "@/lib/api-auth";
+import {
+  getWorkspaceApiContext,
+  WORKSPACE_COOKIE_NAME,
+} from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { DashboardClient } from "@/components/DashboardClient";
+import { WorkspacePicker } from "@/components/workspace-picker";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const resolvedSearchParams = (await searchParams) ?? {};
+  const rawWorkspaceError = resolvedSearchParams.error;
+  const workspaceError =
+    typeof rawWorkspaceError === "string" &&
+    [
+      "workspace_missing",
+      "workspace_invalid",
+      "workspace_selection_required",
+      "workspace_unavailable",
+    ].includes(rawWorkspaceError)
+      ? rawWorkspaceError
+      : null;
   let workspaceName = "Personal workspace";
   let projects:
     | Array<{
@@ -25,23 +46,59 @@ export default async function DashboardPage() {
     workspaceName = "Personal workspace";
     projects = [];
   } else {
-    const context = await getWorkspaceApiContext();
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    const cookieStore = await cookies();
+    const selectedWorkspaceId =
+      cookieStore.get(WORKSPACE_COOKIE_NAME)?.value?.trim() || undefined;
+    const { data: memberships } = user
+      ? await supabase
+          .from("workspace_members")
+          .select("workspace_id, workspaces(name)")
+          .eq("user_id", user.id)
+          .eq("status", "active")
+      : { data: [] };
+    const effectiveWorkspaceId =
+      selectedWorkspaceId ??
+      (memberships?.length === 1
+        ? String(memberships[0].workspace_id)
+        : undefined);
+    const hasSelectedWorkspace = Boolean(
+      effectiveWorkspaceId &&
+        memberships?.some(
+          (membership) => String(membership.workspace_id) === effectiveWorkspaceId,
+        ),
+    );
+
+    if (memberships && memberships.length > 0 && !hasSelectedWorkspace) {
+      return (
+        <AppShell title="Choose workspace">
+          <WorkspacePicker
+            workspaces={memberships.map((membership) => {
+              const workspace = Array.isArray(membership.workspaces)
+                ? membership.workspaces[0]
+                : membership.workspaces;
+              return {
+                id: String(membership.workspace_id),
+                name: workspace?.name ?? "Workspace",
+              };
+            })}
+            error={workspaceError}
+          />
+        </AppShell>
+      );
+    }
+
+    const context = await getWorkspaceApiContext();
 
     if (user) {
-      const { data: membership } = await supabase
-        .from("workspace_members")
-        .select("workspaces(name)")
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .limit(1)
-        .maybeSingle();
-
+      const membership = memberships?.find(
+        (item) => String(item.workspace_id) === effectiveWorkspaceId,
+      );
       const workspace = Array.isArray(membership?.workspaces)
-        ? membership?.workspaces[0]
+        ? membership.workspaces[0]
         : membership?.workspaces;
       workspaceName = workspace?.name ?? workspaceName;
 
