@@ -20,7 +20,19 @@ if (!decision.passed && mode === "enforce") process.exitCode = 1;
 
 export function evaluate({ contract, canary, baseline = null, revision = null }) {
   const failures = [];
+  const requiredSampleSurfaces = [
+    "http_requests",
+    "projects",
+    "uploads",
+    "plans",
+    "render_status",
+    "ops",
+  ];
+  const requiredP95Surfaces = ["projects", "uploads", "plans", "render_status", "ops"];
+
   if (contract?.schema_version !== 1) failures.push("contract_schema_invalid");
+  if (!nonEmptyString(contract?.contract_revision)) failures.push("contract_revision_missing");
+  if (!positiveNumber(contract?.window_seconds)) failures.push("contract_window_invalid");
   if (canary?.schema_version !== 1) failures.push("canary_schema_invalid");
   if (!nonEmptyString(canary?.revision)) failures.push("canary_revision_missing");
   if (revision && canary?.revision !== revision) failures.push("canary_revision_mismatch");
@@ -29,8 +41,11 @@ export function evaluate({ contract, canary, baseline = null, revision = null })
   }
 
   const minimumSamples = contract?.minimum_samples || {};
-  for (const [surface, minimum] of Object.entries(minimumSamples)) {
-    if (!positiveNumber(canary?.samples?.[surface]) || canary.samples[surface] < minimum) {
+  for (const surface of requiredSampleSurfaces) {
+    const minimum = minimumSamples[surface];
+    if (!positiveNumber(minimum)) {
+      failures.push(`contract_minimum_invalid:${surface}`);
+    } else if (!positiveNumber(canary?.samples?.[surface]) || canary.samples[surface] < minimum) {
       failures.push(`insufficient_samples:${surface}`);
     }
   }
@@ -44,6 +59,12 @@ export function evaluate({ contract, canary, baseline = null, revision = null })
     canary?.queues?.backpressure_count,
     thresholds.queue_backpressure_count,
   );
+  compareAtMost(
+    failures,
+    "queue_oldest_queued_seconds",
+    canary?.queues?.max_oldest_queued_seconds,
+    thresholds.queue_oldest_queued_seconds,
+  );
   compareAtMost(failures, "provider_error_rate", canary?.providers?.error_rate, thresholds.provider_error_rate);
   compareAtMost(
     failures,
@@ -51,25 +72,33 @@ export function evaluate({ contract, canary, baseline = null, revision = null })
     canary?.providers?.p95_latency_ms,
     thresholds.provider_p95_latency_ms,
   );
-  for (const [surface, ceiling] of Object.entries(thresholds.p95_ms_by_surface || {})) {
+  for (const surface of requiredP95Surfaces) {
     compareAtMost(
       failures,
       `p95_ms:${surface}`,
       canary?.http?.p95_ms_by_surface?.[surface],
-      ceiling,
+      thresholds.p95_ms_by_surface?.[surface],
     );
+  }
+  const p95Multiplier = thresholds.relative_p95_regression;
+  if (!finiteNumber(p95Multiplier) || p95Multiplier < 1) {
+    failures.push("contract_relative_p95_regression_invalid");
+  }
+  const errorRateIncrease = thresholds.relative_error_rate_increase;
+  if (!finiteNumber(errorRateIncrease) || errorRateIncrease < 0) {
+    failures.push("contract_relative_error_rate_increase_invalid");
   }
 
   if (baseline) {
     if (baseline.schema_version !== 1 || !nonEmptyString(baseline.revision)) {
       failures.push("baseline_invalid");
     } else {
-      for (const surface of Object.keys(thresholds.p95_ms_by_surface || {})) {
+      for (const surface of requiredP95Surfaces) {
         const candidate = canary?.http?.p95_ms_by_surface?.[surface];
         const stable = baseline?.http?.p95_ms_by_surface?.[surface];
         if (!positiveNumber(candidate) || !positiveNumber(stable)) {
           failures.push(`baseline_p95_missing:${surface}`);
-        } else if (candidate > stable * Number(thresholds.relative_p95_regression || 1.2)) {
+        } else if (finiteNumber(p95Multiplier) && candidate > stable * p95Multiplier) {
           failures.push(`p95_regression:${surface}`);
         }
       }
@@ -77,9 +106,9 @@ export function evaluate({ contract, canary, baseline = null, revision = null })
       const stableErrorRate = baseline?.http?.error_rate;
       if (!finiteNumber(candidateErrorRate) || !finiteNumber(stableErrorRate)) {
         failures.push("baseline_error_rate_missing");
-      } else if (candidateErrorRate > Math.max(
-        Number(thresholds.http_error_rate || 0.01),
-        stableErrorRate + Number(thresholds.relative_error_rate_increase || 0.005),
+      } else if (finiteNumber(errorRateIncrease) && candidateErrorRate > Math.max(
+        Number(thresholds.http_error_rate),
+        stableErrorRate + errorRateIncrease,
       )) {
         failures.push("error_rate_regression");
       }

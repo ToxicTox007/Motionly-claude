@@ -57,3 +57,11 @@ test("SLO assertion rejects a mismatched deployment revision", async () => {
   assert.equal(result.status, 1);
   assert.match(result.stdout, /canary_revision_mismatch/);
 });
+
+test("SLO assertion rejects an over-age queued workload", async () => {
+  const result = await run(await fixture({
+    queues: { backpressure_count: 0, max_oldest_queued_seconds: 121 },
+  }));
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /threshold_breached:queue_oldest_queued_seconds/);
+});

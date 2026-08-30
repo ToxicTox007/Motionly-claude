@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "contract_revision": "2026-08-30",
+  "window_seconds": 300,
+  "minimum_samples": {
+    "http_requests": 100,
+    "projects": 20,
+    "uploads": 20,
+    "plans": 20,
+    "render_status": 20,
+    "ops": 20
+  },
+  "thresholds": {
+    "http_error_rate": 0.01,
+    "status_5xx_rate": 0.02,
+    "p95_ms_by_surface": {
+      "projects": 900,
+      "uploads": 1200,
+      "plans": 1700,
+      "render_status": 650,
+      "ops": 1100
+    },
+    "queue_backpressure_count": 0,
+    "queue_oldest_queued_seconds": 120,
+    "provider_error_rate": 0.01,
+    "provider_p95_latency_ms": 2000,
+    "relative_p95_regression": 1.2,
+    "relative_error_rate_increase": 0.005
+  }
+}

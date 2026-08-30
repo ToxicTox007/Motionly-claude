@@ -78,9 +78,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Verify performance and canary contracts without live infrastructure
+      - name: Verify production-candidate contracts without live infrastructure
         run: |
-          node --test scripts/perf/*.test.mjs
+          node scripts/verify_handoff_acceptance.mjs
+          node --test scripts/perf/*.test.mjs scripts/canary-gate.test.mjs scripts/external-verification-gate.test.mjs scripts/production-candidate-evidence.test.mjs
           pnpm --filter @motionly/web exec node --test tests/performance-harness.test.mjs
 
   empty-database-and-repositories:
@@ -408,6 +409,13 @@ jobs:
           --contract scripts/perf/slo-contract.json
           --evidence-dir test-results/canary
           --revision "$GITHUB_SHA"
+      - name: Seal protected production-candidate evidence
+        run: >-
+          node scripts/production-candidate-evidence.mjs
+          --revision "$GITHUB_SHA"
+          --external-evidence-dir test-results/external-verification
+          --canary-evidence-dir test-results/canary
+          --output test-results/production-candidate/acceptance.json
       - name: Upload canary evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -416,4 +424,5 @@ jobs:
           path: |
             test-results/external-verification/
             test-results/canary/
+            test-results/production-candidate/
           if-no-files-found: warn

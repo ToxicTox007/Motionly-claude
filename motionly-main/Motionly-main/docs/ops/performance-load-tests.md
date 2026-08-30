@@ -99,21 +99,28 @@ fail if any benchmark command fails.
 
 `scripts/perf/slo-contract.json` is the source of truth for canary decisions. It
 requires schema version, contract revision, a five-minute window, minimum sample
-counts, HTTP/5xx and p95 measurements by surface, queue backpressure, provider
-health, and (when provided) baseline regression evidence. Validate a collected
-metrics document locally with:
+counts, HTTP/5xx and p95 measurements by surface, queue backpressure and age,
+provider health, and (when provided) baseline regression evidence. Validate a
+collected metrics document locally with:
 
 ```bash
-node scripts/perf/assert-slo.mjs test-results/canary/metrics.json
+node scripts/perf/assert-slo.mjs \
+  --contract scripts/perf/slo-contract.json \
+  --canary test-results/canary/metrics.json \
+  --revision <git-sha>
 ```
 
-Use `--observe` while the metrics producer is being integrated; observe mode
-writes a decision but does not fail. `SLO_ENFORCE=1` is fail-closed: a malformed,
-stale, or undersampled document blocks promotion. The canary workflow promotes
-5%, then 25%, then 100% only after each stage validates. Set
-`CANARY_ROLLBACK_HOOK` to a reversible platform rollback command before enabling
-enforcement; the workflow preserves forward-only migrations and stores the
-promotion, metric, decision, and rollback artifacts under `test-results/canary`.
+Use `--mode observe` while the metrics producer is being integrated; observe mode
+writes a decision but does not fail. The default `--mode enforce` is fail-closed:
+a malformed, stale, or undersampled document blocks promotion. The protected
+canary workflow promotes 5%, then 25%, then 100% only after each stage validates.
+Set `CANARY_ROLLBACK_HOOK` to a reversible platform rollback command before
+enabling enforcement; the workflow preserves forward-only migrations and stores
+the promotion, metric, decision, and rollback artifacts under
+a `test-results/canary` directory. After a successful protected run,
+`scripts/production-candidate-evidence.mjs` verifies the preflight and all three
+enforced decisions, then writes the sanitized acceptance artifact at
+`test-results/production-candidate/acceptance.json` for review.
 
 For live k6 evidence, use strict mode and retain its JSON summary:
 

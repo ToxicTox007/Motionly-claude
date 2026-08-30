@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "evidence_policy": "Verified items cite concrete implementation, command, and runtime evidence in the project handoff. Task 18 remains pending until the protected staging-sandbox workflow emits its production-candidate acceptance artifact.",
+  "items": [
+    {
+      "id": "task-01",
+      "category": "task",
+      "criterion": "BullMQ queue control-plane commands are canonical, lock-safe, and project scoped.",
+      "status": "verified",
+      "implementation_evidence": ["MOTIONLY_SESSION_HANDOFF_2026-07-14.md §6, Task 1"],
+      "verification_commands": ["pytest -q apps/api/tests/test_queue_control_plane.py"],
+      "runtime_evidence": ["Recorded Redis queue suite: 12 passed."]
+    },
+    {
+      "id": "task-02",
+      "category": "product",
+      "criterion": "Immediate correctness regressions preserve active plans and captionless exports.",
+      "status": "verified",
+      "implementation_evidence": ["MOTIONLY_SESSION_HANDOFF_2026-07-14.md §6, Task 2"],
+      "verification_commands": ["pnpm --filter @motionly/web test"],
+      "runtime_evidence": ["Recorded targeted backend suite: 128 passed, 1 skipped."]
+    },
+    {
+      "id": "task-03",
+      "category": "risk",
+      "criterion": "API-controlled tenant mutation boundaries prevent cross-tenant writes.",
+      "status": "verified",
+      "implementation_evidence": ["supabase/migrations/202607140004_api_authoritative_tenant_boundary.sql"],
+      "verification_commands": ["supabase test db"],
+      "runtime_evidence": ["Tenant-boundary contract evidence is recorded in the handoff."]
+    },
+    {
+      "id": "task-04",
+      "category": "risk",
+      "criterion": "Media fetches, workers, and service credentials are hardened against SSRF and privilege leakage.",
+      "status": "verified",
+      "implementation_evidence": ["apps/api/app/services/media_url_policy.py", "apps/worker/src/media-url-policy.mjs"],
+      "verification_commands": ["pytest -q apps/api/tests/test_service_hardening.py"],
+      "runtime_evidence": ["Recorded focused media/service suite: 44 passed."]
+    },
+    {
+      "id": "task-05",
+      "category": "architecture",
+      "criterion": "Timeline revisions and source lineage are immutable and stale derivatives are invalidated.",
+      "status": "verified",
+      "implementation_evidence": ["supabase/migrations/202607140005_immutable_timeline_revisions.sql"],
+      "verification_commands": ["supabase test db --file supabase/tests/task_5_timeline_revisions_test.sql"],
+      "runtime_evidence": ["Recorded focused pgTAP suite: 19 tests passed."]
+    },
+    {
+      "id": "task-06",
+      "category": "task",
+      "criterion": "Uploads and media access remain session-safe across expiration and device changes.",
+      "status": "verified",
+      "implementation_evidence": ["supabase/migrations/202607140006_session_safe_uploads.sql"],
+      "verification_commands": ["pnpm --filter @motionly/web exec node --test tests/session-safe-upload.test.mjs"],
+      "runtime_evidence": ["Recorded Task 6 API/upload/worker-media suite: 48 passed."]
+    },
+    {
+      "id": "task-07",
+      "category": "architecture",
+      "criterion": "Workflow state, outbox publication, claims, and reconciliation are durable and idempotent.",
+      "status": "verified",
+      "implementation_evidence": ["supabase/migrations/202608080001_task7_durable_workflows.sql"],
+      "verification_commands": ["supabase test db --file supabase/tests/task_7_durable_workflows_test.sql"],
+      "runtime_evidence": ["Workflow durability evidence is recorded in the project handoff."]
+    },
+    {
+      "id": "task-08",
+      "category": "architecture",
+      "criterion": "Custom GPU workers replace Lightning AI through a provider-neutral compute interface.",
+      "status": "verified",
+      "implementation_evidence": ["apps/api/tests/test_lightning_removed.py"],
+      "verification_commands": ["pytest -q apps/api/tests/test_lightning_removed.py"],
+      "runtime_evidence": ["Recorded Task 8 Ruff verification passed."]
+    },
+    {
+      "id": "task-09",
+      "category": "architecture",
+      "criterion": "Queue-specific Azure GPU scheduling has capability routing, safety limits, and reconciliation.",
+      "status": "verified",
+      "implementation_evidence": ["infra/azure/gpu-deployments.yaml"],
+      "verification_commands": ["python -m ruff check apps/api"],
+      "runtime_evidence": ["Independent Task 9 audit recorded as passed."]
+    },
+    {
+      "id": "task-10",
+      "category": "architecture",
+      "criterion": "Typed model capabilities use provider-neutral routing, budgets, circuits, and telemetry.",
+      "status": "verified",
+      "implementation_evidence": ["supabase/migrations/202607140010_provider_neutral_model_gateway.sql"],
+      "verification_commands": ["pytest -q apps/api/tests/test_model_gateway.py apps/api/tests/test_model_gateway_redis.py"],
+      "runtime_evidence": ["Independent Task 10 audit recorded as passed."]
+    },
+    {
+      "id": "task-11",
+      "category": "product",
+      "criterion": "AI proposals are typed, attributable, approval-gated, and atomically applied as new revisions.",
+      "status": "verified",
+      "implementation_evidence": ["supabase/migrations/202608080010_task5_proposal_approval_gate.sql"],
+      "verification_commands": ["pnpm --filter @motionly/web test"],
+      "runtime_evidence": ["Proposal and approval workflow evidence is recorded in the project handoff."]
+    },
+    {
+      "id": "task-12",
+      "category": "product",
+      "criterion": "Uploads continue through analysis, approval, assembly, and first-draft rendering without browser ownership.",
+      "status": "verified",
+      "implementation_evidence": ["supabase/tests/task_12_first_draft_workflow_test.sql"],
+      "verification_commands": ["supabase test db --file supabase/tests/task_12_first_draft_workflow_test.sql"],
+      "runtime_evidence": ["Durable first-draft workflow evidence is recorded in the project handoff."]
+    },
+    {
+      "id": "task-13",
+      "category": "risk",
+      "criterion": "Editorial memory and evaluation are consent-bounded, normalized, and default-off.",
+      "status": "verified",
+      "implementation_evidence": ["docs/operations.md"],
+      "verification_commands": ["pytest -q apps/api/tests"],
+      "runtime_evidence": ["Consent and shadow-evaluation evidence is recorded in the project handoff."]
+    },
+    {
+      "id": "task-14",
+      "category": "product",
+      "criterion": "Preview and export share a timeline contract, with visible approximation labels where needed.",
+      "status": "verified",
+      "implementation_evidence": ["docs/renderer-feature-matrix.md"],
+      "verification_commands": ["pnpm --filter @motionly/renderer test:golden"],
+      "runtime_evidence": ["Independent Task 14 audit recorded as passed."]
+    },
+    {
+      "id": "task-15",
+      "category": "product",
+      "criterion": "Creator and professional editor modes remain adaptive, accessible, and behaviorally complete.",
+      "status": "verified",
+      "implementation_evidence": ["apps/web/components/editor/layout/useEditorMode.ts"],
+      "verification_commands": ["pnpm --filter @motionly/web test"],
+      "runtime_evidence": ["Independent Task 15 audit recorded as passed."]
+    },
+    {
+      "id": "task-16",
+      "category": "slo",
+      "criterion": "Scalability SLOs cover bootstrapping, queues, media, browser interaction, and canary enforcement.",
+      "status": "verified",
+      "implementation_evidence": ["scripts/perf/assert-slo.mjs", "scripts/perf/slo-contract.json"],
+      "verification_commands": ["node --test scripts/perf/assert-slo.test.mjs"],
+      "runtime_evidence": ["Versioned canary SLO contract is present and executable."]
+    },
+    {
+      "id": "task-17",
+      "category": "risk",
+      "criterion": "Dependencies, images, models, manifests, SBOMs, and signatures are reproducible and immutable.",
+      "status": "verified",
+      "implementation_evidence": [".github/workflows/supply-chain.yml"],
+      "verification_commands": ["pnpm install --frozen-lockfile --ignore-scripts --offline"],
+      "runtime_evidence": ["Recorded supply-chain validation completed successfully."]
+    },
+    {
+      "id": "task-18",
+      "category": "task",
+      "criterion": "A protected production candidate completes creator/editor, safety, source replacement, signed URL, render/export, retention, restore, and rollback gates before promotion.",
+      "status": "pending",
+      "implementation_evidence": [".github/workflows/phase-0-safety.yml", "scripts/production-candidate-evidence.mjs", "scripts/canary-gate.mjs"],
+      "verification_commands": ["node scripts/production-candidate-evidence.mjs --revision <git-sha>", "workflow_dispatch: Production readiness / staging-canary"],
+      "runtime_evidence": ["Protected staging-sandbox canary evidence has not been collected in this checkout."]
+    }
+  ]
+}
