@@ -1529,6 +1529,14 @@
         "title": "BillingInterval",
         "type": "string"
       },
+      "BillingMode": {
+        "enum": [
+          "managed",
+          "personal"
+        ],
+        "title": "BillingMode",
+        "type": "string"
+      },
       "BillingPlanKey": {
         "enum": [
           "free",
@@ -1541,6 +1549,13 @@
       },
       "BillingStatusResponse": {
         "properties": {
+          "billing_enabled": {
+            "title": "Billing Enabled",
+            "type": "boolean"
+          },
+          "billing_mode": {
+            "$ref": "#/components/schemas/BillingMode"
+          },
           "can_render": {
             "title": "Can Render",
             "type": "boolean"
@@ -1561,11 +1576,18 @@
           "subscription": {
             "$ref": "#/components/schemas/SubscriptionSummary"
           },
+          "unmetered": {
+            "title": "Unmetered",
+            "type": "boolean"
+          },
           "usage": {
             "$ref": "#/components/schemas/UsageSummary"
           }
         },
         "required": [
+          "billing_enabled",
+          "billing_mode",
+          "unmetered",
           "subscription",
           "current_plan",
           "plans",
@@ -10844,6 +10866,11 @@
             "title": "Failed",
             "type": "integer"
           },
+          "failed_scan_truncated": {
+            "default": false,
+            "title": "Failed Scan Truncated",
+            "type": "boolean"
+          },
           "oldest_queued_seconds": {
             "anyOf": [
               {
@@ -13319,6 +13346,29 @@
         "title": "SpeedRampSettings",
         "type": "object"
       },
+      "StemSelectionUpdateRequest": {
+        "properties": {
+          "active": {
+            "enum": [
+              "vocals",
+              "no_vocals"
+            ],
+            "title": "Active",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active",
+          "expected_revision"
+        ],
+        "title": "StemSelectionUpdateRequest",
+        "type": "object"
+      },
       "StemSeparationRequest": {
         "properties": {
           "model": {
@@ -15182,10 +15232,17 @@
       "UsageSummary": {
         "properties": {
           "percent_used": {
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Percent Used",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent Used"
           },
           "period_end": {
             "format": "date-time",
@@ -15198,12 +15255,26 @@
             "type": "string"
           },
           "remaining_renders": {
-            "title": "Remaining Renders",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Renders"
           },
           "renders_limit": {
-            "title": "Renders Limit",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Renders Limit"
           },
           "renders_used": {
             "title": "Renders Used",
@@ -15221,8 +15292,7 @@
           "period_end",
           "renders_used",
           "renders_limit",
-          "remaining_renders",
-          "percent_used"
+          "remaining_renders"
         ],
         "title": "UsageSummary",
         "type": "object"
@@ -28135,6 +28205,117 @@
         ]
       }
     },
+    "/projects/{project_id}/phase5/stems/{resource_id}": {
+      "patch": {
+        "operationId": "select_audio_stem_projects__project_id__phase5_stems__resource_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resource_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Resource Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StemSelectionUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScaleResourceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Audio Stem",
+        "tags": [
+          "Phase 5 intelligence and scale"
+        ]
+      }
+    },
     "/projects/{project_id}/phase5/style-profiles": {
       "post": {
         "operationId": "create_style_profile_projects__project_id__phase5_style_profiles_post",
@@ -29037,6 +29218,118 @@
           }
         },
         "summary": "Confirm Style Reference Multipart Part",
+        "tags": [
+          "Phase 5 intelligence and scale"
+        ]
+      }
+    },
+    "/projects/{project_id}/phase5/style-profiles/{profile_id}/references/{reference_id}": {
+      "delete": {
+        "description": "Retire a style reference while retaining quota until physical cleanup finishes.",
+        "operationId": "delete_style_reference_projects__project_id__phase5_style_profiles__profile_id__references__reference_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Profile Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "reference_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Reference Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-user-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-User-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScaleResourceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Style Reference",
         "tags": [
           "Phase 5 intelligence and scale"
         ]

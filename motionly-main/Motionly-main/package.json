@@ -15,7 +15,9 @@
     "perf:media": "node scripts/perf/media-golden-benchmarks.mjs",
     "perf:slo:check": "node scripts/perf/assert-slo.mjs",
     "contracts:generate": "pnpm --filter @motionly/shared contracts:generate",
-    "contracts:check": "pnpm --filter @motionly/shared contracts:check"
+    "contracts:check": "pnpm --filter @motionly/shared contracts:check",
+    "audit:local": "python apps/api/scripts/audit_local_topology.py --plan-only",
+    "audit:local:preflight": "python apps/api/scripts/audit_local_capabilities.py --plan-only"
   },
   "devDependencies": {
     "pg": "8.21.0",

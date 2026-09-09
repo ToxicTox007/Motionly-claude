@@ -333,6 +333,9 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             client=request.app.state.social_publishing_client,
             oauth_client=request.app.state.publish_oauth_client,
             settings=settings,
+            live_effects_gate=getattr(
+                request.app.state, "local_audit_live_effects_gate", None
+            ),
             job_id=job.resource_id,
             workspace_id=job.workspace_id,
         )

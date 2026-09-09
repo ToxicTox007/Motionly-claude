@@ -8,6 +8,7 @@ arguments carry secret values. Do not commit a local secret directory.
 Create or retrieve these file names before starting `infra/docker-compose.gpu.yml`:
 
 - `postgres_password`
+- `redis_password`
 - `supabase_service_role_key`
 - `supabase_jwt_secret`
 - `admin_api_token` (admin endpoints only)
@@ -27,6 +28,11 @@ Create or retrieve these file names before starting `infra/docker-compose.gpu.ym
 - `temporal_reconciler_cert` / `temporal_reconciler_key`
 - `temporal_namespace_bootstrap_cert` / `temporal_namespace_bootstrap_key`
 - `temporal_diagnostics_cert` / `temporal_diagnostics_key`
+
+For `infra/docker-compose.local-audit.yml`, the protected local `SECRETS_DIR` also
+must contain `local_audit_external_authorization`. It authorizes a named sandbox
+run only; it is mounted as `/run/secrets/local_audit_external_authorization` and
+must never be committed or reused for a release deployment.
 
 Temporal PEM files are retrieved from Key Vault as single-line base64 values, decoded directly into these protected files, and never placed in Compose environment values or command arguments. See `infra/temporal/README.md` for required certificate common names.
 

@@ -444,6 +444,60 @@ class Settings(BaseSettings):
         alias="RUNWAY_ESTIMATED_COST_PER_REQUEST_USD",
     )
 
+    # Local-audit controls remain inert unless LOCAL_AUDIT_MODE is explicitly true.
+    # The authorization value is loaded only from its mounted *_FILE secret below.
+    local_audit_mode: bool = Field(default=False, alias="LOCAL_AUDIT_MODE")
+    local_audit_external_effects_enabled: bool = Field(
+        default=False,
+        alias="LOCAL_AUDIT_EXTERNAL_EFFECTS_ENABLED",
+    )
+    local_audit_external_authorization: str | None = Field(
+        default=None,
+        alias="LOCAL_AUDIT_EXTERNAL_AUTHORIZATION",
+    )
+    local_audit_external_authorization_file: str | None = Field(
+        default=None,
+        alias="LOCAL_AUDIT_EXTERNAL_AUTHORIZATION_FILE",
+    )
+    local_audit_target: str = Field(default="", alias="LOCAL_AUDIT_TARGET")
+    local_audit_run_id: str = Field(default="", alias="LOCAL_AUDIT_RUN_ID")
+    local_audit_provider_accounts: str = Field(
+        default="",
+        alias="LOCAL_AUDIT_PROVIDER_ACCOUNTS",
+    )
+    local_audit_publishing_accounts: str = Field(
+        default="",
+        alias="LOCAL_AUDIT_PUBLISHING_ACCOUNTS",
+    )
+    local_audit_approved_domains: str = Field(
+        default="",
+        alias="LOCAL_AUDIT_APPROVED_DOMAINS",
+    )
+    local_audit_allowed_publish_visibilities: str = Field(
+        default="",
+        alias="LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES",
+    )
+    local_audit_max_per_run_spend_usd: float | None = Field(
+        default=None,
+        alias="LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD",
+    )
+    local_audit_max_total_spend_usd: float | None = Field(
+        default=None,
+        alias="LOCAL_AUDIT_MAX_TOTAL_SPEND_USD",
+    )
+    local_audit_remote_cleanup_owner: str = Field(
+        default="",
+        alias="LOCAL_AUDIT_REMOTE_CLEANUP_OWNER",
+    )
+    local_audit_remote_cleanup_reference: str = Field(
+        default="",
+        alias="LOCAL_AUDIT_REMOTE_CLEANUP_REFERENCE",
+    )
+    local_audit_remote_cleanup_policy: str = Field(
+        default="",
+        alias="LOCAL_AUDIT_REMOTE_CLEANUP_POLICY",
+    )
+
     @property
     def api_auth_bypass_enabled(self) -> bool:
         """Whether the explicitly configured local-only API auth bypass is active."""
@@ -557,6 +611,14 @@ def get_settings() -> Settings:
         secret_file = os.getenv(f"{name}_FILE")
         if secret_file and not os.getenv(name):
             os.environ[name] = Path(secret_file).read_text(encoding="utf-8").strip()
+
+    # The local-audit authorization must come from the mounted file even if a
+    # process inherited a similarly named environment variable.
+    local_audit_authorization_file = os.getenv("LOCAL_AUDIT_EXTERNAL_AUTHORIZATION_FILE")
+    if local_audit_authorization_file:
+        os.environ["LOCAL_AUDIT_EXTERNAL_AUTHORIZATION"] = Path(
+            local_audit_authorization_file
+        ).read_text(encoding="utf-8").strip()
 
     env_file = os.getenv("SETTINGS_ENV_FILE", ".env")
     if env_file == "none":

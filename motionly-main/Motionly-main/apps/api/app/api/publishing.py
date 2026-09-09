@@ -82,11 +82,25 @@ async def complete_publish_oauth(
         raise ApiError(400, "publish_oauth_state_invalid", "Publishing platform does not match.")
     return_url = values["return_url"]
     _validate_return_url(return_url=return_url, settings=settings)
+    
+    # Gate check BEFORE token exchange
+    gate = request.app.state.local_audit_live_effects_gate
+    if gate is not None:
+        gate.authorize_oauth_exchange(platform=platform.value)
+    
     account = PublishOAuthClient(settings).exchange(
         platform=platform,
         code=code,
         redirect_uri=_oauth_redirect_uri(request=request, platform=platform),
     )
+    
+    # Validate provider-returned account AFTER exchange
+    if gate is not None:
+        gate.validate_oauth_account(
+            platform=platform.value,
+            provider_returned_account_id=account.external_account_id,
+        )
+    
     await _repository_call(
         request.app.state.publishing_repository,
         "upsert_connection_async",
@@ -133,6 +147,18 @@ async def create_connection(
     payload: PublishConnectionCreateRequest, actor: ActorDep, request: Request
 ) -> PublishConnectionResponse:
     repository: InMemoryPublishingRepository = request.app.state.publishing_repository
+    settings = request.app.state.settings
+    gate = request.app.state.local_audit_live_effects_gate
+    
+    # In LOCAL_AUDIT_MODE, reject manual token injection
+    if gate is not None and getattr(settings, "local_audit_mode", False):
+        raise ApiError(
+            403,
+            "manual_connection_blocked_in_audit_mode",
+            "Manual publishing connection creation is blocked in LOCAL_AUDIT_MODE. "
+            "Use the OAuth flow to ensure provider-validated account identity.",
+        )
+    
     record = await _repository_call(
         repository,
         "create_connection_async",
@@ -242,6 +268,9 @@ async def create_publish_job(
             client=request.app.state.social_publishing_client,
             oauth_client=request.app.state.publish_oauth_client,
             settings=request.app.state.settings,
+            live_effects_gate=getattr(
+                request.app.state, "local_audit_live_effects_gate", None
+            ),
             job_id=record.id,
             workspace_id=actor.workspace_id,
         )

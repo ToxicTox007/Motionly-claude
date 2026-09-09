@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 
+from app.core.local_audit import (
+    https_host_from_url,
+    local_audit_live_effects_gate_from_settings,
+)
 from app.services.model_adapters import AzureOpenAIAdapter, OpenAICompatibleAdapter
 from app.services.model_gateway import (
     InMemoryBudgetLedger,
     InMemoryCircuitStore,
     ModelCapability,
     ModelGateway,
+    ModelLiveEffectsGate,
     ModelOperation,
     ModelRoute,
     OperationsGatewayTelemetry,
@@ -35,6 +41,7 @@ def model_gateway_from_settings(
     *,
     metrics_registry: object | None = None,
     operations_repository: object | None = None,
+    live_effects_gate: ModelLiveEffectsGate | None = None,
 ) -> ModelGateway | None:
     if not bool(getattr(settings, "model_gateway_enabled", True)):
         return None
@@ -78,6 +85,7 @@ def model_gateway_from_settings(
         if configured_routes
         else _legacy_routes(settings, adapters=adapters)
     )
+    routes = _bind_remote_endpoint_hosts(routes, settings=settings)
     redis_url = getattr(settings, "redis_url", None)
     failure_threshold = int(getattr(settings, "model_gateway_failure_threshold", 3))
     cooldown_seconds = int(getattr(settings, "model_gateway_circuit_cooldown_seconds", 60))
@@ -104,6 +112,8 @@ def model_gateway_from_settings(
             metrics_registry=metrics_registry,
             operations_repository=operations_repository,
         ),
+        live_effects_gate=live_effects_gate
+        or local_audit_live_effects_gate_from_settings(settings),
         monthly_budget_usd=float(
             getattr(settings, "model_gateway_monthly_budget_usd", 100.0)
         ),
@@ -111,6 +121,31 @@ def model_gateway_from_settings(
             getattr(settings, "model_gateway_request_budget_usd", 5.0)
         ),
     )
+
+
+def _bind_remote_endpoint_hosts(
+    routes: list[ModelRoute],
+    *,
+    settings: object,
+) -> list[ModelRoute]:
+    endpoint_urls = {
+        "openrouter": OPENROUTER_BASE_URL,
+        "groq": GROQ_BASE_URL,
+        "openai_compatible": getattr(settings, "model_gateway_openai_base_url", None),
+        "azure": getattr(settings, "azure_openai_endpoint", None),
+    }
+    return [
+        replace(
+            route,
+            endpoint_host=https_host_from_url(
+                str(endpoint_urls.get(route.adapter) or "")
+            ),
+            requires_live_effects_gate=True,
+        )
+        if route.adapter in _HTTP_ADAPTERS
+        else route
+        for route in routes
+    ]
 
 
 def _legacy_routes(settings: object, *, adapters: Mapping[str, object]) -> list[ModelRoute]:

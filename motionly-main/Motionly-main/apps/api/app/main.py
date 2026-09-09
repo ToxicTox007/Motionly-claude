@@ -40,6 +40,7 @@ from app.api.uploads import router as uploads_router
 from app.api.visual import router as visual_router
 from app.api.workflows import router as workflows_router
 from app.core.config import get_settings
+from app.core.local_audit import local_audit_live_effects_gate_from_settings
 from app.core.logging import configure_logging
 from app.core.middleware import (
     InMemoryRateLimiter,
@@ -183,6 +184,9 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
     app.state.settings = settings
+    app.state.local_audit_live_effects_gate = local_audit_live_effects_gate_from_settings(
+        settings
+    )
     app.state.launch_feedback = []
     app.state.metrics_registry = MetricsRegistry()
     app.state.operations_repository = OperationsRepository(
@@ -193,6 +197,7 @@ def create_app() -> FastAPI:
         settings,
         metrics_registry=app.state.metrics_registry,
         operations_repository=app.state.operations_repository,
+        live_effects_gate=app.state.local_audit_live_effects_gate,
     )
     app.state.workflow_repository = (
         SupabaseWorkflowRepository(
@@ -506,6 +511,8 @@ def create_app() -> FastAPI:
             model=settings.runway_model,
             revision=settings.runway_model_revision,
             fixed_cost_usd=settings.runway_estimated_cost_per_request_usd,
+            endpoint_host="api.runwayml.com",
+            requires_live_effects_gate=True,
         )
     transcription_provider_key = settings.transcription_provider.strip().lower()
     edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
@@ -526,6 +533,12 @@ def create_app() -> FastAPI:
         )
     elif settings.app_env == "production":
         raise RuntimeError("Production transcription requires a configured model gateway route")
+    elif settings.local_audit_mode:
+        raise RuntimeError(
+            "LOCAL_AUDIT_MODE requires transcription via model gateway, "
+            "but no gateway transcription route is configured. "
+            "Direct provider fallback is blocked to ensure live-effects gate coverage."
+        )
     elif transcription_provider_key in {"groq", "openai_compatible"} and settings.groq_api_key:
         app.state.transcription_provider = WhisperCompatibleHttpProvider(
             endpoint=GROQ_TRANSCRIPTION_ENDPOINT,
@@ -575,6 +588,12 @@ def create_app() -> FastAPI:
         )
     elif settings.app_env == "production":
         raise RuntimeError("Production planning requires a configured model gateway route")
+    elif settings.local_audit_mode:
+        raise RuntimeError(
+            "LOCAL_AUDIT_MODE requires planning via model gateway, "
+            "but no gateway planning route is configured. "
+            "Direct provider fallback is blocked to ensure live-effects gate coverage."
+        )
     elif (
         edit_planner_provider_key in {"openrouter", "openai_compatible"}
         and settings.openrouter_api_key

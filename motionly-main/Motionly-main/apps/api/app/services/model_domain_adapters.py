@@ -545,6 +545,8 @@ def register_runway_route(
     model: str,
     revision: str,
     fixed_cost_usd: float,
+    endpoint_host: str | None = None,
+    requires_live_effects_gate: bool = False,
 ) -> ModelRoute:
     route = ModelRoute(
         route_id="runway-video-generation",
@@ -559,6 +561,8 @@ def register_runway_route(
         ),
         priority=10,
         fixed_cost_usd=fixed_cost_usd,
+        endpoint_host=endpoint_host,
+        requires_live_effects_gate=requires_live_effects_gate,
     )
     gateway.register_adapter(route.adapter, RunwayVideoGenerationAdapter(provider))
     gateway.register_route(route)

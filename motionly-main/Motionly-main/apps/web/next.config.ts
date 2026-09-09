@@ -1,5 +1,4 @@
 import type { NextConfig } from "next";
-import { withSentryConfig } from "@sentry/nextjs";
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL;
 const apiUrl =
@@ -45,10 +44,6 @@ const connectSources = Array.from(
       configuredSupabaseWebsocketOrigin,
       "https:",
       "wss:",
-      originOf(process.env.NEXT_PUBLIC_SENTRY_DSN),
-      originOf(process.env.NEXT_PUBLIC_GLITCHTIP_DSN),
-      "https://*.sentry.io",
-      "https://app.glitchtip.com",
     ].filter((source): source is string => Boolean(source)),
   ),
 );
@@ -143,10 +138,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withSentryConfig(nextConfig, {
-  authToken: process.env.SENTRY_AUTH_TOKEN,
-  org: process.env.SENTRY_ORG,
-  project: process.env.SENTRY_PROJECT,
-  sentryUrl: process.env.SENTRY_URL || "https://app.glitchtip.com",
-  silent: true,
-});
+export default nextConfig;

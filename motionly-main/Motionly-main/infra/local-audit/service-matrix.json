@@ -1,0 +1,987 @@
+{
+  "schema_version": 1,
+  "audit": {
+    "mode": "plan-only",
+    "compose_file": "infra/docker-compose.gpu.yml",
+    "compose_project_name": "motionly-local-audit",
+    "compose_project_name_environment_variable": "COMPOSE_PROJECT_NAME",
+    "future_runtime_command": "docker compose --project-name motionly-local-audit --env-file <protected-local-env> --file infra/docker-compose.gpu.yml --file infra/docker-compose.dev.yml --file infra/docker-compose.local-audit.yml --profile local-audit",
+    "namespace_scope": "Only Compose resources created under the motionly-local-audit project name may be inspected or removed by later audit stages.",
+    "teardown_owner": "local-audit-harness",
+    "runtime_preflight": {
+      "failure_mode": "blocked",
+      "required_before_external_actions": [
+        "Explicit non-production provider and publishing account identifiers.",
+        "An allowed visibility policy limited to private or unlisted artifacts.",
+        "Remote-artifact cleanup rules with an accountable owner.",
+        "A per-run spend ceiling approved for the audit."
+      ]
+    },
+    "local_audit": {
+      "compose_files": [
+        "infra/docker-compose.gpu.yml",
+        "infra/docker-compose.dev.yml",
+        "infra/docker-compose.local-audit.yml"
+      ],
+      "profile": "local-audit",
+      "loopback_ingress_ports": ["127.0.0.1:18080:80", "127.0.0.1:18443:443"],
+      "audit_owned_volume_prefix": "motionly-local-audit-",
+      "teardown_policy": "Only project-scoped audit-owned resources may be removed; global down -v and volume pruning are forbidden.",
+      "capability_preflight": "apps/api/scripts/audit_local_capabilities.py --plan-only",
+      "live_effects_gate": {
+        "default": "denied",
+        "model_boundary": "ModelGateway.invoke before budget reservation and adapter invocation",
+        "publishing_boundary": "execute_publish_job before OAuth refresh, signed download, and publish"
+      }
+    }
+  },
+  "evidence_sources": {
+    "queue_registry": {
+      "path": "apps/worker/src/queue-common.mjs",
+      "owner": "worker-platform",
+      "required_markers": [
+        "export const allQueueNames",
+        "maintenance"
+      ]
+    },
+    "api_application": {
+      "path": "apps/api/app/main.py",
+      "owner": "api-platform",
+      "required_markers": [
+        "def create_app",
+        "include_router("
+      ]
+    },
+    "openapi": {
+      "path": "packages/shared/openapi.json",
+      "owner": "api-platform"
+    },
+    "ci_workflows": [
+      {
+        "path": ".github/workflows/phase-0-safety.yml",
+        "owner": "release-engineering",
+        "required_markers": [
+          "quality-and-contracts:",
+          "pnpm contracts:check",
+          "python -m ruff check app tests scripts"
+        ]
+      },
+      {
+        "path": ".github/workflows/live-provider-contracts.yml",
+        "owner": "release-engineering",
+        "required_markers": [
+          "workflow_dispatch:",
+          "authorize_external_provider_contracts",
+          "EXTERNAL_VERIFICATION_TARGET: staging-sandbox"
+        ]
+      }
+    ]
+  },
+  "services": [
+    {
+      "name": "volume-permissions",
+      "order": 10,
+      "phase": "data-foundations",
+      "dependencies": [],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["isolated media and model-cache volume ownership"],
+      "startup_predicate": "The one-shot initializer exits successfully after creating and chowning the shared media and model-cache paths.",
+      "verification": {
+        "owner": "data-foundations",
+        "smoke_action": "Inspect one-shot completion and shared-volume ownership inside the isolated Compose project.",
+        "log_pattern": "chown",
+        "cleanup_responsibility": "Remove only resources whose Compose project name is motionly-local-audit after evidence capture."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "postgres",
+      "order": 20,
+      "phase": "data-foundations",
+      "dependencies": [],
+      "expected_ports": [],
+      "healthcheck": "required",
+      "worker_queues": [],
+      "feature_ownership": ["Supabase application database persistence"],
+      "startup_predicate": "PostgreSQL reports healthy through pg_isready.",
+      "verification": {
+        "owner": "data-foundations",
+        "smoke_action": "Run the Compose-declared pg_isready check against the isolated database.",
+        "log_pattern": "database system is ready to accept connections",
+        "cleanup_responsibility": "Remove only the isolated project database volume during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "temporal-postgres",
+      "order": 30,
+      "phase": "data-foundations",
+      "dependencies": [],
+      "expected_ports": [],
+      "healthcheck": "required",
+      "worker_queues": [],
+      "feature_ownership": ["Temporal workflow persistence"],
+      "startup_predicate": "Temporal PostgreSQL reports healthy through pg_isready.",
+      "verification": {
+        "owner": "temporal-control-plane",
+        "smoke_action": "Run the Compose-declared pg_isready check against the isolated Temporal database.",
+        "log_pattern": "database system is ready to accept connections",
+        "cleanup_responsibility": "Remove only the isolated Temporal database volume during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "redis",
+      "order": 40,
+      "phase": "data-foundations",
+      "dependencies": [],
+      "expected_ports": [],
+      "healthcheck": "required",
+      "worker_queues": [],
+      "feature_ownership": ["BullMQ transport, idempotency, and cache state"],
+      "startup_predicate": "Redis reports healthy with authenticated redis-cli ping.",
+      "verification": {
+        "owner": "worker-platform",
+        "smoke_action": "Run the Compose-declared authenticated Redis ping inside the isolated project.",
+        "log_pattern": "Ready to accept connections",
+        "cleanup_responsibility": "Remove only the isolated Redis data volume during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "temporal-db-init",
+      "order": 50,
+      "phase": "temporal-control-plane",
+      "dependencies": [{"service": "temporal-postgres", "condition": "service_healthy"}],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Temporal database creation"],
+      "startup_predicate": "The Temporal database initialization job completes successfully after Temporal PostgreSQL is healthy.",
+      "verification": {
+        "owner": "temporal-control-plane",
+        "smoke_action": "Confirm the one-shot Temporal database initializer exits successfully.",
+        "log_pattern": "temporal_visibility",
+        "cleanup_responsibility": "The isolated Temporal database volume is removed only after captured audit evidence is complete."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "temporal-schema",
+      "order": 60,
+      "phase": "temporal-control-plane",
+      "dependencies": [{"service": "temporal-db-init", "condition": "service_completed_successfully"}],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Temporal schema bootstrap and upgrade"],
+      "startup_predicate": "The Temporal schema job completes successfully after database initialization.",
+      "verification": {
+        "owner": "temporal-control-plane",
+        "smoke_action": "Confirm the schema bootstrap job exits successfully and emits its completion evidence.",
+        "log_pattern": "update-schema",
+        "cleanup_responsibility": "The isolated Temporal database volume is removed only after captured audit evidence is complete."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "temporal",
+      "order": 70,
+      "phase": "temporal-control-plane",
+      "dependencies": [{"service": "temporal-schema", "condition": "service_completed_successfully"}],
+      "expected_ports": [],
+      "healthcheck": "required",
+      "worker_queues": [],
+      "feature_ownership": ["self-hosted TLS Temporal workflow control plane"],
+      "startup_predicate": "The TLS Temporal cluster health command succeeds after schema setup.",
+      "verification": {
+        "owner": "temporal-control-plane",
+        "smoke_action": "Run the Compose-declared TLS Temporal operator health command.",
+        "log_pattern": "SERVING",
+        "cleanup_responsibility": "Remove only the isolated Temporal control-plane resources during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "temporal-namespace",
+      "order": 80,
+      "phase": "temporal-control-plane",
+      "dependencies": [{"service": "temporal", "condition": "service_healthy"}],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Temporal namespace bootstrap"],
+      "startup_predicate": "The namespace bootstrap job completes successfully after Temporal reports healthy.",
+      "verification": {
+        "owner": "temporal-control-plane",
+        "smoke_action": "Confirm namespace bootstrap completion and query the isolated namespace metadata.",
+        "log_pattern": "namespace",
+        "cleanup_responsibility": "Remove only the isolated Temporal control-plane resources during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "supabase-auth",
+      "order": 90,
+      "phase": "supabase-control-plane",
+      "dependencies": [{"service": "postgres", "condition": "service_healthy"}],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Supabase authentication"],
+      "startup_predicate": "The authentication service starts after application PostgreSQL reports healthy.",
+      "verification": {
+        "owner": "supabase-control-plane",
+        "smoke_action": "Issue an isolated fixture-user authentication request through the private service path.",
+        "log_pattern": "GoTrue",
+        "cleanup_responsibility": "Delete fixture identities and remove only isolated Supabase volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "supabase-rest",
+      "order": 100,
+      "phase": "supabase-control-plane",
+      "dependencies": [{"service": "postgres", "condition": "service_healthy"}],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Supabase PostgREST data API"],
+      "startup_predicate": "The REST service starts after application PostgreSQL reports healthy.",
+      "verification": {
+        "owner": "supabase-control-plane",
+        "smoke_action": "Issue a read-only isolated database REST request through the private service path.",
+        "log_pattern": "Listening on port",
+        "cleanup_responsibility": "Remove only isolated Supabase volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "supabase-storage",
+      "order": 110,
+      "phase": "supabase-control-plane",
+      "dependencies": [{"service": "postgres", "condition": "service_healthy"}],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Supabase media object storage"],
+      "startup_predicate": "The storage service starts after application PostgreSQL reports healthy.",
+      "verification": {
+        "owner": "supabase-control-plane",
+        "smoke_action": "Create, read, and delete a fixture object in an isolated test bucket.",
+        "log_pattern": "Storage API",
+        "cleanup_responsibility": "Delete fixture objects and remove only the isolated storage volume during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "supabase-gateway",
+      "order": 120,
+      "phase": "supabase-control-plane",
+      "dependencies": [
+        {"service": "supabase-auth", "condition": "service_started"},
+        {"service": "supabase-rest", "condition": "service_started"},
+        {"service": "supabase-storage", "condition": "service_started"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["private Supabase auth, REST, and storage gateway"],
+      "startup_predicate": "The gateway starts after the three private Supabase components have started.",
+      "verification": {
+        "owner": "supabase-control-plane",
+        "smoke_action": "Verify the gateway routes isolated auth, REST, and storage fixture requests.",
+        "log_pattern": "Kong",
+        "cleanup_responsibility": "Remove only isolated Supabase resources after fixture cleanup."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "api",
+      "order": 130,
+      "phase": "application-control-plane",
+      "dependencies": [
+        {"service": "volume-permissions", "condition": "service_completed_successfully"},
+        {"service": "redis", "condition": "service_healthy"},
+        {"service": "postgres", "condition": "service_healthy"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["FastAPI route surface", "OpenAPI contract", "workflow command production"],
+      "startup_predicate": "The API starts after isolated volume initialization, Redis health, and PostgreSQL health.",
+      "verification": {
+        "owner": "api-platform",
+        "smoke_action": "Call live and ready health routes, then compare the served OpenAPI shape to the checked-in contract.",
+        "log_pattern": "Application startup complete",
+        "cleanup_responsibility": "Delete isolated fixture workspaces and remove only project-scoped state during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["configured model providers", "publishing OAuth providers"],
+        "preflight": "Provider and publishing flows remain blocked until the audit runtime preflight is explicitly satisfied."
+      }
+    },
+    {
+      "name": "temporal-dispatcher",
+      "order": 140,
+      "phase": "application-control-plane",
+      "dependencies": [
+        {"service": "temporal-namespace", "condition": "service_completed_successfully"},
+        {"service": "supabase-gateway", "condition": "service_started"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Temporal workflow step dispatch into BullMQ"],
+      "startup_predicate": "The dispatcher starts after namespace bootstrap and Supabase gateway startup.",
+      "verification": {
+        "owner": "workflow-platform",
+        "smoke_action": "Start a fixture workflow and verify its durable identifiers reach the expected BullMQ queue.",
+        "log_pattern": "temporal-dispatcher",
+        "cleanup_responsibility": "Cancel fixture workflows and delete their isolated records before project teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "temporal-worker",
+      "order": 150,
+      "phase": "application-control-plane",
+      "dependencies": [
+        {"service": "temporal-namespace", "condition": "service_completed_successfully"},
+        {"service": "redis", "condition": "service_healthy"},
+        {"service": "api", "condition": "service_started"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Temporal workflow and activity execution"],
+      "startup_predicate": "The Temporal worker starts after namespace bootstrap, Redis health, and API startup.",
+      "verification": {
+        "owner": "workflow-platform",
+        "smoke_action": "Execute a fixture workflow whose activities enqueue only isolated synthetic jobs.",
+        "log_pattern": "temporal-worker",
+        "cleanup_responsibility": "Cancel fixture workflows and delete their isolated records before project teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "workflow-reconciler",
+      "order": 160,
+      "phase": "application-control-plane",
+      "dependencies": [
+        {"service": "temporal-namespace", "condition": "service_completed_successfully"},
+        {"service": "supabase-gateway", "condition": "service_started"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["workflow reconciliation and recovery"],
+      "startup_predicate": "The reconciler starts after namespace bootstrap and Supabase gateway startup.",
+      "verification": {
+        "owner": "workflow-platform",
+        "smoke_action": "Reconcile a deliberately interrupted isolated workflow and record the terminal state.",
+        "log_pattern": "workflow-reconciler",
+        "cleanup_responsibility": "Delete isolated reconciliation fixtures before project teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "web",
+      "order": 170,
+      "phase": "presentation",
+      "dependencies": [{"service": "api", "condition": "service_started"}],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["Next.js creator application"],
+      "startup_predicate": "The web application starts after the API service has started.",
+      "verification": {
+        "owner": "web-platform",
+        "smoke_action": "Load the isolated creator application and complete the fixture-only browser smoke path.",
+        "log_pattern": "Ready",
+        "cleanup_responsibility": "Remove browser fixtures and only project-scoped Compose resources during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "ingress",
+      "order": 180,
+      "phase": "presentation",
+      "dependencies": [
+        {"service": "web", "condition": "service_started"},
+        {"service": "api", "condition": "service_started"},
+        {"service": "supabase-gateway", "condition": "service_started"}
+      ],
+      "expected_ports": ["80:80", "443:443"],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": ["public Caddy edge routing"],
+      "startup_predicate": "Ingress starts after the web application, API, and Supabase gateway have started.",
+      "verification": {
+        "owner": "edge-platform",
+        "smoke_action": "Route isolated health and fixture requests through the configured local edge without public DNS or ACME issuance.",
+        "log_pattern": "serving initial configuration",
+        "cleanup_responsibility": "Remove only the isolated Caddy data and configuration volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["ACME certificate authority when configured for public domains"],
+        "preflight": "Local audit ingress must use non-public test domains and must not request production certificates."
+      }
+    },
+    {
+      "name": "cpu-ffmpeg-worker",
+      "order": 190,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["upload_preprocess", "render"],
+      "feature_ownership": ["upload preprocessing", "CPU FFmpeg rendering"],
+      "startup_predicate": "The worker starts after API startup and shared-volume initialization.",
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Process a synthetic upload and CPU render from isolated storage, then validate output metadata.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete synthetic media and remove only isolated media/cache volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "gpu-inference-worker",
+      "order": 200,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["visual_analysis", "transcription"],
+      "feature_ownership": ["GPU visual analysis", "transcription"],
+      "startup_predicate": "The GPU worker starts after API startup, shared-volume initialization, and GPU allocation by Docker.",
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Run synthetic visual and transcription jobs with explicit GPU and model-cache evidence.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete synthetic media and remove only isolated media/cache volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["model artifact registries", "configured transcription provider"],
+        "preflight": "Warm an approved local model cache or satisfy the non-production external-provider preflight before remote access."
+      }
+    },
+    {
+      "name": "matte-worker",
+      "order": 210,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["matte_extraction"],
+      "feature_ownership": ["GPU matte extraction"],
+      "startup_predicate": "The GPU worker starts after API startup, shared-volume initialization, and GPU allocation by Docker.",
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Run a synthetic matte extraction job and validate the isolated matte artifact.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete synthetic media and remove only isolated media/cache volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["model artifact registries"],
+        "preflight": "Warm an approved local model cache before the runtime audit or authorize only a non-production artifact source."
+      }
+    },
+    {
+      "name": "gpu-ffmpeg-worker",
+      "order": 220,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["render_gpu"],
+      "feature_ownership": ["NVIDIA-accelerated FFmpeg rendering"],
+      "startup_predicate": "The GPU FFmpeg worker starts after API startup, shared-volume initialization, and GPU allocation by Docker.",
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Render a synthetic fixture using the configured h264_nvenc encoder and inspect codec evidence.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete synthetic render artifacts and remove only isolated media/cache volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "demucs-worker",
+      "order": 230,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["audio_demucs"],
+      "feature_ownership": ["audio stem separation"],
+      "startup_predicate": "The Demucs worker starts after API startup and shared-volume initialization.",
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Separate stems for a synthetic audio fixture and validate the isolated artifacts.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete synthetic audio artifacts and remove only isolated media/cache volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["model artifact registries"],
+        "preflight": "Warm an approved local model cache before the runtime audit or authorize only a non-production artifact source."
+      }
+    },
+    {
+      "name": "provider-worker",
+      "order": 240,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["provider_calls"],
+      "feature_ownership": ["provider-call execution"],
+      "startup_predicate": "The provider worker starts after API startup and shared-volume initialization.",
+      "verification": {
+        "owner": "provider-integrations",
+        "smoke_action": "Verify fixture-mode provider routing first; run remote provider contracts only after explicit preflight approval.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete isolated request records and follow approved remote-artifact cleanup rules if external approval is granted."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["configured AI, media, stock, and music providers"],
+        "preflight": "blocked-until-non-production-provider-preflight"
+      }
+    },
+    {
+      "name": "planning-worker",
+      "order": 250,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["planning", "stock_search", "stock_asset_enrichment", "audio", "intelligence", "maintenance"],
+      "feature_ownership": ["edit planning", "stock discovery", "stock enrichment", "audio selection", "media intelligence", "maintenance"],
+      "startup_predicate": "The planning worker starts after API startup and shared-volume initialization.",
+      "verification": {
+        "owner": "creative-platform",
+        "smoke_action": "Exercise fixture-mode planning, stock, audio, intelligence, and maintenance jobs using isolated records.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete isolated plans, recommendations, and artifacts before project teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["configured planning, stock, music, and model providers"],
+        "preflight": "blocked-until-non-production-provider-preflight"
+      }
+    },
+    {
+      "name": "remotion-worker",
+      "order": 260,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["render_remotion"],
+      "feature_ownership": ["Remotion rendering"],
+      "startup_predicate": "The Remotion worker starts after API startup and shared-volume initialization.",
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Render a synthetic Remotion fixture and validate the encoded artifact and proxy constraints.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete synthetic render artifacts and remove only isolated media/cache volumes during teardown."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
+      "name": "publishing-worker",
+      "order": 270,
+      "phase": "workers",
+      "dependencies": [
+        {"service": "api", "condition": "service_started"},
+        {"service": "volume-permissions", "condition": "service_completed_successfully"}
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": ["publish"],
+      "feature_ownership": ["social publishing"],
+      "startup_predicate": "The publishing worker starts after API startup and shared-volume initialization.",
+      "verification": {
+        "owner": "publishing-integrations",
+        "smoke_action": "Verify fixture-mode publication state transitions first; remote publication is a separately approved sandbox-only step.",
+        "log_pattern": "worker_ready",
+        "cleanup_responsibility": "Delete isolated publication records and follow approved remote-artifact cleanup rules if external approval is granted."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": true,
+        "systems": ["social publishing platforms and OAuth endpoints"],
+        "preflight": "blocked-until-non-production-publishing-preflight"
+      }
+    }
+  ],
+  "feature_tests": [
+    {
+      "id": "api-openapi-surface",
+      "order": 10,
+      "requires_services": ["api"],
+      "queues": [],
+      "verification": {
+        "owner": "api-platform",
+        "smoke_action": "Compare checked-in OpenAPI operations and tags with the isolated API response before feature execution.",
+        "log_pattern": "OpenAPI contract",
+        "cleanup_responsibility": "No runtime state is created by the static OpenAPI verification."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    },
+    {
+      "id": "supabase-auth-storage",
+      "order": 20,
+      "requires_services": ["supabase-auth", "supabase-rest", "supabase-storage", "supabase-gateway", "api"],
+      "queues": [],
+      "verification": {
+        "owner": "supabase-control-plane",
+        "smoke_action": "Exercise fixture authentication, RLS-scoped persistence, and fixture object lifecycle through the gateway.",
+        "log_pattern": "gateway fixture request succeeded",
+        "cleanup_responsibility": "Delete fixture identities, rows, and objects before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    },
+    {
+      "id": "temporal-workflow-control",
+      "order": 30,
+      "requires_services": ["temporal", "temporal-namespace", "temporal-dispatcher", "temporal-worker", "workflow-reconciler", "redis", "api"],
+      "queues": [],
+      "verification": {
+        "owner": "workflow-platform",
+        "smoke_action": "Run a synthetic identifier-only workflow through dispatch, worker execution, reconciliation, and terminal evidence.",
+        "log_pattern": "workflow terminal state",
+        "cleanup_responsibility": "Cancel and delete all isolated workflow fixtures before project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    },
+    {
+      "id": "creator-web-ingress",
+      "order": 40,
+      "requires_services": ["web", "ingress", "api", "supabase-gateway"],
+      "queues": [],
+      "verification": {
+        "owner": "web-platform",
+        "smoke_action": "Complete the fixture-only creator browser journey through local ingress routing.",
+        "log_pattern": "creator fixture journey complete",
+        "cleanup_responsibility": "Remove browser and API fixtures before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "local ingress must not use public DNS or ACME issuance"}
+    },
+    {
+      "id": "upload-preprocess",
+      "order": 50,
+      "requires_services": ["cpu-ffmpeg-worker", "api", "redis"],
+      "queues": ["upload_preprocess"],
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Submit a synthetic media upload and verify preprocessing output, metadata, and durable queue completion.",
+        "log_pattern": "upload_preprocess completed",
+        "cleanup_responsibility": "Delete synthetic upload and derived artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    },
+    {
+      "id": "transcription",
+      "order": 60,
+      "requires_services": ["gpu-inference-worker", "api", "redis"],
+      "queues": ["transcription"],
+      "verification": {
+        "owner": "provider-integrations",
+        "smoke_action": "Use a fixture transcription provider by default; enable sandbox provider verification only after preflight approval.",
+        "log_pattern": "transcription completed",
+        "cleanup_responsibility": "Delete synthetic transcripts and follow approved remote-artifact cleanup if external verification is enabled."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["configured transcription provider"], "preflight": "blocked-until-non-production-provider-preflight"}
+    },
+    {
+      "id": "visual-analysis",
+      "order": 70,
+      "requires_services": ["gpu-inference-worker", "api", "redis"],
+      "queues": ["visual_analysis"],
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Run visual analysis against synthetic media and record GPU/model-cache evidence.",
+        "log_pattern": "visual_analysis completed",
+        "cleanup_responsibility": "Delete synthetic analysis data and media before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["model artifact registries"], "preflight": "use a warmed local cache or approved non-production artifact source"}
+    },
+    {
+      "id": "matte-extraction",
+      "order": 80,
+      "requires_services": ["matte-worker", "api", "redis"],
+      "queues": ["matte_extraction"],
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Run matte extraction on synthetic media and validate the isolated output artifact.",
+        "log_pattern": "matte_extraction completed",
+        "cleanup_responsibility": "Delete synthetic matte artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["model artifact registries"], "preflight": "use a warmed local cache or approved non-production artifact source"}
+    },
+    {
+      "id": "edit-planning",
+      "order": 90,
+      "requires_services": ["planning-worker", "api", "redis"],
+      "queues": ["planning"],
+      "verification": {
+        "owner": "creative-platform",
+        "smoke_action": "Use fixture planning inputs by default and verify the durable plan result.",
+        "log_pattern": "planning completed",
+        "cleanup_responsibility": "Delete fixture plans and recommendations before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["configured planning provider"], "preflight": "blocked-until-non-production-provider-preflight"}
+    },
+    {
+      "id": "stock-search",
+      "order": 100,
+      "requires_services": ["planning-worker", "api", "redis"],
+      "queues": ["stock_search"],
+      "verification": {
+        "owner": "provider-integrations",
+        "smoke_action": "Verify fixture stock-search routing; run provider-backed search only with sandbox approval.",
+        "log_pattern": "stock_search completed",
+        "cleanup_responsibility": "Delete fixture search results and approved remote artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["stock media providers"], "preflight": "blocked-until-non-production-provider-preflight"}
+    },
+    {
+      "id": "stock-asset-enrichment",
+      "order": 110,
+      "requires_services": ["planning-worker", "api", "redis"],
+      "queues": ["stock_asset_enrichment"],
+      "verification": {
+        "owner": "provider-integrations",
+        "smoke_action": "Verify fixture asset enrichment routing; run remote enrichment only with sandbox approval.",
+        "log_pattern": "stock_asset_enrichment completed",
+        "cleanup_responsibility": "Delete fixture enrichment records and approved remote artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["stock media providers"], "preflight": "blocked-until-non-production-provider-preflight"}
+    },
+    {
+      "id": "audio-selection",
+      "order": 120,
+      "requires_services": ["planning-worker", "api", "redis"],
+      "queues": ["audio"],
+      "verification": {
+        "owner": "creative-platform",
+        "smoke_action": "Exercise fixture audio selection and validate the isolated recommendation record.",
+        "log_pattern": "audio completed",
+        "cleanup_responsibility": "Delete fixture audio records before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["configured music providers"], "preflight": "blocked-until-non-production-provider-preflight"}
+    },
+    {
+      "id": "cpu-render",
+      "order": 130,
+      "requires_services": ["cpu-ffmpeg-worker", "api", "redis"],
+      "queues": ["render"],
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Render a synthetic CPU fixture and validate encoded output metadata.",
+        "log_pattern": "render completed",
+        "cleanup_responsibility": "Delete synthetic render artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    },
+    {
+      "id": "gpu-render",
+      "order": 140,
+      "requires_services": ["gpu-ffmpeg-worker", "api", "redis"],
+      "queues": ["render_gpu"],
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Render a synthetic GPU fixture and require h264_nvenc encoder evidence.",
+        "log_pattern": "render_gpu completed",
+        "cleanup_responsibility": "Delete synthetic render artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    },
+    {
+      "id": "remotion-render",
+      "order": 150,
+      "requires_services": ["remotion-worker", "api", "redis"],
+      "queues": ["render_remotion"],
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Render a synthetic Remotion fixture and validate encoded output and proxy isolation.",
+        "log_pattern": "render_remotion completed",
+        "cleanup_responsibility": "Delete synthetic render artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    },
+    {
+      "id": "publishing",
+      "order": 160,
+      "requires_services": ["publishing-worker", "api", "redis"],
+      "queues": ["publish"],
+      "verification": {
+        "owner": "publishing-integrations",
+        "smoke_action": "Verify fixture publish-state transitions only; execute remote publishing exclusively after sandbox preflight approval.",
+        "log_pattern": "publish completed",
+        "cleanup_responsibility": "Delete fixture publication records and follow approved remote-artifact cleanup rules if publishing is authorized."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["social publishing platforms"], "preflight": "blocked-until-non-production-publishing-preflight"}
+    },
+    {
+      "id": "media-intelligence",
+      "order": 170,
+      "requires_services": ["planning-worker", "api", "redis"],
+      "queues": ["intelligence"],
+      "verification": {
+        "owner": "creative-platform",
+        "smoke_action": "Exercise fixture media intelligence and validate isolated result metadata.",
+        "log_pattern": "intelligence completed",
+        "cleanup_responsibility": "Delete fixture intelligence data before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["configured model providers"], "preflight": "blocked-until-non-production-provider-preflight"}
+    },
+    {
+      "id": "audio-demucs",
+      "order": 180,
+      "requires_services": ["demucs-worker", "api", "redis"],
+      "queues": ["audio_demucs"],
+      "verification": {
+        "owner": "media-platform",
+        "smoke_action": "Run fixture stem separation and validate all isolated output tracks.",
+        "log_pattern": "audio_demucs completed",
+        "cleanup_responsibility": "Delete fixture audio artifacts before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["model artifact registries"], "preflight": "use a warmed local cache or approved non-production artifact source"}
+    },
+    {
+      "id": "provider-call-routing",
+      "order": 190,
+      "requires_services": ["provider-worker", "api", "redis"],
+      "queues": ["provider_calls"],
+      "verification": {
+        "owner": "provider-integrations",
+        "smoke_action": "Validate fixture provider routing and enforce the external preflight gate before any sandbox call.",
+        "log_pattern": "provider_calls completed",
+        "cleanup_responsibility": "Delete fixture calls and clean approved remote artifacts if an external sandbox step is authorized."
+      },
+      "external_side_effects": {"can_invoke_external_systems": true, "systems": ["configured external providers"], "preflight": "blocked-until-non-production-provider-preflight"}
+    },
+    {
+      "id": "maintenance",
+      "order": 200,
+      "requires_services": ["planning-worker", "api", "redis"],
+      "queues": ["maintenance"],
+      "verification": {
+        "owner": "workflow-platform",
+        "smoke_action": "Run a bounded fixture maintenance job and validate only isolated retention and scaling records.",
+        "log_pattern": "maintenance completed",
+        "cleanup_responsibility": "Delete fixture maintenance records before isolated project teardown."
+      },
+      "external_side_effects": {"can_invoke_external_systems": false, "systems": [], "preflight": "not-applicable"}
+    }
+  ]
+}

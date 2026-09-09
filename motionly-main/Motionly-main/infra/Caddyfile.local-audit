@@ -1,0 +1,16 @@
+# Local audit ingress is loopback-bound by Compose and uses Caddy's local CA.
+# It must never obtain a public ACME certificate or serve production hostnames.
+{$APP_DOMAIN:app.audit.localhost} {
+  tls internal
+  reverse_proxy web:3000
+}
+
+{$API_DOMAIN:api.audit.localhost} {
+  tls internal
+  reverse_proxy api:8000
+}
+
+{$SUPABASE_DOMAIN:supabase.audit.localhost} {
+  tls internal
+  reverse_proxy supabase-gateway:8000
+}

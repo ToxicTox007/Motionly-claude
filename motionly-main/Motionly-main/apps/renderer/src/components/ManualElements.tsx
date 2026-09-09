@@ -13,7 +13,7 @@ import {
   durationMsToFrameCount,
   millisecondsToFrameStart,
 } from "@motionly/shared";
-import { manualVisualBackground, safeRendererMediaUrl } from "../manual-media-policy.js";
+import { manualVisualBackground, safeRendererMediaUrl } from "../manual-media-policy";
 import type { ManualElement } from "@motionly/shared";
 
 export function ManualElements({

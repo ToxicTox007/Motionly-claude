@@ -35,3 +35,5 @@ start_deployment.py
 !infra/release-manifest.schema.json
 !scripts/perf/slo-contract.json
 !scripts/handoff-acceptance.json
+# The local topology matrix is a committed source-of-truth audit contract.
+!infra/local-audit/service-matrix.json

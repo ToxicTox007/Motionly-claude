@@ -13,6 +13,10 @@ from uuid import UUID
 import httpx
 
 from app.api.errors import ApiError
+from app.core.local_audit import (
+    LocalAuditLiveEffectsGate,
+    local_audit_live_effects_gate_from_settings,
+)
 from app.core.logging import get_logger, redact_data
 from app.repositories.publishing import PublishConnectionRecord, PublishJobRecord
 from app.schemas.publishing import PublishConnectionStatus, PublishPlatform, PublishStatus
@@ -736,6 +740,7 @@ def execute_publish_job(
     client: SocialPublishingClient,
     oauth_client: PublishOAuthClient | None = None,
     settings=None,
+    live_effects_gate: LocalAuditLiveEffectsGate | None = None,
     job_id,
     workspace_id,
 ) -> PublishJobRecord:
@@ -759,6 +764,17 @@ def execute_publish_job(
             user_message="Reconnect the publishing account before trying again.",
             reconnect_required=True,
             retryable=False,
+        )
+    live_effects_gate = live_effects_gate or local_audit_live_effects_gate_from_settings(
+        settings
+    )
+    if live_effects_gate is not None:
+        # Do not refresh OAuth, sign storage URLs, or call the provider until
+        # the sandbox account, visibility, host and cleanup controls are valid.
+        live_effects_gate.authorize_publish(
+            platform=connection.platform.value,
+            account_id=connection.external_account_id,
+            privacy=job.privacy,
         )
     try:
         connection = _refresh_connection_if_needed(
@@ -933,11 +949,17 @@ def execute_publish_job(
 
 def refresh_connections_due_for_publish(*, publishing_repository, oauth_client, settings) -> int:
     refreshed = 0
+    live_effects_gate = local_audit_live_effects_gate_from_settings(settings)
     for connection in publishing_repository.list_all_connections():
         if connection.connection_status == PublishConnectionStatus.RECONNECT_REQUIRED:
             continue
         if not _connection_needs_refresh(connection=connection, settings=settings):
             continue
+        if live_effects_gate is not None:
+            live_effects_gate.authorize_publishing_refresh(
+                platform=connection.platform.value,
+                account_id=connection.external_account_id,
+            )
         try:
             _refresh_connection(
                 publishing_repository=publishing_repository,

@@ -419,6 +419,10 @@ class ModelRoute:
     explicitly_free: bool = False
     max_output_units: int = 4096
     enabled: bool = True
+    # HTTP adapter routes bind this from the adapter's actual configured base URL.
+    # Native routes leave it unset and never cross the live-effects boundary.
+    endpoint_host: str | None = None
+    requires_live_effects_gate: bool = False
 
     def __post_init__(self) -> None:
         required = {
@@ -546,6 +550,19 @@ class ModelProvidersExhausted(ModelGatewayError):
 
 class ModelAdapter(Protocol):
     def invoke(self, *, route: ModelRoute, request: ModelRequest) -> AdapterResult: ...
+
+
+class ModelLiveEffectsGate(Protocol):
+    """A local-audit gate that must decide before a remote adapter is invoked."""
+
+    def authorize_model(
+        self,
+        *,
+        provider: str,
+        endpoint_host: str | None,
+        estimated_cost_usd: float,
+        explicitly_free: bool,
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -952,6 +969,7 @@ class ModelGateway:
         budget_ledger: BudgetLedger | None = None,
         circuit_store: CircuitStore | None = None,
         telemetry: GatewayTelemetry | None = None,
+        live_effects_gate: ModelLiveEffectsGate | None = None,
         monthly_budget_usd: float = 100.0,
         request_budget_usd: float = 5.0,
     ) -> None:
@@ -963,6 +981,7 @@ class ModelGateway:
         self._budget_ledger = budget_ledger or InMemoryBudgetLedger()
         self._circuit_store = circuit_store or InMemoryCircuitStore()
         self._telemetry = telemetry or NullGatewayTelemetry()
+        self._live_effects_gate = live_effects_gate
         self._monthly_budget_usd = max(0.0, monthly_budget_usd)
         self._request_budget_usd = max(0.0, request_budget_usd)
         route_ids = [route.route_id for route in self._routes]
@@ -1063,6 +1082,16 @@ class ModelGateway:
                     usage=ModelUsage(),
                 )
                 continue
+
+            if self._live_effects_gate is not None and route.requires_live_effects_gate:
+                # This decision happens before both shared-budget reservation and
+                # adapter invocation. Native routes do not require a remote gate.
+                self._live_effects_gate.authorize_model(
+                    provider=route.provider,
+                    endpoint_host=route.endpoint_host,
+                    estimated_cost_usd=estimated_cost,
+                    explicitly_free=route.explicitly_free,
+                )
 
             try:
                 self._circuit_store.check(route.circuit_key)
