@@ -7,7 +7,7 @@
       "category": "task",
       "criterion": "BullMQ queue control-plane commands are canonical, lock-safe, and project scoped.",
       "status": "verified",
-      "implementation_evidence": ["MOTIONLY_SESSION_HANDOFF_2026-07-14.md §6, Task 1"],
+      "implementation_evidence": ["apps/api/tests/test_queue_control_plane.py"],
       "verification_commands": ["pytest -q apps/api/tests/test_queue_control_plane.py"],
       "runtime_evidence": ["Recorded Redis queue suite: 12 passed."]
     },
@@ -16,7 +16,7 @@
       "category": "product",
       "criterion": "Immediate correctness regressions preserve active plans and captionless exports.",
       "status": "verified",
-      "implementation_evidence": ["MOTIONLY_SESSION_HANDOFF_2026-07-14.md §6, Task 2"],
+      "implementation_evidence": ["apps/web/tests/export-captionless.test.mjs"],
       "verification_commands": ["pnpm --filter @motionly/web test"],
       "runtime_evidence": ["Recorded targeted backend suite: 128 passed, 1 skipped."]
     },

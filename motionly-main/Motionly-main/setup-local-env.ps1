@@ -122,4 +122,4 @@ Write-Host ""
 Write-Host "Verify services:" -ForegroundColor Yellow
 Write-Host "  docker compose --env-file infra/.env.local -f infra/docker-compose.gpu.yml ps"
 Write-Host ""
-Write-Host "See DOCKER-COMPOSE-ENV-GUIDE.md for full documentation" -ForegroundColor Cyan
+Write-Host "See docs/reference/local-development.md for full documentation" -ForegroundColor Cyan

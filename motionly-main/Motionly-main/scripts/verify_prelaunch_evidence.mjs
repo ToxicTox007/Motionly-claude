@@ -1,4 +1,9 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const readText = (relativePath) => readFileSync(resolve(ROOT, relativePath), "utf8");
 
 const requiredFiles = [
   "docs/data-retention.md",
@@ -6,7 +11,7 @@ const requiredFiles = [
   "docs/renderer-feature-matrix.md",
   "docs/backups-restore.md",
   "docs/prelaunch-review.md",
-  "infra/secrets/README.md",
+  "docs/security/secrets.md",
 ];
 
 const requiredReviewTerms = [
@@ -22,13 +27,13 @@ const requiredReviewTerms = [
 ];
 
 for (const file of requiredFiles) {
-  const content = readFileSync(file, "utf8");
+  const content = readText(file);
   if (!content.trim()) {
     throw new Error(`${file} is empty`);
   }
 }
 
-const review = readFileSync("docs/prelaunch-review.md", "utf8");
+const review = readText("docs/prelaunch-review.md");
 for (const term of requiredReviewTerms) {
   if (!review.includes(term)) {
     throw new Error(
@@ -37,7 +42,7 @@ for (const term of requiredReviewTerms) {
   }
 }
 
-const operations = readFileSync("docs/operations.md", "utf8");
+const operations = readText("docs/operations.md");
 for (const term of [
   "Provider latency/error SLO",
   "/health/ready",
@@ -50,7 +55,7 @@ for (const term of [
   }
 }
 
-const retention = readFileSync("docs/data-retention.md", "utf8");
+const retention = readText("docs/data-retention.md");
 for (const term of [
   "Source video",
   "Transcripts",

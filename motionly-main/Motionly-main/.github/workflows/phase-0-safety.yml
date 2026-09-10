@@ -328,6 +328,8 @@ jobs:
           sudo apt-get install -y postgresql-client
           pnpm install --frozen-lockfile
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Verify documentation structure
+        run: pnpm docs:check
       - name: Verify documented launch evidence
         run: node scripts/verify_prelaunch_evidence.mjs
       - name: Run Phase 10 pre-launch contracts

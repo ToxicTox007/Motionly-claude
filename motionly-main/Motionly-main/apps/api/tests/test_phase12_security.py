@@ -165,7 +165,7 @@ def test_retention_deletion_queue_filtering() -> None:
 
 
 def test_data_handling_documentation_exists() -> None:
-    doc_path = Path("/workspaces/Motionly-claude/motionly-main/Motionly-main/DATA_HANDLING.md")
+    doc_path = Path(__file__).resolve().parents[3] / "docs" / "security" / "data-handling.md"
     assert doc_path.exists()
     content = doc_path.read_text()
     assert "Groq" in content

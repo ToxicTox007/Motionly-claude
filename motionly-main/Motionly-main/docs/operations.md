@@ -31,7 +31,7 @@ docker compose --env-file .env.production -f infra/docker-compose.gpu.yml up -d
 
 The deployment environment must define `APP_DOMAIN`, `API_DOMAIN`, `SUPABASE_DOMAIN`,
 `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, Supabase JWT keys, and provider credentials. Secret-file names
-and rotation expectations are documented in `infra/secrets/README.md`.
+and rotation expectations are documented in [Runtime secrets](security/secrets.md).
 
 ## Consented editorial learning
 

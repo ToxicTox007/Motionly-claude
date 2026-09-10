@@ -9,6 +9,7 @@
     "typecheck": "turbo typecheck",
     "test": "turbo test",
     "format": "prettier --check .",
+    "docs:check": "node scripts/check_docs.mjs",
     "perf:k6": "k6 run scripts/perf/k6-api-workflows.js",
     "perf:bullmq": "node scripts/perf/bullmq-queue-load.mjs",
     "perf:browser": "pnpm --filter @motionly/web perf:browser",

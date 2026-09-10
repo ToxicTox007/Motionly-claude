@@ -192,7 +192,7 @@ A Compose/infrastructure integration test showing an allowed service reaches an 
 - Compose mounts Docker secrets and exposes `_FILE` variables for several application-managed secrets.
 - `apps/api/app/core/config.py` loads an allowlisted set of secret-file values when a direct environment value is absent.
 - `apps/worker/src/file-secret-startup.test.mjs` demonstrates worker/Remotion loading a token from a secret file.
-- `scripts/deploy/apply_release.sh` retrieves Key Vault secrets into release-specific permission-restricted files; `infra/secrets/README.md` documents the model.
+- `scripts/deploy/apply_release.sh` retrieves Key Vault secrets into release-specific permission-restricted files; [`docs/security/secrets.md`](security/secrets.md) documents the model.
 - Deployment-contract tests inspect portions of the file-secret/release-agent behavior.
 
 ### Still left

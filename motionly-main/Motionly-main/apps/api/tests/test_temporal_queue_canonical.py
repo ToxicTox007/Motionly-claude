@@ -145,11 +145,9 @@ def test_migration_path_documented_for_queue_rename() -> None:
     Changing queue name requires coordinated deployment or workflow draining.
     This test verifies we treat it seriously (not just a config cosmetic).
     """
-    analysis_doc = ROOT / "TASK5-TEMPORAL-QUEUE-ANALYSIS.md"
-    
-    if not analysis_doc.exists():
-        pytest.skip("Queue analysis documentation not generated yet")
-    
+    analysis_doc = ROOT / "docs" / "ops" / "temporal-queue-migration.md"
+    assert analysis_doc.exists(), "Temporal queue migration runbook is missing"
+
     content = analysis_doc.read_text(encoding="utf-8")
     
     # Documentation should mention data-plane implications

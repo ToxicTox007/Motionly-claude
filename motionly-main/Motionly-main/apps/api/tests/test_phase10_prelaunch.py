@@ -71,7 +71,7 @@ def test_phase10_prelaunch_evidence_files_are_present() -> None:
             "Browser and device compatibility",
             "Privacy and legal",
         ],
-        "infra/secrets/README.md": ["never commit", "/run/secrets"],
+        "docs/security/secrets.md": ["never commit", "/run/secrets"],
     }
     for relative, terms in required.items():
         content = (ROOT / relative).read_text()
@@ -114,7 +114,7 @@ def test_ci_runs_phase10_prelaunch_gates() -> None:
 
 
 def test_renderer_feature_matrix_is_backed_by_golden_and_encoded_gates() -> None:
-    matrix = (ROOT / "docs/renderer-feature-matrix.md").read_text()
+    matrix = (ROOT / "docs/renderer-feature-matrix.md").read_text(encoding="utf-8")
     golden = (ROOT / "apps/renderer/src/golden-frames.test.ts").read_text()
     encoded = (ROOT / "apps/renderer/src/encoded-output.test.ts").read_text()
     workflow = (ROOT / ".github/workflows/phase-0-safety.yml").read_text()
