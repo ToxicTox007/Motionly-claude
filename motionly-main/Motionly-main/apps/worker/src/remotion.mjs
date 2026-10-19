@@ -8,7 +8,7 @@
  *   2. Resolve all supabase:// media references to signed URLs
  *   3. Filter fixture:// assets (not renderable in production)
  *   4. Write the assembled MotionlyRenderProps to a temp JSON file
- *   5. Spawn the Remotion CLI: node --loader ts-node/esm src/render-cli.ts
+ *   5. Spawn the Remotion CLI: node --import ./ts-node-register.mjs src/render-cli.ts
  *   6. Read the render metadata written by the CLI ({output}.json)
  *   7. Upload the rendered MP4 to Supabase Storage
  *   8. Finalise the job/export records directly in Supabase
@@ -657,12 +657,10 @@ async function resolveSrc(
   return mediaProxy.register(src);
 }
 
-function fixtureMediaAllowed() {
-  return (
-    env("APP_ENV") !== "production" ||
-    env("MOTIONLY_DEMO_MODE") === "true" ||
-    env("ALLOW_FIXTURE_PROVIDERS") === "true"
-  );
+// fixture:// media (registered test fixtures) is skipped outside production
+// and never accepted in production, whatever else is set.
+export function fixtureMediaAllowed(environment = process.env) {
+  return String(environment.APP_ENV ?? "").trim() !== "production";
 }
 
 function renderTimeoutMs() {
@@ -849,10 +847,7 @@ export async function assembleRenderProps(
 
   let resolvedStems = renderProps.sourceStems ?? null;
   const activeStem = resolvedStems?.active ?? "vocals";
-  if (
-    resolvedStems &&
-    !["vocals", "no_vocals"].includes(activeStem)
-  ) {
+  if (resolvedStems && !["vocals", "no_vocals"].includes(activeStem)) {
     throw new StructuredRenderError(
       "render_selected_stem_unavailable",
       "The selected source stem is unavailable for rendering.",
@@ -876,10 +871,10 @@ export async function assembleRenderProps(
         ...resolvedStems,
         [stemName]: {
           ...stem,
-          src: await resolveSrc(
-            `supabase://${stem.bucket}/${stem.path}`,
-            { mediaProxy, tenantScope },
-          ),
+          src: await resolveSrc(`supabase://${stem.bucket}/${stem.path}`, {
+            mediaProxy,
+            tenantScope,
+          }),
         },
       };
     } else if (stem?.src) {
@@ -1109,8 +1104,8 @@ function spawnRenderer(
   return new Promise((resolve, reject) => {
     const rPath = rendererPath();
     const args = [
-      "--loader",
-      "ts-node/esm",
+      "--import",
+      "./ts-node-register.mjs",
       "src/render-cli.ts",
       "--props",
       propsPath,

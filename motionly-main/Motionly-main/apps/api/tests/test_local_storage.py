@@ -178,3 +178,87 @@ def test_supabase_storage_uploads_file(monkeypatch, tmp_path: Path) -> None:
     assert calls["headers"]["content-type"] == "video/mp4"
     assert calls["headers"]["x-upsert"] == "true"
     assert calls["content"] == b"render-bytes"
+
+
+# Supabase Storage answers a missing object with HTTP 400 and a body whose
+# statusCode is "404" (storage-api v1.14 and v1.60), and a HEAD request has no
+# body to tell that apart from a missing bucket or a bad key.
+_MISSING_OBJECT = {"statusCode": "404", "error": "not_found", "message": "Object not found"}
+_MISSING_BUCKET = {"statusCode": "404", "error": "Bucket not found", "message": "Bucket not found"}
+
+
+def _supabase_storage(tmp_path: Path) -> SupabaseBackedObjectStorage:
+    return SupabaseBackedObjectStorage(
+        root=tmp_path,
+        supabase_url="https://example.supabase.co",
+        service_role_key="service-role",
+    )
+
+
+def test_supabase_storage_inspects_an_object_from_its_info(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    def fake_get(url: str, *, headers: dict[str, str], timeout: int):
+        calls.append(url)
+        return httpx.Response(200, json={"name": "a/b.mp4", "size": 11, "etag": '"abc"'})
+
+    monkeypatch.setattr("app.services.local_storage.httpx.get", fake_get)
+
+    metadata = _supabase_storage(tmp_path).inspect_object(bucket="raw-uploads", path="a/b.mp4")
+
+    assert calls == ["https://example.supabase.co/storage/v1/object/info/raw-uploads/a/b.mp4"]
+    assert (metadata.size_bytes, metadata.etag, metadata.sha256) == (11, '"abc"', None)
+
+
+@pytest.mark.parametrize("status", [400, 404])
+def test_supabase_storage_reports_a_missing_object_as_missing(
+    monkeypatch, tmp_path: Path, status: int
+) -> None:
+    monkeypatch.setattr(
+        "app.services.local_storage.httpx.get",
+        lambda *_args, **_kwargs: httpx.Response(status, json=_MISSING_OBJECT),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        _supabase_storage(tmp_path).inspect_object(bucket="raw-uploads", path="a/b.mp4")
+
+    assert (exc_info.value.status_code, exc_info.value.code) == (404, "storage_object_missing")
+
+
+def test_supabase_storage_reports_a_missing_bucket_as_a_storage_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "app.services.local_storage.httpx.get",
+        lambda *_args, **_kwargs: httpx.Response(400, json=_MISSING_BUCKET),
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        _supabase_storage(tmp_path).inspect_object(bucket="raw-uploads", path="a/b.mp4")
+
+    assert (exc_info.value.status_code, exc_info.value.code) == (502, "storage_inspection_failed")
+
+
+def test_supabase_storage_download_reports_a_missing_object_as_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class MissingStream:
+        status_code = 400
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return httpx.Response(400, json=_MISSING_OBJECT).content
+
+    monkeypatch.setattr(
+        "app.services.local_storage.httpx.stream", lambda *_args, **_kwargs: MissingStream()
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        _supabase_storage(tmp_path).ensure_object(bucket="raw-uploads", path="a/b.mp4")
+
+    assert (exc_info.value.status_code, exc_info.value.code) == (404, "storage_object_missing")

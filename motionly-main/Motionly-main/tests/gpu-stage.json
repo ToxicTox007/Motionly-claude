@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "gate_env": "RUN_GPU_STAGE_TESTS",
+  "description": "Every check that needs real GPU hardware or GPU-stage infrastructure, plus optional checks that need external accounts or local services. A test may skip in CPU-stage runs only if its skip reason matches an entry here (see scripts/verify/skip_audit.py). GPU-stage checks run only after explicit approval, via .github/workflows/gpu-stage.yml.",
+  "gpu_stage": [
+    {
+      "id": "release-compose-integration",
+      "kind": "ci_job",
+      "location": ".github/workflows/gpu-stage.yml#release-compose-integration",
+      "reason": "Starts the full release Compose topology, including the three GPU services that request 'gpus: all'; requires a self-hosted GPU runner."
+    },
+    {
+      "id": "local-audit-probe-gpu",
+      "kind": "cli_probe",
+      "location": "apps/api/scripts/audit_local_capabilities.py --probe-gpu",
+      "reason": "Reads real nvidia-smi and Docker GPU runtime metadata. CPU-stage tests cover its parsing with simulated command output only."
+    },
+    {
+      "id": "local-audit-gpu-inference-smoke",
+      "kind": "runtime_smoke",
+      "location": "infra/local-audit/service-matrix.json#gpu-inference-worker",
+      "reason": "Smoke-tests real visual/transcription inference on the GPU inference worker image."
+    },
+    {
+      "id": "local-audit-matte-smoke",
+      "kind": "runtime_smoke",
+      "location": "infra/local-audit/service-matrix.json#matte-worker",
+      "reason": "Smoke-tests real MediaPipe matte segmentation on the matte GPU worker image."
+    },
+    {
+      "id": "local-audit-gpu-ffmpeg-smoke",
+      "kind": "runtime_smoke",
+      "location": "infra/local-audit/service-matrix.json#gpu-ffmpeg-worker",
+      "reason": "Renders with the h264_nvenc hardware encoder and inspects codec evidence."
+    }
+  ],
+  "optional": [
+    {
+      "id": "live-provider-contracts",
+      "match": "Live provider contracts are disabled",
+      "enable_env": "RUN_LIVE_PROVIDER_CONTRACTS",
+      "reason": "Calls real Groq, OpenRouter, Pexels, Pixabay and Runway accounts; outside the CPU-stage proof."
+    },
+    {
+      "id": "redis-contracts",
+      "match": "set RUN_REDIS_CONTRACTS=true",
+      "enable_env": "RUN_REDIS_CONTRACTS",
+      "reason": "Needs a live Redis; always enabled by the 'contracts' verify stage and the redis-contracts CI job."
+    },
+    {
+      "id": "supabase-repository-contracts",
+      "match": "Set RUN_SUPABASE_CONTRACTS=1",
+      "enable_env": "RUN_SUPABASE_CONTRACTS",
+      "reason": "Needs a local Supabase stack; always enabled by the 'db' verify stage and the empty-database CI job."
+    },
+    {
+      "id": "temporal-time-skipping",
+      "match": "set RUN_TEMPORAL_TIME_SKIPPING_TESTS=1",
+      "enable_env": "RUN_TEMPORAL_TIME_SKIPPING_TESTS",
+      "reason": "Downloads and runs the Temporal SDK test server; always enabled by the 'contracts' verify stage."
+    },
+    {
+      "id": "renderer-encoded-output",
+      "match": "set RUN_RENDERER_ENCODED_TESTS=true",
+      "enable_env": "RUN_RENDERER_ENCODED_TESTS",
+      "reason": "Real Remotion + Chromium + ffmpeg encode; always enabled by the 'media' verify stage."
+    },
+    {
+      "id": "renderer-golden-frames",
+      "match": "set RUN_RENDERER_GOLDEN_TESTS=true",
+      "enable_env": "RUN_RENDERER_GOLDEN_TESTS",
+      "reason": "Real Remotion frame-signature goldens in the pinned renderer image; enabled by the 'media' verify stage."
+    },
+    {
+      "id": "aws-static-tools",
+      "match": "set RUN_AWS_STATIC_TOOLS=1",
+      "enable_env": "RUN_AWS_STATIC_TOOLS",
+      "reason": "Runs the pinned cfn-lint and cfn-guard binaries (scripts/aws/install-tools.sh); always enabled by the 'aws' verify stage."
+    }
+  ]
+}

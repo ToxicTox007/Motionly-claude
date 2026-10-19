@@ -28,11 +28,17 @@ export function EmptyState({
     >
       {/* Icon slot */}
       <div className="size-16 rounded border-2 border-foreground bg-primary flex items-center justify-center animate-float mx-auto mb-6 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-        <Icon className="size-7 text-primary-foreground" aria-hidden="true" strokeWidth={2} />
+        <Icon
+          className="size-7 text-primary-foreground"
+          aria-hidden="true"
+          strokeWidth={2}
+        />
       </div>
 
       {/* Headline */}
-      <h2 className="text-xl font-black uppercase tracking-tight mt-0 mb-2 text-foreground">{title}</h2>
+      <h2 className="text-xl font-black uppercase tracking-tight mt-0 mb-2 text-foreground">
+        {title}
+      </h2>
 
       {/* Description */}
       <p className="text-xs font-mono text-muted-foreground mb-6 mx-auto max-w-sm leading-relaxed">

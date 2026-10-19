@@ -155,32 +155,44 @@ export default async function LaunchOpsPage() {
           <MetricCard
             icon={Gauge}
             label="API p95"
-            value={formatLatency(overview?.operations_dashboard?.api_p95_ms ?? null)}
+            value={formatLatency(
+              overview?.operations_dashboard?.api_p95_ms ?? null,
+            )}
           />
           <MetricCard
             icon={Gauge}
             label="API p99"
-            value={formatLatency(overview?.operations_dashboard?.api_p99_ms ?? null)}
+            value={formatLatency(
+              overview?.operations_dashboard?.api_p99_ms ?? null,
+            )}
           />
           <MetricCard
             icon={AlertTriangle}
             label="Route errors"
-            value={String(overview?.operations_dashboard?.route_errors_5xx ?? 0)}
+            value={String(
+              overview?.operations_dashboard?.route_errors_5xx ?? 0,
+            )}
           />
           <MetricCard
             icon={Activity}
             label="Supabase p95"
-            value={formatLatency(overview?.operations_dashboard?.supabase_p95_ms ?? null)}
+            value={formatLatency(
+              overview?.operations_dashboard?.supabase_p95_ms ?? null,
+            )}
           />
           <MetricCard
             icon={AlertTriangle}
             label="Slow Supabase"
-            value={String(overview?.operations_dashboard?.slow_supabase_calls ?? 0)}
+            value={String(
+              overview?.operations_dashboard?.slow_supabase_calls ?? 0,
+            )}
           />
           <MetricCard
             icon={Activity}
             label="Max queue age"
-            value={formatAge(overview?.operations_dashboard?.max_queue_age_seconds ?? null)}
+            value={formatAge(
+              overview?.operations_dashboard?.max_queue_age_seconds ?? null,
+            )}
           />
           <MetricCard
             icon={Gauge}
@@ -270,18 +282,20 @@ export default async function LaunchOpsPage() {
             </p>
             <p className="mt-1 text-xs font-semibold text-muted-foreground">
               Cost per approved export:{" "}
-              {formatUsd(overview?.provider_costs?.cost_per_approved_export_usd)}
+              {formatUsd(
+                overview?.provider_costs?.cost_per_approved_export_usd,
+              )}
             </p>
             <div className="mt-4 grid gap-2">
               {providerCostEntries.map(([provider, amount]) => (
-                  <div
-                    key={provider}
-                    className="flex items-center justify-between gap-3 border-t border-border pt-2 text-sm"
-                  >
-                    <span className="font-semibold">{provider}</span>
-                    <span>{formatUsd(amount)}</span>
-                  </div>
-                ))}
+                <div
+                  key={provider}
+                  className="flex items-center justify-between gap-3 border-t border-border pt-2 text-sm"
+                >
+                  <span className="font-semibold">{provider}</span>
+                  <span>{formatUsd(amount)}</span>
+                </div>
+              ))}
               {!providerCostEntries.length ? (
                 <p className="border-t border-border pt-3 text-sm text-muted-foreground">
                   No provider costs reported.
@@ -577,7 +591,9 @@ function sanitizeProviderCostEntries(
   return Object.entries(byProvider ?? {}).filter(([key, value]) => {
     const keyLower = key.toLowerCase();
     const valString = String(value).toLowerCase();
-    return !keyLower.includes("placeholder") && !valString.includes("placeholder");
+    return (
+      !keyLower.includes("placeholder") && !valString.includes("placeholder")
+    );
   });
 }
 

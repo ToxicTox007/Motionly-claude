@@ -7,7 +7,9 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.api.dependencies import Actor
 from app.api.health import dependencies
+from app.core.middleware import InMemoryRateLimiter
 from app.repositories.captions import TranscriptRecord
 from app.schemas.captions import LanguageHint, TranscriptWord
 from app.schemas.plans import EditPlanStyle, PlanCreateRequest
@@ -227,16 +229,20 @@ def test_health_dependencies_endpoint_with_audio_ml(monkeypatch) -> None:
         def __init__(self):
             self.settings = SimpleNamespace(
                 app_env="test",
+                gpu_stage="enabled",
                 redis_url=None,
                 supabase_url=None,
                 supabase_service_role_key=None,
                 remotion_enabled=False,
                 worker_api_token=None,
-                render_execute_ffmpeg=False
+                render_execute_ffmpeg=False,
+                health_diagnostics_rate_limit_per_minute=10,
+                health_diagnostics_cache_ttl_seconds=0,
             )
             self.queue_registry = SimpleNamespace(
                 snapshots=lambda: []
             )
+            self.rate_limiter = InMemoryRateLimiter()
             self.audio_ml_providers = {
                 "emotion": MockAudioMLProvider(),
                 "speaker_diarization": MockAudioMLProviderDown()
@@ -252,7 +258,8 @@ def test_health_dependencies_endpoint_with_audio_ml(monkeypatch) -> None:
         return DependencyHealth(status="ok", message="Mocked Supabase.")
     monkeypatch.setattr("app.api.health._supabase_health", fake_supabase_health)
 
-    response = asyncio.run(dependencies(request))
+    actor = Actor(user_id=uuid4(), workspace_id=uuid4())
+    response = asyncio.run(dependencies(request, actor))
 
     assert "audio_ml" in response.dependencies
     assert response.dependencies["audio_ml"].status == "degraded"

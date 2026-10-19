@@ -31,7 +31,12 @@ export const fallbackBillingStatus: BillingStatusSummary = {
       bulk_uploads: false,
       api_access: false,
     },
-    features: ["3 renders/month", "Watermarked exports", "720p exports", "No B-roll"],
+    features: [
+      "3 renders/month",
+      "Watermarked exports",
+      "720p exports",
+      "No B-roll",
+    ],
   },
   plans: [
     {
@@ -52,7 +57,12 @@ export const fallbackBillingStatus: BillingStatusSummary = {
         bulk_uploads: false,
         api_access: false,
       },
-      features: ["3 renders/month", "Watermarked exports", "720p exports", "No B-roll"],
+      features: [
+        "3 renders/month",
+        "Watermarked exports",
+        "720p exports",
+        "No B-roll",
+      ],
     },
     {
       key: "creator",
@@ -92,7 +102,12 @@ export const fallbackBillingStatus: BillingStatusSummary = {
         bulk_uploads: false,
         api_access: false,
       },
-      features: ["100 renders/month", "Priority queue", "Premium effects", "B-roll"],
+      features: [
+        "100 renders/month",
+        "Priority queue",
+        "Premium effects",
+        "B-roll",
+      ],
     },
     {
       key: "agency",
@@ -112,7 +127,13 @@ export const fallbackBillingStatus: BillingStatusSummary = {
         bulk_uploads: true,
         api_access: true,
       },
-      features: ["5 seats", "4K exports", "Brand kits", "Bulk uploads", "API access"],
+      features: [
+        "5 seats",
+        "4K exports",
+        "Brand kits",
+        "Bulk uploads",
+        "API access",
+      ],
     },
   ],
   usage: {

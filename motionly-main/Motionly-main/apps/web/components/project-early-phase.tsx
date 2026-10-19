@@ -6,7 +6,7 @@ import { ChevronLeft, Film, Loader2, XCircle } from "lucide-react";
 import type { UploadStatus } from "@motionly/shared";
 import { ThemeMenu } from "@/components/theme-menu";
 import { UploadPanel } from "@/components/upload-panel";
-import { buildApiHeaders, startAdaptivePolling } from "@/lib/client-api";
+import { apiFetch, startAdaptivePolling } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import {
   PRODUCT_FLOW_STAGES,
@@ -20,8 +20,6 @@ type ProjectPhaseAuth = {
   title: string;
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
 };
 
 export function UploadProjectScreen(props: ProjectPhaseAuth) {
@@ -35,14 +33,13 @@ export function UploadProjectScreen(props: ProjectPhaseAuth) {
           <h1 className="text-2xl font-bold">Upload your footage</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Drop in your raw talking-head video. We&apos;ll transcribe it and
-            prepare an AI edit proposal for you to review before it reaches the timeline.
+            prepare an AI edit proposal for you to review before it reaches the
+            timeline.
           </p>
         </div>
         <UploadPanel
           projectId={props.projectId}
           workspaceId={props.workspaceId}
-          userId={props.userId}
-          apiAccessToken={props.apiAccessToken}
         />
       </div>
     </ProjectPhaseShell>
@@ -67,18 +64,10 @@ export function ProcessingProjectScreen({
     let stopPolling: () => void = () => undefined;
     stopPolling = startAdaptivePolling(
       async (signal) => {
-        const response = await fetch(
+        const response = await apiFetch(
           `${env.apiBaseUrl}/projects/${props.projectId}/uploads/${uploadId}`,
-          {
-            cache: "no-store",
-            headers: await buildApiHeaders({
-              workspaceId: props.workspaceId,
-              userId: props.userId,
-              accessToken: props.apiAccessToken,
-              json: false,
-            }),
-            signal,
-          },
+          { cache: "no-store", signal },
+          { workspaceId: props.workspaceId },
         );
         const payload = (await response.json().catch(() => null)) as {
           status?: UploadStatus;
@@ -114,15 +103,7 @@ export function ProcessingProjectScreen({
       },
     );
     return stopPolling;
-  }, [
-    props.apiAccessToken,
-    props.projectId,
-    props.userId,
-    props.workspaceId,
-    router,
-    status,
-    uploadId,
-  ]);
+  }, [props.projectId, props.workspaceId, router, status, uploadId]);
 
   const activeIndex = productFlowStageIndex(status);
   const failed = status === "failed";

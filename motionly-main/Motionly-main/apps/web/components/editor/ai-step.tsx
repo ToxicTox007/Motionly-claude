@@ -47,8 +47,6 @@ import {
 interface AIStepProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   initialPlans: EditPlanRecordSummary[];
   activePlanId: string | null;
   transcript: TranscriptSummary | null;
@@ -154,8 +152,6 @@ const sourceLanguages = [
 export function AIStep({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   initialPlans,
   activePlanId,
   transcript,
@@ -247,8 +243,6 @@ export function AIStep({
           {
             method: "GET",
             workspaceId,
-            userId,
-            accessToken: apiAccessToken,
             signal: abortController.signal,
           },
         );
@@ -266,7 +260,7 @@ export function AIStep({
       abortController.abort();
       stopPolling();
     };
-  }, [apiAccessToken, projectId, userId, visualStatus.status, workspaceId]);
+  }, [projectId, visualStatus.status, workspaceId]);
 
   useEffect(() => {
     if (!activePlanId) {
@@ -281,8 +275,6 @@ export function AIStep({
         }>(`${env.apiBaseUrl}/projects/${projectId}/plans/snapshots`, {
           method: "GET",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Timeline versions could not be loaded.",
           signal: abortController.signal,
         });
@@ -296,7 +288,7 @@ export function AIStep({
       canceled = true;
       abortController.abort();
     };
-  }, [activePlanId, apiAccessToken, projectId, userId, workspaceId]);
+  }, [activePlanId, projectId, workspaceId]);
 
   function safePlanStatusUrl(value: string) {
     const apiBaseUrl = new URL(env.apiBaseUrl, window.location.origin);
@@ -339,8 +331,6 @@ export function AIStep({
         `${env.apiBaseUrl}/projects/${projectId}/proposals/${encodeURIComponent(proposalId)}`,
         {
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "The AI edit proposal could not be loaded.",
           signal,
         },
@@ -399,8 +389,6 @@ export function AIStep({
         pending.statusUrl,
         {
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           signal,
         },
         (progress) => {
@@ -481,8 +469,6 @@ export function AIStep({
       }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
         method: "POST",
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError:
           "AI edit proposal could not be generated. Please try again.",
         signal,
@@ -560,8 +546,6 @@ export function AIStep({
       `${env.apiBaseUrl}/projects/${projectId}/proposals/${encodeURIComponent(workflowProposalId)}`,
       {
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "The workflow proposal could not be loaded.",
         signal: controller.signal,
       },
@@ -601,9 +585,7 @@ export function AIStep({
     return () => controller.abort();
     // Proposal recovery is keyed only by the canonical artifact identity.
   }, [
-    apiAccessToken,
     projectId,
-    userId,
     workflow?.state,
     workflowProposalId,
     workflowProposalLinkedRevision,
@@ -703,8 +685,6 @@ export function AIStep({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "The proposal decision could not be applied.",
           signal,
           body: { ...decisionPayload },
@@ -733,8 +713,6 @@ export function AIStep({
         plans: EditPlanRecordSummary[];
       }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "The approved timeline could not be confirmed.",
         signal,
       });
@@ -784,8 +762,6 @@ export function AIStep({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError:
             "The proposal was approved, but its media layers could not be synchronized.",
           signal,
@@ -841,8 +817,6 @@ export function AIStep({
     }>(`${env.apiBaseUrl}/projects/${projectId}/captions/generate`, {
       method: "POST",
       workspaceId,
-      userId,
-      accessToken: apiAccessToken,
       friendlyError: "Captions could not be prepared yet.",
       signal,
       body: {
@@ -856,14 +830,12 @@ export function AIStep({
       submission: payload,
       immediate: payload.track,
       apiBaseUrl: env.apiBaseUrl,
-      options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+      options: { workspaceId, signal },
       load: async () => {
         const result = await editorApiRequest<{
           tracks: CaptionTrackSummary[];
         }>(`${env.apiBaseUrl}/projects/${projectId}/captions`, {
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           signal,
         });
         return result.tracks[0] ?? null;
@@ -882,8 +854,6 @@ export function AIStep({
     }>(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, {
       method: "POST",
       workspaceId,
-      userId,
-      accessToken: apiAccessToken,
       friendlyError: "B-roll could not be generated for this edit.",
       signal,
       body: {
@@ -894,11 +864,11 @@ export function AIStep({
       submission: payload,
       immediate: payload.slots,
       apiBaseUrl: env.apiBaseUrl,
-      options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+      options: { workspaceId, signal },
       load: async () => {
         const result = await editorApiRequest<{ slots: BrollSlotSummary[] }>(
           `${env.apiBaseUrl}/projects/${projectId}/broll`,
-          { workspaceId, userId, accessToken: apiAccessToken, signal },
+          { workspaceId, signal },
         );
         return result.slots;
       },
@@ -916,8 +886,6 @@ export function AIStep({
     }>(`${env.apiBaseUrl}/projects/${projectId}/music/select`, {
       method: "POST",
       workspaceId,
-      userId,
-      accessToken: apiAccessToken,
       friendlyError:
         "No production music track is available for this edit yet.",
       signal,
@@ -933,11 +901,11 @@ export function AIStep({
       submission: payload,
       immediate: payload.selection,
       apiBaseUrl: env.apiBaseUrl,
-      options: { workspaceId, userId, accessToken: apiAccessToken, signal },
+      options: { workspaceId, signal },
       load: () =>
         editorApiRequest<MusicSelectionSummary | null>(
           `${env.apiBaseUrl}/projects/${projectId}/music/selection`,
-          { workspaceId, userId, accessToken: apiAccessToken, signal },
+          { workspaceId, signal },
         ),
       resourceLabel: "Music selection",
       onProgress: (progress) => setMessage(`Preparing music: ${progress}%`),
@@ -954,8 +922,6 @@ export function AIStep({
         `${env.apiBaseUrl}/projects/${projectId}/clips/recommendations?goal=${encodeURIComponent(clipGoal)}`,
         {
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Best moments could not be found. Please try again.",
         },
       );
@@ -1008,8 +974,6 @@ export function AIStep({
       }>(`${env.apiBaseUrl}/projects/${projectId}/transcriptions`, {
         method: "POST",
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Transcription could not be started. Please try again.",
         body: {
           force,
@@ -1050,8 +1014,6 @@ export function AIStep({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Timeline version could not be saved.",
           body: {
             plan_id: activePlan.id,
@@ -1087,8 +1049,6 @@ export function AIStep({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Timeline version could not be restored.",
           body: {},
         },

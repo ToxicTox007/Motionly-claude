@@ -23,17 +23,10 @@ deployment-env/
 .env*
 *.env
 *.log
-*.json
 check_visual_intelligence.py
 studio_visual_intelligence.py
 start_deployment.py
-# Committed supply-chain lockfiles
-!package-lock.json
-# Worker-bridge manifest is a required Docker/CI build input, not generated output.
-!apps/api/worker-bridge/package.json
-# Release schema and gate contracts are runtime source, not generated test output.
-!infra/release-manifest.schema.json
-!scripts/perf/slo-contract.json
-!scripts/handoff-acceptance.json
-# The local topology matrix is a committed source-of-truth audit contract.
-!infra/local-audit/service-matrix.json
+# Generated test, browser, and performance artifacts (JSON reports live here).
+test-results/
+playwright-report/
+blob-report/

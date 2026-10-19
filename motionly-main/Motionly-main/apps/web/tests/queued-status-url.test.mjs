@@ -9,7 +9,10 @@ test("queued layer paths resolve through the browser /api proxy", () => {
     "/api/projects/project-1/jobs/job-1",
   );
   assert.equal(
-    normalizeQueuedLayerStatusUrl("projects/project-1/jobs/job-1?wait=1", "/api/"),
+    normalizeQueuedLayerStatusUrl(
+      "projects/project-1/jobs/job-1?wait=1",
+      "/api/",
+    ),
     "/api/projects/project-1/jobs/job-1?wait=1",
   );
 });

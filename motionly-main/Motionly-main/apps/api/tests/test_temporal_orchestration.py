@@ -1482,3 +1482,26 @@ def test_reconciler_repairs_draft_ready_only_from_stored_render_success_hash() -
     assert invalid.repaired == 0
     assert invalid.actions[0].action == "reported_draft_ready_success_evidence_invalid"
     assert temporal.signals == []
+
+
+def test_claiming_an_empty_outbox_returns_no_messages() -> None:
+    """An idle system has nothing to dispatch; the dispatcher and reconciler
+    poll this RPC continuously and must not crash on an empty result."""
+    request = httpx.Request("POST", "https://supabase.test/rpc/motionly_claim_workflow_outbox")
+    empty = httpx.Response(200, request=request, json=[])
+
+    class _Client:
+        def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+            return empty
+
+        async def async_request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+            return empty
+
+    repository = SupabaseWorkflowRepository(
+        supabase_url="https://supabase.test",
+        service_role_key="test-role-key",
+    )
+    repository.client = _Client()  # type: ignore[assignment]
+
+    assert repository.claim_outbox(lease_owner="dispatcher-a") == []
+    assert asyncio.run(repository.claim_outbox_async(lease_owner="dispatcher-a")) == []

@@ -11,7 +11,9 @@ import type { MotionlyRenderProps, SourceTimelineClip } from "./types.js";
 // @motionly/shared so exported frames map to source time identically to the
 // browser preview. This module only adapts render props into the clip list.
 
-export function sourceTimelineClips(input: MotionlyRenderProps): SourceTimelineClip[] {
+export function sourceTimelineClips(
+  input: MotionlyRenderProps,
+): SourceTimelineClip[] {
   const explicit = normalizeSourceClips(input.timeline?.clips ?? []);
   if (explicit.length) return explicit;
 
@@ -47,6 +49,7 @@ export function outputTimeToSourceTime(
   outputTimeMs: number,
 ): { clip: SourceTimelineClip; sourceTimeMs: number } {
   const clips = sourceTimelineClips(input);
-  const clip = resolveSourceClipAtOutputMs(outputTimeMs, clips) ?? clips[clips.length - 1];
+  const clip =
+    resolveSourceClipAtOutputMs(outputTimeMs, clips) ?? clips[clips.length - 1];
   return { clip, sourceTimeMs: outputMsToSourceMs(outputTimeMs, clips) };
 }

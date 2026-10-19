@@ -12,8 +12,6 @@ import argparse
 import gzip
 import hashlib
 import json
-import os
-import re
 import stat
 import sys
 import tarfile
@@ -21,9 +19,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Final
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE: Final = ROOT / "infra" / "docker-compose.gpu.yml"
-BIND_MOUNT_RE: Final = re.compile(r"^\s*-\s+((?:\./|\.\./)[^:\s]+):[^\s]+")
 
 
 @dataclass(frozen=True)
@@ -49,18 +48,52 @@ def _relative_to_root(path: Path) -> str:
         raise ValueError(f"release input escapes repository root: {path}") from error
 
 
+class _ComposeLoader(yaml.SafeLoader):
+    """SafeLoader that accepts Compose's merge tags (!override, !reset)."""
+
+
+def _compose_tag(loader: yaml.SafeLoader, _suffix: str, node: yaml.Node) -> object:
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return loader.construct_scalar(node)
+
+
+_ComposeLoader.add_multi_constructor("!", _compose_tag)
+
+
+def _mount_source(volume: object) -> str | None:
+    """The host path of a relative bind mount, in short or long syntax."""
+    if isinstance(volume, dict):
+        source = volume.get("source") if volume.get("type", "bind") == "bind" else None
+    elif isinstance(volume, str):
+        source = volume.split(":", 1)[0]
+    else:
+        source = None
+    if isinstance(source, str) and source.startswith(("./", "../")):
+        return source
+    return None
+
+
 def compose_bind_mount_sources(compose_file: Path = COMPOSE_FILE) -> list[Path]:
-    """Return static relative host paths referenced by Compose bind mounts."""
+    """Return static relative host paths referenced by Compose bind mounts.
+
+    Mounts are read from the parsed file, so block lists, flow lists
+    (`volumes: [./a:/b]`) and long-syntax entries are all found.
+    """
+    compose = yaml.load(compose_file.read_text(encoding="utf-8"), Loader=_ComposeLoader)
     sources = {compose_file.resolve()}
-    for raw_line in compose_file.read_text(encoding="utf-8").splitlines():
-        match = BIND_MOUNT_RE.match(raw_line)
-        if not match:
-            continue
-        source = (compose_file.parent / match.group(1)).resolve()
-        _relative_to_root(source)
-        if not source.exists():
-            raise ValueError(f"Compose bind-mount source does not exist: {match.group(1)}")
-        sources.add(source)
+    for service in (compose.get("services") or {}).values():
+        for volume in (service or {}).get("volumes") or []:
+            relative = _mount_source(volume)
+            if relative is None:
+                continue
+            source = (compose_file.parent / relative).resolve()
+            _relative_to_root(source)
+            if not source.exists():
+                raise ValueError(f"Compose bind-mount source does not exist: {relative}")
+            sources.add(source)
     return sorted(sources, key=lambda path: _relative_to_root(path))
 
 

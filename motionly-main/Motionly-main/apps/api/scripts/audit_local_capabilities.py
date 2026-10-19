@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Render a redacted, side-effect-free capability report for local audit.
 
-This command never starts containers, builds or pulls images, writes files, invokes
-providers, or publishes content.  By default GPU support is explicitly
+This command never starts containers, builds or pulls images, writes files, or invokes
+providers.  By default GPU support is explicitly
 ``not-probed``; ``--probe-gpu`` only reads local NVIDIA and Docker metadata.
 """
 
@@ -50,7 +50,6 @@ APPLICATION_IMAGE_VARIABLES = (
     "MOTIONLY_PROVIDER_WORKER_IMAGE",
     "MOTIONLY_PLANNING_WORKER_IMAGE",
     "MOTIONLY_REMOTION_WORKER_IMAGE",
-    "MOTIONLY_PUBLISHING_WORKER_IMAGE",
     "MOTIONLY_TEMPORAL_SERVER_IMAGE",
     "TEMPORAL_ADMIN_TOOLS_IMAGE",
 )
@@ -63,9 +62,7 @@ DIRECT_COMPOSE_VALUES = (
     "SUPABASE_ANON_KEY",
     "SUPABASE_SERVICE_ROLE_KEY",
     "APP_DOMAIN",
-    "API_DOMAIN",
-    "SUPABASE_DOMAIN",
-    "SENTRY_DSN",
+    "PUBLIC_ORIGIN",
     "TEMPORAL_BOOTSTRAP_ADMIN_UNTIL",
     *APPLICATION_IMAGE_VARIABLES,
 )
@@ -77,8 +74,6 @@ SECRET_FILE_NAMES = (
     "supabase_jwt_secret",
     "admin_api_token",
     "worker_api_token",
-    "publish_token_encryption_key",
-    "publish_oauth_state_secret",
     "groq_api_key",
     "openrouter_api_key",
     "runway_api_key",
@@ -126,7 +121,6 @@ LOCAL_IMAGE_NAMES = (
     "motionly-provider-worker:dev",
     "motionly-planning-worker:dev",
     "motionly-remotion-worker:dev",
-    "motionly-publishing-worker:dev",
     "motionly-temporal-server:local-audit",
 )
 _PLACEHOLDER_MARKERS = (
@@ -253,7 +247,6 @@ def build_capability_report(
             "images_built": False,
             "images_pulled": False,
             "provider_calls": False,
-            "publishing_calls": False,
             "files_written": False,
         },
         "namespace": {
@@ -290,9 +283,7 @@ def _inspect_isolation_contract() -> tuple[dict[str, object], list[str]]:
         if isinstance(entry, dict) and isinstance(entry.get("name"), str)
     ]
     profiled_count = sum(
-        1
-        for name in service_names
-        if f"  {name}:\n    profiles: [local-audit]" in overlay
+        1 for name in service_names if f"  {name}:\n    profiles: [local-audit]" in overlay
     )
     if "name: motionly-local-audit" not in overlay:
         errors.append("local_audit_project_name_missing")
@@ -304,17 +295,16 @@ def _inspect_isolation_contract() -> tuple[dict[str, object], list[str]]:
         errors.append("ingress_ports_not_replaced")
     if "tls internal" not in caddyfile:
         errors.append("local_ingress_must_not_request_public_certificates")
-    if "LOCAL_AUDIT_MODE: \"true\"" not in overlay:
+    if 'LOCAL_AUDIT_MODE: "true"' not in overlay:
         errors.append("local_audit_mode_not_enabled_in_overlay")
     expected_default_denial = (
-        "LOCAL_AUDIT_EXTERNAL_EFFECTS_ENABLED: "
-        "${LOCAL_AUDIT_EXTERNAL_EFFECTS_ENABLED:-false}"
+        "LOCAL_AUDIT_EXTERNAL_EFFECTS_ENABLED: ${LOCAL_AUDIT_EXTERNAL_EFFECTS_ENABLED:-false}"
     )
     if expected_default_denial not in overlay:
         errors.append("live_effects_default_not_denied")
     if LOCAL_AUDIT_AUTHORIZATION_SECRET_NAME not in overlay:
         errors.append("local_audit_authorization_secret_missing")
-    if "gpus: all" not in base_compose or "FFMPEG_GPU_ENABLED: \"true\"" not in base_compose:
+    if "gpus: all" not in base_compose or 'FFMPEG_GPU_ENABLED: "true"' not in base_compose:
         errors.append("gpu_compose_contract_missing")
     if dev_compose.count("build:") < 10 or "infra/temporal/server/Dockerfile" not in overlay:
         errors.append("required_local_image_builds_missing")
@@ -374,7 +364,7 @@ def _inspect_protected_inputs(
             invalid += 1
             continue
         present += 1
-        errors.extend(_protected_path_errors(path, is_directory=False))
+        errors.extend(_protected_path_errors(path, is_directory=False, secret_file=True))
         try:
             value = path.read_text(encoding="utf-8").strip()
         except OSError:
@@ -411,16 +401,11 @@ def _validate_compose_environment(values: Mapping[str, str]) -> list[str]:
             break
     if values.get("COMPOSE_PROJECT_NAME") != "motionly-local-audit":
         errors.append("compose_project_name_not_isolated")
-    for name in ("APP_DOMAIN", "API_DOMAIN", "SUPABASE_DOMAIN"):
-        if not _is_local_audit_domain(values.get(name)):
-            errors.append("production_domain_not_allowed")
-            break
-    sentry_dsn = str(values.get("SENTRY_DSN") or "")
-    try:
-        sentry_host = urlsplit(sentry_dsn).hostname
-    except ValueError:
-        sentry_host = None
-    if sentry_host and not _is_local_audit_domain(sentry_host):
+    # One public origin; its host must be a local audit name too.
+    origin_host = urlsplit(str(values.get("PUBLIC_ORIGIN") or "")).hostname
+    if not _is_local_audit_domain(values.get("APP_DOMAIN")) or not _is_local_audit_domain(
+        origin_host
+    ):
         errors.append("production_domain_not_allowed")
     if not _valid_rfc3339_utc(values.get("TEMPORAL_BOOTSTRAP_ADMIN_UNTIL")):
         errors.append("temporal_bootstrap_expiry_invalid")
@@ -618,16 +603,20 @@ def _protected_env_file_errors(path: Path) -> list[str]:
     return _protected_path_errors(path, is_directory=False)
 
 
-def _protected_path_errors(path: Path, *, is_directory: bool) -> list[str]:
+def _protected_path_errors(
+    path: Path, *, is_directory: bool, secret_file: bool = False
+) -> list[str]:
     if os.name == "nt":
         return [] if _windows_acl_is_private(path) else ["protected_input_acl_not_private"]
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
     except OSError:
         return ["protected_input_unreadable"]
-    if mode & 0o077:
-        return ["protected_input_permissions_not_private"]
-    if is_directory and mode & 0o007:
+    # Directories and the env file must be private. Secret files may be
+    # read-only for everyone (non-root containers read their mounts) because
+    # their private directory already keeps other host users out.
+    blocked = 0o022 if secret_file and not is_directory else 0o077
+    if mode & blocked:
         return ["protected_input_permissions_not_private"]
     return []
 
@@ -687,6 +676,7 @@ def _run_command(command: tuple[str, ...]) -> CommandResult:
 
 def _total_memory_bytes() -> int | None:
     if os.name == "nt":
+
         class MemoryStatus(ctypes.Structure):
             _fields_ = [
                 ("dwLength", ctypes.c_ulong),

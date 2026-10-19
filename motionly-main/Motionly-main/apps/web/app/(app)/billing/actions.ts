@@ -21,7 +21,9 @@ export async function startCheckout(formData: FormData) {
   });
   const body = await response.json();
   if (!response.ok || !body.checkout_url) {
-    redirect(`/billing?error=${encodeURIComponent(body?.error?.code ?? "checkout_failed")}`);
+    redirect(
+      `/billing?error=${encodeURIComponent(body?.error?.code ?? "checkout_failed")}`,
+    );
   }
 
   redirect(body.checkout_url);
@@ -41,7 +43,9 @@ export async function openCustomerPortal() {
   });
   const body = await response.json();
   if (!response.ok || !body.portal_url) {
-    redirect(`/billing?error=${encodeURIComponent(body?.error?.code ?? "portal_failed")}`);
+    redirect(
+      `/billing?error=${encodeURIComponent(body?.error?.code ?? "portal_failed")}`,
+    );
   }
 
   redirect(body.portal_url);

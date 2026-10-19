@@ -1,11 +1,14 @@
-"""Contracts for the single-VM Azure Compose deployment control plane."""
+"""Contracts for the single-instance Compose deployment control plane (AWS).
+
+The AWS-specific release path is pinned in test_aws_release_contract.py.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "deploy-compose-vm.yml"
+DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "deploy-aws.yml"
 AGENT = ROOT / "scripts" / "deploy" / "apply_release.sh"
 BOOTSTRAP = ROOT / "scripts" / "deploy" / "bootstrap_compose_host.sh"
 PG_REHEARSAL = ROOT / "scripts" / "deploy" / "rehearse_postgres17_upgrade.sh"
@@ -17,18 +20,15 @@ TEMPORAL_CANARY_RUNBOOK = ROOT / "docs" / "ops" / "temporal-mtls-canary.md"
 SUPPLY_CHAIN = ROOT / ".github" / "workflows" / "supply-chain.yml"
 
 
-def test_deploy_workflow_is_oidc_vm_only_and_production_is_protected() -> None:
+def test_deploy_workflow_is_oidc_single_instance_and_production_is_protected() -> None:
     workflow = DEPLOY_WORKFLOW.read_text()
 
     assert "id-token: write" in workflow
-    assert "azure/login@v2" in workflow
-    assert "environment: staging" in workflow
+    assert "aws-actions/configure-aws-credentials@v4" in workflow
     assert "environment: production" in workflow
-    assert "az vm run-command invoke" in workflow
-    assert "--auth-mode login" in workflow
-    assert "--release-id '$RELEASE_ID'" in workflow
+    assert "scripts/deploy/run_on_instance.sh" in workflow
     assert "--preflight" in workflow
-    assert "vmss" not in workflow.lower()
+    assert "vmss" not in workflow.lower() and "autoscaling" not in workflow.lower()
     assert "secrets." not in workflow
 
 
@@ -37,11 +37,7 @@ def test_host_agent_reads_secrets_locally_and_tracks_digest_rollback() -> None:
     bootstrap = BOOTSTRAP.read_text()
     host_env = HOST_ENV.read_text()
 
-    assert "az storage blob download" in agent
-    assert "--auth-mode login" in agent
-    assert "az keyvault secret show" in agent
     assert "cosign verify-blob" in agent
-    assert "docker login ghcr.io" in agent
     assert "--password-stdin" in agent
     assert "chmod 600" in agent
     assert "current_link" in agent and "previous_link" in agent
@@ -49,6 +45,11 @@ def test_host_agent_reads_secrets_locally_and_tracks_digest_rollback() -> None:
     assert "docker compose --project-name motionly" in agent
     assert "vmss" not in agent.lower()
     assert "MOTIONLY_APP_DOMAIN" in host_env
+    # One public origin: browsers reach /api and /supabase on the app domain.
+    for retired in ("MOTIONLY_API_DOMAIN", "MOTIONLY_SUPABASE_DOMAIN"):
+        assert retired not in host_env
+        assert retired not in agent
+    assert '"PUBLIC_ORIGIN": f"https://{app_domain}"' in agent
     assert "MOTIONLY_TEMPORAL_SERVER_IMAGE" not in host_env
     assert "MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" in host_env
     assert "MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE" in host_env
@@ -57,10 +58,8 @@ def test_host_agent_reads_secrets_locally_and_tracks_digest_rollback() -> None:
     assert "temporal-ca-cert" in agent
     assert "MOTIONLY_TEMPORAL_SERVER_IMAGE" in SUPPLY_CHAIN.read_text()
     assert "temporal-server" in SUPPLY_CHAIN.read_text()
-    assert "Key Vault Secrets User" in DEPLOY_RUNBOOK.read_text()
-    assert "Storage Blob Data Reader" in DEPLOY_RUNBOOK.read_text()
     assert "VMSS is explicitly unsupported" in DEPLOY_RUNBOOK.read_text()
-    assert "system-assigned managed identity" in bootstrap
+    assert "instance role" in bootstrap
 
 
 def test_postgres17_rehearsal_requires_logical_restore_and_explicit_rollback_boundary() -> None:
@@ -90,13 +89,13 @@ def test_temporal_backup_verifier_uses_protected_libpq_service_interfaces() -> N
     assert "<postgres-15-source-url>" not in rehearsal
 
 
-def test_release_agent_never_passes_key_vault_secret_values_as_argv() -> None:
+def test_release_agent_never_passes_secret_values_as_argv() -> None:
     agent = AGENT.read_text()
 
     assert "fetch_secret_to_file" in agent
     assert "read_required_secret" not in agent
     assert 'python3 - "$manifest" "$env_file" "$secrets_dir" "$postgres_password"' not in agent
-    assert "az keyvault secret show" in agent
+    assert "aws ssm get-parameter --with-decryption" in agent
     assert "--password-stdin" in agent
 
 

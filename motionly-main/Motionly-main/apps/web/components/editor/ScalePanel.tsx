@@ -69,7 +69,6 @@ interface ScalePanelProps {
   projectId: string;
   workspaceId: string;
   userId: string;
-  apiAccessToken: string;
   activePlan: EditPlanRecordSummary | null;
   captionTrack: CaptionTrackSummary | null;
   effectsConfig: EffectsConfigSummary | null;
@@ -84,14 +83,7 @@ interface ScalePanelProps {
 }
 
 export function ScalePanel(props: ScalePanelProps) {
-  const {
-    projectId,
-    workspaceId,
-    userId,
-    apiAccessToken,
-    activePlan,
-    onPlanUpdated,
-  } = props;
+  const { projectId, workspaceId, userId, activePlan, onPlanUpdated } = props;
   const [resources, setResources] = useState<Resource[]>([]);
   const [templates, setTemplates] = useState<Resource[]>([]);
   const [audio, setAudio] = useState<Record<string, unknown>>({});
@@ -128,52 +120,31 @@ export function ScalePanel(props: ScalePanelProps) {
     ] = await Promise.all([
       editorApiRequest<{ resources: Resource[] }>(
         `${env.apiBaseUrl}/projects/${projectId}/phase5/resources`,
-        auth(
-          { workspaceId, userId, apiAccessToken },
-          lifecycleController.signal,
-        ),
+        auth({ workspaceId }, lifecycleController.signal),
       ),
       editorApiRequest<{ resources: Resource[] }>(
         `${env.apiBaseUrl}/phase5/templates`,
-        auth(
-          { workspaceId, userId, apiAccessToken },
-          lifecycleController.signal,
-        ),
+        auth({ workspaceId }, lifecycleController.signal),
       ),
       editorApiRequest<{ audio_intelligence: Record<string, unknown> }>(
         `${env.apiBaseUrl}/projects/${projectId}/phase5/audio-intelligence`,
-        auth(
-          { workspaceId, userId, apiAccessToken },
-          lifecycleController.signal,
-        ),
+        auth({ workspaceId }, lifecycleController.signal),
       ).catch(() => ({ audio_intelligence: {} })),
       editorApiRequest<Record<string, unknown>>(
         `${env.apiBaseUrl}/projects/${projectId}/analytics/ai-edits`,
-        auth(
-          { workspaceId, userId, apiAccessToken },
-          lifecycleController.signal,
-        ),
+        auth({ workspaceId }, lifecycleController.signal),
       ),
       editorApiRequest<Resource>(
         `${env.apiBaseUrl}/projects/${projectId}/phase5/collaboration`,
-        auth(
-          { workspaceId, userId, apiAccessToken },
-          lifecycleController.signal,
-        ),
+        auth({ workspaceId }, lifecycleController.signal),
       ),
       editorApiRequest<EditorialLearningStatus>(
         `${env.apiBaseUrl}/editorial-learning/status`,
-        auth(
-          { workspaceId, userId, apiAccessToken },
-          lifecycleController.signal,
-        ),
+        auth({ workspaceId }, lifecycleController.signal),
       ).catch(() => null),
       editorApiRequest<EditorialLearningPolicy>(
         `${env.apiBaseUrl}/editorial-learning/policy`,
-        auth(
-          { workspaceId, userId, apiAccessToken },
-          lifecycleController.signal,
-        ),
+        auth({ workspaceId }, lifecycleController.signal),
       ).catch(() => null),
     ]);
     setResources(resourceData.resources);
@@ -192,14 +163,7 @@ export function ScalePanel(props: ScalePanelProps) {
       collaborationRevision.current = collaborationData.revision;
       onPlanUpdated(shared);
     }
-  }, [
-    apiAccessToken,
-    lifecycleController,
-    onPlanUpdated,
-    projectId,
-    userId,
-    workspaceId,
-  ]);
+  }, [lifecycleController, onPlanUpdated, projectId, workspaceId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -382,7 +346,9 @@ export function ScalePanel(props: ScalePanelProps) {
           props.onProposalCreated,
         )
       ) {
-        setMessage("Template proposal ready. Review it in the AI panel before applying it.");
+        setMessage(
+          "Template proposal ready. Review it in the AI panel before applying it.",
+        );
         return;
       }
       const planId = identity.planId;
@@ -680,7 +646,9 @@ export function ScalePanel(props: ScalePanelProps) {
           props.onProposalCreated,
         )
       ) {
-        setMessage("Style proposal ready. Review it in the AI panel before applying it.");
+        setMessage(
+          "Style proposal ready. Review it in the AI panel before applying it.",
+        );
         return;
       }
       const planId = identity.planId;
@@ -724,8 +692,6 @@ export function ScalePanel(props: ScalePanelProps) {
       <BrandKitPanel
         projectId={projectId}
         workspaceId={workspaceId}
-        userId={userId}
-        apiAccessToken={apiAccessToken}
         styleProfiles={profiles}
         savedTemplates={templates}
         captionTrack={props.captionTrack}
@@ -736,8 +702,6 @@ export function ScalePanel(props: ScalePanelProps) {
       <CreativeVariantsPanel
         projectId={projectId}
         workspaceId={workspaceId}
-        userId={userId}
-        apiAccessToken={apiAccessToken}
         activePlan={activePlan}
       />
 
@@ -1186,13 +1150,11 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function auth(
-  props: Pick<ScalePanelProps, "workspaceId" | "userId" | "apiAccessToken">,
+  props: Pick<ScalePanelProps, "workspaceId">,
   signal?: AbortSignal,
 ) {
   return {
     workspaceId: props.workspaceId,
-    userId: props.userId,
-    accessToken: props.apiAccessToken,
     signal,
   };
 }

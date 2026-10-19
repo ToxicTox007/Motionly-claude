@@ -20,7 +20,6 @@ MOTIONLY_DEMUCS_WORKER_IMAGE=motionly-demucs-worker:dev
 MOTIONLY_PROVIDER_WORKER_IMAGE=motionly-provider-worker:dev
 MOTIONLY_PLANNING_WORKER_IMAGE=motionly-planning-worker:dev
 MOTIONLY_REMOTION_WORKER_IMAGE=motionly-remotion-worker:dev
-MOTIONLY_PUBLISHING_WORKER_IMAGE=motionly-publishing-worker:dev
 TEMPORAL_ADMIN_TOOLS_IMAGE=temporalio/admin-tools:1.24.2
 MOTIONLY_TEMPORAL_SERVER_IMAGE=ghcr.io/motionly/temporal-server:latest
 
@@ -37,18 +36,13 @@ SUPABASE_JWT_SECRET=super-secret-jwt-key-at-least-32-characters-long-for-dev
 SUPABASE_ANON_KEY=anon-key-base64-encoded-at-least-32-chars-dev
 SUPABASE_SERVICE_ROLE_KEY=service-role-key-base64-encoded-at-least-48-chars-dev
 
-# Domains
+# One public origin: /api and /supabase are routed on the app domain
 APP_DOMAIN=app.localhost
-API_DOMAIN=api.localhost
-SUPABASE_DOMAIN=supabase.localhost
-
-# Monitoring (optional)
-SENTRY_DSN=
+PUBLIC_ORIGIN=https://app.localhost
 
 # Internal tokens
 WORKER_API_TOKEN=dev-worker-token-123
 ADMIN_API_TOKEN=dev-admin-token-456
-PUBLISH_TOKEN_ENCRYPTION_KEY=dev-publish-encryption-key-32-chars-minimum-here
 
 # Temporal
 TEMPORAL_BOOTSTRAP_ADMIN_UNTIL=2099-12-31T23:59:59Z
@@ -75,9 +69,10 @@ echo "super-secret-jwt-key-at-least-32-characters-long-for-dev" > supabase_jwt_s
 echo "service-role-key-base64-encoded-at-least-48-chars-dev" > supabase_service_role_key
 echo "dev-worker-token-123" > worker_api_token
 echo "dev-admin-token-456" > admin_api_token
-echo "dev-publish-encryption-key-32-chars-minimum-here" > publish_token_encryption_key
-echo "dev-oauth-state-secret" > publish_oauth_state_secret
 echo "dev-metrics-token" > metrics_bearer_token
+# Origin guard secret (32+ characters of A-Z a-z 0-9 _ -); previous stays empty.
+echo "dev-origin-verify-0123456789abcdefghijkl" > edge_origin_verify
+touch edge_origin_verify_previous
 
 # Create empty API key files (for fixture mode)
 touch groq_api_key
@@ -85,7 +80,7 @@ touch openrouter_api_key
 touch runway_api_key
 touch azure_openai_api_key
 
-echo "✓ Created core secrets (12 files)"
+echo "✓ Created core secrets (14 files)"
 
 # Create empty Temporal cert files (for local dev without TLS)
 echo "[3/3] Creating Temporal certificate placeholders..."
@@ -98,12 +93,15 @@ touch temporal_reconciler_cert temporal_reconciler_key
 touch temporal_namespace_bootstrap_cert temporal_namespace_bootstrap_key
 touch temporal_diagnostics_cert temporal_diagnostics_key
 
-echo "✓ Created Temporal cert placeholders (19 files)"
+echo "✓ Created Temporal cert placeholders (17 files)"
 
 # Set permissions (works on Unix-like systems)
 if [[ "$OSTYPE" != "msys" && "$OSTYPE" != "win32" ]]; then
-  chmod 600 *
-  echo "✓ Set file permissions to 0600"
+  # Containers run as non-root users and Compose mounts secret files with
+  # their host mode: read-only files inside a private directory.
+  chmod 444 *
+  chmod 700 .
+  echo "✓ Set secret files to 0444 inside a 0700 directory"
 else
   echo "⚠ Skipping chmod on Windows (run 'icacls' manually if needed)"
 fi
@@ -113,7 +111,7 @@ echo ""
 echo "=== Setup Complete! ==="
 echo ""
 echo "📁 Created:"
-echo "  - infra/.env.local (23 environment variables)"
+echo "  - infra/.env.local (27 environment variables)"
 echo "  - infra/secrets/* (31 secret files)"
 echo ""
 echo "🚀 Start minimal services:"

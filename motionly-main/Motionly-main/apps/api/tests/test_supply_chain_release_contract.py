@@ -25,7 +25,6 @@ COMPOSE_IMAGE_VARIABLES = (
     "MOTIONLY_PROVIDER_WORKER_IMAGE",
     "MOTIONLY_PLANNING_WORKER_IMAGE",
     "MOTIONLY_REMOTION_WORKER_IMAGE",
-    "MOTIONLY_PUBLISHING_WORKER_IMAGE",
 )
 
 
@@ -56,3 +55,24 @@ def test_supply_chain_uses_hash_locked_python_dependencies() -> None:
 
     assert "--require-hashes -r apps/api/requirements-dev.lock" in workflow
     assert "--require-hashes -r apps/api/requirements-ml.lock --dry-run" in workflow
+
+
+def test_the_release_manifest_job_installs_the_bundle_tools_before_packaging() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[3] / ".github" / "workflows" / "supply-chain.yml"
+        ).read_text()
+    )
+    steps = workflow["jobs"]["release-manifest"]["steps"]
+    runs = [str(step.get("run", "")) for step in steps]
+    install = next(i for i, run in enumerate(runs) if "scripts/release/requirements.lock" in run)
+    package = next(i for i, run in enumerate(runs) if "package_release_bundle.py" in run)
+    assert install < package
+    assert "--require-hashes" in runs[install]
+    assert any("actions/setup-python" in str(step.get("uses", "")) for step in steps[:install])
+    lock = (
+        Path(__file__).resolve().parents[3] / "scripts" / "release" / "requirements.lock"
+    ).read_text()
+    assert "pyyaml==" in lock and "--hash=sha256:" in lock

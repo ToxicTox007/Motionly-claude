@@ -89,13 +89,20 @@ async def request_id_middleware(
             "supabase_call_count": counters.supabase_calls,
             "queue_call_count": counters.queue_calls,
             "response_size": response_size,
-            "user_id": request.headers.get("x-motionly-user-id"),
+            "user_id": _verified_user_id(request),
             "workspace_id": request.headers.get("x-motionly-workspace-id"),
             "service": "motionly-api",
             "environment": request.app.state.settings.app_env,
         },
     )
     return response
+
+
+def _verified_user_id(request: Request) -> str | None:
+    """The user named by the request's verified token (rate_limit_middleware
+    verifies it first); never a value the caller supplies."""
+    verified = getattr(getattr(request, "state", None), "verified_supabase_token", None)
+    return str(verified.user_id) if verified is not None else None
 
 
 def _route_label(request: Request) -> str:

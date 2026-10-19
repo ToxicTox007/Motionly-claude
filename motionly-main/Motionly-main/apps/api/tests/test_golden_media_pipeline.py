@@ -52,7 +52,7 @@ def test_upload_to_export_ffmpeg_golden_media(tmp_path: Path) -> None:
                 }
             },
             "render_props": {
-                "sourceVideo": {"src": "dummy"},
+                "sourceVideo": {"src": f"supabase://raw-uploads/{upload.storage_path}"},
                 "exportSettings": {"fps": 10},
             },
         },

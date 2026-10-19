@@ -23,7 +23,6 @@ LOCAL_AUDIT_AUTHORIZATION_MOUNT = (
     f"/run/secrets/{LOCAL_AUDIT_AUTHORIZATION_SECRET_NAME}"
 )
 _ALLOWED_AUDIT_TARGETS = frozenset({"local-sandbox", "staging-sandbox"})
-_ALLOWED_PUBLISH_VISIBILITIES = frozenset({"private", "unlisted"})
 _PRODUCTION_MOTIONLY_HOSTS = frozenset({"motionly.com", "motionly.ai"})
 _ACCOUNT_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,254}$")
 _HOST_PATTERN = re.compile(
@@ -50,14 +49,6 @@ _PLACEHOLDER_MARKERS = (
     "your-",
     "todo",
 )
-
-# Publishing reaches these exact hosts after the gate.  The YouTube refresh
-# endpoint is distinct from the upload endpoint, so both must be allowlisted.
-PUBLISHING_REQUIRED_HOSTS = {
-    "tiktok": frozenset({"open.tiktokapis.com"}),
-    "instagram": frozenset({"graph.facebook.com"}),
-    "youtube": frozenset({"www.googleapis.com", "oauth2.googleapis.com"}),
-}
 
 
 class LocalAuditEffectsDenied(RuntimeError):
@@ -87,9 +78,7 @@ class LocalAuditPolicy:
     authorization_fingerprint: str
     external_effects_enabled: bool
     provider_accounts: tuple[AuditAccount, ...]
-    publishing_accounts: tuple[AuditAccount, ...]
     approved_domains: frozenset[str]
-    allowed_publish_visibilities: frozenset[str]
     max_per_run_spend_usd: float
     max_total_spend_usd: float
     cleanup_owner_fingerprint: str
@@ -110,12 +99,7 @@ class LocalAuditPolicy:
                 {"provider": account.provider, "account_hash": account.fingerprint}
                 for account in self.provider_accounts
             ],
-            "publishing_accounts": [
-                {"platform": account.provider, "account_hash": account.fingerprint}
-                for account in self.publishing_accounts
-            ],
             "approved_domains": sorted(self.approved_domains),
-            "allowed_publish_visibilities": sorted(self.allowed_publish_visibilities),
             "spend_controls": {
                 "max_per_run_usd": _round_currency(self.max_per_run_spend_usd),
                 "max_total_usd": _round_currency(self.max_total_spend_usd),
@@ -241,15 +225,7 @@ def compile_local_audit_policy(
         field="provider_accounts",
         errors=errors,
     )
-    publishing_accounts = _parse_accounts(
-        values.get("LOCAL_AUDIT_PUBLISHING_ACCOUNTS"),
-        field="publishing_accounts",
-        errors=errors,
-    )
     approved_domains = _parse_domains(values.get("LOCAL_AUDIT_APPROVED_DOMAINS"), errors)
-    allowed_visibilities = _parse_visibilities(
-        values.get("LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES"), errors
-    )
 
     max_per_run = _parse_positive_amount(
         values.get("LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD"),
@@ -302,9 +278,7 @@ def compile_local_audit_policy(
                 values.get("LOCAL_AUDIT_EXTERNAL_EFFECTS_ENABLED")
             ),
             provider_accounts=provider_accounts,
-            publishing_accounts=publishing_accounts,
             approved_domains=frozenset(approved_domains),
-            allowed_publish_visibilities=frozenset(allowed_visibilities),
             max_per_run_spend_usd=max_per_run,
             max_total_spend_usd=max_total,
             cleanup_owner_fingerprint=_fingerprint(cleanup_owner),
@@ -343,14 +317,8 @@ class LocalAuditLiveEffectsGate:
             "LOCAL_AUDIT_PROVIDER_ACCOUNTS": getattr(
                 settings, "local_audit_provider_accounts", None
             ),
-            "LOCAL_AUDIT_PUBLISHING_ACCOUNTS": getattr(
-                settings, "local_audit_publishing_accounts", None
-            ),
             "LOCAL_AUDIT_APPROVED_DOMAINS": getattr(
                 settings, "local_audit_approved_domains", None
-            ),
-            "LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES": getattr(
-                settings, "local_audit_allowed_publish_visibilities", None
             ),
             "LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD": getattr(
                 settings, "local_audit_max_per_run_spend_usd", None
@@ -456,157 +424,6 @@ class LocalAuditLiveEffectsGate:
             )
         )
 
-    def authorize_publish(
-        self,
-        *,
-        platform: str,
-        account_id: str,
-        privacy: str,
-    ) -> None:
-        policy, account, hosts = self._authorize_publishing_account(
-            action="publish",
-            platform=platform,
-            account_id=account_id,
-        )
-        privacy_key = str(privacy).strip().lower()
-        if privacy_key not in policy.allowed_publish_visibilities:
-            self._deny(
-                action="publish",
-                reason="publish_visibility_not_approved",
-                provider=account.provider,
-                endpoint_hosts=hosts,
-                account_hash=account.fingerprint,
-            )
-        self._record(
-            LocalAuditDecision(
-                action="publish",
-                allowed=True,
-                reason="authorized",
-                provider=account.provider,
-                endpoint_hosts=hosts,
-                account_hash=account.fingerprint,
-            )
-        )
-
-    def authorize_publishing_refresh(self, *, platform: str, account_id: str) -> None:
-        _policy, account, hosts = self._authorize_publishing_account(
-            action="publish_token_refresh",
-            platform=platform,
-            account_id=account_id,
-        )
-        self._record(
-            LocalAuditDecision(
-                action="publish_token_refresh",
-                allowed=True,
-                reason="authorized",
-                provider=account.provider,
-                endpoint_hosts=hosts,
-                account_hash=account.fingerprint,
-            )
-        )
-
-    def authorize_oauth_exchange(
-        self,
-        *,
-        platform: str,
-        pending_account_id: str | None = None,
-    ) -> None:
-        """
-        Authorize OAuth token exchange before making the network call.
-        pending_account_id is used for validation but not yet bound to a stored token.
-        """
-        platform_key = _normalize_provider(platform)
-        hosts = tuple(sorted(PUBLISHING_REQUIRED_HOSTS.get(platform_key, ())))
-        policy = self._require_enabled_policy(
-            action="oauth_exchange",
-            provider=platform_key,
-            endpoint_hosts=hosts,
-        )
-        if not hosts:
-            self._deny(
-                action="oauth_exchange",
-                reason="publishing_platform_not_supported",
-                provider=platform_key,
-            )
-        missing_hosts = [host for host in hosts if host not in policy.approved_domains]
-        if missing_hosts:
-            self._deny(
-                action="oauth_exchange",
-                reason="publishing_endpoint_host_not_approved",
-                provider=platform_key,
-                endpoint_hosts=hosts,
-            )
-        # If pending_account_id is provided, validate it's allowlisted
-        if pending_account_id:
-            account = next(
-                (
-                    item
-                    for item in policy.publishing_accounts
-                    if item.provider == platform_key and item.account_id == str(pending_account_id)
-                ),
-                None,
-            )
-            if account is None:
-                self._deny(
-                    action="oauth_exchange",
-                    reason="publishing_account_not_allowlisted",
-                    provider=platform_key,
-                    endpoint_hosts=hosts,
-                )
-        self._record(
-            LocalAuditDecision(
-                action="oauth_exchange",
-                allowed=True,
-                reason="authorized",
-                provider=platform_key,
-                endpoint_hosts=hosts,
-            )
-        )
-
-    def validate_oauth_account(
-        self,
-        *,
-        platform: str,
-        provider_returned_account_id: str,
-    ) -> None:
-        """
-        Validate that the account ID returned by the OAuth provider is allowlisted.
-        Call this after token exchange completes.
-        """
-        platform_key = _normalize_provider(platform)
-        hosts = tuple(sorted(PUBLISHING_REQUIRED_HOSTS.get(platform_key, ())))
-        policy = self._require_enabled_policy(
-            action="oauth_account_validation",
-            provider=platform_key,
-            endpoint_hosts=hosts,
-        )
-        account = next(
-            (
-                item
-                for item in policy.publishing_accounts
-                if item.provider == platform_key
-                and item.account_id == str(provider_returned_account_id)
-            ),
-            None,
-        )
-        if account is None:
-            self._deny(
-                action="oauth_account_validation",
-                reason="provider_returned_account_not_allowlisted",
-                provider=platform_key,
-                endpoint_hosts=hosts,
-            )
-        self._record(
-            LocalAuditDecision(
-                action="oauth_account_validation",
-                allowed=True,
-                reason="authorized",
-                provider=platform_key,
-                endpoint_hosts=hosts,
-                account_hash=account.fingerprint,
-            )
-        )
-
     def safe_report(self) -> dict[str, object]:
         if self._compilation.policy is None:
             return {
@@ -629,52 +446,6 @@ class LocalAuditLiveEffectsGate:
             }
         )
         return report
-
-    def _authorize_publishing_account(
-        self,
-        *,
-        action: str,
-        platform: str,
-        account_id: str,
-    ) -> tuple[LocalAuditPolicy, AuditAccount, tuple[str, ...]]:
-        platform_key = _normalize_provider(platform)
-        hosts = tuple(sorted(PUBLISHING_REQUIRED_HOSTS.get(platform_key, ())))
-        policy = self._require_enabled_policy(
-            action=action,
-            provider=platform_key,
-            endpoint_hosts=hosts,
-        )
-        if not hosts:
-            self._deny(
-                action=action,
-                reason="publishing_platform_not_supported",
-                provider=platform_key,
-            )
-        account = next(
-            (
-                item
-                for item in policy.publishing_accounts
-                if item.provider == platform_key and item.account_id == str(account_id)
-            ),
-            None,
-        )
-        if account is None:
-            self._deny(
-                action=action,
-                reason="publishing_account_not_allowlisted",
-                provider=platform_key,
-                endpoint_hosts=hosts,
-            )
-        missing_hosts = [host for host in hosts if host not in policy.approved_domains]
-        if missing_hosts:
-            self._deny(
-                action=action,
-                reason="publishing_endpoint_host_not_approved",
-                provider=platform_key,
-                endpoint_hosts=hosts,
-                account_hash=account.fingerprint,
-            )
-        return policy, account, hosts
 
     def _require_enabled_policy(
         self,
@@ -815,23 +586,6 @@ def _parse_domains(raw_value: object, errors: list[str]) -> tuple[str, ...]:
     if len(set(domains)) != len(domains):
         errors.append("approved_domains_duplicate")
     return tuple(domains)
-
-
-def _parse_visibilities(raw_value: object, errors: list[str]) -> tuple[str, ...]:
-    if isinstance(raw_value, str):
-        values = [item.strip().lower() for item in raw_value.split(",") if item.strip()]
-    elif isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)):
-        values = [str(item).strip().lower() for item in raw_value if str(item).strip()]
-    else:
-        values = []
-    if not values:
-        errors.append("publish_visibility_required")
-        return ()
-    if any(value not in _ALLOWED_PUBLISH_VISIBILITIES for value in values):
-        errors.append("publish_visibility_invalid")
-    if len(set(values)) != len(values):
-        errors.append("publish_visibility_duplicate")
-    return tuple(values)
 
 
 def _parse_positive_amount(

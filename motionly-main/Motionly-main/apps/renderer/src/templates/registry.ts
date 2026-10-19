@@ -7,7 +7,13 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
     name: "Luxury Reel",
     style: "luxury",
     caption_animation: "gold_shimmer",
-    supported_effects: ["warm_grade", "soft_flash", "gold_shimmer", "ken_burns", "beat_impact"],
+    supported_effects: [
+      "warm_grade",
+      "soft_flash",
+      "gold_shimmer",
+      "ken_burns",
+      "beat_impact",
+    ],
     default_color_grade: "champagne_gold",
     intro: true,
     outro: true,
@@ -21,7 +27,12 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
     name: "Founder Reel",
     style: "founder",
     caption_animation: "slide_up",
-    supported_effects: ["clean_lower_third", "emphasis_pulse", "ken_burns", "zoom_punch"],
+    supported_effects: [
+      "clean_lower_third",
+      "emphasis_pulse",
+      "ken_burns",
+      "zoom_punch",
+    ],
     default_color_grade: "clean_neutral",
     intro: true,
     outro: true,
@@ -35,7 +46,14 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
     name: "Travel Reel",
     style: "travel",
     caption_animation: "karaoke",
-    supported_effects: ["warm_grade", "flash_frame", "ken_burns", "speed_ramp", "beat_impact", "map_card"],
+    supported_effects: [
+      "warm_grade",
+      "flash_frame",
+      "ken_burns",
+      "speed_ramp",
+      "beat_impact",
+      "map_card",
+    ],
     default_color_grade: "sunlit",
     intro: true,
     outro: false,
@@ -49,7 +67,12 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
     name: "Podcast Reel",
     style: "podcast",
     caption_animation: "pulse",
-    supported_effects: ["waveform", "clean_lower_third", "emphasis_pulse", "beat_impact"],
+    supported_effects: [
+      "waveform",
+      "clean_lower_third",
+      "emphasis_pulse",
+      "beat_impact",
+    ],
     default_color_grade: "studio",
     intro: false,
     outro: true,
@@ -63,7 +86,13 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
     name: "Fashion Reel",
     style: "fashion",
     caption_animation: "slide_up",
-    supported_effects: ["flash_frame", "mono_grade", "emphasis_pulse", "ken_burns", "beat_impact"],
+    supported_effects: [
+      "flash_frame",
+      "mono_grade",
+      "emphasis_pulse",
+      "ken_burns",
+      "beat_impact",
+    ],
     default_color_grade: "editorial_mono",
     intro: true,
     outro: true,
@@ -98,7 +127,14 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
     name: "Product Promo Reel",
     style: "luxury",
     caption_animation: "gold_shimmer",
-    supported_effects: ["product_card", "warm_grade", "broll_slide_in", "gradient_ramp", "ken_burns", "speed_ramp"],
+    supported_effects: [
+      "product_card",
+      "warm_grade",
+      "broll_slide_in",
+      "gradient_ramp",
+      "ken_burns",
+      "speed_ramp",
+    ],
     default_color_grade: "champagne_gold",
     intro: true,
     outro: true,
@@ -134,7 +170,10 @@ export function templateForStyle(style: EditPlanStyleKey): TemplateDefinition {
   return getTemplate(styleDefaults[style]);
 }
 
-export function downgradeUnsupportedEffects(templateId: RenderTemplateId, effects: string[]) {
+export function downgradeUnsupportedEffects(
+  templateId: RenderTemplateId,
+  effects: string[],
+) {
   const template = getTemplate(templateId);
   const supported = new Set(template.supported_effects);
   const applied = effects.filter((effect) => supported.has(effect));
@@ -142,6 +181,8 @@ export function downgradeUnsupportedEffects(templateId: RenderTemplateId, effect
   return {
     applied,
     unsupported,
-    downgraded: unsupported.map((effect) => `${effect}->${template.default_color_grade}`),
+    downgraded: unsupported.map(
+      (effect) => `${effect}->${template.default_color_grade}`,
+    ),
   };
 }

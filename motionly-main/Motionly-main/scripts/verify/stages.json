@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "description": "Ordered `pnpm verify` stages. A stage marked not_implemented reports so and never passes. Steps run from the repository root; {python} and {pnpm} are resolved by scripts/verify/verify.mjs.",
+  "stages": [
+    {
+      "name": "static",
+      "status": "implemented",
+      "steps": [
+        {
+          "name": "prettier",
+          "run": "{pnpm} format"
+        },
+        {
+          "name": "eslint and package lint",
+          "run": "{pnpm} lint"
+        },
+        {
+          "name": "typecheck",
+          "run": "{pnpm} typecheck"
+        },
+        {
+          "name": "ruff",
+          "cwd": "apps/api",
+          "run": "{python} -m ruff check app tests scripts"
+        },
+        {
+          "name": "docs links",
+          "run": "{pnpm} docs:check"
+        },
+        {
+          "name": "handoff acceptance ledger",
+          "run": "node scripts/verify_handoff_acceptance.mjs"
+        },
+        {
+          "name": "actionlint",
+          "run": "scripts/verify/actionlint.sh"
+        }
+      ]
+    },
+    {
+      "name": "unit",
+      "status": "implemented",
+      "steps": [
+        {
+          "name": "api pytest",
+          "cwd": "apps/api",
+          "env": {
+            "APP_ENV": "test"
+          },
+          "run": "{python} -m pytest -q -p no:cacheprovider --junitxml={results}/junit/api.xml"
+        },
+        {
+          "name": "web node tests",
+          "cwd": "apps/web",
+          "run": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/web.xml tests/*.test.mjs"
+        },
+        {
+          "name": "web browser specs load (playwright --list)",
+          "cwd": "apps/web",
+          "run": "timeout 180 node node_modules/@playwright/test/cli.js test --list && MOTIONLY_CPU_STAGE_STATE=/dev/null timeout 180 node node_modules/@playwright/test/cli.js test --config playwright.browser.config.mjs --list"
+        },
+        {
+          "name": "worker node tests",
+          "cwd": "apps/worker",
+          "run": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/worker.xml src/*.test.mjs"
+        },
+        {
+          "name": "worker startup check",
+          "cwd": "apps/worker",
+          "run": "node src/worker.mjs --check"
+        },
+        {
+          "name": "renderer typecheck and ts tests",
+          "cwd": "apps/renderer",
+          "env": {
+            "TS_NODE_TRANSPILE_ONLY": "true"
+          },
+          "run": "node --import ./ts-node-register.mjs --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/renderer-ts.xml src/*.test.ts"
+        },
+        {
+          "name": "renderer mjs tests",
+          "cwd": "apps/renderer",
+          "run": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/renderer-mjs.xml src/*.test.mjs"
+        },
+        {
+          "name": "release gate scripts",
+          "run": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/scripts.xml scripts/perf/*.test.mjs scripts/canary-gate.test.mjs scripts/external-verification-gate.test.mjs scripts/production-candidate-evidence.test.mjs"
+        },
+        {
+          "name": "cdn simulator tests",
+          "run": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/cdn-sim.xml scripts/cdn-sim/*.test.mjs"
+        },
+        {
+          "name": "temporal server wrapper (go vet, go test)",
+          "cwd": "infra/temporal/server",
+          "run": "go vet ./... && go test ./..."
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --pytest {results}/junit/api.xml --node {results}/junit/web.xml --node {results}/junit/worker.xml --node {results}/junit/renderer-ts.xml --node {results}/junit/renderer-mjs.xml --node {results}/junit/scripts.xml --node {results}/junit/cdn-sim.xml --summary {results}/skip-audit.json"
+        }
+      ]
+    },
+    {
+      "name": "db",
+      "status": "implemented",
+      "steps": [
+        {
+          "name": "start local supabase (postgres, auth, rest)",
+          "run": "node_modules/.bin/supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector"
+        },
+        {
+          "name": "build the database from empty (every migration, then seed)",
+          "run": "node_modules/.bin/supabase db reset --local"
+        },
+        {
+          "name": "pgTAP schema and RLS tests",
+          "run": "node_modules/.bin/supabase test db"
+        },
+        {
+          "name": "repository contracts and schema-matches-code",
+          "cwd": "apps/api",
+          "env": {
+            "APP_ENV": "test",
+            "RUN_SUPABASE_CONTRACTS": "1"
+          },
+          "run": "../../scripts/verify/with-supabase-env.sh {python} -m pytest -q -p no:cacheprovider --junitxml={results}/junit/db-api.xml tests/integration/test_supabase_repository_contracts.py tests/integration/test_schema_matches_code.py"
+        },
+        {
+          "name": "stop local supabase and delete its volumes",
+          "always": true,
+          "run": "node_modules/.bin/supabase stop --no-backup"
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --require supabase-repository-contracts --pytest {results}/junit/db-api.xml --summary {results}/skip-audit-db.json"
+        }
+      ]
+    },
+    {
+      "name": "contracts",
+      "status": "implemented",
+      "steps": [
+        {
+          "name": "generated API contract",
+          "run": "{pnpm} contracts:check"
+        },
+        {
+          "name": "start ephemeral redis",
+          "run": "docker rm -f -v motionly-verify-redis >/dev/null 2>&1; docker run -d --rm --name motionly-verify-redis -p 127.0.0.1:56380:6379 redis:7.4-alpine >/dev/null && for i in $(seq 1 30); do docker exec motionly-verify-redis redis-cli ping >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1"
+        },
+        {
+          "name": "api redis and temporal contracts",
+          "cwd": "apps/api",
+          "env": {
+            "APP_ENV": "test",
+            "RUN_REDIS_CONTRACTS": "true",
+            "REDIS_URL": "redis://127.0.0.1:56380/14",
+            "RUN_TEMPORAL_TIME_SKIPPING_TESTS": "1"
+          },
+          "run": "{python} -m pytest -q -p no:cacheprovider --junitxml={results}/junit/contracts-api.xml tests/test_queue_control_plane.py tests/test_model_gateway_redis.py tests/test_bullmq_registry.py tests/test_temporal_orchestration.py"
+        },
+        {
+          "name": "worker redis contract",
+          "cwd": "apps/worker",
+          "env": {
+            "RUN_REDIS_CONTRACTS": "true",
+            "REDIS_URL": "redis://127.0.0.1:56380/15"
+          },
+          "run": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/contracts-worker.xml src/redis-contract.test.mjs"
+        },
+        {
+          "name": "stop ephemeral redis",
+          "always": true,
+          "run": "docker rm -f -v motionly-verify-redis >/dev/null 2>&1 || true"
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --require redis-contracts --require temporal-time-skipping --pytest {results}/junit/contracts-api.xml --node {results}/junit/contracts-worker.xml --summary {results}/skip-audit-contracts.json"
+        }
+      ]
+    },
+    {
+      "name": "media",
+      "status": "implemented",
+      "steps": [
+        {
+          "name": "require ffmpeg and ffprobe",
+          "run": "command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null"
+        },
+        {
+          "name": "ffmpeg libx264 goldens and cv2 matte",
+          "cwd": "apps/api",
+          "env": {
+            "APP_ENV": "test"
+          },
+          "run": "{python} -m pytest -q -p no:cacheprovider --junitxml={results}/junit/media-api.xml tests/test_golden_media_pipeline.py tests/test_ffmpeg_render.py tests/test_segmentation_matte.py tests/test_renders.py tests/test_phase8_integrity.py::test_512_mib_upload_is_streamed_with_bounded_python_memory"
+        },
+        {
+          "name": "build pinned renderer image",
+          "run": "docker build --quiet --file apps/worker/Dockerfile --tag motionly-renderer-verify:local . >/dev/null"
+        },
+        {
+          "name": "remotion encoded output (Chromium + ffmpeg)",
+          "run": "docker run --rm --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium motionly-renderer-verify:local sh -lc 'cd /app/apps/renderer && pnpm test:encoded'"
+        },
+        {
+          "name": "remotion frame goldens",
+          "run": "docker run --rm --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium motionly-renderer-verify:local sh -lc 'cd /app/apps/renderer && pnpm test:golden'"
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --pytest {results}/junit/media-api.xml --summary {results}/skip-audit-media.json"
+        }
+      ]
+    },
+    {
+      "name": "stack",
+      "status": "implemented",
+      "steps": [
+        {
+          "name": "build CPU-stage images from this checkout",
+          "run": "{python} scripts/verify/cpu_stage_stack.py build"
+        },
+        {
+          "name": "start the stack from empty volumes",
+          "run": "{python} scripts/verify/cpu_stage_stack.py up"
+        },
+        {
+          "name": "migrations, schema, edge, health and worker roles",
+          "env": {
+            "RUN_SUPABASE_CONTRACTS": "1"
+          },
+          "run": "{python} scripts/verify/cpu_stage_stack.py check"
+        },
+        {
+          "name": "no restarts, OOM kills or failed one-shots",
+          "run": "{python} scripts/verify/cpu_stage_stack.py verdict"
+        },
+        {
+          "name": "tear down the project and its secrets",
+          "always": true,
+          "run": "{python} scripts/verify/cpu_stage_stack.py down"
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --require supabase-repository-contracts --pytest {results}/junit/stack-api.xml --summary {results}/skip-audit-stack.json"
+        }
+      ]
+    },
+    {
+      "name": "browser",
+      "status": "implemented",
+      "note": "Playwright in Chromium, Firefox, WebKit, Pixel 7 and iPhone 14 against the CPU stage through the CDN simulator (HTTPS), with console, page-error, 5xx, failed-request and axe WCAG 2.1 A/AA gates, then a service-log scan and the container verdict.",
+      "steps": [
+        {
+          "name": "build CPU-stage images from this checkout",
+          "run": "{python} scripts/verify/cpu_stage_stack.py build"
+        },
+        {
+          "name": "start the stack from empty volumes",
+          "run": "{python} scripts/verify/cpu_stage_stack.py up"
+        },
+        {
+          "name": "mark the start of the browser suite",
+          "run": "{python} scripts/verify/cpu_stage_stack.py mark browser"
+        },
+        {
+          "name": "browser suite in five setups",
+          "cwd": "apps/web",
+          "run": "timeout 3600 node node_modules/@playwright/test/cli.js test --config playwright.browser.config.mjs"
+        },
+        {
+          "name": "every setup ran, no unexpected failures or flakes, navigation timings",
+          "run": "{python} scripts/verify/browser_report.py"
+        },
+        {
+          "name": "no new error lines in service logs",
+          "run": "{python} scripts/verify/cpu_stage_stack.py logscan --since-mark browser"
+        },
+        {
+          "name": "no restarts, OOM kills or failed one-shots under browser load",
+          "run": "{python} scripts/verify/cpu_stage_stack.py verdict"
+        },
+        {
+          "name": "tear down the project and its secrets",
+          "always": true,
+          "run": "{python} scripts/verify/cpu_stage_stack.py down"
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --node {results}/browser/junit.xml --summary {results}/skip-audit-browser.json"
+        }
+      ]
+    },
+    {
+      "name": "leakage",
+      "status": "implemented",
+      "note": "Fixture registry (fixtures/registry.json) and leakage gate: every stand-in registered, production refuses every fixture switch, production deployment inputs enable none, test infrastructure never in production.",
+      "steps": [
+        {
+          "name": "fixture registry and production refusals (api)",
+          "cwd": "apps/api",
+          "run": "{python} -m pytest -p no:cacheprovider -q tests/test_fixture_leakage.py --junitxml={results}/junit/leakage-api.xml"
+        },
+        {
+          "name": "production workers refuse fixtures",
+          "cwd": "apps/worker",
+          "run": "node --test --test-name-pattern=\"production\" --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/leakage-worker.xml src/ml-execution.test.mjs"
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --pytest {results}/junit/leakage-api.xml --node {results}/junit/leakage-worker.xml --summary {results}/skip-audit-leakage.json"
+        }
+      ]
+    },
+    {
+      "name": "aws",
+      "status": "implemented",
+      "note": "Static validation of infra/aws (template rendered from the edge contract, cfn-lint, cfn-guard with mutation probes, shell syntax), then a local release rehearsal: the real release agent against moto (S3, SSM), a local registry and the CPU-stage images; it applies two releases and restores after a broken third. Never calls AWS.",
+      "steps": [
+        {
+          "name": "install pinned cfn-lint and cfn-guard",
+          "run": "PYTHON={python} bash scripts/aws/install-tools.sh"
+        },
+        {
+          "name": "template matches the edge contract render",
+          "run": "{python} scripts/aws/render_template.py --check"
+        },
+        {
+          "name": "cfn-lint",
+          "run": "${MOTIONLY_AWS_TOOLS:-/tmp/motionly-aws-tools}/venv/bin/cfn-lint --regions ap-south-1 -- infra/aws/motionly.template.json"
+        },
+        {
+          "name": "cfn-guard policy",
+          "run": "${MOTIONLY_AWS_TOOLS:-/tmp/motionly-aws-tools}/cfn-guard validate --rules infra/aws/guard/motionly.guard --data infra/aws/motionly.template.json --show-summary fail"
+        },
+        {
+          "name": "deploy scripts parse",
+          "run": "bash -n infra/aws/bootstrap.sh scripts/deploy/apply_release.sh scripts/deploy/run_on_instance.sh scripts/deploy/bootstrap_compose_host.sh"
+        },
+        {
+          "name": "template contract and guard mutation probes",
+          "cwd": "apps/api",
+          "env": {
+            "RUN_AWS_STATIC_TOOLS": "1"
+          },
+          "run": "{python} -m pytest -p no:cacheprovider -q tests/test_aws_template.py tests/test_aws_guard.py tests/test_aws_release_contract.py tests/test_release_rehearsal.py --junitxml={results}/junit/aws-api.xml"
+        },
+        {
+          "name": "build CPU-stage images from this checkout",
+          "run": "{python} scripts/verify/cpu_stage_stack.py build"
+        },
+        {
+          "name": "release rehearsal (moto, local registry, real agent)",
+          "run": "{python} scripts/release/rehearse_release.py"
+        },
+        {
+          "name": "skip audit",
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --require aws-static-tools --pytest {results}/junit/aws-api.xml --summary {results}/skip-audit-aws.json"
+        }
+      ]
+    },
+    {
+      "name": "deadcode",
+      "status": "not_implemented",
+      "note": "Task 32: knip, vulture, route-caller check.",
+      "steps": []
+    },
+    {
+      "name": "perf",
+      "status": "not_implemented",
+      "note": "Tasks 3/6/32: approved CPU-stage resource and performance budgets (Decision D2).",
+      "steps": []
+    }
+  ]
+}

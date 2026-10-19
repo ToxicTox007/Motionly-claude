@@ -1,5 +1,5 @@
 begin;
-select plan(69);
+select plan(73);
 
 select is(
   (select count(*)::integer from information_schema.tables
@@ -332,8 +332,35 @@ select is(
   'each accepted run has a stable distinct Temporal workflow ID'
 );
 
+-- Replacing the source superseded the first run (202608090007): its
+-- undelivered start was dead-lettered and a cancellation was queued. Every row
+-- here shares now(), so make the second run's start strictly earliest: the
+-- claims below take that start first and then the queued cancellation.
+select is(
+  (select state from public.transactional_outbox
+   where workflow_run_id = (select (result->>'id')::uuid from task7_first_start)
+     and event_type = 'workflow.start'),
+  'dead_letter',
+  'source replacement dead-letters the superseded run''s undelivered start'
+);
+select is(
+  (select state from public.transactional_outbox
+   where workflow_run_id = (select (result->>'id')::uuid from task7_first_start)
+     and event_type = 'workflow.cancelled'),
+  'pending',
+  'source replacement queues a cancellation for the superseded run'
+);
+update public.transactional_outbox
+set available_at = now() - interval '1 second'
+where workflow_run_id = (select (result->>'id')::uuid from task7_second_start)
+  and event_type = 'workflow.start';
+
 create temporary table task7_first_claim as
 select * from public.motionly_claim_workflow_outbox('dispatcher-a', 1, 60);
+select is(
+  (select event_type from task7_first_claim), 'workflow.start',
+  'the earliest available message is claimed first'
+);
 select is(
   (select state from task7_first_claim), 'leased',
   'outbox claim leases one available record'
@@ -370,6 +397,10 @@ select is(
 
 create temporary table task7_second_claim as
 select * from public.motionly_claim_workflow_outbox('dispatcher-b', 1, 60);
+select is(
+  (select event_type from task7_second_claim), 'workflow.cancelled',
+  'the queued cancellation is the next available message'
+);
 create temporary table task7_first_failure as
 select * from public.motionly_fail_workflow_outbox(
   (select id from task7_second_claim),
@@ -437,9 +468,15 @@ select is(
   (select result->'step'->>'state' from task7_complete), 'succeeded',
   'current attempt atomically completes a step'
 );
+-- Run 1: start and source-superseded events; start and cancellation messages.
+-- Run 2: start and completion events; start and successor messages.
 select ok(
-  (select count(*) = 3 from public.workflow_events)
-  and (select count(*) = 3 from public.transactional_outbox),
+  (select count(*) = 2 from public.workflow_events
+   where workflow_run_id = (select (result->>'id')::uuid from task7_second_start))
+  and (select count(*) = 2 from public.transactional_outbox
+   where workflow_run_id = (select (result->>'id')::uuid from task7_second_start))
+  and (select count(*) = 4 from public.workflow_events)
+  and (select count(*) = 4 from public.transactional_outbox),
   'completion appends one event and one successor outbox message'
 );
 
@@ -593,12 +630,24 @@ select throws_ok(
   'workflow projection rejects skipped lifecycle transitions'
 );
 
+-- The first run was superseded by the source replacement above, so the
+-- final-expiry checks use their own run on the current source revision.
+create temporary table task7_final_start as
+select result
+from public.motionly_start_workflow_run(
+  '37000000-0000-4000-8000-000000000001',
+  '47000000-0000-4000-8000-000000000001',
+  '57000000-0000-4000-8000-000000000001', 3,
+  '87000000-0000-4000-8000-000000000001',
+  'first_draft', 'first-draft-v1', 'task7-final-expiry-0001', repeat('a', 64),
+  '17000000-0000-4000-8000-000000000001', '{}'::jsonb
+) as result;
 create temporary table task7_final_begin as
 select result
 from public.motionly_begin_workflow_step(
   '37000000-0000-4000-8000-000000000001',
   '47000000-0000-4000-8000-000000000001',
-  (select (result->>'id')::uuid from task7_first_start),
+  (select (result->>'id')::uuid from task7_final_start),
   'final-expiry-v1', 'analyze_source', 'final-expiry-attempt-0001',
   'worker-final', 60, repeat('8', 64), 1
 ) as result;
@@ -615,7 +664,7 @@ select result
 from public.motionly_begin_workflow_step(
   '37000000-0000-4000-8000-000000000001',
   '47000000-0000-4000-8000-000000000001',
-  (select (result->>'id')::uuid from task7_first_start),
+  (select (result->>'id')::uuid from task7_final_start),
   'final-expiry-v1', 'analyze_source', 'final-expiry-attempt-0002',
   'worker-reaper', 60, repeat('8', 64), 1
 ) as result;
@@ -626,7 +675,7 @@ select is(
 );
 select is(
   (select state from public.workflow_runs
-   where id = (select (result->>'id')::uuid from task7_first_start)),
+   where id = (select (result->>'id')::uuid from task7_final_start)),
   'failed',
   'step exhaustion terminalizes the workflow run'
 );
@@ -641,7 +690,7 @@ select is(
 select throws_ok(
   $$update public.workflow_runs
     set state = 'analyzing', revision = revision + 1
-    where id = (select (result->>'id')::uuid from task7_first_start)$$,
+    where id = (select (result->>'id')::uuid from task7_final_start)$$,
   '55000', 'WORKFLOW_TERMINAL: terminal workflow lifecycle cannot change',
   'terminal workflow cannot be reopened'
 );

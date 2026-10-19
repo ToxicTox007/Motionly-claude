@@ -49,6 +49,7 @@ def test_plan_only_report_covers_every_service_queue_and_feature_path() -> None:
         "supabase-rest",
         "supabase-storage",
         "supabase-gateway",
+        "db-migrate",
         "api",
         "temporal-dispatcher",
         "temporal-worker",
@@ -63,7 +64,6 @@ def test_plan_only_report_covers_every_service_queue_and_feature_path() -> None:
         "provider-worker",
         "planning-worker",
         "remotion-worker",
-        "publishing-worker",
     ]
     assert [service["name"] for service in services] == expected_service_order
     assert len(services) == len(expected_service_order)
@@ -86,9 +86,6 @@ def test_plan_only_report_covers_every_service_queue_and_feature_path() -> None:
             "default": "denied",
             "model_boundary": (
                 "ModelGateway.invoke before budget reservation and adapter invocation"
-            ),
-            "publishing_boundary": (
-                "execute_publish_job before OAuth refresh, signed download, and publish"
             ),
         },
     }

@@ -63,9 +63,3 @@ services:
     build:
       context: ..
       dockerfile: apps/worker/Dockerfile
-
-  publishing-worker:
-    image: motionly-publishing-worker:dev
-    build:
-      context: ..
-      dockerfile: apps/worker/Dockerfile.python

@@ -7,13 +7,14 @@ import { Modal } from "@/components/brutal-ui";
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { useFocusTrap } from "@/lib/useFocusTrap";
-import type { EditPlanRecordSummary, PlanSnapshotSummary } from "@motionly/shared";
+import type {
+  EditPlanRecordSummary,
+  PlanSnapshotSummary,
+} from "@motionly/shared";
 
 interface VersionHistoryPanelProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   activePlan: EditPlanRecordSummary | null;
   onPlanRestored: (plan: EditPlanRecordSummary) => void;
 }
@@ -21,8 +22,6 @@ interface VersionHistoryPanelProps {
 export function VersionHistoryPanel({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   activePlan,
   onPlanRestored,
 }: VersionHistoryPanelProps) {
@@ -42,8 +41,6 @@ export function VersionHistoryPanel({
       `${env.apiBaseUrl}/projects/${projectId}/plans/snapshots`,
       {
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Version history could not be loaded.",
       },
     )
@@ -56,7 +53,7 @@ export function VersionHistoryPanel({
     return () => {
       canceled = true;
     };
-  }, [apiAccessToken, projectId, userId, workspaceId]);
+  }, [projectId, workspaceId]);
 
   async function saveSnapshot() {
     if (!activePlan) return;
@@ -67,8 +64,6 @@ export function VersionHistoryPanel({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Snapshot could not be saved.",
           body: {
             plan_id: activePlan.id,
@@ -95,8 +90,6 @@ export function VersionHistoryPanel({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Version could not be restored.",
           body: {},
         },
@@ -115,7 +108,9 @@ export function VersionHistoryPanel({
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-black uppercase tracking-tight">Version history</h2>
+        <h2 className="text-lg font-black uppercase tracking-tight">
+          Version history
+        </h2>
         <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
           Save named, restorable copies of the complete edit manifest.
         </p>
@@ -157,9 +152,14 @@ export function VersionHistoryPanel({
                 className="card rounded border-2 border-foreground p-3 flex items-center justify-between gap-3 bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
               >
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <History className="size-4 shrink-0 text-primary" strokeWidth={2} />
+                  <History
+                    className="size-4 shrink-0 text-primary"
+                    strokeWidth={2}
+                  />
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-bold text-foreground">{snapshot.name}</p>
+                    <p className="truncate text-xs font-bold text-foreground">
+                      {snapshot.name}
+                    </p>
                     <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
                       Plan v{snapshot.source_plan_version} ·{" "}
                       {new Date(snapshot.created_at).toLocaleDateString()}

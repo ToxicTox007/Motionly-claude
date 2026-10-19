@@ -1,42 +1,47 @@
-
 > **Temporal mTLS/authz release gate:** the custom Temporal server image is never automatically activated without a completed same-VM overlap proof. Follow `docs/ops/temporal-mtls-canary.md`; `temporal_canary_gate.sh` refuses activation/migration when the proof is absent or incomplete. No live canary is claimed by this repository.
-# Compose production deployment on one Azure VM
 
-Motionly production has exactly one supported runtime: the digest-only `infra/docker-compose.gpu.yml` stack on one Azure VM. Managed-cluster, autoscaling, Railway, direct tag deployment, and VMSS paths are unsupported. A VMSS is explicitly unsupported until media state, PostgreSQL, Redis, and local model/cache storage have an approved shared-state/externalization design.
+# Compose production deployment on one AWS instance
+
+Motionly production has exactly one supported runtime: the digest-only `infra/docker-compose.gpu.yml` stack on the one EC2 instance of the `infra/aws` stack in Mumbai ([AWS infrastructure](aws-infrastructure.md)). Managed-cluster, autoscaling, Railway, direct tag deployment, and VMSS paths are unsupported. A VMSS is explicitly unsupported until media state, PostgreSQL, Redis, and local model/cache storage have an approved shared-state/externalization design, and neither is an autoscaling group.
 
 ## One-time host bootstrap
 
-1. Provision a Linux VM with Docker Compose v2, Azure CLI, Cosign, Python 3, the NVIDIA Container Toolkit, and a system-assigned managed identity. Restrict SSH; GitHub deployment uses Azure VM Run Command rather than SSH.
-2. Grant the VM identity **Key Vault Secrets User** on the Motionly vault and **Storage Blob Data Reader** on the release container/account. Grant its application identity only GHCR package read access; store the resulting read-only GHCR token in Key Vault as `ghcr-read-token`.
-3. From a reviewed checkout, run `sudo scripts/deploy/bootstrap_compose_host.sh`. It installs `/opt/motionly/agent/bin/apply-release` and creates `/etc/motionly/host.env` if absent.
-4. Fill only non-secret resource identifiers and domains in `/etc/motionly/host.env`, then set it to `root:root` and `0600`. The agent requires `MOTIONLY_KEY_VAULT_NAME`, `MOTIONLY_RELEASE_STORAGE_ACCOUNT`, `MOTIONLY_GHCR_USERNAME`, `MOTIONLY_APP_DOMAIN`, `MOTIONLY_API_DOMAIN`, and `MOTIONLY_SUPABASE_DOMAIN`.
-5. Create the documented Key Vault secrets: `postgres-password`, `redis-password`, `supabase-jwt-secret`, `supabase-anon-key`, `supabase-service-role-key`, `admin-api-token`, `worker-api-token`, `publish-token-encryption-key`, `publish-oauth-state-secret`, `groq-api-key`, `openrouter-api-key`, `runway-api-key`, optional `azure-openai-api-key`, `metrics-bearer-token`, `sentry-dsn`, and the read-only `ghcr-read-token`.
+1. Deploy the `infra/aws` stack. Its first-boot script mounts the data volume at `/srv/motionly` and installs Docker, a pinned Docker Compose plugin and Cosign; the AWS CLI and Python 3 come with Amazon Linux 2023. The instance has no SSH: operators use SSM Session Manager and GitHub uses SSM Run Command.
+2. Create the SSM SecureString parameters under `/motionly/<environment>/`: `postgres-password`, `redis-password`, `temporal-db-password`, `supabase-jwt-secret`, `supabase-anon-key`, `supabase-service-role-key`, `admin-api-token`, `worker-api-token`, `metrics-bearer-token`, the provider keys production uses (`groq-api-key`, `openrouter-api-key`, `runway-api-key`, optional `azure-openai-api-key`), `edge/origin-verify` (the CloudFront origin secret; `edge/origin-verify-previous` only during a rotation), the base64-encoded Temporal certificate and key parameters (`temporal-ca-cert` through `temporal-diagnostics-key`), and `registry-read-token`, a read-only GHCR token. The instance role can read only this path.
+3. From a checkout of the release tag on the instance, run `sudo scripts/deploy/bootstrap_compose_host.sh`. It installs `/opt/motionly/agent/bin/apply-release` and creates `/etc/motionly/host.env` if absent.
+4. Fill only non-secret values in `/etc/motionly/host.env` (`root:root`, `0600`): `MOTIONLY_ENVIRONMENT`, `MOTIONLY_RELEASE_BUCKET` (the stack's `ReleasesBucketName` output), `MOTIONLY_COMPUTE_PROFILE` (the stack's `ComputeProfile`), `MOTIONLY_REGISTRY_USERNAME`, and `MOTIONLY_APP_DOMAIN`, the CloudFront domain from the stack's `PublicOrigin` output. That domain is the one public origin: the agent writes `PUBLIC_ORIGIN=https://<app domain>`, and the ingress routes `/api` and `/supabase` on it.
 
-The VM agent obtains them only through managed identity, creates per-release `0700` directories and `0600` files, and mounts them as Compose secrets. GitHub Actions never sends a secret as a Run Command argument.
+The agent reads the parameters only through the instance role, writes them to per-release `0700` directories as read-only `0444` files, and mounts them as Compose secrets. No secret is ever an SSM Run Command argument.
 
 ## Release flow
 
-1. A `v*` tag runs the supply-chain workflow. It builds six linux/amd64 components, scans and signs each pushed `ghcr.io/...@sha256:...` image, and creates a signed release manifest mapping all ten Compose image variables to those digests.
-2. `deploy-compose-vm.yml` runs automatically after a successful tag supply-chain run. It uses GitHub Actions OIDC (`azure/login`) to upload the signed manifest, certificate, signature, and configuration/migration bundle to Azure Blob Storage.
-3. The staging job calls `apply-release --release-id <sha> --preflight` on the same single host. This validates blob access, manifest digest shape, bundle layout, and Cosign identity without changing containers or reading application secrets.
-4. The `production` GitHub Environment must be configured with required reviewers. After approval, the workflow passes only the release SHA to Azure VM Run Command. The host validates the signed manifest, reads Key Vault values locally, performs `docker compose pull`, brings up the full topology, and checks API health.
+1. A `v*` tag runs the supply-chain workflow. It builds the linux/amd64 components, scans and signs each pushed `ghcr.io/...@sha256:...` image, and creates a signed release manifest mapping every Compose image variable to those digests.
+2. `deploy-aws.yml` runs after a successful tag supply-chain run. It assumes the stack's `GitHubDeployRole` through GitHub OIDC and uploads the bundle, certificate, signature and, last, the signed manifest to the releases bucket with conditional writes, so a published release is never overwritten.
+3. It then runs `apply-release --release-id <sha> --preflight` on the instance over SSM Run Command (`scripts/deploy/run_on_instance.sh`, which waits for the command and fails unless it succeeded). Preflight validates the S3 objects, manifest digests, image registry, bundle layout and Cosign identity without changing containers or reading application secrets.
+4. The `production` GitHub Environment must have required reviewers; the deploy role trusts only that environment. After approval, the workflow passes only the release SHA to the instance. The agent validates the signed manifest, reads the SSM parameters, pulls the images by digest, brings up the topology (`--profile gpu` for `ComputeProfile=gpu`) and waits until every service reports healthy; the long-running services all have health checks, so a crash-looping service fails the release.
 
-Required GitHub configuration values are `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `AZURE_VM_NAME`, and `AZURE_RELEASE_STORAGE_ACCOUNT`. They are non-secret GitHub Environment/repository variables. The Azure federated credential must be restricted to this repository and the deployment workflow/environment subject.
+Every `docker compose up` runs the one-shot `db-migrate` service before any application service starts. It applies pending `supabase/migrations` files in version order under an advisory lock and records each version in `supabase_migrations.schema_migrations`, the table the Supabase CLI uses (see `infra/db/migrate.sh`). If it fails, no application service starts. Postgres initializes an empty volume with the Supabase image's own init scripts plus `infra/db/roles.sql`, which sets the Auth, REST and Storage login passwords from the `postgres_password` secret.
+
+The workflow needs three non-secret GitHub variables in the `production` environment: `AWS_DEPLOY_ROLE_ARN` (stack output `GitHubDeployRoleArn`), `AWS_RELEASE_BUCKET` (`ReleasesBucketName`) and `AWS_INSTANCE_ID` (`InstanceId`).
+
+## Release rehearsal
+
+`pnpm verify --stage aws` rehearses this path locally (`scripts/release/rehearse_release.py`). It runs the real agent against [moto](https://github.com/getmoto/moto) standing in for S3 and SSM, a local registry holding the CPU-stage images, and a release signed with a throwaway Cosign key. It publishes and applies two releases, checks the public origin after each, breaks a third so it never becomes healthy and checks that the agent restores the second (still `current`) and the origin keeps answering, and tears everything down. It writes `test-results/aws/rehearsal.json`; a failed run also keeps each service's state and recent log in `test-results/aws/rehearsal-services/` (throwaway rehearsal secrets only). It needs Docker and the CPU-stage images, which the stage builds first, so CI runs it in its own `aws-release-rehearsal` job. In rehearsal the agent permits endpoint overrides, a loopback registry, a key-based signature and the CPU-stage overlay (labelled test fixtures, no GPU); a production or staging host refuses each of them.
 
 ## Rollback and evidence
 
-The host records `current` and `previous` release directories plus copies of their manifests under `/var/lib/motionly`. If activation health checks fail, the agent automatically activates the previous digest manifest. An operator can request the same rollback path through Run Command:
+The host records `current` and `previous` release directories plus copies of their manifests under `MOTIONLY_RELEASE_ROOT`. If activation health checks fail, the agent automatically activates the previous digest manifest. An operator can request the same rollback over SSM Run Command or Session Manager:
 
 ```sh
 sudo /opt/motionly/agent/bin/apply-release --rollback
 ```
 
-Do not use `docker compose pull` with tags, edit a release env file by hand, or reset volumes during rollback. Capture `docker compose logs`, the signed release manifest/certificate/signature, Key Vault audit records, and GitHub Environment approval history in the incident record.
+Do not use `docker compose pull` with tags, edit a release env file by hand, or reset volumes during rollback. Capture `docker compose logs`, the signed release manifest/certificate/signature, CloudTrail records of the SSM commands and parameter reads, and GitHub Environment approval history in the incident record.
 
 ## Secrets and access boundaries
 
-- GitHub OIDC identities upload only non-secret release artifacts to Blob Storage and invoke Run Command.
-- The VM identity reads artifacts and Key Vault values; it has no package write grant.
-- The GHCR token is read-only and never appears in workflow logs or Run Command parameters.
+- The GitHub deploy role can only write release objects to the releases bucket and run `AWS-RunShellScript` on this instance.
+- The instance role reads release objects and `/motionly/<environment>/*` parameters; it cannot write releases or delete backups.
+- The registry token is read-only and never appears in workflow logs or command parameters.
 - API and worker credentials are file-backed `/run/secrets/*`; only unavoidable Supabase/Redis bootstrap fields are written to the protected per-release env file.
-- Keep one VM: local PostgreSQL, Redis, storage, model cache, and Compose volumes are host-affine by design.
+- Keep one instance: local PostgreSQL, Redis, storage, model cache, and Compose volumes live on the instance's data volume by design.

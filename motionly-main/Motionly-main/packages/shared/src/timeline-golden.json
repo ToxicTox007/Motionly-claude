@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "description": "Hand-computed preview/export timing expectations for the canonical source-timeline evaluator. Clips are deliberately unsorted, contain a zero-length clip, and carry stale output positions so normalization is exercised. Normalized output layout: A 0-1000 (source 0-1000), B 1000-2500 (source 3000-4500), D 2500-3700 (source 8000-9200).",
+  "clips": [
+    {
+      "id": "D",
+      "source_start_ms": 8000,
+      "source_end_ms": 9200,
+      "output_start_ms": 5000,
+      "output_end_ms": 6200
+    },
+    {
+      "id": "A",
+      "source_start_ms": 0,
+      "source_end_ms": 1000,
+      "output_start_ms": 0,
+      "output_end_ms": 1000
+    },
+    {
+      "id": "C",
+      "source_start_ms": 6000,
+      "source_end_ms": 6000,
+      "output_start_ms": 2500,
+      "output_end_ms": 2500
+    },
+    {
+      "id": "B",
+      "source_start_ms": 3000,
+      "source_end_ms": 4500,
+      "output_start_ms": 1000,
+      "output_end_ms": 2500
+    }
+  ],
+  "duration_ms": 3700,
+  "samples": [
+    { "output_ms": 0, "edge": "start", "source_ms": 0 },
+    { "output_ms": 500, "edge": "start", "source_ms": 500 },
+    { "output_ms": 999, "edge": "start", "source_ms": 999 },
+    { "output_ms": 1000, "edge": "start", "source_ms": 3000 },
+    { "output_ms": 1000, "edge": "end", "source_ms": 1000 },
+    { "output_ms": 1200, "edge": "start", "source_ms": 3200 },
+    { "output_ms": 2499, "edge": "start", "source_ms": 4499 },
+    { "output_ms": 2500, "edge": "start", "source_ms": 8000 },
+    { "output_ms": 2500, "edge": "end", "source_ms": 4500 },
+    { "output_ms": 3000, "edge": "start", "source_ms": 8500 },
+    { "output_ms": 3700, "edge": "start", "source_ms": 9200 },
+    { "output_ms": 3700, "edge": "end", "source_ms": 9200 },
+    { "output_ms": 5000, "edge": "start", "source_ms": 9200 }
+  ]
+}

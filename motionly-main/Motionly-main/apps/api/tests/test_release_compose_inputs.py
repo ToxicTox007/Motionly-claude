@@ -83,6 +83,10 @@ def test_release_compose_input_writer_uses_manifest_digests_and_0600_files(tmp_p
     assert environment["TEMPORAL_BOOTSTRAP_ADMIN_UNTIL"].endswith("Z")
     assert environment["TEMPORAL_ADMIN_TOOLS_IMAGE"].startswith("temporalio/admin-tools@sha256:")
     assert environment["SECRETS_DIR"] == str(secret_directory)
+    # One public origin; the ingress serves the app domain.
+    assert environment["APP_DOMAIN"] == "app.release.test"
+    assert environment["PUBLIC_ORIGIN"] == "https://app.release.test"
+    assert "API_DOMAIN" not in environment and "SUPABASE_DOMAIN" not in environment
     assert stat.S_IMODE(environment_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(secret_directory.stat().st_mode) == 0o700
     for secret_name in (
@@ -100,7 +104,7 @@ def test_release_compose_input_writer_uses_manifest_digests_and_0600_files(tmp_p
         "temporal_namespace_bootstrap_cert",
         "temporal_diagnostics_cert",
     ):
-        assert stat.S_IMODE((secret_directory / secret_name).stat().st_mode) == 0o600
+        assert stat.S_IMODE((secret_directory / secret_name).stat().st_mode) == 0o444
     certificate = subprocess.run(
         [
             "openssl",

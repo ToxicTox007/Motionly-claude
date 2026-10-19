@@ -10,8 +10,14 @@ import {
 const rel = (path) => new URL(path, import.meta.url);
 
 test("renderer consumes the shared canonical frame conversion helpers", async () => {
-  const sharedSource = await readFile(rel("../../../packages/shared/src/timeline.ts"), "utf8");
-  const rendererSource = await readFile(rel("./components/VideoScene.tsx"), "utf8");
+  const sharedSource = await readFile(
+    rel("../../../packages/shared/src/timeline.ts"),
+    "utf8",
+  );
+  const rendererSource = await readFile(
+    rel("./components/VideoScene.tsx"),
+    "utf8",
+  );
 
   assert.match(sharedSource, /DEFAULT_RENDER_FPS = 30/);
   assert.match(sharedSource, /millisecondsToFrameStart/);
@@ -31,8 +37,16 @@ test("all renderer timeline components use shared frame helpers, not ad-hoc roun
     "./components/Captions.tsx",
   ]) {
     const source = await readFile(rel(file), "utf8");
-    assert.match(source, /from "@motionly\/shared"/, `${file} should import shared helpers`);
-    assert.match(source, /millisecondsToFrameStart/, `${file} should use millisecondsToFrameStart`);
+    assert.match(
+      source,
+      /from "@motionly\/shared"/,
+      `${file} should import shared helpers`,
+    );
+    assert.match(
+      source,
+      /millisecondsToFrameStart/,
+      `${file} should use millisecondsToFrameStart`,
+    );
     assert.doesNotMatch(
       source,
       /Math\.round\([^)]*\/\s*1000[^)]*\*\s*fps/,
@@ -57,7 +71,10 @@ test("web preview consumes the shared canonical timeline evaluator", async () =>
     "utf8",
   );
 
-  assert.match(libTimeline, /export \{ outputMsToSourceMs \} from "@motionly\/shared"/);
+  assert.match(
+    libTimeline,
+    /export \{ outputMsToSourceMs \} from "@motionly\/shared"/,
+  );
   assert.match(playbackSync, /resolveSourceClipAtOutputMs/);
   assert.match(playbackSync, /from "@motionly\/shared"/);
   // The browser-only boundary fudge and the inline clip walker are gone.
@@ -66,12 +83,17 @@ test("web preview consumes the shared canonical timeline evaluator", async () =>
 });
 
 test("the duplicated web timeline mapping module has been removed", async () => {
-  await assert.rejects(() => readFile(rel("../../web/lib/timeline-time.mjs"), "utf8"));
+  await assert.rejects(() =>
+    readFile(rel("../../web/lib/timeline-time.mjs"), "utf8"),
+  );
 });
 
 test("canonical evaluator matches the shared preview/export timing golden", async () => {
   const golden = JSON.parse(
-    await readFile(rel("../../../packages/shared/src/timeline-golden.json"), "utf8"),
+    await readFile(
+      rel("../../../packages/shared/src/timeline-golden.json"),
+      "utf8",
+    ),
   );
   const clips = normalizeSourceClips(golden.clips);
   assert.equal(outputTimelineDurationMs(clips), golden.duration_ms);

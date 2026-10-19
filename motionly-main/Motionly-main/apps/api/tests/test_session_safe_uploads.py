@@ -693,14 +693,15 @@ def test_schema_validation_storage_signer_caps_and_route_registration(
         service_role_key="service-role",
     )
 
-    def fake_sign(*, bucket, path, expires_in_seconds):
-        observed.append(expires_in_seconds)
+    def fake_sign(*, bucket, path, expires_in_seconds, link_base):
+        observed.append((expires_in_seconds, link_base))
         return f"https://storage.invalid/{bucket}/{path}"
 
     monkeypatch.setattr(signer, "_create_supabase_signed_download_url", fake_sign)
     signer.create_signed_download(bucket="raw", path="x", expires_in_seconds=7200)
     signer.create_signed_worker_download(bucket="raw", path="x", expires_in_seconds=9999)
-    assert observed == [300, 7200]
+    # Without a separate public URL, browser and worker links share one base.
+    assert observed == [(300, "https://example.supabase.co"), (7200, "https://example.supabase.co")]
 
     monkeypatch.setenv("APP_ENV", "local")
     monkeypatch.setenv("SETTINGS_ENV_FILE", "none")

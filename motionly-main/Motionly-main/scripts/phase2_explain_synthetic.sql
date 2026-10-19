@@ -147,27 +147,9 @@ select
   now() - (gs || ' seconds')::interval
 from generate_series(1, 20000) as gs;
 
-insert into public.publish_connections (
-  workspace_id,
-  platform,
-  access_token,
-  external_account_id,
-  account_name,
-  created_at
-)
-select
-  '42000000-0000-4000-8000-000000000001',
-  'tiktok',
-  'token-' || gs::text,
-  'acct-' || gs::text,
-  'Account ' || gs::text,
-  now() - (gs || ' seconds')::interval
-from generate_series(1, 20000) as gs;
-
 analyze public.worker_heartbeats;
 analyze public.uploaded_videos;
 analyze public.edit_plans;
-analyze public.publish_connections;
 
 \echo 'worker_heartbeats_latest'
 explain (analyze, buffers)
@@ -200,16 +182,5 @@ where workspace_id = '42000000-0000-4000-8000-000000000001'
   and transcript_id = '44000000-0000-4000-8000-000000000001'
 order by updated_at desc
 limit 1;
-
-\echo 'publish_connections_workspace_list'
-explain (analyze, buffers)
-select id, workspace_id, platform, access_token, refresh_token,
-       token_expires_at, refresh_token_expires_at, scopes, external_account_id,
-       account_name, connection_status, last_refresh_at,
-       last_refresh_failure_reason, created_at
-from public.publish_connections
-where workspace_id = '42000000-0000-4000-8000-000000000001'
-order by created_at desc
-limit 100;
 
 rollback;

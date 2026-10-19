@@ -45,6 +45,7 @@ def test_live_health_returns_request_id() -> None:
         "status": "ok",
         "service": "motionly-api",
         "environment": get_settings().app_env,
+        "gpu_stage": "enabled",
         "request_id": "req_test",
     }
 
@@ -72,6 +73,7 @@ def test_public_readiness_is_cheap_and_does_not_probe_dependencies(monkeypatch, 
         "status": "ok",
         "service": "motionly-api",
         "environment": "test",
+        "gpu_stage": "enabled",
         "request_id": "req_ready",
     }
 

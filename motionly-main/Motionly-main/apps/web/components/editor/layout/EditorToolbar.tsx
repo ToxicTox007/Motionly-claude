@@ -221,15 +221,25 @@ function ShortcutGuide() {
         <p className="mb-2 text-sm font-semibold">Precision controls</p>
         <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-sm">
           <dt>Play backward / pause / forward</dt>
-          <dd><ShortcutKeys keys="J K L" /></dd>
+          <dd>
+            <ShortcutKeys keys="J K L" />
+          </dd>
           <dt>Trim selected clip to playhead</dt>
-          <dd><ShortcutKeys keys="[ ]" /></dd>
+          <dd>
+            <ShortcutKeys keys="[ ]" />
+          </dd>
           <dt>Undo / redo</dt>
-          <dd><ShortcutKeys keys="Ctrl/⌘ Z" /></dd>
+          <dd>
+            <ShortcutKeys keys="Ctrl/⌘ Z" />
+          </dd>
           <dt>Switch editor mode</dt>
-          <dd><ShortcutKeys keys={EDITOR_MODE_SHORTCUT} /></dd>
+          <dd>
+            <ShortcutKeys keys={EDITOR_MODE_SHORTCUT} />
+          </dd>
           <dt>Move focused timeline clip</dt>
-          <dd><ShortcutKeys keys="← →" /></dd>
+          <dd>
+            <ShortcutKeys keys="← →" />
+          </dd>
         </dl>
       </div>
     </details>
@@ -272,7 +282,12 @@ function IconCommandButton({
 }
 
 function SaveBadge({ status }: { status: "saving" | "saved" | "error" }) {
-  const label = status === "saving" ? "Saving…" : status === "error" ? "Save failed" : "Saved";
+  const label =
+    status === "saving"
+      ? "Saving…"
+      : status === "error"
+        ? "Save failed"
+        : "Saved";
   return (
     <div
       className="flex min-h-9 items-center gap-1.5 rounded border-2 border-foreground bg-surface px-2.5 text-xs font-semibold text-foreground shadow-brutal-sm"
@@ -287,7 +302,9 @@ function SaveBadge({ status }: { status: "saving" | "saved" | "error" }) {
           status === "saved" && "bg-success",
         )}
       />
-      <span className={status === "error" ? "text-danger" : undefined}>{label}</span>
+      <span className={status === "error" ? "text-danger" : undefined}>
+        {label}
+      </span>
     </div>
   );
 }

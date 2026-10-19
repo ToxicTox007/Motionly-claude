@@ -54,8 +54,6 @@ interface TimelinePanelProps {
   onClipSelect: (clipId: string | null) => void;
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   activePlan: EditPlanRecordSummary | null;
   captionTrack: CaptionTrackSummary | null;
   musicSelection: MusicSelectionSummary | null;
@@ -92,8 +90,6 @@ export function TimelinePanel({
   onClipSelect,
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   activePlan,
   captionTrack,
   musicSelection,
@@ -271,8 +267,6 @@ export function TimelinePanel({
       return editorApiRequest<Record<string, any>>(`${env.apiBaseUrl}${path}`, {
         method: "PATCH",
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Timeline changes could not be saved. Please try again.",
         body: {
           ...(body as Record<string, unknown>),
@@ -280,7 +274,7 @@ export function TimelinePanel({
         },
       });
     },
-    [apiAccessToken, getExpectedRevision, userId, workspaceId],
+    [getExpectedRevision, workspaceId],
   );
 
   const saveCuts = useCallback(
@@ -1267,7 +1261,10 @@ export function TimelinePanel({
           className="flex flex-shrink-0 flex-col border-r-2 border-foreground bg-surface"
           style={{ width: LABEL_WIDTH }}
         >
-          <div className="border-b-2 border-foreground bg-background" style={{ height: RULER_HEIGHT }} />
+          <div
+            className="border-b-2 border-foreground bg-background"
+            style={{ height: RULER_HEIGHT }}
+          />
           {tracks.map((track) => (
             <div
               key={track.kind}
@@ -1658,12 +1655,15 @@ const MobileTimelineView = React.memo(
                     trackToneClass(track.kind),
                   )}
                 >
-                  <PixelIcon name={trackIconName(track.kind)} className="size-3" />
+                  <PixelIcon
+                    name={trackIconName(track.kind)}
+                    className="size-3"
+                  />
                   <span>{track.label}</span>
                 </div>
                 <div className="relative h-full w-full">
                   {track.clips.length === 0 ? (
-                    <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground/60">
+                    <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">
                       Empty
                     </div>
                   ) : (
@@ -1711,7 +1711,7 @@ const MobileTimelineView = React.memo(
       prev.tracks === next.tracks &&
       prev.totalDurationMs === next.totalDurationMs
     );
-  }
+  },
 );
 
 interface ClipBlockProps {
@@ -1891,7 +1891,8 @@ const ClipBlock = React.memo(
         const deltaMs = msFromPointer(moveEvent.clientX) - startPointerMs;
         const nextMs = startClipMs + deltaMs;
         const snapped = getSnappedMs(nextMs, clip.id);
-        const previewStart = Math.abs(snapped - nextMs) <= 150 ? snapped : nextMs;
+        const previewStart =
+          Math.abs(snapped - nextMs) <= 150 ? snapped : nextMs;
         setDragPreview({
           clipId: clip.id,
           startMs: previewStart,
@@ -2075,10 +2076,7 @@ const Playhead = React.memo(function Playhead({
       style={{ left: pct, transform: "translateX(-50%)" }}
     >
       <div className="h-3 w-3 rotate-45 border-2 border-foreground bg-danger" />
-      <div
-        className="w-1 bg-danger"
-        style={{ height: totalHeight - 8 }}
-      />
+      <div className="w-1 bg-danger" style={{ height: totalHeight - 8 }} />
     </div>
   );
 });
@@ -2096,11 +2094,7 @@ const TimelineRuler = React.memo(function TimelineRuler({
     const next = ticks[index + 1];
     if (!next) return [];
     const gap = next.ms - tick.ms;
-    return [
-      tick.ms + gap * 0.25,
-      tick.ms + gap * 0.5,
-      tick.ms + gap * 0.75,
-    ];
+    return [tick.ms + gap * 0.25, tick.ms + gap * 0.5, tick.ms + gap * 0.75];
   });
 
   return (

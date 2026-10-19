@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from app.api.errors import ApiError
 from app.api.internal_jobs import require_worker_token
-from app.api.publishing import _oauth_state_secret
 from app.core.config import get_settings
 from app.core.middleware import security_headers_middleware
 from app.core.security import constant_time_token_matches
@@ -27,14 +26,12 @@ def _production_settings(*, process_role: str = "api", **updates):
         "api_public_base_url": "https://api.example.com",
         "api_cors_origins": "https://app.example.com",
         "supabase_url": "https://project.supabase.co",
+        "supabase_public_url": "https://app.example.com/supabase",
         "supabase_jwt_secret": "jwt-secret",
         "supabase_service_role_key": "service-role",
         "redis_url": "redis://redis.example.com:6379",
         "worker_api_token": "worker-only-token",
         "admin_api_token": None,
-        "publish_oauth_state_secret": "oauth-state-only-secret",
-        "publish_token_encryption_key": "publish-token-encryption-key-with-32-bytes",
-        "sentry_dsn": "https://public@example.ingest.sentry.io/1",
         "metrics_bearer_token": "metrics-token",
         "skip_api_auth": False,
         "allow_fixture_providers": False,
@@ -59,11 +56,48 @@ def _production_settings(*, process_role: str = "api", **updates):
         "pexels_api_key": "pexels-key",
         "pixabay_api_key": "pixabay-key",
         "billing_enabled": False,
-        "publish_sync_completion": False,
         "force_local_media_storage": False,
     }
     values.update(updates)
     return get_settings().model_copy(update=values)
+
+
+def test_production_requires_the_https_supabase_url_browsers_use() -> None:
+    """Signed media links are opened by browsers, so they need the public URL (N12).
+
+    Python workers run jobs through the same app (app.workers.domain_job), so
+    the links they sign need it too. The Compose API runs self-hosted Temporal,
+    whose validation path returns early, so that path is covered explicitly.
+    """
+    self_hosted_api = {
+        "temporal_deployment_mode": "self_hosted",
+        "temporal_address": "temporal:7233",
+        "temporal_namespace": "motionly",
+        "temporal_task_queue": "motionly-orchestration",
+        "temporal_server_root_ca_path": "/run/secrets/temporal_ca_cert",
+        "temporal_client_cert_path": "/run/secrets/temporal_api_cert",
+        "temporal_client_private_key_path": "/run/secrets/temporal_api_key",
+        "temporal_server_name": "temporal",
+        "temporal_client_role": "api",
+        "temporal_identity": "motionly-api",
+        "temporal_tls_enabled": True,
+    }
+    for overrides in ({"process_role": "api"}, {"process_role": "worker"}, self_hosted_api):
+        _validate_production_settings(_production_settings(**overrides))
+        with pytest.raises(RuntimeError, match="SUPABASE_PUBLIC_URL"):
+            _validate_production_settings(
+                _production_settings(**overrides, supabase_public_url=None)
+            )
+        for value in (
+            "http://app.example.com/supabase",
+            "https://localhost/supabase",
+            "https://127.0.0.1/supabase",
+            "https://app.example.invalid/supabase",
+        ):
+            with pytest.raises(RuntimeError, match="SUPABASE_PUBLIC_URL"):
+                _validate_production_settings(
+                    _production_settings(**overrides, supabase_public_url=value)
+                )
 
 
 def _custom_gateway_route(*, capability: str, revision: str = "model-2026-07-14") -> dict:
@@ -167,32 +201,18 @@ def test_internal_auth_accepts_worker_token_and_rejects_admin_token() -> None:
     assert exc_info.value.status_code == 403
 
 
-def test_publish_oauth_state_never_falls_back_to_admin_token() -> None:
-    settings = SimpleNamespace(
-        publish_oauth_state_secret=None,
-        admin_api_token="admin-only-token",
-    )
-
-    with pytest.raises(ApiError) as exc_info:
-        _oauth_state_secret(settings)
-    assert exc_info.value.code == "publish_oauth_not_configured"
-
-
-def test_production_api_requires_worker_and_oauth_secrets_but_not_admin_token() -> None:
+def test_production_api_requires_worker_secret_but_not_admin_token() -> None:
     _validate_production_settings(_production_settings(admin_api_token=None))
 
     with pytest.raises(RuntimeError, match="WORKER_API_TOKEN"):
         _validate_production_settings(_production_settings(worker_api_token=None))
-    with pytest.raises(RuntimeError, match="PUBLISH_OAUTH_STATE_SECRET"):
-        _validate_production_settings(_production_settings(publish_oauth_state_secret=None))
 
 
-def test_production_worker_requires_worker_token_without_admin_or_oauth_secret() -> None:
+def test_production_worker_requires_worker_token_without_admin_secret() -> None:
     settings = _production_settings(
         process_role="worker",
         worker_api_token="worker-only-token",
         admin_api_token=None,
-        publish_oauth_state_secret=None,
     )
 
     _validate_production_settings(settings)
@@ -266,7 +286,6 @@ def test_worker_credentials_are_structurally_separated_in_runtime_config() -> No
     shared_worker_env = compose.split("x-media-environment:", 1)[1].split("x-media-volumes:", 1)[0]
     assert "WORKER_API_TOKEN_FILE: /run/secrets/worker_api_token" in shared_worker_env
     assert "ADMIN_API_TOKEN" not in shared_worker_env
-    assert "publish_oauth_state_secret" in compose
 
 
 def test_registered_internal_and_admin_routes_remain_separately_authorized() -> None:
@@ -333,6 +352,22 @@ def test_runtime_containers_drop_root_and_own_writable_paths() -> None:
             assert path in source, f"{relative} does not provision {path}"
 
 
+def test_runtime_user_owns_the_home_directory_its_image_declares() -> None:
+    """Root build steps (npm, pnpm, pip) run with HOME set and create the home
+    directory before ``useradd --create-home`` runs, which then skips it. A
+    root-owned home stops Chromium creating its profile and crash database, so
+    every Remotion render fails. Each image that sets HOME must chown it."""
+    for path in sorted((ROOT / "apps").glob("*/Dockerfile*")):
+        source = path.read_text(encoding="utf-8")
+        declared = re.search(r"\bHOME=(/home/[A-Za-z0-9_-]+)", source)
+        if not declared:
+            continue
+        home = declared.group(1)
+        owners = re.findall(r"chown -R \S+((?:\s+(?:\\\n\s*)?/[^\s\\]+)+)", source)
+        owned_paths = {item for group in owners for item in group.split() if item.startswith("/")}
+        assert home in owned_paths, f"{path.relative_to(ROOT)} must chown its HOME {home}"
+
+
 def test_gpu_compose_initializes_shared_volume_ownership_without_worker_admin_secrets() -> None:
     compose = (ROOT / "infra/docker-compose.gpu.yml").read_text(encoding="utf-8")
     initializer = re.search(r"(?ms)^  volume-permissions:\n(.*?)(?=^  postgres:\n)", compose)
@@ -370,7 +405,6 @@ def test_gpu_compose_initializes_shared_volume_ownership_without_worker_admin_se
         "provider-worker",
         "planning-worker",
         "remotion-worker",
-        "publishing-worker",
     )
     for service in worker_services:
         service_block = re.search(
@@ -381,13 +415,11 @@ def test_gpu_compose_initializes_shared_volume_ownership_without_worker_admin_se
         source = service_block.group(1)
         assert "depends_on: *worker-depends-on" in source, service
         assert "admin_api_token" not in source, service
-        assert "publish_oauth_state_secret" not in source, service
 
     worker_secrets_match = re.search(r"(?ms)&worker-secrets\s*\[(.*?)\]", compose)
     assert worker_secrets_match is not None
     worker_secrets = worker_secrets_match.group(1)
     assert "admin_api_token" not in worker_secrets
-    assert "publish_oauth_state_secret" not in worker_secrets
 
 
 def test_environment_templates_contain_only_distinct_placeholders() -> None:
@@ -398,7 +430,6 @@ def test_environment_templates_contain_only_distinct_placeholders() -> None:
 
     assert "ADMIN_API_TOKEN=replace-with-distinct-admin-token" in root_example
     assert "WORKER_API_TOKEN=replace-with-distinct-worker-token" in root_example
-    assert "PUBLISH_OAUTH_STATE_SECRET=replace-with-distinct" in root_example
     assert "WORKER_API_TOKEN=replace-with-distinct-worker-token" in api_example
     assert "WORKER_API_TOKEN=replace-with-distinct-worker-token" in worker_example
     assert "ADMIN_API_TOKEN" not in production_template
@@ -630,8 +661,6 @@ def test_production_orchestration_roles_use_only_role_specific_dependencies(
             "https://api.example.com" if process_role == "temporal-worker" else None
         ),
         worker_api_token=("worker-secret" if process_role == "temporal-worker" else None),
-        publish_oauth_state_secret=None,
-        sentry_dsn=None,
         metrics_bearer_token=None,
         model_gateway_enabled=False,
     )
@@ -681,8 +710,6 @@ def test_self_hosted_temporal_roles_allow_private_compose_without_api_key(
         pixabay_api_key=None,
         worker_api_base_url=("http://api:8000" if process_role == "temporal-worker" else None),
         worker_api_token=("worker-secret" if process_role == "temporal-worker" else None),
-        publish_oauth_state_secret=None,
-        sentry_dsn=None,
         metrics_bearer_token=None,
         model_gateway_enabled=False,
     )

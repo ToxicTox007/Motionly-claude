@@ -1,10 +1,7 @@
 import { cookies } from "next/headers";
 import { AppShell } from "@/components/app-shell";
 import { createClient } from "@/lib/supabase/server";
-import {
-  getWorkspaceApiContext,
-  WORKSPACE_COOKIE_NAME,
-} from "@/lib/api-auth";
+import { getWorkspaceApiContext, WORKSPACE_COOKIE_NAME } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { DashboardClient } from "@/components/DashboardClient";
 import { WorkspacePicker } from "@/components/workspace-picker";
@@ -41,7 +38,7 @@ export default async function DashboardPage({
       }>
     | [] = [];
 
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
+  if (env.skipAuthMiddleware) {
     // Local bypass: use defaults and avoid Supabase calls
     workspaceName = "Personal workspace";
     projects = [];
@@ -67,9 +64,10 @@ export default async function DashboardPage({
         : undefined);
     const hasSelectedWorkspace = Boolean(
       effectiveWorkspaceId &&
-        memberships?.some(
-          (membership) => String(membership.workspace_id) === effectiveWorkspaceId,
-        ),
+      memberships?.some(
+        (membership) =>
+          String(membership.workspace_id) === effectiveWorkspaceId,
+      ),
     );
 
     if (memberships && memberships.length > 0 && !hasSelectedWorkspace) {

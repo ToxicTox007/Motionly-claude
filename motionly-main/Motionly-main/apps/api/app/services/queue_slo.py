@@ -92,12 +92,6 @@ QUEUE_SLOS: dict[str, QueueSlo] = {
         oldest_warn_seconds=300,
         oldest_reject_seconds=1_800,
     ),
-    "publish": QueueSlo(
-        queued_warn=200,
-        queued_reject=2_000,
-        oldest_warn_seconds=300,
-        oldest_reject_seconds=1_800,
-    ),
     "intelligence": QueueSlo(
         queued_warn=200,
         queued_reject=2_000,

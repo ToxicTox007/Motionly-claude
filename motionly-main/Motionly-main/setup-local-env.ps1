@@ -20,7 +20,6 @@ MOTIONLY_DEMUCS_WORKER_IMAGE=motionly-demucs-worker:dev
 MOTIONLY_PROVIDER_WORKER_IMAGE=motionly-provider-worker:dev
 MOTIONLY_PLANNING_WORKER_IMAGE=motionly-planning-worker:dev
 MOTIONLY_REMOTION_WORKER_IMAGE=motionly-remotion-worker:dev
-MOTIONLY_PUBLISHING_WORKER_IMAGE=motionly-publishing-worker:dev
 TEMPORAL_ADMIN_TOOLS_IMAGE=temporalio/admin-tools:1.24.2
 MOTIONLY_TEMPORAL_SERVER_IMAGE=ghcr.io/motionly/temporal-server:latest
 
@@ -37,18 +36,13 @@ SUPABASE_JWT_SECRET=super-secret-jwt-key-at-least-32-characters-long-for-dev
 SUPABASE_ANON_KEY=anon-key-base64-encoded-at-least-32-chars-dev
 SUPABASE_SERVICE_ROLE_KEY=service-role-key-base64-encoded-at-least-48-chars-dev
 
-# Domains
+# One public origin: /api and /supabase are routed on the app domain
 APP_DOMAIN=app.localhost
-API_DOMAIN=api.localhost
-SUPABASE_DOMAIN=supabase.localhost
-
-# Monitoring (optional)
-SENTRY_DSN=
+PUBLIC_ORIGIN=https://app.localhost
 
 # Internal tokens
 WORKER_API_TOKEN=dev-worker-token-123
 ADMIN_API_TOKEN=dev-admin-token-456
-PUBLISH_TOKEN_ENCRYPTION_KEY=dev-publish-encryption-key-32-chars-minimum-here
 
 # Temporal
 TEMPORAL_BOOTSTRAP_ADMIN_UNTIL=2099-12-31T23:59:59Z
@@ -76,9 +70,10 @@ Set-Location "infra\secrets"
 "service-role-key-base64-encoded-at-least-48-chars-dev" | Out-File -FilePath "supabase_service_role_key" -Encoding UTF8 -NoNewline
 "dev-worker-token-123" | Out-File -FilePath "worker_api_token" -Encoding UTF8 -NoNewline
 "dev-admin-token-456" | Out-File -FilePath "admin_api_token" -Encoding UTF8 -NoNewline
-"dev-publish-encryption-key-32-chars-minimum-here" | Out-File -FilePath "publish_token_encryption_key" -Encoding UTF8 -NoNewline
-"dev-oauth-state-secret" | Out-File -FilePath "publish_oauth_state_secret" -Encoding UTF8 -NoNewline
 "dev-metrics-token" | Out-File -FilePath "metrics_bearer_token" -Encoding UTF8 -NoNewline
+# Origin guard secret (32+ characters of A-Z a-z 0-9 _ -); previous stays empty.
+"dev-origin-verify-0123456789abcdefghijkl" | Out-File -FilePath "edge_origin_verify" -Encoding ascii -NoNewline
+New-Item -ItemType File -Force -Path "edge_origin_verify_previous" | Out-Null
 
 # Create empty API key files
 New-Item -ItemType File -Force -Path "groq_api_key" | Out-Null
@@ -113,7 +108,7 @@ Write-Host ""
 Write-Host "=== Setup Complete! ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Created:" -ForegroundColor Cyan
-Write-Host "  infra/.env.local with 23 environment variables"
+Write-Host "  infra/.env.local with 27 environment variables"
 Write-Host "  infra/secrets/* with 31 secret files"
 Write-Host ""
 Write-Host "Start minimal services:" -ForegroundColor Yellow

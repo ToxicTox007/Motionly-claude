@@ -16,9 +16,10 @@ def test_only_single_vm_compose_is_an_approved_production_deployment_path() -> N
     assert '"railway"' not in package
     assert "railway@" not in lock
 
-    deploy_workflow = (ROOT / ".github" / "workflows" / "deploy-compose-vm.yml").read_text()
-    assert "az vm run-command invoke" in deploy_workflow
+    deploy_workflow = (ROOT / ".github" / "workflows" / "deploy-aws.yml").read_text()
+    assert "scripts/deploy/run_on_instance.sh" in deploy_workflow
     assert "vmss" not in deploy_workflow.lower()
+    assert not (ROOT / ".github" / "workflows" / "deploy-compose-vm.yml").exists()
 
     host_runbook = (ROOT / "docs" / "ops" / "compose-vm-deployment.md").read_text()
     assert "exactly one supported runtime" in host_runbook

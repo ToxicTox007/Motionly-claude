@@ -21,18 +21,18 @@ import {
   ProcessingProjectScreen,
   UploadProjectScreen,
 } from "@/components/project-early-phase";
-import { env, resolveProxiedUrl } from "@/lib/env";
+import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import {
   assertCanonicalWorkflowIdentity,
   selectLatestFirstDraftWorkflow,
 } from "@/lib/workflow-ui.mjs";
+import { PageTitle } from "@/components/page-title";
 
 type ApiContext = {
   headers: Record<string, string>;
   workspaceId: string;
   userId: string;
-  apiAccessToken: string;
 };
 
 type ProjectResponse = {
@@ -122,21 +122,27 @@ export default async function ProjectDetailsPage({
     title: project.title,
     projectId,
     workspaceId,
-    userId: context.userId,
-    apiAccessToken: context.apiAccessToken,
   };
 
   if (!upload) {
-    return <UploadProjectScreen {...phaseAuth} />;
+    return (
+      <>
+        <PageTitle title={project.title} />
+        <UploadProjectScreen {...phaseAuth} />
+      </>
+    );
   }
 
   if (upload.status !== "ready") {
     return (
-      <ProcessingProjectScreen
-        {...phaseAuth}
-        uploadId={upload.id}
-        initialStatus={upload.status}
-      />
+      <>
+        <PageTitle title={project.title} />
+        <ProcessingProjectScreen
+          {...phaseAuth}
+          uploadId={upload.id}
+          initialStatus={upload.status}
+        />
+      </>
     );
   }
 
@@ -220,44 +226,45 @@ export default async function ProjectDetailsPage({
     null;
 
   return (
-    <EditorClient
-      projectId={projectId}
-      workspaceId={workspaceId}
-      userId={context.userId}
-      apiAccessToken={context.apiAccessToken}
-      title={project.title}
-      upload={upload}
-      uploadAssetUrls={{
-        source_video_url:
-          resolveProxiedUrl(uploadAssetUrls?.source_video_url) ?? null,
-        thumbnail_url:
-          resolveProxiedUrl(uploadAssetUrls?.thumbnail_url) ?? null,
-        source_reference_id: uploadAssetUrls?.source_reference_id ?? null,
-        thumbnail_reference_id: uploadAssetUrls?.thumbnail_reference_id ?? null,
-        expires_at: uploadAssetUrls?.expires_at ?? null,
-        expires_in_seconds: uploadAssetUrls?.expires_in_seconds,
-      }}
-      transcript={transcript}
-      captionTracks={captionsPayload?.tracks ?? []}
-      editPlans={editPlans}
-      activePlanId={activePlanId}
-      brollSlots={brollPayload?.slots ?? []}
-      musicSelection={musicSelection}
-      effectsConfig={effectsConfig}
-      renderJobs={rendersPayload?.jobs ?? []}
-      exports={exportsPayload?.exports ?? []}
-      maxExportResolution={toExportResolution(
-        billingStatus?.entitlements.max_resolution,
-      )}
-      visualStatus={
-        visualStatus ?? {
-          status: "unavailable",
-          message:
-            "Visual context is unavailable; editing will continue using transcript and audio.",
+    <>
+      <PageTitle title={project.title} />
+      <EditorClient
+        projectId={projectId}
+        workspaceId={workspaceId}
+        userId={context.userId}
+        title={project.title}
+        upload={upload}
+        uploadAssetUrls={{
+          source_video_url: uploadAssetUrls?.source_video_url ?? null,
+          thumbnail_url: uploadAssetUrls?.thumbnail_url ?? null,
+          source_reference_id: uploadAssetUrls?.source_reference_id ?? null,
+          thumbnail_reference_id:
+            uploadAssetUrls?.thumbnail_reference_id ?? null,
+          expires_at: uploadAssetUrls?.expires_at ?? null,
+          expires_in_seconds: uploadAssetUrls?.expires_in_seconds,
+        }}
+        transcript={transcript}
+        captionTracks={captionsPayload?.tracks ?? []}
+        editPlans={editPlans}
+        activePlanId={activePlanId}
+        brollSlots={brollPayload?.slots ?? []}
+        musicSelection={musicSelection}
+        effectsConfig={effectsConfig}
+        renderJobs={rendersPayload?.jobs ?? []}
+        exports={exportsPayload?.exports ?? []}
+        maxExportResolution={toExportResolution(
+          billingStatus?.entitlements.max_resolution,
+        )}
+        visualStatus={
+          visualStatus ?? {
+            status: "unavailable",
+            message:
+              "Visual context is unavailable; editing will continue using transcript and audio.",
+          }
         }
-      }
-      initialWorkflow={initialWorkflow}
-    />
+        initialWorkflow={initialWorkflow}
+      />
+    </>
   );
 }
 
@@ -291,10 +298,8 @@ async function getApiContexts(projectId: string): Promise<ApiContext[]> {
     return {
       userId: user.id,
       workspaceId,
-      apiAccessToken: session.access_token,
       headers: {
         authorization: `Bearer ${session.access_token}`,
-        "x-motionly-user-id": user.id,
         "x-motionly-workspace-id": workspaceId,
       },
     };

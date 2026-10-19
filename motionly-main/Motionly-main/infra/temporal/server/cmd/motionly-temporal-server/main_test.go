@@ -162,3 +162,45 @@ func TestProductionConfigTemplateLoadsMandatoryFrontendAndInternodeMTLS(t *testi
 		t.Fatal("frontend TLS server name is not pinned")
 	}
 }
+
+func TestClusterSystemIdentityIsAdminAndOnlyItReachesTheSystemNamespace(t *testing.T) {
+	policy := temporalPolicy{namespace: testNamespace, bootstrapUntil: time.Now().Add(time.Hour)}
+	claims, err := mtlsClaimMapper{policy: policy}.GetClaims(&authorization.AuthInfo{
+		TLSSubject: &pkix.Name{CommonName: "temporal"},
+	})
+	if err != nil || claims.Subject != "temporal" || claims.System != authorization.RoleAdmin {
+		t.Fatalf("the cluster's own certificate must map to system admin: %#v, %v", claims, err)
+	}
+	authorizer := mtlsAuthorizer{policy: policy}
+	assertDecision(t, authorizer, claims, "/temporal.api.workflowservice.v1.WorkflowService/StartWorkflowExecution", "temporal-system", authorization.DecisionAllow)
+	assertDecision(t, authorizer, claims, "/temporal.api.workflowservice.v1.WorkflowService/PollActivityTaskQueue", testNamespace, authorization.DecisionAllow)
+	assertDecision(t, authorizer, claims, "/temporal.api.operatorservice.v1.OperatorService/ListSearchAttributes", "", authorization.DecisionAllow)
+
+	apiClaims := &authorization.Claims{
+		Subject:    "motionly-api",
+		Namespaces: map[string]authorization.Role{testNamespace: authorization.RoleReader | authorization.RoleWriter},
+	}
+	assertDecision(t, authorizer, apiClaims, "/temporal.api.workflowservice.v1.WorkflowService/StartWorkflowExecution", "temporal-system", authorization.DecisionDeny)
+	forged := &authorization.Claims{Subject: "motionly-api", System: authorization.RoleAdmin}
+	assertDecision(t, authorizer, forged, "/temporal.api.operatorservice.v1.OperatorService/ListSearchAttributes", "", authorization.DecisionDeny)
+}
+
+func TestNamespaceBootstrapCanConnectAndCheckOnlyItsNamespace(t *testing.T) {
+	// The CLI calls GetSystemInfo when it connects, and the bootstrap script
+	// describes the namespace first so a re-run (every release) is a no-op.
+	authorizer := mtlsAuthorizer{policy: temporalPolicy{namespace: testNamespace}}
+	bootstrap := &authorization.Claims{Subject: "motionly-namespace-bootstrap", System: authorization.RoleAdmin}
+
+	assertDecision(t, authorizer, bootstrap, "/temporal.api.workflowservice.v1.WorkflowService/GetSystemInfo", "", authorization.DecisionAllow)
+	assertDecision(t, authorizer, bootstrap, "/temporal.api.workflowservice.v1.WorkflowService/DescribeNamespace", testNamespace, authorization.DecisionAllow)
+	assertDecision(t, authorizer, bootstrap, "/temporal.api.workflowservice.v1.WorkflowService/RegisterNamespace", testNamespace, authorization.DecisionAllow)
+	assertDecision(t, authorizer, bootstrap, "/temporal.api.workflowservice.v1.WorkflowService/DescribeNamespace", "other", authorization.DecisionDeny)
+	assertDecision(t, authorizer, bootstrap, "/temporal.api.workflowservice.v1.WorkflowService/ListWorkflowExecutions", testNamespace, authorization.DecisionDeny)
+	assertDecision(t, authorizer, bootstrap, "/temporal.api.workflowservice.v1.WorkflowService/GetClusterInfo", "", authorization.DecisionDeny)
+
+	apiClaims := &authorization.Claims{
+		Subject:    "motionly-api",
+		Namespaces: map[string]authorization.Role{testNamespace: authorization.RoleReader | authorization.RoleWriter},
+	}
+	assertDecision(t, authorizer, apiClaims, "/temporal.api.workflowservice.v1.WorkflowService/GetSystemInfo", "", authorization.DecisionAllow)
+}

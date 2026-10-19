@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
+import { PageTitle } from "@/components/page-title";
 
 type LegalSection = {
   title: string;
@@ -18,6 +19,7 @@ export function LegalPage({
 }) {
   return (
     <main className="min-h-screen">
+      <PageTitle title={title} />
       <div className="container-content py-12 lg:py-16">
         <Link
           href="/"
@@ -31,7 +33,9 @@ export function LegalPage({
           <Badge variant="primary" className="mb-4">
             Last updated {updated}
           </Badge>
-          <h1 className="text-4xl font-black uppercase text-foreground sm:text-5xl">{title}</h1>
+          <h1 className="text-4xl font-black uppercase text-foreground sm:text-5xl">
+            {title}
+          </h1>
         </div>
 
         <div className="overflow-hidden rounded border-2 border-foreground bg-surface shadow-brutal divide-y-2 divide-foreground">
@@ -41,9 +45,17 @@ export function LegalPage({
               .replace(/[^a-z0-9]+/g, "-")
               .replace(/^-|-$/g, "");
             return (
-              <section key={section.title} id={id} className="px-6 py-7 sm:px-8">
-                <h2 className="mb-3 text-lg font-black uppercase text-foreground">{section.title}</h2>
-                <p className="text-muted-foreground leading-[1.8] text-sm font-mono">{section.body}</p>
+              <section
+                key={section.title}
+                id={id}
+                className="px-6 py-7 sm:px-8"
+              >
+                <h2 className="mb-3 text-lg font-black uppercase text-foreground">
+                  {section.title}
+                </h2>
+                <p className="text-muted-foreground leading-[1.8] text-sm font-mono">
+                  {section.body}
+                </p>
               </section>
             );
           })}

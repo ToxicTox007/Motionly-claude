@@ -62,7 +62,9 @@ export function PropertiesInspector({
               Text
               <textarea
                 value={String(property("content", draft.name))}
-                onChange={(event) => updateProperty("content", event.target.value)}
+                onChange={(event) =>
+                  updateProperty("content", event.target.value)
+                }
                 className="mt-1.5 min-h-[80px] w-full p-3 resize-y font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
               />
             </label>
@@ -166,7 +168,9 @@ export function PropertiesInspector({
                 <input
                   type="color"
                   value={String(property("color", "#ffffff"))}
-                  onChange={(event) => updateProperty("color", event.target.value)}
+                  onChange={(event) =>
+                    updateProperty("color", event.target.value)
+                  }
                   className="mt-1.5 h-10 w-full rounded border-2 border-foreground bg-transparent p-0.5 cursor-pointer"
                 />
               </label>

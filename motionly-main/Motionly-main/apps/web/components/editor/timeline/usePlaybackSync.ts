@@ -43,7 +43,8 @@ export function usePlaybackSync(
           setPlayheadMs(currentClip.output_end_ms);
           return;
         }
-        if (videoRef.current) videoRef.current.currentTime = next.source_start_ms / 1000;
+        if (videoRef.current)
+          videoRef.current.currentTime = next.source_start_ms / 1000;
         setPlayheadMs(next.output_start_ms);
         return;
       }

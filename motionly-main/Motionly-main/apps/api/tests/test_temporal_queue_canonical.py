@@ -7,8 +7,6 @@ data-plane issue, not a cosmetic rename.
 
 from __future__ import annotations
 
-import inspect
-import os
 from pathlib import Path
 
 import pytest

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Generate and validate Motionly's immutable, archive-bound Compose release manifest."""
 
 from __future__ import annotations
@@ -35,10 +36,13 @@ IMAGE_COMPONENT_BY_VARIABLE: Final = {
     "MOTIONLY_PROVIDER_WORKER_IMAGE": "cpu-worker",
     "MOTIONLY_PLANNING_WORKER_IMAGE": "cpu-worker",
     "MOTIONLY_REMOTION_WORKER_IMAGE": "remotion-worker",
-    "MOTIONLY_PUBLISHING_WORKER_IMAGE": "cpu-worker",
     "MOTIONLY_TEMPORAL_SERVER_IMAGE": "temporal-server",
 }
-DIGEST_IMAGE_RE: Final = re.compile(r"^ghcr\.io/[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$")
+# GHCR, or the loopback registry of the local release rehearsal
+# (scripts/release/rehearse_release.py), which only a rehearsal host accepts.
+DIGEST_IMAGE_RE: Final = re.compile(
+    r"^(?:ghcr\.io|127\.0\.0\.1:\d{2,5}|localhost:\d{2,5})/[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$"
+)
 REVISION_RE: Final = re.compile(r"^[0-9a-f]{7,64}$")
 SHA256_RE: Final = re.compile(r"^[a-f0-9]{64}$")
 SBOM_ARTIFACT_RE: Final = re.compile(r"^[A-Za-z0-9._-]+\.spdx\.json$")

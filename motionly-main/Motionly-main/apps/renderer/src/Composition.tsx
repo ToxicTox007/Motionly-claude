@@ -6,7 +6,11 @@ import {
   useVideoConfig,
 } from "remotion";
 import type React from "react";
-import { durationMsToFrameCount, millisecondsToFrameEnd, millisecondsToFrameStart } from "@motionly/shared";
+import {
+  durationMsToFrameCount,
+  millisecondsToFrameEnd,
+  millisecondsToFrameStart,
+} from "@motionly/shared";
 import { AnimatedCaptions } from "./components/Captions";
 import { VideoScene } from "./components/VideoScene";
 import { ManualElements } from "./components/ManualElements";
@@ -32,7 +36,20 @@ export function MotionlyPremiumComposition(input: MotionlyRenderProps) {
         template={template}
       />
       {input.watermark ? (
-        <div style={{ position: "absolute", right: 32, bottom: 26, padding: "8px 12px", background: "rgba(0,0,0,.38)", color: "rgba(255,255,255,.82)", fontFamily: "Inter, sans-serif", fontSize: 22, fontWeight: 800, letterSpacing: 2 }}>
+        <div
+          style={{
+            position: "absolute",
+            right: 32,
+            bottom: 26,
+            padding: "8px 12px",
+            background: "rgba(0,0,0,.38)",
+            color: "rgba(255,255,255,.82)",
+            fontFamily: "Inter, sans-serif",
+            fontSize: 22,
+            fontWeight: 800,
+            letterSpacing: 2,
+          }}
+        >
           MOTIONLY
         </div>
       ) : null}
@@ -182,7 +199,10 @@ function MusicAndSfxMix({ input }: { input: MotionlyRenderProps }) {
     attenuationDb: selection.mix?.ducking.speech_attenuation_db ?? -12,
   });
   const sfxUrls = sfxCueUrls(track.raw_metadata);
-  const sfxIntensity = Math.max(0, Math.min(1, selection.sfx_intensity ?? 0.25));
+  const sfxIntensity = Math.max(
+    0,
+    Math.min(1, selection.sfx_intensity ?? 0.25),
+  );
   const cueFrames = beatCueFrames(track.beat_map, fps, durationInFrames).slice(
     0,
     Math.round(sfxIntensity * 6),
@@ -211,7 +231,10 @@ function MusicAndSfxMix({ input }: { input: MotionlyRenderProps }) {
 }
 
 function mediaUrl(
-  track: NonNullable<MotionlyRenderProps["musicSelection"]>["track"] | undefined | null,
+  track:
+    | NonNullable<MotionlyRenderProps["musicSelection"]>["track"]
+    | undefined
+    | null,
 ) {
   const trackRecord = track as Record<string, unknown> | undefined | null;
   const metadata = track?.raw_metadata;

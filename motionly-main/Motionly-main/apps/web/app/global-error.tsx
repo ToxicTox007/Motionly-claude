@@ -1,8 +1,7 @@
 "use client";
 
-import * as Sentry from "@sentry/nextjs";
-import { useEffect } from "react";
 import { AlertTriangle, ArrowLeft, RefreshCw } from "lucide-react";
+import { PageTitle } from "@/components/page-title";
 
 export default function GlobalError({
   error,
@@ -11,12 +10,11 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset?: () => void;
 }) {
-  useEffect(() => {
-    Sentry.captureException(error);
-  }, [error]);
-
   return (
     <html lang="en" data-theme="dark">
+      <head>
+        <PageTitle title="Something went wrong" />
+      </head>
       <body
         style={{
           minHeight: "100vh",
@@ -108,8 +106,7 @@ export default function GlobalError({
               margin: "0 0 2rem",
             }}
           >
-            The error has been reported. You can try refreshing the page or
-            head back to your dashboard.
+            You can try refreshing the page or head back to your dashboard.
           </p>
 
           {/* Actions */}
@@ -140,7 +137,9 @@ export default function GlobalError({
                 transition: "transform 100ms ease",
               }}
             >
-              <ArrowLeft style={{ width: "16px", height: "16px", strokeWidth: 2 }} />
+              <ArrowLeft
+                style={{ width: "16px", height: "16px", strokeWidth: 2 }}
+              />
               Go to dashboard
             </a>
             {reset && (
@@ -163,7 +162,9 @@ export default function GlobalError({
                   transition: "transform 100ms ease",
                 }}
               >
-                <RefreshCw style={{ width: "15px", height: "15px", strokeWidth: 2 }} />
+                <RefreshCw
+                  style={{ width: "15px", height: "15px", strokeWidth: 2 }}
+                />
                 Try again
               </button>
             )}

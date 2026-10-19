@@ -27,7 +27,10 @@ test("TimelinePanel.tsx implements time-based virtualization correctly", async (
   assert.match(source, /const \[visibleRange, setVisibleRange\] = useState/);
   assert.match(source, /const isClipVisible = useCallback/);
   assert.match(source, /isClipVisible\(clip\)\s*\?\s*\(?\s*<ClipBlock/);
-  assert.match(source, /const \[visibleRange, setVisibleRange\] = React\.useState/);
+  assert.match(
+    source,
+    /const \[visibleRange, setVisibleRange\] = React\.useState/,
+  );
   assert.match(source, /const isMobileClipVisible = React\.useCallback/);
   assert.match(source, /isMobileClipVisible\(clip\) \? \(/);
   assert.match(source, /window\.requestAnimationFrame/);

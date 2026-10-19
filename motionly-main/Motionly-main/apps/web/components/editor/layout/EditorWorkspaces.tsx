@@ -11,7 +11,6 @@ import { useFocusTrap } from "@/lib/useFocusTrap";
 import { CurrentTaskCard } from "./CreatorProgressRail";
 import type { CreatorFlow, EditorMode, EditorPanels } from "./types";
 
-
 const DESKTOP_WORKSPACE_QUERY = "(min-width: 1024px)";
 
 function subscribeToDesktopWorkspace(onStoreChange: () => void) {
@@ -70,8 +69,12 @@ function MobileWorkspace({
   panels: EditorPanels;
 }) {
   const [activeSheet, setActiveSheet] = useState<"left" | "right" | null>(null);
-  const leftTrapRef = useFocusTrap(activeSheet === "left", () => setActiveSheet(null));
-  const rightTrapRef = useFocusTrap(activeSheet === "right", () => setActiveSheet(null));
+  const leftTrapRef = useFocusTrap(activeSheet === "left", () =>
+    setActiveSheet(null),
+  );
+  const rightTrapRef = useFocusTrap(activeSheet === "right", () =>
+    setActiveSheet(null),
+  );
 
   const activeTask =
     creatorFlow.tasks.find((task) => task.key === creatorFlow.activeTaskKey) ??
@@ -108,7 +111,10 @@ function MobileWorkspace({
             aria-label="Current creator task"
             className="shrink-0 overflow-hidden rounded border border-foreground bg-surface"
           >
-            <CurrentTaskCard task={activeTask} onSelect={creatorFlow.onTaskSelect} />
+            <CurrentTaskCard
+              task={activeTask}
+              onSelect={creatorFlow.onTaskSelect}
+            />
           </section>
         ) : null}
         <section
@@ -173,9 +179,15 @@ function CreatorWorkspace({
       >
         {panels.centerPanel}
       </section>
-      <aside className="flex min-h-0 flex-col gap-3" aria-label="Guided editor settings">
+      <aside
+        className="flex min-h-0 flex-col gap-3"
+        aria-label="Guided editor settings"
+      >
         <section className="shrink-0 overflow-hidden rounded border border-foreground bg-surface">
-          <CurrentTaskCard task={activeTask} onSelect={creatorFlow.onTaskSelect} />
+          <CurrentTaskCard
+            task={activeTask}
+            onSelect={creatorFlow.onTaskSelect}
+          />
         </section>
         <section className="min-h-0 flex-1 overflow-hidden rounded border border-foreground bg-surface">
           {panels.rightPanel}

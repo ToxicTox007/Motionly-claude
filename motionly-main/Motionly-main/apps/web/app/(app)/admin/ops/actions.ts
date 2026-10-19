@@ -22,20 +22,24 @@ async function adminPost(path: string) {
 
 export async function retryQueueJob(formData: FormData) {
   const jobId = String(formData.get("jobId") ?? "");
-  if (jobId) await adminPost(`/admin/queues/jobs/${encodeURIComponent(jobId)}/retry`);
+  if (jobId)
+    await adminPost(`/admin/queues/jobs/${encodeURIComponent(jobId)}/retry`);
 }
 
 export async function cancelQueueJob(formData: FormData) {
   const jobId = String(formData.get("jobId") ?? "");
-  if (jobId) await adminPost(`/admin/queues/jobs/${encodeURIComponent(jobId)}/cancel`);
+  if (jobId)
+    await adminPost(`/admin/queues/jobs/${encodeURIComponent(jobId)}/cancel`);
 }
 
 export async function retryRenderJob(formData: FormData) {
   const jobId = String(formData.get("jobId") ?? "");
-  if (jobId) await adminPost(`/admin/renders/${encodeURIComponent(jobId)}/retry`);
+  if (jobId)
+    await adminPost(`/admin/renders/${encodeURIComponent(jobId)}/retry`);
 }
 
 export async function cancelRenderJob(formData: FormData) {
   const jobId = String(formData.get("jobId") ?? "");
-  if (jobId) await adminPost(`/admin/renders/${encodeURIComponent(jobId)}/cancel`);
+  if (jobId)
+    await adminPost(`/admin/renders/${encodeURIComponent(jobId)}/cancel`);
 }

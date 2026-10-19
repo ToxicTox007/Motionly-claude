@@ -25,13 +25,12 @@ const ACTIVE_WORKFLOW_STATES = new Set([
   "draft_rendering",
 ]);
 
-export const WORKFLOW_STATUS_TRANSPORT = "authenticated-adaptive-polling" as const;
+export const WORKFLOW_STATUS_TRANSPORT =
+  "authenticated-adaptive-polling" as const;
 
 type UseWorkflowStatusOptions = {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   initialWorkflow: WorkflowDetail | null;
 };
 
@@ -47,8 +46,6 @@ export type WorkflowStatusController = {
 export function useWorkflowStatus({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   initialWorkflow,
 }: UseWorkflowStatusOptions): WorkflowStatusController {
   const [workflow, setWorkflow] = useState<WorkflowDetail | null>(() => {
@@ -60,8 +57,9 @@ export function useWorkflowStatus({
     }
   });
   const [error, setError] = useState<string | null>(null);
-  const [pendingCommand, setPendingCommand] =
-    useState<WorkflowCommand | null>(null);
+  const [pendingCommand, setPendingCommand] = useState<WorkflowCommand | null>(
+    null,
+  );
   const refreshSequenceRef = useRef(0);
   const workflowRef = useRef(workflow);
   const pendingCommandRef = useRef<WorkflowCommand | null>(null);
@@ -72,11 +70,9 @@ export function useWorkflowStatus({
   const requestOptions = useCallback(
     (signal?: AbortSignal) => ({
       workspaceId,
-      userId,
-      accessToken: apiAccessToken,
       signal,
     }),
-    [apiAccessToken, userId, workspaceId],
+    [workspaceId],
   );
 
   const refresh = useCallback(

@@ -1,0 +1,16 @@
+# One-time repairs to migrations that never applied on any database.
+#
+# scripts/check_forward_migrations.sh allows a change to an existing migration
+# only when the file is listed here and its committed content has exactly this
+# sha256. Any other edit, a rename or a deletion still fails: fix the schema
+# with a new forward migration instead. Do not add entries for migrations that
+# may have applied anywhere.
+#
+# 202608090009: selected pg_constraint.constraint_name, which does not exist
+#   (the column is conname), so every database stopped at this migration and
+#   none ever applied it or anything after it.
+# 202608090010: asset_collection_items references
+#   asset_library_items (workspace_id, id), which had no unique key. It could
+#   only run after 202608090009, so it never applied either.
+1f7ab6898e2662d49189f4ffb7f0f1a7e80ec44c2a2fdb6d20fe11a89b120e68  supabase/migrations/202608090009_client_review_collaboration.sql
+e3c4bddceb4b76231207712d8afac882a13c7159121130827c0af0f5c2f3694c  supabase/migrations/202608090010_localized_publishing_asset_library.sql

@@ -6,13 +6,13 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "dev": "remotion studio src/index.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "render": "node --loader ts-node/esm src/render-cli.ts",
-    "render:cli": "node --loader ts-node/esm src/render-cli.ts",
-    "render:smoke": "node --loader ts-node/esm src/smoke-render.ts",
+    "render": "node --import ./ts-node-register.mjs src/render-cli.ts",
+    "render:cli": "node --import ./ts-node-register.mjs src/render-cli.ts",
+    "render:smoke": "node --import ./ts-node-register.mjs src/smoke-render.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json --noEmit && TS_NODE_TRANSPILE_ONLY=true node --loader ts-node/esm --test src/*.test.ts && node --test src/*.test.mjs",
-    "test:encoded": "RUN_RENDERER_ENCODED_TESTS=true TS_NODE_TRANSPILE_ONLY=true node --loader ts-node/esm --test src/encoded-output.test.ts",
-    "test:golden": "RUN_RENDERER_GOLDEN_TESTS=true TS_NODE_TRANSPILE_ONLY=true node --loader ts-node/esm --test src/golden-frames.test.ts"
+    "test": "tsc -p tsconfig.json --noEmit && TS_NODE_TRANSPILE_ONLY=true node --import ./ts-node-register.mjs --test src/*.test.ts && node --test src/*.test.mjs",
+    "test:encoded": "RUN_RENDERER_ENCODED_TESTS=true TS_NODE_TRANSPILE_ONLY=true node --import ./ts-node-register.mjs --test src/encoded-output.test.ts",
+    "test:golden": "RUN_RENDERER_GOLDEN_TESTS=true TS_NODE_TRANSPILE_ONLY=true node --import ./ts-node-register.mjs --test src/golden-frames.test.ts"
   },
   "dependencies": {
     "@motionly/shared": "workspace:*",
@@ -25,10 +25,13 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
-    "@types/node": "22.19.19",
+    "@types/node": "24.19.1",
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
     "ts-node": "10.9.2",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

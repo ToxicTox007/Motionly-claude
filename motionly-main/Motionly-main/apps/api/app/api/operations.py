@@ -162,6 +162,8 @@ async def run_gpu_autoscaling(
     x_motionly_worker_token: str | None = Header(default=None),
 ) -> dict[str, object]:
     await require_worker_token(request, x_motionly_worker_token)
+    if request.app.state.settings.gpu_stage != "enabled":
+        return {"status": "disabled", "reason": "gpu_stage_not_enabled"}
     service = getattr(request.app.state, "gpu_scaling_service", None)
     if service is None:
         return {"status": "disabled", "reason": "compute_backend_unconfigured"}

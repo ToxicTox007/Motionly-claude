@@ -95,6 +95,7 @@ def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -
             project_id=project_id,
             actor=actor,
             repository=repository,
+            request=request,
         )
     )
     # Operational analytics is deliberately not exportable as training data.
@@ -324,6 +325,7 @@ def test_analytics_api_prefers_async_repository_methods() -> None:
             project_id=project_id,
             actor=actor,
             repository=repository,
+            request=request,
             limit=25,
         )
     )

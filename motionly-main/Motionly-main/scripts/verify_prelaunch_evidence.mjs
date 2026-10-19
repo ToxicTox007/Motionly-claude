@@ -3,7 +3,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const readText = (relativePath) => readFileSync(resolve(ROOT, relativePath), "utf8");
+const readText = (relativePath) =>
+  readFileSync(resolve(ROOT, relativePath), "utf8");
 
 const requiredFiles = [
   "docs/data-retention.md",

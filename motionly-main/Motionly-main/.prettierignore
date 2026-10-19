@@ -1,0 +1,13 @@
+# Package-manager lockfiles are owned by pnpm/npm.
+pnpm-lock.yaml
+**/package-lock.json
+
+# Generated API contracts are compared byte-for-byte by `pnpm contracts:check`.
+packages/shared/openapi.json
+packages/shared/src/generated/
+
+# Recorded provider responses and media golden signatures must stay byte-exact.
+apps/api/tests/fixtures/
+apps/renderer/src/goldens/
+# Rendered by scripts/aws/render_template.py (checked by the aws verify stage).
+infra/aws/motionly.template.json

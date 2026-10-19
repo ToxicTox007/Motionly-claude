@@ -3,22 +3,22 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.api.dependencies import Actor, get_actor
-from app.api.errors import ApiError
-from app.api.internal_jobs import run_queue_job
+from app.api.errors import ApiError, api_error_handler
+from app.api.internal_jobs import router as internal_jobs_router
 from app.api.internal_renders import update_render_progress
 from app.api.projects import get_project
-from app.api.publishing import create_publish_job
 from app.api.renders import get_export_download_url, get_render
 from app.api.uploads import get_upload, get_upload_asset_urls
+from app.core.middleware import request_id_middleware
 from app.repositories.projects import InMemoryProjectRepository
-from app.repositories.publishing import InMemoryPublishingRepository
 from app.repositories.uploads import InMemoryUploadRepository
-from app.schemas.publishing import PublishCreateRequest, PublishPlatform
 from app.schemas.renders import RenderJobStatus, RenderOutputFormat
 from app.schemas.uploads import UploadStatus, VideoMetadata
-from app.services.queue import PublishQueue, QueueRegistry
+from app.services.queue import QueueRegistry
 from tests.test_renders import make_render_repository, make_request
 
 PROTECTED_ROUTE_GROUPS = [
@@ -30,7 +30,6 @@ PROTECTED_ROUTE_GROUPS = [
     "/projects/{id}/music",
     "/projects/{id}/effects",
     "/projects/{id}/renders",
-    "/projects/{id}/publish",
     "/billing",
 ]
 
@@ -93,26 +92,24 @@ def test_protected_route_groups_reject_forged_workspace_header(
     assert exc_info.value.status_code == 403
 
 
+def _internal_jobs_client() -> TestClient:
+    """Exercise the internal jobs router exactly as mounted, including its
+    router-level worker-token dependency (calling the handler directly would
+    bypass that dependency)."""
+    app = FastAPI()
+    app.middleware("http")(request_id_middleware)
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.state.settings = SimpleNamespace(app_env="local", worker_api_token="worker-secret")
+    app.state.queue_registry = QueueRegistry()
+    app.include_router(internal_jobs_router)
+    return TestClient(app)
+
+
 def test_internal_worker_route_rejects_missing_worker_token() -> None:
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                settings=SimpleNamespace(app_env="local", worker_api_token="worker-secret"),
-                queue_registry=QueueRegistry(),
-            )
-        )
-    )
+    response = _internal_jobs_client().post("/internal/jobs/missing/run")
 
-    with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            run_queue_job(
-                queue_job_id="missing",
-                request=request,
-                x_motionly_worker_token=None,
-            )
-        )
-
-    assert exc_info.value.status_code == 403
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "worker_access_denied"
 
 
 def test_project_route_denies_wrong_workspace_user() -> None:
@@ -285,57 +282,6 @@ def test_forged_render_id_from_another_project_is_not_returned() -> None:
     assert exc_info.value.status_code == 404
 
 
-def test_publish_route_rejects_export_from_another_workspace_before_enqueue() -> None:
-    workspace_id = uuid4()
-    project_id = uuid4()
-    foreign_export_id = uuid4()
-    registry = QueueRegistry()
-    publishing_repository = InMemoryPublishingRepository()
-    connection = publishing_repository.create_connection(
-        workspace_id=workspace_id,
-        platform=PublishPlatform.TIKTOK,
-        access_token="access-token",
-        external_account_id="creator-1",
-        account_name="Creator",
-    )
-
-    class ProjectRepository:
-        def get_project(self, *, project_id, workspace_id):
-            return SimpleNamespace(id=project_id, workspace_id=workspace_id)
-
-    class RenderRepository:
-        def get_export(self, *, export_id, workspace_id):
-            assert export_id == foreign_export_id
-            raise ApiError(403, "workspace_access_denied", "You do not have access.")
-
-    state = SimpleNamespace(
-        project_repository=ProjectRepository(),
-        render_repository=RenderRepository(),
-        publishing_repository=publishing_repository,
-        publish_queue=PublishQueue(registry),
-        settings=SimpleNamespace(publish_sync_completion=False),
-    )
-
-    with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            create_publish_job(
-                project_id=project_id,
-                payload=PublishCreateRequest(
-                    export_id=foreign_export_id,
-                    connection_id=connection.id,
-                    title="Launch clip",
-                    caption="#motionly",
-                    privacy="private",
-                ),
-                actor=Actor(user_id=uuid4(), workspace_id=workspace_id),
-                request=SimpleNamespace(app=SimpleNamespace(state=state)),
-            )
-        )
-
-    assert exc_info.value.status_code == 403
-    assert registry.jobs == {}
-
-
 def test_worker_payload_cannot_update_render_in_another_workspace() -> None:
     repository, project_id, workspace_id, _user_id = make_render_repository()
     render = repository.create_render_job(
@@ -385,25 +331,13 @@ def test_worker_payload_cannot_update_render_in_another_workspace() -> None:
 
 
 def test_worker_route_rejects_wrong_worker_token() -> None:
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                settings=SimpleNamespace(app_env="local", worker_api_token="worker-secret"),
-                queue_registry=QueueRegistry(),
-            )
-        )
+    response = _internal_jobs_client().post(
+        "/internal/jobs/any-job/run",
+        headers={"x-motionly-worker-token": "forged-token"},
     )
 
-    with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            run_queue_job(
-                queue_job_id="any-job",
-                request=request,
-                x_motionly_worker_token="forged-token",
-            )
-        )
-
-    assert exc_info.value.status_code == 403
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "worker_access_denied"
 
 
 class CountingSigner:

@@ -6,7 +6,8 @@ import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 
 export async function createProject(formData: FormData) {
-  const title = String(formData.get("title") ?? "Untitled reel").trim() || "Untitled reel";
+  const title =
+    String(formData.get("title") ?? "Untitled reel").trim() || "Untitled reel";
 
   const context = await getWorkspaceApiContext();
   if (!context) {
@@ -22,7 +23,9 @@ export async function createProject(formData: FormData) {
   const project = await response.json();
 
   if (!response.ok || !project.id) {
-    redirect(`/projects/new?error=${encodeURIComponent(project?.error?.code ?? "create_failed")}`);
+    redirect(
+      `/projects/new?error=${encodeURIComponent(project?.error?.code ?? "create_failed")}`,
+    );
   }
 
   redirect(`/projects/${project.id}`);
@@ -53,7 +56,9 @@ export async function updateProject(formData: FormData) {
   const project = await response.json();
 
   if (!response.ok || !project.id) {
-    redirect(`/projects?error=${encodeURIComponent(project?.error?.code ?? "update_failed")}`);
+    redirect(
+      `/projects?error=${encodeURIComponent(project?.error?.code ?? "update_failed")}`,
+    );
   }
 
   revalidatePath("/projects");
@@ -77,7 +82,9 @@ export async function deleteProject(formData: FormData) {
   const payload = await response.json();
 
   if (!response.ok || !payload.deleted) {
-    redirect(`/projects?error=${encodeURIComponent(payload?.error?.code ?? "delete_failed")}`);
+    redirect(
+      `/projects?error=${encodeURIComponent(payload?.error?.code ?? "delete_failed")}`,
+    );
   }
 
   revalidatePath("/projects");

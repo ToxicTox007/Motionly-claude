@@ -84,42 +84,57 @@ test("media URL policy checks DNS results and accepts public HTTPS", async () =>
     MediaUrlPolicyError,
   );
   assert.equal(
-    (await assertSafeOutboundMediaUrl(
-      "https://media.example.com/video.mp4?signature=secret",
-      { lookup: publicLookup },
-    )).kind,
+    (
+      await assertSafeOutboundMediaUrl(
+        "https://media.example.com/video.mp4?signature=secret",
+        { lookup: publicLookup },
+      )
+    ).kind,
     "http",
   );
   assert.equal(
-    (await assertSafeOutboundMediaUrl("https://[2606:4700:4700::1111]/video.mp4")).kind,
+    (
+      await assertSafeOutboundMediaUrl(
+        "https://[2606:4700:4700::1111]/video.mp4",
+      )
+    ).kind,
     "http",
   );
   assert.equal(
-    (await assertSafeOutboundMediaUrl("http://0x08080808/video.mp4", {
-      resolveDns: false,
-    })).kind,
+    (
+      await assertSafeOutboundMediaUrl("http://0x08080808/video.mp4", {
+        resolveDns: false,
+      })
+    ).kind,
     "http",
   );
 });
 
 test("media URL policy preserves strict Supabase refs and bounded WAV data", async () => {
   assert.equal(
-    (await assertSafeOutboundMediaUrl(
-      "supabase://raw-uploads/workspaces/ws/projects/project/video.mp4",
-      { allowSupabase: true },
-    )).kind,
+    (
+      await assertSafeOutboundMediaUrl(
+        "supabase://raw-uploads/workspaces/ws/projects/project/video.mp4",
+        { allowSupabase: true },
+      )
+    ).kind,
     "supabase",
   );
   await assert.rejects(
-    assertSafeOutboundMediaUrl("supabase://raw-uploads/workspaces/ws/../secret.mp4", {
-      allowSupabase: true,
-    }),
+    assertSafeOutboundMediaUrl(
+      "supabase://raw-uploads/workspaces/ws/../secret.mp4",
+      {
+        allowSupabase: true,
+      },
+    ),
     MediaUrlPolicyError,
   );
   assert.equal(
-    (await assertSafeOutboundMediaUrl("data:audio/wav;base64,UklGRg==", {
-      allowDataAudio: true,
-    })).kind,
+    (
+      await assertSafeOutboundMediaUrl("data:audio/wav;base64,UklGRg==", {
+        allowDataAudio: true,
+      })
+    ).kind,
     "data_audio",
   );
 });
@@ -130,8 +145,14 @@ test("render manifest validation covers manual video/audio and provider URLs", a
     assets: [{ kind: "video", src: "https://media.example.com/broll.mp4" }],
     editPlan: {
       manual_elements: [
-        { type: "sfx", properties: { assetUrl: "data:audio/wav;base64,UklGRg==" } },
-        { type: "broll", properties: { src: "https://media.example.com/manual.mp4" } },
+        {
+          type: "sfx",
+          properties: { assetUrl: "data:audio/wav;base64,UklGRg==" },
+        },
+        {
+          type: "broll",
+          properties: { src: "https://media.example.com/manual.mp4" },
+        },
       ],
     },
     musicSelection: {
@@ -144,7 +165,8 @@ test("render manifest validation covers manual video/audio and provider URLs", a
     },
   };
   await validateRenderMediaManifest(props, { lookup: publicLookup });
-  props.editPlan.manual_elements[1].properties.src = "http://127.0.0.1/private.mp4";
+  props.editPlan.manual_elements[1].properties.src =
+    "http://127.0.0.1/private.mp4";
   await assert.rejects(
     validateRenderMediaManifest(props, { lookup: publicLookup }),
     MediaUrlPolicyError,
@@ -173,21 +195,25 @@ test("safe media fetch pins each validated address without a second DNS resoluti
     assert.equal(options.headers.host, url.host);
     assert.equal(options.servername, url.hostname);
     assert.equal(options.family, expected.family);
-    options.lookup("attacker-controlled.invalid", { all: true }, (error, records) => {
-      assert.ifError(error);
-      assert.deepEqual(records, [expected]);
-      connectedAddresses.push(records[0]);
+    options.lookup(
+      "attacker-controlled.invalid",
+      { all: true },
+      (error, records) => {
+        assert.ifError(error);
+        assert.deepEqual(records, [expected]);
+        connectedAddresses.push(records[0]);
 
-      const isRedirect = requestCount === 0;
-      requestCount += 1;
-      const incoming = Readable.from([]);
-      incoming.statusCode = isRedirect ? 302 : 200;
-      incoming.statusMessage = isRedirect ? "Found" : "OK";
-      incoming.rawHeaders = isRedirect
-        ? ["Location", "https://cdn.example.com/final.mp4?token=still-secret"]
-        : ["Content-Type", "video/mp4"];
-      onResponse(incoming);
-    });
+        const isRedirect = requestCount === 0;
+        requestCount += 1;
+        const incoming = Readable.from([]);
+        incoming.statusCode = isRedirect ? 302 : 200;
+        incoming.statusMessage = isRedirect ? "Found" : "OK";
+        incoming.rawHeaders = isRedirect
+          ? ["Location", "https://cdn.example.com/final.mp4?token=still-secret"]
+          : ["Content-Type", "video/mp4"];
+        onResponse(incoming);
+      },
+    );
     return request;
   };
 
@@ -226,10 +252,11 @@ test("safe media fetch revalidates redirects and bounds redirect count", async (
   );
   assert.equal(calls, 1);
 
-  const redirectForever = async () => new Response(null, {
-    status: 302,
-    headers: { location: "/next.mp4" },
-  });
+  const redirectForever = async () =>
+    new Response(null, {
+      status: 302,
+      headers: { location: "/next.mp4" },
+    });
   await assert.rejects(
     safeFetchMedia("https://media.example.com/start.mp4", {
       lookup: publicLookup,
@@ -239,7 +266,6 @@ test("safe media fetch revalidates redirects and bounds redirect count", async (
     /redirect limit exceeded/,
   );
 });
-
 
 test("worker validates manual graphic and CSS background URLs and sanitizes legacy visual CSS", async () => {
   const legacy = sanitizeManualElementProperties({

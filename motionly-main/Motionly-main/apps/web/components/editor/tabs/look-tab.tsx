@@ -34,8 +34,6 @@ import type { PreviewLookState } from "../preview/VideoPreview";
 interface LookTabProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   initialConfig: EffectsConfigSummary | null;
   suggestedPreset?: VisualPresetKey | null;
   selectedTimelineClip?: TimelineClip | null;
@@ -165,8 +163,6 @@ function defaultMotionSettings(): MotionSettings {
 export function LookTab({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   initialConfig,
   suggestedPreset,
   selectedTimelineClip,
@@ -338,27 +334,21 @@ export function LookTab({
         config?: EffectsConfigSummary | null;
         status: "ready" | "queued";
         status_url?: string | null;
-      }>(
-        `${env.apiBaseUrl}/projects/${projectId}/effects`,
-        {
-          method: "PATCH",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError:
-            "Look settings could not be applied. Please try again.",
-          body,
-        },
-      );
+      }>(`${env.apiBaseUrl}/projects/${projectId}/effects`, {
+        method: "PATCH",
+        workspaceId,
+        friendlyError: "Look settings could not be applied. Please try again.",
+        body,
+      });
       const config = await resolveQueuedLayer({
         submission: payload,
         immediate: payload.config,
         apiBaseUrl: env.apiBaseUrl,
-        options: { workspaceId, userId, accessToken: apiAccessToken },
+        options: { workspaceId },
         load: () =>
           editorApiRequest<EffectsConfigSummary | null>(
             `${env.apiBaseUrl}/projects/${projectId}/effects`,
-            { workspaceId, userId, accessToken: apiAccessToken },
+            { workspaceId },
           ),
         resourceLabel: "Look settings",
         onProgress: (progress) => setMessage(`Applying look: ${progress}%`),
@@ -677,14 +667,22 @@ export function LookTab({
                       selected
                         ? "border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
                         : disabled
-                          ? "border-foreground/30 bg-muted/35 text-muted-foreground/60"
+                          ? "border-foreground/30 bg-muted/35 text-muted-foreground"
                           : "border-foreground bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
                     )}
                   >
                     {selected ? (
-                      <Check className="size-3.5" aria-hidden="true" strokeWidth={2} />
+                      <Check
+                        className="size-3.5"
+                        aria-hidden="true"
+                        strokeWidth={2}
+                      />
                     ) : disabled ? (
-                      <AlertTriangle className="size-3.5" aria-hidden="true" strokeWidth={2} />
+                      <AlertTriangle
+                        className="size-3.5"
+                        aria-hidden="true"
+                        strokeWidth={2}
+                      />
                     ) : null}
                     <span>{effect.label}</span>
                     <span className="text-[10px] opacity-75 font-normal">
@@ -1408,7 +1406,10 @@ export function LookTab({
         className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
       >
         {loading ? (
-          <Loader2 className="size-4 animate-spin text-primary-foreground" strokeWidth={2} />
+          <Loader2
+            className="size-4 animate-spin text-primary-foreground"
+            strokeWidth={2}
+          />
         ) : (
           <Palette className="size-4 text-primary-foreground" strokeWidth={2} />
         )}

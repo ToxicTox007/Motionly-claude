@@ -43,14 +43,14 @@ import { cn } from "@/lib/utils";
 import { useToast } from "./toast";
 import { LoadingPixelSkeleton } from "./editor/ui";
 import {
-  buildApiHeaders,
+  apiFetch,
   editorApiRequest,
   pollPlanJob,
   resolveQueuedLayer,
   startAdaptivePolling,
   RevisionConflictError,
 } from "@/lib/client-api";
-import { env, resolveProxiedUrl } from "@/lib/env";
+import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
 import { useRevisionTracking } from "@/hooks/useRevisionTracking";
 import { useWorkflowStatus } from "@/hooks/useWorkflowStatus";
@@ -110,7 +110,6 @@ interface EditorClientProps {
   projectId: string;
   workspaceId: string;
   userId: string;
-  apiAccessToken: string;
   title: string;
   upload: UploadedVideoSummary;
   uploadAssetUrls: {
@@ -144,7 +143,7 @@ type InspectorTab =
   | "history"
   | "scale"
   | "review"
-  | "publish"
+  | "localize"
   | "export";
 
 type PendingReviewProposal = {
@@ -236,7 +235,6 @@ export function EditorClient(props: EditorClientProps) {
     projectId,
     workspaceId,
     userId,
-    apiAccessToken,
     title,
     upload,
     uploadAssetUrls,
@@ -409,16 +407,10 @@ export function EditorClient(props: EditorClientProps) {
     const poll = async () => {
       if (document.visibilityState !== "visible") return;
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${env.apiBaseUrl}/projects/${projectId}/transcript`,
-          {
-            headers: await buildApiHeaders({
-              workspaceId,
-              userId,
-              accessToken: apiAccessToken,
-            }),
-            cache: "no-store",
-          },
+          { cache: "no-store" },
+          { workspaceId },
         );
         if (cancelled) return;
         if (response.status === 404) {
@@ -448,15 +440,7 @@ export function EditorClient(props: EditorClientProps) {
       cancelled = true;
       stopPolling?.();
     };
-  }, [
-    apiAccessToken,
-    localTranscript?.status,
-    projectId,
-    router,
-    upload,
-    userId,
-    workspaceId,
-  ]);
+  }, [localTranscript?.status, projectId, router, upload, workspaceId]);
 
   // When AI generates a new plan, update locally and advance inspector
   const handlePlanGenerated = useCallback(
@@ -503,8 +487,6 @@ export function EditorClient(props: EditorClientProps) {
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "The timeline could not be synchronized.",
           body: {},
         },
@@ -513,14 +495,7 @@ export function EditorClient(props: EditorClientProps) {
     } catch (error) {
       console.error(error);
     }
-  }, [
-    apiAccessToken,
-    handlePlanUpdated,
-    localActivePlanId,
-    projectId,
-    userId,
-    workspaceId,
-  ]);
+  }, [handlePlanUpdated, localActivePlanId, projectId, workspaceId]);
 
   const handleCaptionTrackUpdated = useCallback(
     (track: CaptionTrackSummary) => {
@@ -579,8 +554,6 @@ export function EditorClient(props: EditorClientProps) {
         {
           method: "PATCH",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError:
             "The saved editor history action could not be applied.",
           body: {
@@ -603,14 +576,12 @@ export function EditorClient(props: EditorClientProps) {
       return action.successLabel;
     },
     [
-      apiAccessToken,
       getExpectedRevision,
       handleBrollSlotUpdated,
       handleCaptionTrackUpdated,
       handleMusicSelectionUpdated,
       handlePlanUpdated,
       router,
-      userId,
       workspaceId,
     ],
   );
@@ -628,8 +599,6 @@ export function EditorClient(props: EditorClientProps) {
           {
             method: "PATCH",
             workspaceId,
-            userId,
-            accessToken: apiAccessToken,
             friendlyError: "Project title could not be saved.",
             body: { title: trimmed },
           },
@@ -650,16 +619,7 @@ export function EditorClient(props: EditorClientProps) {
         });
       }
     },
-    [
-      apiAccessToken,
-      projectId,
-      router,
-      setLocalTitle,
-      setSaveStatus,
-      userId,
-      workspaceId,
-      toast,
-    ],
+    [projectId, router, setLocalTitle, setSaveStatus, workspaceId, toast],
   );
 
   // ── Conflict resolution handlers ──────────────────────────────────────────
@@ -670,8 +630,6 @@ export function EditorClient(props: EditorClientProps) {
         `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}`,
         {
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Could not reload the plan.",
         },
       );
@@ -682,13 +640,11 @@ export function EditorClient(props: EditorClientProps) {
       console.error("Failed to refetch plan after conflict:", error);
     }
   }, [
-    apiAccessToken,
     clearConflict,
     handlePlanUpdated,
     localActivePlanId,
     projectId,
     router,
-    userId,
     workspaceId,
   ]);
 
@@ -847,7 +803,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     projectId,
     workspaceId,
     userId,
-    apiAccessToken,
     title,
     upload,
     uploadAssetUrls,
@@ -922,8 +877,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
   const workflowStatus = useWorkflowStatus({
     projectId,
     workspaceId,
-    userId,
-    apiAccessToken,
     initialWorkflow: props.initialWorkflow,
   });
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -946,21 +899,14 @@ function EditorClientEditor(props: EditorClientEditorProps) {
 
     const request = (async () => {
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${env.apiBaseUrl}/projects/${projectId}/media/refresh-urls`,
           {
             method: "POST",
-            headers: {
-              ...(await buildApiHeaders({
-                workspaceId,
-                userId,
-                accessToken: apiAccessToken,
-              })),
-              "content-type": "application/json",
-            },
             body: JSON.stringify({ reference_ids: referenceIds }),
             cache: "no-store",
           },
+          { workspaceId, json: true },
         );
         const payload = (await response.json().catch(() => null)) as {
           refreshed?: Array<{
@@ -998,10 +944,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             .sort((left, right) => Date.parse(left) - Date.parse(right));
           return {
             ...current,
-            source_video_url:
-              resolveProxiedUrl(source?.url) ?? current.source_video_url,
-            thumbnail_url:
-              resolveProxiedUrl(thumbnail?.url) ?? current.thumbnail_url,
+            source_video_url: source?.url ?? current.source_video_url,
+            thumbnail_url: thumbnail?.url ?? current.thumbnail_url,
             expires_at: expiries[0] ?? current.expires_at,
           };
         });
@@ -1019,11 +963,9 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     });
     return request;
   }, [
-    apiAccessToken,
     projectId,
     uploadAssetUrls.source_reference_id,
     uploadAssetUrls.thumbnail_reference_id,
-    userId,
     workspaceId,
   ]);
 
@@ -1218,8 +1160,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         {
           method: "PATCH",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Element changes could not be saved.",
           body: {
             manual_elements: elements,
@@ -1232,11 +1172,9 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     },
     [
       activePlan,
-      apiAccessToken,
       getExpectedRevision,
       handlePlanUpdated,
       projectId,
-      userId,
       workspaceId,
     ],
   );
@@ -1313,8 +1251,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           }>(`${env.apiBaseUrl}/projects/${projectId}/captions/generate`, {
             method: "POST",
             workspaceId,
-            userId,
-            accessToken: apiAccessToken,
             signal,
             friendlyError: "Auto-captioning failed.",
             body: { preset: "bold_influencer", hide_filler_words: false },
@@ -1325,8 +1261,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             apiBaseUrl: env.apiBaseUrl,
             options: {
               workspaceId,
-              userId,
-              accessToken: apiAccessToken,
               signal,
             },
             load: async () => {
@@ -1334,8 +1268,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
                 tracks: CaptionTrackSummary[];
               }>(`${env.apiBaseUrl}/projects/${projectId}/captions`, {
                 workspaceId,
-                userId,
-                accessToken: apiAccessToken,
                 signal,
               });
               return result.tracks[0] ?? null;
@@ -1353,8 +1285,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           }>(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, {
             method: "POST",
             workspaceId,
-            userId,
-            accessToken: apiAccessToken,
             signal,
             friendlyError: "Smart B-roll fill failed.",
             body: { density: "from_plan" },
@@ -1365,8 +1295,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             apiBaseUrl: env.apiBaseUrl,
             options: {
               workspaceId,
-              userId,
-              accessToken: apiAccessToken,
               signal,
             },
             load: async () => {
@@ -1374,8 +1302,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
                 slots: BrollSlotSummary[];
               }>(`${env.apiBaseUrl}/projects/${projectId}/broll`, {
                 workspaceId,
-                userId,
-                accessToken: apiAccessToken,
                 signal,
               });
               return result.slots;
@@ -1393,8 +1319,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           }>(`${env.apiBaseUrl}/projects/${projectId}/music/select`, {
             method: "POST",
             workspaceId,
-            userId,
-            accessToken: apiAccessToken,
             signal,
             friendlyError: "AI music matching failed.",
             body: {
@@ -1411,14 +1335,12 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             apiBaseUrl: env.apiBaseUrl,
             options: {
               workspaceId,
-              userId,
-              accessToken: apiAccessToken,
               signal,
             },
             load: () =>
               editorApiRequest<MusicSelectionSummary | null>(
                 `${env.apiBaseUrl}/projects/${projectId}/music/selection`,
-                { workspaceId, userId, accessToken: apiAccessToken, signal },
+                { workspaceId, signal },
               ),
             resourceLabel: "Music selection",
             onProgress: (progress) =>
@@ -1438,8 +1360,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
             method: "POST",
             workspaceId,
-            userId,
-            accessToken: apiAccessToken,
             signal,
             friendlyError: `${entry.name} failed.`,
             body: {
@@ -1459,8 +1379,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               `${env.apiBaseUrl}${payload.status_url}`,
               {
                 workspaceId,
-                userId,
-                accessToken: apiAccessToken,
                 signal,
               },
               (progress) => {
@@ -1484,8 +1402,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               plans: EditPlanRecordSummary[];
             }>(`${env.apiBaseUrl}/projects/${projectId}/plans`, {
               workspaceId,
-              userId,
-              accessToken: apiAccessToken,
               signal,
             });
             const foundPlan = planList.plans.find((p) => p.id === planId);
@@ -1527,14 +1443,12 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     },
     [
       activePlan,
-      apiAccessToken,
       handleBrollSlotsUpdated,
       handleCaptionTrackUpdated,
       handleMusicSelectionUpdated,
       handlePlanGenerated,
       onReviewProposalCreated,
       projectId,
-      userId,
       workspaceId,
       toast,
     ],
@@ -1576,8 +1490,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         }>(`${env.apiBaseUrl}/projects/${projectId}/effects`, {
           method: "PATCH",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Clip effect could not be applied.",
           body,
         });
@@ -1585,11 +1497,11 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           submission: payload,
           immediate: payload.config,
           apiBaseUrl: env.apiBaseUrl,
-          options: { workspaceId, userId, accessToken: apiAccessToken },
+          options: { workspaceId },
           load: () =>
             editorApiRequest<EffectsConfigSummary | null>(
               `${env.apiBaseUrl}/projects/${projectId}/effects`,
-              { workspaceId, userId, accessToken: apiAccessToken },
+              { workspaceId },
             ),
           resourceLabel: "Clip effect",
           onProgress: (progress) =>
@@ -1613,14 +1525,12 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       }
     },
     [
-      apiAccessToken,
       handleEffectsConfigUpdated,
       localEffectsConfig,
       projectId,
       setInspectorTabWrapped,
       setSelectedClipIdWrapped,
       timelineState.tracks,
-      userId,
       workspaceId,
       toast,
     ],
@@ -1858,12 +1768,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       >
         {{
           leftPanel: (
-            <ElementPalette
-              projectId={projectId}
-              workspaceId={workspaceId}
-              userId={userId}
-              apiAccessToken={apiAccessToken}
-            />
+            <ElementPalette projectId={projectId} workspaceId={workspaceId} />
           ),
 
           centerPanel: (
@@ -1927,7 +1832,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               projectId={projectId}
               workspaceId={workspaceId}
               userId={userId}
-              apiAccessToken={apiAccessToken}
               upload={upload}
               transcript={localTranscript}
               captionTracks={localCaptionTracks}
@@ -1984,8 +1888,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               }}
               projectId={projectId}
               workspaceId={workspaceId}
-              userId={userId}
-              apiAccessToken={apiAccessToken}
               activePlan={activePlan}
               captionTrack={localCaptionTracks[0] ?? null}
               musicSelection={localMusicSelection}
@@ -2039,7 +1941,6 @@ interface InspectorPanelProps {
   projectId: string;
   workspaceId: string;
   userId: string;
-  apiAccessToken: string;
   upload: UploadedVideoSummary;
   transcript: TranscriptSummary | null;
   captionTracks: CaptionTrackSummary[];
@@ -2092,7 +1993,7 @@ const INSPECTOR_TABS: Array<{
   { id: "history", label: "History", icon: History, requiresPlan: true },
   { id: "review", label: "Review", icon: MessageSquare, requiresPlan: true },
   { id: "scale", label: "Scale", icon: Network, requiresPlan: false },
-  { id: "publish", label: "Publish", icon: Languages, requiresPlan: false },
+  { id: "localize", label: "Localize", icon: Languages, requiresPlan: false },
   { id: "export", label: "Export", icon: Download, requiresPlan: false },
 ];
 
@@ -2103,7 +2004,6 @@ function InspectorPanel({
   projectId,
   workspaceId,
   userId,
-  apiAccessToken,
   upload,
   transcript,
   captionTracks,
@@ -2246,8 +2146,6 @@ function InspectorPanel({
           <AIStep
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             initialPlans={localEditPlans}
             activePlanId={localActivePlanId}
             transcript={transcript}
@@ -2268,8 +2166,6 @@ function InspectorPanel({
           <CaptionsTab
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             initialTracks={captionTracks}
             activePlan={activePlan}
             onTrackUpdated={onCaptionTrackUpdated}
@@ -2281,8 +2177,6 @@ function InspectorPanel({
           <BrollTab
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             initialSlots={brollSlots}
             activePlanId={localActivePlanId}
             activePlanBrollDensity={brollDensity}
@@ -2295,8 +2189,6 @@ function InspectorPanel({
           <AudioTab
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             initialSelection={musicSelection}
             activePlanMusicMood={musicMood}
             onSelectionUpdated={onMusicSelectionUpdated}
@@ -2307,8 +2199,6 @@ function InspectorPanel({
           <LookTab
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             initialConfig={effectsConfig}
             suggestedPreset={suggestedPreset}
             selectedTimelineClip={selectedTimelineClip}
@@ -2316,12 +2206,10 @@ function InspectorPanel({
             onPreviewLookUpdated={onPreviewLookUpdated}
           />
         )}
-        {tab === "publish" && (
+        {tab === "localize" && (
           <PublishingLibraryPanel
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             captionTrackId={captionTracks[0]?.id ?? null}
             activePlanId={localActivePlanId}
           />
@@ -2330,8 +2218,6 @@ function InspectorPanel({
           <ExportStep
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             initialJobs={renderJobs}
             initialExports={exports}
             captionTrackId={captionTracks[0]?.id ?? null}
@@ -2347,8 +2233,6 @@ function InspectorPanel({
           <VersionHistoryPanel
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             activePlan={activePlan}
             onPlanRestored={onPlanUpdated}
           />
@@ -2357,8 +2241,6 @@ function InspectorPanel({
           <ReviewPanel
             projectId={projectId}
             workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
             activePlan={activePlan}
             mediaRevision={mediaRevision}
             uploadedVideoId={upload.id}
@@ -2374,7 +2256,6 @@ function InspectorPanel({
             projectId={projectId}
             workspaceId={workspaceId}
             userId={userId}
-            apiAccessToken={apiAccessToken}
             activePlan={activePlan}
             captionTrack={captionTracks[0] ?? null}
             effectsConfig={effectsConfig}
@@ -2674,14 +2555,10 @@ function UploadScreen({
   title,
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
 }: {
   title: string;
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
 }) {
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
@@ -2713,12 +2590,7 @@ function UploadScreen({
               the timeline.
             </p>
           </div>
-          <UploadPanel
-            projectId={projectId}
-            workspaceId={workspaceId}
-            userId={userId}
-            apiAccessToken={apiAccessToken}
-          />
+          <UploadPanel projectId={projectId} workspaceId={workspaceId} />
         </div>
       </div>
     </div>

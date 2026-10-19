@@ -1,4 +1,5 @@
 import { PublicReviewClient } from "./PublicReviewClient";
+import { PageTitle } from "@/components/page-title";
 
 export default async function PublicReviewPage({
   params,
@@ -8,6 +9,7 @@ export default async function PublicReviewPage({
   const { shareId } = await params;
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <PageTitle title="Revision review" />
       <PublicReviewClient shareId={shareId} />
     </div>
   );

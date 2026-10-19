@@ -13,7 +13,7 @@ export function captionSelectionForExport({
   const packageId = localizedPublishPackageId || null;
   return {
     caption_track_id:
-      includeCaptions && !packageId ? (captionTrackId || null) : null,
+      includeCaptions && !packageId ? captionTrackId || null : null,
     localized_publish_package_id: packageId,
   };
 }
@@ -30,6 +30,8 @@ export function captionSelectionForBulkExport({
     ...selection,
     includeCaptions:
       Boolean(selection.includeCaptions) ||
-      targetIncludesCaptions.some((includeCaptions) => Boolean(includeCaptions)),
+      targetIncludesCaptions.some((includeCaptions) =>
+        Boolean(includeCaptions),
+      ),
   });
 }

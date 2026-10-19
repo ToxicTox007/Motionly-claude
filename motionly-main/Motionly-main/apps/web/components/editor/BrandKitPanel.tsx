@@ -206,8 +206,6 @@ function effectsSnapshot(
 export function BrandKitPanel({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   styleProfiles,
   savedTemplates,
   captionTrack,
@@ -216,8 +214,6 @@ export function BrandKitPanel({
 }: {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   styleProfiles: ReferenceOption[];
   savedTemplates: ReferenceOption[];
   captionTrack: CaptionTrackSummary | null;
@@ -230,10 +226,7 @@ export function BrandKitPanel({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const auth = useMemo(
-    () => ({ workspaceId, userId, accessToken: apiAccessToken }),
-    [apiAccessToken, userId, workspaceId],
-  );
+  const auth = useMemo(() => ({ workspaceId }), [workspaceId]);
   const load = useCallback(
     async (signal?: AbortSignal) => {
       const response = await editorApiRequest<{

@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("media work is dispatched directly and never through the API job runner", async () => {
-  const source = await readFile(new URL("./worker.mjs", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("./worker.mjs", import.meta.url),
+    "utf8",
+  );
   assert.doesNotMatch(source, /\/internal\/jobs\//);
   assert.match(source, /app\.workers\.domain_job/);
   assert.match(source, /app\.workers\.visual_job/);
@@ -13,9 +16,17 @@ test("media work is dispatched directly and never through the API job runner", a
 });
 
 test("standard worker defaults to the isolated Remotion queue", async () => {
-  const source = await readFile(new URL("./queue-common.mjs", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("./queue-common.mjs", import.meta.url),
+    "utf8",
+  );
   assert.match(source, /defaultQueueNames = \["render_remotion"\]/);
-  for (const queue of ["audio_demucs", "provider_calls", "visual_analysis", "matte_extraction"]) {
+  for (const queue of [
+    "audio_demucs",
+    "provider_calls",
+    "visual_analysis",
+    "matte_extraction",
+  ]) {
     assert.match(source, new RegExp(`"${queue}"`));
   }
 });
@@ -74,7 +85,10 @@ test("worker runtime telemetry reports queue wait and runtime", async () => {
 });
 
 test("worker startup emits explicit readiness fields", async () => {
-  const source = await readFile(new URL("./worker.mjs", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("./worker.mjs", import.meta.url),
+    "utf8",
+  );
   assert.match(source, /event: "worker_ready"/);
   assert.match(source, /process_alive: true/);
   assert.match(source, /redis_connected: true/);

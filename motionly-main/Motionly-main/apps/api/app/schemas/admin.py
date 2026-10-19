@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,8 @@ class QueueSnapshotResponse(BaseModel):
 class AdminOverviewResponse(BaseModel):
     service: str = "motionly-api"
     environment: str
+    # "not_enabled": GPU-dependent capabilities are labelled CPU-stage fixtures.
+    gpu_stage: Literal["enabled", "not_enabled"]
     request_id: str
     queues: list[QueueSnapshotResponse]
     recent_renders: list[RenderJobResponse]

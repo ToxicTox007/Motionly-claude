@@ -9,7 +9,6 @@ from app.core.security import constant_time_token_matches
 from app.schemas.renders import RenderJobStatus
 from app.services.matte_jobs import run_matte_for_upload
 from app.services.outcomes import record_render_success_outcome
-from app.services.publishing import execute_publish_job
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob, QueueJobStatus, QueueRegistry
 from app.services.render_jobs import complete_render_job_by_id
 from app.services.scale import execute_scale_resource
@@ -323,36 +322,6 @@ def _execute_job(*, job: EnqueuedJob, request: Request) -> dict[str, Any]:
             "render_job_id": str(render.id),
             "render_status": render.status.value,
             "failed": render.status == RenderJobStatus.FAILED,
-        }
-
-    if job.kind == "publish":
-        published = execute_publish_job(
-            publishing_repository=request.app.state.publishing_repository,
-            render_repository=request.app.state.render_repository,
-            storage_signer=request.app.state.storage_signer,
-            client=request.app.state.social_publishing_client,
-            oauth_client=request.app.state.publish_oauth_client,
-            settings=settings,
-            live_effects_gate=getattr(
-                request.app.state, "local_audit_live_effects_gate", None
-            ),
-            job_id=job.resource_id,
-            workspace_id=job.workspace_id,
-        )
-        if published.status.value == "published":
-            export = request.app.state.render_repository.get_export(
-                export_id=published.export_id, workspace_id=job.workspace_id
-            )
-            request.app.state.operations_repository.approve_export(
-                workspace_id=job.workspace_id,
-                render_job_id=export.render_job_id,
-                export_id=export.id,
-            )
-        return {
-            "publish_job_id": str(published.id),
-            "publish_status": published.status.value,
-            "external_post_id": published.external_post_id,
-            "failed": published.status.value == "failed",
         }
 
     if job.kind == "phase5":

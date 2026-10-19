@@ -28,6 +28,14 @@ def main() -> None:
 def _runner():
     settings = get_settings()
     validate_production_settings(settings)
+    if (
+        settings.ml_execution_mode == "test_fixture"
+        and settings.visual_intelligence_provider.strip().lower() != "fixture"
+    ):
+        raise RuntimeError(
+            "ML_EXECUTION_MODE=test_fixture requires VISUAL_PROVIDER=fixture; "
+            "real models run only on the GPU-stage workers"
+        )
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
     upload_repository = SupabaseUploadRepository(

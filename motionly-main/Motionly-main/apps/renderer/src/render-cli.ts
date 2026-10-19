@@ -24,7 +24,9 @@ async function main() {
   const bundleLocation = await getOrCreateBundle(entryPoint);
 
   const compositions = await getCompositions(bundleLocation, { inputProps });
-  const composition = compositions.find((item) => item.id === "MotionlyPremium");
+  const composition = compositions.find(
+    (item) => item.id === "MotionlyPremium",
+  );
 
   if (!composition) {
     throw new Error("MotionlyPremium composition was not found.");
@@ -90,7 +92,9 @@ async function getOrCreateBundle(entryPoint: string): Promise<string> {
     // Cache file missing or unreadable — fall through to create a new bundle
   }
 
-  console.log("[render-cli] Building Remotion bundle (first render in this container)...");
+  console.log(
+    "[render-cli] Building Remotion bundle (first render in this container)...",
+  );
   const location = await bundle({ entryPoint });
 
   // Cache for subsequent renders in this container lifetime
@@ -127,7 +131,9 @@ function assertProductionProps(inputProps: MotionlyRenderProps) {
     asset.src?.startsWith("fixture://"),
   );
   if (fixtureAsset) {
-    throw new Error(`Fixture media is not allowed in render assets: ${fixtureAsset.id}`);
+    throw new Error(
+      `Fixture media is not allowed in render assets: ${fixtureAsset.id}`,
+    );
   }
 }
 

@@ -9,7 +9,7 @@ import type {
   MusicTrackSummary,
 } from "@motionly/shared";
 import {
-  buildApiHeaders,
+  apiFetch,
   editorApiRequest,
   resolveQueuedLayer,
 } from "@/lib/client-api";
@@ -20,8 +20,6 @@ import type { PreviewAudioState } from "../preview/VideoPreview";
 interface AudioTabProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   initialSelection: MusicSelectionSummary | null;
   activePlanMusicMood?: string | null;
   onSelectionUpdated: (selection: MusicSelectionSummary) => void;
@@ -40,8 +38,6 @@ const moods = [
 export function AudioTab({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   initialSelection,
   activePlanMusicMood,
   onSelectionUpdated,
@@ -109,15 +105,10 @@ export function AudioTab({
       setTracksLoading(true);
       try {
         const params = new URLSearchParams({ mood });
-        const response = await fetch(
+        const response = await apiFetch(
           `${env.apiBaseUrl}/projects/${projectId}/music/tracks?${params}`,
-          {
-            headers: await buildApiHeaders({
-              workspaceId,
-              userId,
-              accessToken: apiAccessToken,
-            }),
-          },
+          {},
+          { workspaceId },
         );
         const payload = await response.json();
         if (!response.ok)
@@ -136,7 +127,7 @@ export function AudioTab({
     return () => {
       canceled = true;
     };
-  }, [apiAccessToken, includeMusic, mood, projectId, userId, workspaceId]);
+  }, [includeMusic, mood, projectId, workspaceId]);
 
   async function updateAudio(next?: {
     mood?: string;
@@ -156,8 +147,6 @@ export function AudioTab({
       }>(`${env.apiBaseUrl}/projects/${projectId}/music/select`, {
         method: "POST",
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError:
           "No production music track is available for that mood yet.",
         body: {
@@ -174,11 +163,11 @@ export function AudioTab({
         submission: payload,
         immediate: payload.selection,
         apiBaseUrl: env.apiBaseUrl,
-        options: { workspaceId, userId, accessToken: apiAccessToken },
+        options: { workspaceId },
         load: () =>
           editorApiRequest<MusicSelectionSummary | null>(
             `${env.apiBaseUrl}/projects/${projectId}/music/selection`,
-            { workspaceId, userId, accessToken: apiAccessToken },
+            { workspaceId },
           ),
         resourceLabel: "Music selection",
         onProgress: (progress) => setMessage(`Selecting music: ${progress}%`),
@@ -248,7 +237,10 @@ export function AudioTab({
               className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary cursor-pointer disabled:cursor-not-allowed"
             />
           </label>
-          <p className="text-xs text-muted-foreground">Music is used only after Motionly verifies the catalog grant, scope, and expiry on the server.</p>
+          <p className="text-xs text-muted-foreground">
+            Music is used only after Motionly verifies the catalog grant, scope,
+            and expiry on the server.
+          </p>
         </PanelSection>
 
         <PanelSection title="Mix" defaultOpen>
@@ -295,7 +287,11 @@ export function AudioTab({
                   )}
                 >
                   {selected ? (
-                    <Check className="size-3.5" aria-hidden="true" strokeWidth={2} />
+                    <Check
+                      className="size-3.5"
+                      aria-hidden="true"
+                      strokeWidth={2}
+                    />
                   ) : null}
                   {label}
                 </button>
@@ -308,7 +304,10 @@ export function AudioTab({
           <div className="mb-3 flex items-center justify-between">
             <Label className="mb-0">Track Alternatives</Label>
             {tracksLoading ? (
-              <Loader2 className="size-3.5 animate-spin text-primary" strokeWidth={2} />
+              <Loader2
+                className="size-3.5 animate-spin text-primary"
+                strokeWidth={2}
+              />
             ) : null}
           </div>
           <div className="space-y-2">
@@ -341,7 +340,14 @@ export function AudioTab({
                     <span className="block truncate text-xs font-bold">
                       {track.title}
                     </span>
-                    <span className={cn("block text-[10px] mt-0.5 font-mono", selectedTrackId === track.id ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                    <span
+                      className={cn(
+                        "block text-[10px] mt-0.5 font-mono",
+                        selectedTrackId === track.id
+                          ? "text-primary-foreground/80"
+                          : "text-muted-foreground",
+                      )}
+                    >
                       {track.mood_tags.join(", ") || track.license}
                     </span>
                   </span>
@@ -368,7 +374,10 @@ export function AudioTab({
         className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
       >
         {loading ? (
-          <Loader2 className="size-4 animate-spin text-primary-foreground" strokeWidth={2} />
+          <Loader2
+            className="size-4 animate-spin text-primary-foreground"
+            strokeWidth={2}
+          />
         ) : (
           <Volume2 className="size-4" strokeWidth={2} />
         )}

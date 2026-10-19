@@ -1,6 +1,8 @@
-# Rendered by motionly-temporal-server into a mode-0600 temporary file. The
-# only substituted value is the database password read directly from its Docker
-# secret; certificate paths stay Docker secret paths and no PEM material is in Git.
+# Rendered by motionly-temporal-server into a mode-0600 temporary file, which
+# substitutes the database password read directly from its Docker secret.
+# start-server.sh first substitutes the container's IP address for
+# {{TEMPORAL_BROADCAST_ADDRESS}}. Certificate paths stay Docker secret paths and
+# no PEM material is in Git.
 log:
   stdout: true
   level: info
@@ -36,7 +38,8 @@ persistence:
 global:
   membership:
     maxJoinDuration: 30s
-    broadcastAddress: temporal
+    # Ringpop advertises an IP address, never a host name.
+    broadcastAddress: "{{TEMPORAL_BROADCAST_ADDRESS}}"
   pprof:
     port: 0
   tls:
@@ -79,18 +82,22 @@ services:
     rpc:
       grpcPort: 7233
       membershipPort: 6933
+      bindOnIP: 0.0.0.0
   matching:
     rpc:
       grpcPort: 7235
       membershipPort: 6935
+      bindOnIP: 0.0.0.0
   history:
     rpc:
       grpcPort: 7234
       membershipPort: 6934
+      bindOnIP: 0.0.0.0
   worker:
     rpc:
       grpcPort: 7239
       membershipPort: 6939
+      bindOnIP: 0.0.0.0
 
 clusterMetadata:
   enableGlobalNamespace: false

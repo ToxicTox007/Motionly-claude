@@ -78,10 +78,7 @@ export function VideoScene({ input, template }: VideoSceneProps) {
   );
 }
 
-function SourceClipAssembly({
-  input,
-  template,
-}: VideoSceneProps) {
+function SourceClipAssembly({ input, template }: VideoSceneProps) {
   const { fps } = useVideoConfig();
   return (
     <>
@@ -92,7 +89,11 @@ function SourceClipAssembly({
           fps,
         );
         return (
-          <Sequence key={clip.id} from={from} durationInFrames={durationInFrames}>
+          <Sequence
+            key={clip.id}
+            from={from}
+            durationInFrames={durationInFrames}
+          >
             <SourceClipSurface input={input} template={template} clip={clip} />
           </Sequence>
         );
@@ -108,7 +109,8 @@ function SourceClipSurface({
 }: VideoSceneProps & { clip: SourceTimelineClip }) {
   const localFrame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
-  const outputFrame = millisecondsToFrameStart(clip.output_start_ms, fps) + localFrame;
+  const outputFrame =
+    millisecondsToFrameStart(clip.output_start_ms, fps) + localFrame;
   const framing = input.exportSettings.framing;
   const crop = cropWithAutoReframe(
     input,
@@ -140,9 +142,13 @@ function SourceClipSurface({
       gradeFilter(input.editPlan.color_grade, template.default_color_grade),
       sourceMotion.filter,
       segmentationSpillFilter(input),
-    ].filter(Boolean).join(" "),
+    ]
+      .filter(Boolean)
+      .join(" "),
     ...(usesLegacyBackgroundIsolation(input)
-      ? subjectIsolationStyle(input.effectsConfig!.background_removal!.feather_px)
+      ? subjectIsolationStyle(
+          input.effectsConfig!.background_removal!.feather_px,
+        )
       : {}),
   };
   const selectedStemSource = input.sourceStems
@@ -205,7 +211,10 @@ function BrollSurface({
 }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const fadeFrames = Math.max(4, durationMsToFrameCount(asset.crossfade_ms ?? 260, fps));
+  const fadeFrames = Math.max(
+    4,
+    durationMsToFrameCount(asset.crossfade_ms ?? 260, fps),
+  );
   const opacity = interpolate(
     frame,
     [
@@ -253,7 +262,9 @@ function BrollSurface({
         objectPosition: `${Math.round(motion.xPct)}% ${Math.round(motion.yPct)}%`,
         transform: motionTransformCss(motion),
         transformOrigin: `${Math.round(motion.xPct)}% ${Math.round(motion.yPct)}%`,
-        filter: ["contrast(1.04) saturate(1.05)", motion.filter].filter(Boolean).join(" "),
+        filter: ["contrast(1.04) saturate(1.05)", motion.filter]
+          .filter(Boolean)
+          .join(" "),
         ...(isolateBroll
           ? subjectIsolationStyle(
               input.effectsConfig?.background_removal.feather_px ?? 18,
@@ -300,7 +311,8 @@ function usesLegacyBackgroundIsolation(input: MotionlyRenderProps) {
 function segmentationSpillFilter(input: MotionlyRenderProps) {
   const settings = input.effectsConfig?.background_removal;
   if (!settings?.enabled) return undefined;
-  if (!input.sourceVideo.has_alpha && !input.segmentationMatte?.src) return undefined;
+  if (!input.sourceVideo.has_alpha && !input.segmentationMatte?.src)
+    return undefined;
   const spill = Math.max(0, Math.min(1, settings.spill_suppression ?? 0));
   if (spill <= 0) return undefined;
   const strength = (spill * 18).toFixed(1);
@@ -360,7 +372,13 @@ function sourceMotionState({
   state = applyKenBurns(state, motion, frame, durationInFrames);
   state = applyMotionKeyframes(state, motion, "source", null, timeMs);
   state = applyMotionKeyframes(state, motion, "source", activeClipId, timeMs);
-  state = applySpeedRamp(state, input, motion, timeMs, input.sourceVideo.duration_ms);
+  state = applySpeedRamp(
+    state,
+    input,
+    motion,
+    timeMs,
+    input.sourceVideo.duration_ms,
+  );
   state = applyBeatImpact(state, input, motion, timeMs, frame);
   state = applyClipMotionEffects(
     state,
@@ -405,9 +423,21 @@ function brollMotionState({
     opacity: 1,
     playbackRate: 1,
   };
-  state = applyMotionKeyframes(state, motion, "broll", asset.slot_id ?? asset.id, localMs);
+  state = applyMotionKeyframes(
+    state,
+    motion,
+    "broll",
+    asset.slot_id ?? asset.id,
+    localMs,
+  );
   state = applyMotionKeyframes(state, motion, "broll", null, globalMs);
-  state = applySpeedRamp(state, input, motion, globalMs, (durationInFrames / fps) * 1000);
+  state = applySpeedRamp(
+    state,
+    input,
+    motion,
+    globalMs,
+    (durationInFrames / fps) * 1000,
+  );
   state = applyBeatImpact(state, input, motion, globalMs, frame);
   const brollClipId = asset.slot_id ? `broll-${asset.slot_id}` : null;
   state = applyClipMotionEffects(
@@ -432,7 +462,10 @@ function cropWithAutoReframe(
   const settings = input.effectsConfig?.motion?.auto_reframe;
   if (!settings?.enabled) return crop;
   if ((outputAspect ?? "9:16") !== settings.target_aspect) return crop;
-  const tracked = interpolateSubjectTrack(settings.subject_track ?? [], sourceTimeMs);
+  const tracked = interpolateSubjectTrack(
+    settings.subject_track ?? [],
+    sourceTimeMs,
+  );
   const subjectX = clamp(tracked?.x ?? settings.subject_x_pct / 100, 0, 1);
   const subjectY = clamp(tracked?.y ?? settings.subject_y_pct / 100, 0, 1);
   const strength = clamp(1 - settings.smoothing * 0.25, 0.5, 1);
@@ -449,13 +482,16 @@ function interpolateSubjectTrack(
   timestampMs: number,
 ) {
   if (!track?.length) return null;
-  const afterIndex = track.findIndex((point) => point.timestamp_ms >= timestampMs);
+  const afterIndex = track.findIndex(
+    (point) => point.timestamp_ms >= timestampMs,
+  );
   if (afterIndex <= 0) return track[Math.max(0, afterIndex)];
   if (afterIndex < 0) return track[track.length - 1];
   const before = track[afterIndex - 1];
   const after = track[afterIndex];
   const progress = clamp(
-    (timestampMs - before.timestamp_ms) / Math.max(1, after.timestamp_ms - before.timestamp_ms),
+    (timestampMs - before.timestamp_ms) /
+      Math.max(1, after.timestamp_ms - before.timestamp_ms),
     0,
     1,
   );
@@ -472,7 +508,12 @@ function applyKenBurns(
   frame: number,
   durationInFrames: number,
 ) {
-  return applyKenBurnsSettings(state, motion?.ken_burns, frame, durationInFrames);
+  return applyKenBurnsSettings(
+    state,
+    motion?.ken_burns,
+    frame,
+    durationInFrames,
+  );
 }
 
 function applyKenBurnsSettings(
@@ -534,7 +575,9 @@ function matchingKeyframes(
   clipId: string | null,
 ) {
   return [...(motion?.keyframes ?? [])]
-    .filter((keyframe) => keyframe.target === target || keyframe.target === "all")
+    .filter(
+      (keyframe) => keyframe.target === target || keyframe.target === "all",
+    )
     .filter((keyframe) => {
       if (!keyframe.clip_id) return clipId === null;
       return keyframe.clip_id === clipId;
@@ -542,7 +585,10 @@ function matchingKeyframes(
     .sort((a, b) => a.at_ms - b.at_ms);
 }
 
-function interpolatedKeyframeState(keyframes: MotionKeyframe[], timeMs: number) {
+function interpolatedKeyframeState(
+  keyframes: MotionKeyframe[],
+  timeMs: number,
+) {
   const base = keyframeToState({
     target: "source",
     clip_id: null,
@@ -557,7 +603,11 @@ function interpolatedKeyframeState(keyframes: MotionKeyframe[], timeMs: number) 
   const first = keyframes[0];
   if (timeMs <= first.at_ms) {
     if (first.at_ms === 0) return keyframeToState(first);
-    return mixKeyframeState(base, keyframeToState(first), ease(timeMs / first.at_ms, first.easing));
+    return mixKeyframeState(
+      base,
+      keyframeToState(first),
+      ease(timeMs / first.at_ms, first.easing),
+    );
   }
   const last = keyframes[keyframes.length - 1];
   if (timeMs >= last.at_ms) return keyframeToState(last);
@@ -651,9 +701,11 @@ function speedRampAmount({
     }
   }
   if (!boundaries.length) {
-    if (timeMs <= rampInMs) amount = Math.max(amount, ease(timeMs / rampInMs, easing));
+    if (timeMs <= rampInMs)
+      amount = Math.max(amount, ease(timeMs / rampInMs, easing));
     const remaining = durationMs - timeMs;
-    if (remaining <= rampOutMs) amount = Math.max(amount, ease(remaining / rampOutMs, easing));
+    if (remaining <= rampOutMs)
+      amount = Math.max(amount, ease(remaining / rampOutMs, easing));
   }
   return clamp(amount, 0, 1);
 }
@@ -667,10 +719,12 @@ function applyBeatImpact(
 ) {
   const settings = motion?.beat_impact;
   const beats = input.musicSelection?.track?.beat_map ?? [];
-  if (!settings?.enabled || !beats.length || settings.max_impacts <= 0) return state;
+  if (!settings?.enabled || !beats.length || settings.max_impacts <= 0)
+    return state;
   const impactBeats = beats.slice(0, settings.max_impacts);
   const nearest = impactBeats.reduce(
-    (current, beat) => (Math.abs(beat - timeMs) < Math.abs(current - timeMs) ? beat : current),
+    (current, beat) =>
+      Math.abs(beat - timeMs) < Math.abs(current - timeMs) ? beat : current,
     impactBeats[0],
   );
   const distance = Math.abs(nearest - timeMs);
@@ -680,8 +734,10 @@ function applyBeatImpact(
   return {
     ...state,
     scale: state.scale * (1 + (settings.zoom - 1) * amount * 2.4),
-    translateX: state.translateX + Math.sin(frame * 1.7) * settings.shake_px * amount,
-    translateY: state.translateY + Math.cos(frame * 2.1) * settings.shake_px * amount,
+    translateX:
+      state.translateX + Math.sin(frame * 1.7) * settings.shake_px * amount,
+    translateY:
+      state.translateY + Math.cos(frame * 2.1) * settings.shake_px * amount,
     rotationDeg: state.rotationDeg + Math.sin(frame * 0.9) * amount * 0.8,
   };
 }
@@ -702,7 +758,12 @@ function applyClipMotionEffects(
   const effectSet = new Set(effects);
   let next = { ...state };
   if (effectSet.has("ken_burns")) {
-    next = applyKenBurnsSettings(next, motion?.ken_burns, frame, durationInFrames);
+    next = applyKenBurnsSettings(
+      next,
+      motion?.ken_burns,
+      frame,
+      durationInFrames,
+    );
   }
   if (effectSet.has("zoom_punch")) {
     const nearest = input.editPlan.zoom_moments.find(
@@ -718,9 +779,13 @@ function applyClipMotionEffects(
       const amount = clipSpeedRampAmount(timeMs, durationMs, settings);
       next = {
         ...next,
-        playbackRate: next.playbackRate * (1 + amount * (settings.peak_speed - 1)),
+        playbackRate:
+          next.playbackRate * (1 + amount * (settings.peak_speed - 1)),
         scale: next.scale * (1 + amount * 0.018),
-        filter: [next.filter, `blur(${(amount * 1.4).toFixed(2)}px)`].filter(Boolean).join(" ") || undefined,
+        filter:
+          [next.filter, `blur(${(amount * 1.4).toFixed(2)}px)`]
+            .filter(Boolean)
+            .join(" ") || undefined,
       };
     }
   }
@@ -728,31 +793,47 @@ function applyClipMotionEffects(
     const settings = motion?.beat_impact;
     const beats = input.musicSelection?.track?.beat_map ?? [];
     if (settings?.enabled && beats.length && settings.max_impacts > 0) {
-      const nearest = beats.slice(0, settings.max_impacts).reduce(
-        (current, beat) => (Math.abs(beat - timeMs) < Math.abs(current - timeMs) ? beat : current),
-        beats[0],
-      );
+      const nearest = beats
+        .slice(0, settings.max_impacts)
+        .reduce(
+          (current, beat) =>
+            Math.abs(beat - timeMs) < Math.abs(current - timeMs)
+              ? beat
+              : current,
+          beats[0],
+        );
       const distance = Math.abs(nearest - timeMs);
       const windowMs = 150;
       if (distance <= windowMs) {
-        const amount = ease(1 - distance / windowMs, "ease_out") * settings.intensity;
+        const amount =
+          ease(1 - distance / windowMs, "ease_out") * settings.intensity;
         next = {
           ...next,
           scale: next.scale * (1 + (settings.zoom - 1) * amount * 2.4),
-          translateX: next.translateX + Math.sin(frame * 1.7) * settings.shake_px * amount,
-          translateY: next.translateY + Math.cos(frame * 2.1) * settings.shake_px * amount,
+          translateX:
+            next.translateX +
+            Math.sin(frame * 1.7) * settings.shake_px * amount,
+          translateY:
+            next.translateY +
+            Math.cos(frame * 2.1) * settings.shake_px * amount,
           rotationDeg: next.rotationDeg + Math.sin(frame * 0.9) * amount * 0.8,
         };
       }
     }
   }
   if (effectSet.has("motion_blur")) {
-    next = { ...next, filter: [next.filter, "blur(0.65px)"].filter(Boolean).join(" ") || undefined };
+    next = {
+      ...next,
+      filter:
+        [next.filter, "blur(0.65px)"].filter(Boolean).join(" ") || undefined,
+    };
   }
   if (effectSet.has("flash")) {
     const flashAmount = pulseAroundBoundaries({
       timeMs,
-      boundaries: input.editPlan.cuts.map((cut) => cut.start_ms).filter((start) => start > 0),
+      boundaries: input.editPlan.cuts
+        .map((cut) => cut.start_ms)
+        .filter((start) => start > 0),
       fallbackDurationMs: (durationInFrames / fps) * 1000,
       rampInMs: 50,
       rampOutMs: 180,
@@ -760,13 +841,18 @@ function applyClipMotionEffects(
     });
     next = {
       ...next,
-      filter: [next.filter, `brightness(${1 + flashAmount * 0.25})`].filter(Boolean).join(" ") || undefined,
+      filter:
+        [next.filter, `brightness(${1 + flashAmount * 0.25})`]
+          .filter(Boolean)
+          .join(" ") || undefined,
     };
   }
   if (effectSet.has("glitch")) {
     const glitchAmount = pulseAroundBoundaries({
       timeMs,
-      boundaries: input.editPlan.cuts.map((cut) => cut.start_ms).filter((start) => start > 0),
+      boundaries: input.editPlan.cuts
+        .map((cut) => cut.start_ms)
+        .filter((start) => start > 0),
       fallbackDurationMs: (durationInFrames / fps) * 1000,
       rampInMs: 60,
       rampOutMs: 220,
@@ -774,8 +860,12 @@ function applyClipMotionEffects(
     });
     next = {
       ...next,
-      translateX: next.translateX + Math.sin(timeMs * 0.12) * glitchAmount * 1.4,
-      filter: [next.filter, `hue-rotate(${glitchAmount * 12}deg)`].filter(Boolean).join(" ") || undefined,
+      translateX:
+        next.translateX + Math.sin(timeMs * 0.12) * glitchAmount * 1.4,
+      filter:
+        [next.filter, `hue-rotate(${glitchAmount * 12}deg)`]
+          .filter(Boolean)
+          .join(" ") || undefined,
     };
   }
   return next;
@@ -796,7 +886,9 @@ function pulseAroundBoundaries({
   rampOutMs: number;
   easing: MotionSettings["speed_ramp"]["easing"] | "linear";
 }) {
-  const activeBoundaries = boundaries.length ? boundaries : [0, fallbackDurationMs];
+  const activeBoundaries = boundaries.length
+    ? boundaries
+    : [0, fallbackDurationMs];
   let amount = 0;
   for (const boundary of activeBoundaries) {
     const delta = timeMs - boundary;
@@ -817,11 +909,17 @@ function clipSpeedRampAmount(
 ) {
   let amount = 0;
   if (timeMs <= settings.ramp_in_ms) {
-    amount = Math.max(amount, ease(timeMs / settings.ramp_in_ms, settings.easing));
+    amount = Math.max(
+      amount,
+      ease(timeMs / settings.ramp_in_ms, settings.easing),
+    );
   }
   const remaining = durationMs - timeMs;
   if (remaining <= settings.ramp_out_ms) {
-    amount = Math.max(amount, ease(remaining / settings.ramp_out_ms, settings.easing));
+    amount = Math.max(
+      amount,
+      ease(remaining / settings.ramp_out_ms, settings.easing),
+    );
   }
   return clamp(amount, 0, 1);
 }
@@ -988,8 +1086,10 @@ function ease(
   const t = clamp(progress, 0, 1);
   if (easing === "ease_in") return t * t;
   if (easing === "ease_out") return 1 - Math.pow(1 - t, 2);
-  if (easing === "spring") return clamp(1 - Math.cos(t * Math.PI * 1.5) * Math.pow(1 - t, 2), 0, 1);
-  if (easing === "ease_in_out") return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  if (easing === "spring")
+    return clamp(1 - Math.cos(t * Math.PI * 1.5) * Math.pow(1 - t, 2), 0, 1);
+  if (easing === "ease_in_out")
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
   return t;
 }
 

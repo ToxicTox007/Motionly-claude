@@ -4,7 +4,7 @@ async function run() {
   console.log("Launching browser with sandbox disabled...");
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -25,7 +25,9 @@ async function run() {
 
   console.log("Waiting for redirection...");
   try {
-    await page.waitForURL(url => !url.pathname.includes('/login'), { timeout: 15000 });
+    await page.waitForURL((url) => !url.pathname.includes("/login"), {
+      timeout: 15000,
+    });
   } catch (err) {
     console.log("Timeout waiting for navigation. Current URL:", page.url());
   }
@@ -33,14 +35,15 @@ async function run() {
   const currentUrl = page.url();
   console.log("Final URL:", currentUrl);
 
-  const screenshotPath = "/home/codespace/.gemini/antigravity-cli/brain/ffc8064e-bac4-44d0-ab19-0b27296f4685/login_result.png";
+  const screenshotPath =
+    "/home/codespace/.gemini/antigravity-cli/brain/ffc8064e-bac4-44d0-ab19-0b27296f4685/login_result.png";
   await page.screenshot({ path: screenshotPath });
   console.log(`Saved screenshot to ${screenshotPath}`);
 
   await browser.close();
 }
 
-run().catch(err => {
+run().catch((err) => {
   console.error("Execution failed:", err);
   process.exit(1);
 });

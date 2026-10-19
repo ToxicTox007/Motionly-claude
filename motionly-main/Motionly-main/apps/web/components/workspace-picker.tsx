@@ -24,13 +24,23 @@ export function WorkspacePicker({
         </p>
       </div>
       {error ? (
-        <p role="alert" className="border-2 border-danger bg-danger/10 p-3 text-xs font-bold">
+        <p
+          role="alert"
+          className="border-2 border-danger bg-danger/10 p-3 text-xs font-bold"
+        >
           Workspace selection could not be applied. Choose an active workspace
           and try again.
         </p>
       ) : null}
-      <form action="/api/workspaces/select" method="post" className="space-y-3">
-        <label className="block text-xs font-black uppercase" htmlFor="workspace_id">
+      <form
+        action="/app-api/workspaces/select"
+        method="post"
+        className="space-y-3"
+      >
+        <label
+          className="block text-xs font-black uppercase"
+          htmlFor="workspace_id"
+        >
           Workspace
         </label>
         <select

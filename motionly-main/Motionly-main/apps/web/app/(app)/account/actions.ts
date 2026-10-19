@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { env } from "@/lib/env";
 
 export async function updateProfile(formData: FormData) {
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
+  if (env.skipAuthMiddleware) {
     redirect("/account?updated=1");
   }
 
@@ -21,7 +22,9 @@ export async function updateProfile(formData: FormData) {
   });
 
   if (error) {
-    redirect(`/account?error=${encodeURIComponent(error.code ?? "profile_update_failed")}`);
+    redirect(
+      `/account?error=${encodeURIComponent(error.code ?? "profile_update_failed")}`,
+    );
   }
 
   revalidatePath("/account");
@@ -29,7 +32,7 @@ export async function updateProfile(formData: FormData) {
 }
 
 export async function updatePassword(formData: FormData) {
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
+  if (env.skipAuthMiddleware) {
     redirect("/account?password=1");
   }
 
@@ -44,7 +47,9 @@ export async function updatePassword(formData: FormData) {
   const { error } = await supabase.auth.updateUser({ password });
 
   if (error) {
-    redirect(`/account?error=${encodeURIComponent(error.code ?? "password_update_failed")}`);
+    redirect(
+      `/account?error=${encodeURIComponent(error.code ?? "password_update_failed")}`,
+    );
   }
 
   redirect("/account?password=1");

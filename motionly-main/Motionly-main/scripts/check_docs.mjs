@@ -21,7 +21,9 @@ async function walk(directory) {
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) {
       files.push(...(await walk(path)));
-    } else if ([".md", ".markdown"].includes(extname(entry.name).toLowerCase())) {
+    } else if (
+      [".md", ".markdown"].includes(extname(entry.name).toLowerCase())
+    ) {
       files.push(path);
     }
   }
@@ -38,7 +40,9 @@ async function exists(path) {
 }
 
 function markdownLinks(content) {
-  return [...content.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)].map((match) => match[1].trim());
+  return [...content.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)].map((match) =>
+    match[1].trim(),
+  );
 }
 
 function linkPath(sourceFile, rawTarget) {
@@ -48,7 +52,11 @@ function linkPath(sourceFile, rawTarget) {
   }
 
   const normalized = target.replaceAll("\\", "/");
-  if (REPOSITORY_ROOT_LINK_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+  if (
+    REPOSITORY_ROOT_LINK_PREFIXES.some((prefix) =>
+      normalized.startsWith(prefix),
+    )
+  ) {
     return resolve(ROOT, normalized);
   }
   if (normalized.startsWith("docs/")) {
@@ -73,7 +81,11 @@ if (!(await exists(INDEX_FILE))) {
       continue;
     }
     const relativeToDocs = relative(DOCS_DIR, target);
-    if (relativeToDocs !== "" && !relativeToDocs.startsWith("..") && !relativeToDocs.includes(":")) {
+    if (
+      relativeToDocs !== "" &&
+      !relativeToDocs.startsWith("..") &&
+      !relativeToDocs.includes(":")
+    ) {
       indexedTargets.add(relativeToDocs.replaceAll("\\", "/"));
     }
   }
@@ -94,9 +106,13 @@ for (const file of markdownFiles) {
 }
 
 if (errors.length) {
-  console.error(`Documentation check failed (${errors.length} issue${errors.length === 1 ? "" : "s"}):`);
+  console.error(
+    `Documentation check failed (${errors.length} issue${errors.length === 1 ? "" : "s"}):`,
+  );
   for (const error of errors) console.error(`- ${error}`);
   process.exit(1);
 }
 
-console.log(`Documentation check passed: ${markdownFiles.length} Markdown files are linked and all local links resolve.`);
+console.log(
+  `Documentation check passed: ${markdownFiles.length} Markdown files are linked and all local links resolve.`,
+);

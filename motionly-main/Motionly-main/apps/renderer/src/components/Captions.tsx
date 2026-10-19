@@ -6,8 +6,15 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
-import type { CaptionSegment, CaptionStyle, TranscriptWord } from "@motionly/shared";
-import { millisecondsToFrameEnd, millisecondsToFrameStart } from "@motionly/shared";
+import type {
+  CaptionSegment,
+  CaptionStyle,
+  TranscriptWord,
+} from "@motionly/shared";
+import {
+  millisecondsToFrameEnd,
+  millisecondsToFrameStart,
+} from "@motionly/shared";
 import type { TemplateDefinition } from "../types";
 
 type CaptionsProps = {
@@ -17,11 +24,18 @@ type CaptionsProps = {
   template: TemplateDefinition;
 };
 
-export function AnimatedCaptions({ segments, words, style, template }: CaptionsProps) {
+export function AnimatedCaptions({
+  segments,
+  words,
+  style,
+  template,
+}: CaptionsProps) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const timeMs = (frame / fps) * 1000;
-  const segment = segments.find((item) => timeMs >= item.start_ms && timeMs <= item.end_ms);
+  const segment = segments.find(
+    (item) => timeMs >= item.start_ms && timeMs <= item.end_ms,
+  );
   if (!segment) return null;
 
   const segmentStartFrame = millisecondsToFrameStart(segment.start_ms, fps);
@@ -47,7 +61,9 @@ export function AnimatedCaptions({ segments, words, style, template }: CaptionsP
   });
   const textColor = style?.text_color ?? template.foreground;
   const accentColor = style?.accent_color ?? template.accent;
-  const fontSize = style?.font_size_px ? Math.round(style.font_size_px * 1.45) : 76;
+  const fontSize = style?.font_size_px
+    ? Math.round(style.font_size_px * 1.45)
+    : 76;
   const fontWeight = style?.font_weight ?? 900;
   const textTransform =
     style?.text_case === "uppercase"
@@ -67,8 +83,16 @@ export function AnimatedCaptions({ segments, words, style, template }: CaptionsP
     >
       <div
         style={{
-          maxWidth: mode === "creator_ticker" ? 960 : mode === "impact_stamp" ? 1000 : 840,
-          width: mode === "impact_stamp" || mode === "creator_ticker" ? "88%" : undefined,
+          maxWidth:
+            mode === "creator_ticker"
+              ? 960
+              : mode === "impact_stamp"
+                ? 1000
+                : 840,
+          width:
+            mode === "impact_stamp" || mode === "creator_ticker"
+              ? "88%"
+              : undefined,
           ...(placement.customPosition
             ? {
                 position: "absolute",
@@ -93,12 +117,13 @@ export function AnimatedCaptions({ segments, words, style, template }: CaptionsP
               ? `2px solid ${style.border_color}`
               : undefined,
           borderRadius:
-            mode === "creator_ticker" ? 999 : style?.border_radius_px ?? 0,
+            mode === "creator_ticker" ? 999 : (style?.border_radius_px ?? 0),
           padding:
             style?.background_opacity && style.background_opacity > 0
               ? `${style.padding_y_px}px ${style.padding_x_px}px`
               : undefined,
-          boxShadow: mode === "minimal_line" ? undefined : (style?.shadow ?? undefined),
+          boxShadow:
+            mode === "minimal_line" ? undefined : (style?.shadow ?? undefined),
           textShadow: style?.shadow ?? "0 6px 24px rgba(0,0,0,0.72)",
           WebkitTextStroke:
             style?.stroke_width_px && style.stroke_color
@@ -108,7 +133,9 @@ export function AnimatedCaptions({ segments, words, style, template }: CaptionsP
         }}
       >
         {mode === "educational_card" ? (
-          <span style={stepBadgeStyle(accentColor)}>STEP {segment.index + 1}</span>
+          <span style={stepBadgeStyle(accentColor)}>
+            STEP {segment.index + 1}
+          </span>
         ) : null}
         {renderWords({
           segment,
@@ -149,7 +176,8 @@ function renderWords({
   return displayWords.map((word, index) => {
     const isActive = activeWord?.index === word.index;
     const normalized = word.text.replace(/[^\w'-]/g, "");
-    const isHighlighted = isActive || segment.highlight_words?.includes(normalized);
+    const isHighlighted =
+      isActive || segment.highlight_words?.includes(normalized);
     return (
       <React.Fragment key={`${word.index}-${word.start_ms}-${index}`}>
         <span
@@ -216,7 +244,8 @@ function captionAnimation({
   const exitOpacity =
     remainingFrames < 8 ? interpolate(remainingFrames, [0, 8], [0, 1]) : 1;
   if (animation === "impact_stamp" || mode === "impact_stamp") {
-    const shake = localFrame < 10 ? Math.sin(frame * 1.7) * (10 - localFrame) * 0.9 : 0;
+    const shake =
+      localFrame < 10 ? Math.sin(frame * 1.7) * (10 - localFrame) * 0.9 : 0;
     const scale = interpolate(entrance, [0, 0.72, 1], [1.28, 0.96, 1]);
     return {
       opacity: exitOpacity,
@@ -235,7 +264,9 @@ function captionAnimation({
       exitOpacity,
       interpolate(localFrame, [0, 18], [0, 1], { extrapolateRight: "clamp" }),
     );
-    const y = interpolate(localFrame, [0, 18], [16, 0], { extrapolateRight: "clamp" });
+    const y = interpolate(localFrame, [0, 18], [16, 0], {
+      extrapolateRight: "clamp",
+    });
     return {
       opacity,
       transform: `translateY(${y}px)`,
@@ -311,7 +342,8 @@ function stepBadgeStyle(accentColor: string): React.CSSProperties {
 }
 
 function captionBackground(style?: CaptionStyle | null) {
-  if (!style?.background_color || style.background_opacity <= 0) return undefined;
+  if (!style?.background_color || style.background_opacity <= 0)
+    return undefined;
   return hexToRgba(style.background_color, style.background_opacity);
 }
 

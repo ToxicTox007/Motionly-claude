@@ -1,5 +1,5 @@
 begin;
-select plan(5);
+select plan(4);
 
 select ok(
   to_regclass('public.worker_heartbeats_last_seen_at_desc_idx') is not null,
@@ -19,11 +19,6 @@ select ok(
 select ok(
   to_regclass('public.edit_plans_workspace_project_transcript_updated_idx') is not null,
   'latest plan by transcript index exists'
-);
-
-select ok(
-  to_regclass('public.publish_connections_workspace_created_idx') is not null,
-  'publish connection workspace list index exists'
 );
 
 select * from finish();

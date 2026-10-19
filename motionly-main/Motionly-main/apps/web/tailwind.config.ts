@@ -28,6 +28,15 @@ const config: Config = {
         "pixel-border": "hsl(var(--border-strong))",
         "focus-ring": "hsl(var(--focus))",
       },
+      // Brand and status colours used as text keep WCAG AA contrast.
+      textColor: {
+        primary: "hsl(var(--primary-text))",
+        danger: "hsl(var(--danger-text))",
+        warning: "hsl(var(--warning-text))",
+        success: "hsl(var(--success-text))",
+        info: "hsl(var(--info-text))",
+        accent: "hsl(var(--accent-text))",
+      },
       borderRadius: {
         sm: "4px",
         DEFAULT: "4px",

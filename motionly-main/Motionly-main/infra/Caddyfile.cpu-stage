@@ -1,0 +1,13 @@
+# CPU-stage ingress: the production origin, behind the CloudFront simulator
+# (the edge service). Plain HTTP, so Caddy never requests a certificate.
+# Compose also binds it to 127.0.0.1:18080 so the stack checker can prove that
+# direct requests, which lack the origin secret, are refused.
+{
+	auto_https off
+}
+
+# One site for any host name; the guard runs before the shared routes.
+:80 {
+	import /etc/caddy/origin-guard.caddy
+	import /etc/caddy/routes.caddy
+}

@@ -14,7 +14,10 @@ def test_api_image_contains_no_ffmpeg_or_ml_runtime() -> None:
         dockerfile_lower = dockerfile.read_text().lower()
         assert "ffmpeg" not in dockerfile_lower
         assert "apps/api/worker-bridge" in dockerfile_lower
-        assert "nodejs" in dockerfile_lower
+        # The Node worker bridge needs a Node runtime: Node 24 copied from the
+        # pinned official image (Decision D1), not Debian's Node 20 package.
+        assert "copy --from=node:24-bookworm-slim@sha256:" in dockerfile_lower
+        assert "/usr/local/bin/node /usr/local/bin/node" in dockerfile_lower
         assert "worker-bridge/package.json" in dockerfile_lower
         assert "worker-bridge/package-lock.json" in dockerfile_lower
         assert "npm ci --omit=dev" in dockerfile_lower
@@ -81,7 +84,6 @@ def test_heavy_endpoints_require_worker_queue_before_enqueue() -> None:
         "music.py",
         "effects.py",
         "captions.py",
-        "publishing.py",
     ):
         source = (api_dir / filename).read_text()
         assert "prepare_heavy_job_enqueue" in source
@@ -95,7 +97,6 @@ def test_specialized_worker_pools_and_persistent_model_cache_are_declared() -> N
         "demucs-worker",
         "provider-worker",
         "remotion-worker",
-        "publishing-worker",
     ):
         assert service in compose
     assert "motionly-model-cache" in compose
@@ -104,9 +105,5 @@ def test_specialized_worker_pools_and_persistent_model_cache_are_declared() -> N
 
 def test_contract_generation_has_no_runtime_database_migration() -> None:
     generator = (ROOT / "apps/api/scripts/generate_openapi_contract.py").read_text()
-    app_main = (ROOT / "apps/api/app/main.py").read_text()
-    maintenance = (ROOT / "apps/api/scripts/encrypt_legacy_publish_tokens.py").read_text()
 
     assert 'os.environ["SETTINGS_ENV_FILE"] = "none"' in generator
-    assert ".encrypt_legacy_tokens()" not in app_main
-    assert "repository.encrypt_legacy_tokens()" in maintenance

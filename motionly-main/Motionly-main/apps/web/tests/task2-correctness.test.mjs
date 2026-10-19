@@ -21,9 +21,18 @@ test("project loading checks every active workspace membership", async () => {
 });
 
 test("normal AI generation uses caches while explicit regeneration can bypass them", async () => {
-  const aiStep = await readFile(new URL("components/editor/ai-step.tsx", root), "utf8");
-  const editor = await readFile(new URL("components/editor-client.tsx", root), "utf8");
-  const scale = await readFile(new URL("components/editor/ScalePanel.tsx", root), "utf8");
+  const aiStep = await readFile(
+    new URL("components/editor/ai-step.tsx", root),
+    "utf8",
+  );
+  const editor = await readFile(
+    new URL("components/editor-client.tsx", root),
+    "utf8",
+  );
+  const scale = await readFile(
+    new URL("components/editor/ScalePanel.tsx", root),
+    "utf8",
+  );
   const broll = await readFile(
     new URL("components/editor/tabs/broll-tab.tsx", root),
     "utf8",
@@ -43,7 +52,9 @@ test("conflict reload requests the individual plan and discards stale editor sta
     "utf8",
   );
   const dialog = await readFile(
-    new URL("components/editor/ConflictDialog.tsx", root), "utf8");
+    new URL("components/editor/ConflictDialog.tsx", root),
+    "utf8",
+  );
 
   assert.match(
     editor,

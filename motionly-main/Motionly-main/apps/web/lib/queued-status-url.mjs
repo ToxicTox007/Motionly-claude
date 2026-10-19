@@ -17,7 +17,9 @@ export function normalizeQueuedLayerStatusUrl(statusUrl, apiBaseUrl) {
 
   if (ABSOLUTE_HTTP_URL.test(target)) {
     if (!ABSOLUTE_HTTP_URL.test(base)) {
-      throw new Error("Absolute queued status URLs require an absolute API base URL.");
+      throw new Error(
+        "Absolute queued status URLs require an absolute API base URL.",
+      );
     }
     const expectedApi = new URL(base);
     const requestedStatus = new URL(target);

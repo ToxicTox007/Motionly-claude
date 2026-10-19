@@ -1,86 +1,14 @@
 import type { NextConfig } from "next";
+import { parseServerConfig } from "./lib/runtime-config.mjs";
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-const apiUrl =
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  "http://localhost:8000";
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL ??
-  process.env.SUPABASE_URL ??
-  "http://127.0.0.1:54321";
+// Phase names from next/constants (compared directly so this file also loads
+// under plain Node in the unit tests).
+const DEVELOPMENT_SERVER = "phase-development-server";
+const PRODUCTION_SERVER = "phase-production-server";
 
-const serverActionAllowedOrigins = [
-  "localhost:3000",
-  "127.0.0.1:3000",
-  "*.app.github.dev",
-  "*.vercel.app",
-];
-
-function originOf(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  try {
-    return new URL(value).origin;
-  } catch {
-    return undefined;
-  }
-}
-
-function websocketOrigin(value: string | undefined): string | undefined {
-  const origin = originOf(value);
-  if (!origin) return undefined;
-  return origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
-}
-
-const configuredApiOrigin = originOf(apiUrl);
-const configuredSupabaseOrigin = originOf(supabaseUrl);
-const configuredSupabaseWebsocketOrigin = websocketOrigin(supabaseUrl);
-const connectSources = Array.from(
-  new Set(
-    [
-      "'self'",
-      configuredApiOrigin,
-      configuredSupabaseOrigin,
-      configuredSupabaseWebsocketOrigin,
-      "https:",
-      "wss:",
-    ].filter((source): source is string => Boolean(source)),
-  ),
-);
-
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "frame-src 'none'",
-  "form-action 'self'",
-  `script-src 'self' 'unsafe-inline'${
-    process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"
-  }`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' blob: data: https:",
-  `media-src ${[
-    "'self'",
-    "blob:",
-    "data:",
-    "https:",
-    configuredApiOrigin,
-    configuredSupabaseOrigin,
-  ]
-    .filter(Boolean)
-    .join(" ")}`,
-  "font-src 'self' data:",
-  "worker-src 'self' blob:",
-  `connect-src ${connectSources.join(" ")}`,
-  "manifest-src 'self'",
-  process.env.NODE_ENV === "production" ? "upgrade-insecure-requests" : "",
-]
-  .filter(Boolean)
-  .join("; ");
-
+// Static headers only. The Content-Security-Policy needs a per-request nonce,
+// so proxy.ts sets it (lib/security-headers.mjs).
 const securityHeaders = [
-  { key: "Content-Security-Policy", value: contentSecurityPolicy },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
@@ -90,52 +18,64 @@ const securityHeaders = [
   },
 ];
 
-if (appUrl) {
-  try {
-    serverActionAllowedOrigins.push(new URL(appUrl).host);
-  } catch {
-    // Ignore invalid app URL here; runtime env validation handles hard failures.
-  }
-}
+export default function nextConfig(phase: string): NextConfig {
+  const development = phase === DEVELOPMENT_SERVER;
+  // A server validates its runtime configuration when it starts, so a
+  // misconfigured container exits instead of failing requests. A build needs
+  // no configuration: the image is configured where it runs.
+  const config =
+    development || phase === PRODUCTION_SERVER
+      ? parseServerConfig(process.env)
+      : undefined;
 
-const nextConfig: NextConfig = {
-  poweredByHeader: false,
-  reactStrictMode: true,
-  allowedDevOrigins: ["localhost", "127.0.0.1", "*.app.github.dev"],
-  experimental: {
-    serverActions: {
-      allowedOrigins: serverActionAllowedOrigins,
-    },
-  },
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${apiUrl}/:path*`,
-      },
-      {
-        source: "/supabase/:path*",
-        destination: `${supabaseUrl}/:path*`,
-      },
-    ];
-  },
-  async headers() {
-    return [
-      {
-        source: "/:path*",
-        headers: securityHeaders,
-      },
-      {
-        source: "/icon.svg",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=86400, stale-while-revalidate=604800",
+  return {
+    poweredByHeader: false,
+    reactStrictMode: true,
+    ...(development
+      ? {
+          allowedDevOrigins: ["localhost", "127.0.0.1", "*.app.github.dev"],
+          experimental: {
+            serverActions: {
+              allowedOrigins: [
+                "localhost:3000",
+                "127.0.0.1:3000",
+                "*.app.github.dev",
+              ],
+            },
           },
-        ],
-      },
-    ];
-  },
-};
-
-export default nextConfig;
+        }
+      : {}),
+    async rewrites() {
+      // Deployed, the edge (Caddy behind CloudFront) routes /api to FastAPI
+      // and /supabase to Kong. `next dev` stands in for it locally.
+      if (!development || !config) return [];
+      return [
+        {
+          source: "/api/:path*",
+          destination: `${config.apiInternalUrl}/:path*`,
+        },
+        {
+          source: "/supabase/:path*",
+          destination: `${config.supabaseUrl}/:path*`,
+        },
+      ];
+    },
+    async headers() {
+      return [
+        {
+          source: "/:path*",
+          headers: securityHeaders,
+        },
+        {
+          source: "/icon.svg",
+          headers: [
+            {
+              key: "Cache-Control",
+              value: "public, max-age=86400, stale-while-revalidate=604800",
+            },
+          ],
+        },
+      ];
+    },
+  };
+}

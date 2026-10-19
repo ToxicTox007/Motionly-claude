@@ -52,7 +52,6 @@ def test_get_actor_verifies_supabase_jwt_and_ignores_spoofed_user_header(
         get_actor(
             request=request,
             authorization=f"Bearer {token}",
-            x_motionly_user_id=str(uuid4()),
             x_motionly_workspace_id=str(workspace_id),
         )
     )
@@ -69,7 +68,6 @@ def test_get_actor_rejects_invalid_token() -> None:
             get_actor(
                 request=request,
                 authorization="Bearer not-a-jwt",
-                x_motionly_user_id=str(uuid4()),
                 x_motionly_workspace_id=str(uuid4()),
             )
         )
@@ -86,7 +84,6 @@ def test_get_actor_rejects_forged_user_header_without_bearer_token() -> None:
             get_actor(
                 request=request,
                 authorization=None,
-                x_motionly_user_id=str(uuid4()),
                 x_motionly_workspace_id=str(uuid4()),
             )
         )
@@ -270,7 +267,6 @@ def test_get_actor_fails_closed_in_production_without_jwt_secret() -> None:
             get_actor(
                 request=request,
                 authorization=None,
-                x_motionly_user_id=str(uuid4()),
                 x_motionly_workspace_id=str(uuid4()),
             )
         )
@@ -287,7 +283,6 @@ def test_get_actor_fails_closed_in_staging_without_jwt_secret() -> None:
             get_actor(
                 request=request,
                 authorization=None,
-                x_motionly_user_id=str(uuid4()),
                 x_motionly_workspace_id=str(uuid4()),
             )
         )

@@ -79,7 +79,11 @@ def test_no_lightning_references_remain_in_runtime_config_or_tests():
             content = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        sanitized = content.lower().replace("lightningcss", "")
+        # ``lightningcss`` is an unrelated CSS toolchain package; references to this
+        # guard's own filename (e.g. in the acceptance ledger) are not integrations.
+        sanitized = (
+            content.lower().replace("lightningcss", "").replace("test_lightning_removed", "")
+        )
         if "lightning" in sanitized:
             offenders.append(str(path.relative_to(ROOT)))
     assert not offenders, f"Lightning references still present in: {sorted(offenders)}"
@@ -101,7 +105,6 @@ def test_compose_replaces_retired_gpu_deployment_scripts() -> None:
         "provider-worker",
         "planning-worker",
         "remotion-worker",
-        "publishing-worker",
     ):
         assert f"  {service}:" in compose
     assert "stock_asset_enrichment" in compose

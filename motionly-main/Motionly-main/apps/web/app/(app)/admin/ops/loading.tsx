@@ -32,7 +32,10 @@ export default function AdminOpsLoading() {
               <LoadingPixelSkeleton className="h-4 w-16" />
             </div>
             {[1, 2, 3].map((i) => (
-              <div key={i} className="p-4 flex justify-between border-b border-border/40">
+              <div
+                key={i}
+                className="p-4 flex justify-between border-b border-border/40"
+              >
                 <LoadingPixelSkeleton className="h-4 w-32" />
                 <LoadingPixelSkeleton className="h-4 w-12" />
                 <LoadingPixelSkeleton className="h-4 w-12" />
@@ -50,7 +53,10 @@ export default function AdminOpsLoading() {
             <LoadingPixelSkeleton className="h-10 w-36" />
           </div>
           {[1, 2, 3].map((i) => (
-            <div key={i} className="pixel-panel p-4 flex justify-between items-center">
+            <div
+              key={i}
+              className="pixel-panel p-4 flex justify-between items-center"
+            >
               <div className="space-y-2">
                 <LoadingPixelSkeleton className="h-4 w-48" />
                 <LoadingPixelSkeleton className="h-3 w-64" />

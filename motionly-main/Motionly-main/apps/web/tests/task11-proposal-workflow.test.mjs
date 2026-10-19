@@ -74,7 +74,10 @@ test("rejection sends no actions and exits without mutating active plan or downs
   assert.doesNotMatch(rejection, /ensureBroll\(/);
   assert.doesNotMatch(rejection, /ensureMusic\(/);
   assert.doesNotMatch(rejection, /compile-timeline/);
-  assert.match(rejection, /if \(workflowOwned\)[\s\S]*await onWorkflowRefresh\(\)[\s\S]*router\.refresh\(\)/);
+  assert.match(
+    rejection,
+    /if \(workflowOwned\)[\s\S]*await onWorkflowRefresh\(\)[\s\S]*router\.refresh\(\)/,
+  );
 });
 
 test("approval confirms the authoritative plan and workflow-owned approval bypasses client mutations", async () => {
@@ -113,7 +116,10 @@ test("approval confirms the authoritative plan and workflow-owned approval bypas
     "      if (workflowOwned) {",
     "      // Standalone proposals retain",
   );
-  assert.doesNotMatch(workflowBranch, /ensureCaptions|ensureBroll|ensureMusic|compile-timeline/);
+  assert.doesNotMatch(
+    workflowBranch,
+    /ensureCaptions|ensureBroll|ensureMusic|compile-timeline/,
+  );
   assert.match(
     decision,
     /planAppliedLocally\s*\?[^:]*timeline synchronization did not finish/s,
@@ -194,7 +200,10 @@ test("proposal decisions use deterministic cross-device keys and exact concurren
   );
 
   assert.match(source, /proposalDecisionIdempotencyKey\(\{/);
-  assert.match(source, /workspaceId,[\s\S]*projectId,[\s\S]*proposalId: proposal\.id/);
+  assert.match(
+    source,
+    /workspaceId,[\s\S]*projectId,[\s\S]*proposalId: proposal\.id/,
+  );
   assert.match(source, /proposalRevision: proposal\.revision/);
   assert.match(source, /actionIds: idempotencyActionIds/);
   assert.doesNotMatch(source, /crypto\.randomUUID|decisionIdempotencyKeysRef/);
@@ -226,9 +235,15 @@ test("workflow proposal recovery uses the canonical artifact and never browser s
   assert.match(source, /nextProposal\.project_id !== projectId/);
   assert.match(source, /nextProposal\.workspace_id !== workspaceId/);
   assert.match(source, /isProposalRevisionCompatible\(/);
-  assert.match(source, /workflowProposalLinkedRevision,[\s\S]*nextProposal\.revision/);
+  assert.match(
+    source,
+    /workflowProposalLinkedRevision,[\s\S]*nextProposal\.revision/,
+  );
   assert.match(source, /showProposalForReview\(nextProposal, true\)/);
-  assert.doesNotMatch(source, /sessionStorage|localStorage|PendingProposalIdentity/);
+  assert.doesNotMatch(
+    source,
+    /sessionStorage|localStorage|PendingProposalIdentity/,
+  );
 });
 
 test("shared contracts and polling expose proposal identities without changing legacy success return", async () => {

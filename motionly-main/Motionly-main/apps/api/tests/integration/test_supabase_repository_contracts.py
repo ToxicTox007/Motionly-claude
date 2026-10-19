@@ -8,6 +8,7 @@ from app.api.errors import ApiError
 from app.repositories.projects import SupabaseProjectRepository
 from app.repositories.scale import SupabaseScaleRepository
 from app.repositories.uploads import SupabaseUploadRepository
+from app.repositories.workflows import SupabaseWorkflowRepository
 from app.schemas.projects import ProjectStatus
 from app.schemas.scale import ScaleResourceStatus
 from app.schemas.uploads import UploadStatus
@@ -101,6 +102,84 @@ def test_project_upload_and_scale_repositories_round_trip(supabase_contract_cont
         projects.get_project(project_id=project.id, workspace_id=uuid4())
     scale.delete(resource_id=resource.id, workspace_id=workspace_id)
     projects.delete_project(project_id=project.id, workspace_id=workspace_id)
+
+
+def test_projects_with_workflow_history_can_be_deleted(supabase_contract_context) -> None:
+    """Workflow history is append-only, but deleting its project removes it."""
+    url, key, user_id, workspace_id = supabase_contract_context
+    headers = {"apikey": key, "authorization": f"Bearer {key}"}
+    projects = SupabaseProjectRepository(supabase_url=url, service_role_key=key)
+    workflows = SupabaseWorkflowRepository(supabase_url=url, service_role_key=key)
+    project = projects.create_project(
+        workspace_id=workspace_id, created_by=user_id, title="Delete with history"
+    )
+    path = f"workspaces/{workspace_id}/projects/{project.id}/raw/source.mp4"
+
+    def rest(method: str, table: str, *, prefer: str | None = None, **kwargs):
+        request_headers = {**headers, **({"prefer": prefer} if prefer else {})}
+        response = httpx.request(
+            method, f"{url}/rest/v1/{table}", headers=request_headers, timeout=20, **kwargs
+        )
+        response.raise_for_status()
+        return response.json() if response.content else None
+
+    upload = rest(
+        "POST",
+        "uploaded_videos",
+        prefer="return=representation",
+        json={
+            "workspace_id": str(workspace_id),
+            "project_id": str(project.id),
+            "storage_bucket": "raw-uploads",
+            "storage_path": path,
+            "original_filename": "source.mp4",
+            "mime_type": "video/mp4",
+            "byte_size": 2048,
+            "file_size_bytes": 2048,
+            "status": "processing",
+            "workflow_version": "first-draft-v2",
+        },
+    )[0]
+    reference = rest(
+        "POST",
+        "object_references",
+        prefer="return=representation",
+        json={
+            "workspace_id": str(workspace_id),
+            "project_id": str(project.id),
+            "storage_bucket": "raw-uploads",
+            "storage_path": path,
+            "owner_type": "uploaded_video",
+            "owner_id": upload["id"],
+            "object_type": "source_video",
+            "mime_type": "video/mp4",
+            "size_bytes": 2048,
+            "sha256": "a" * 64,
+        },
+    )[0]
+    rest(
+        "PATCH",
+        "uploaded_videos",
+        params={"id": f"eq.{upload['id']}"},
+        json={
+            "source_object_reference_id": reference["id"],
+            "verified_size_bytes": 2048,
+            "verified_sha256": "a" * 64,
+        },
+    )
+    run, _ = workflows.ensure_first_draft_v2(
+        workspace_id=workspace_id,
+        project_id=project.id,
+        uploaded_video_id=UUID(upload["id"]),
+        started_by=user_id,
+    )
+    for table in ("workflow_events", "transactional_outbox"):
+        assert rest("GET", table, params={"workflow_run_id": f"eq.{run.id}", "select": "id"})
+
+    projects.delete_project(project_id=project.id, workspace_id=workspace_id)
+
+    for table in ("workflow_runs", "workflow_events", "transactional_outbox", "uploaded_videos"):
+        assert rest("GET", table, params={"project_id": f"eq.{project.id}", "select": "id"}) == []
 
 
 

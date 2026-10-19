@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -24,7 +25,6 @@ APPLICATION_IMAGE_VARIABLES = (
     "MOTIONLY_PROVIDER_WORKER_IMAGE",
     "MOTIONLY_PLANNING_WORKER_IMAGE",
     "MOTIONLY_REMOTION_WORKER_IMAGE",
-    "MOTIONLY_PUBLISHING_WORKER_IMAGE",
     "MOTIONLY_TEMPORAL_SERVER_IMAGE",
 )
 
@@ -40,9 +40,7 @@ REQUIRED_VARIABLES = (
     "SUPABASE_ANON_KEY",
     "SUPABASE_SERVICE_ROLE_KEY",
     "APP_DOMAIN",
-    "API_DOMAIN",
-    "SUPABASE_DOMAIN",
-    "SENTRY_DSN",
+    "PUBLIC_ORIGIN",
     "TEMPORAL_BOOTSTRAP_ADMIN_UNTIL",
 )
 
@@ -54,13 +52,13 @@ SECRET_FILE_NAMES = (
     "supabase_jwt_secret",
     "admin_api_token",
     "worker_api_token",
-    "publish_token_encryption_key",
-    "publish_oauth_state_secret",
     "groq_api_key",
     "openrouter_api_key",
     "runway_api_key",
     "azure_openai_api_key",
     "metrics_bearer_token",
+    "edge_origin_verify",
+    "edge_origin_verify_previous",
     "temporal_ca_cert",
     "temporal_server_cert",
     "temporal_server_key",
@@ -96,9 +94,7 @@ def _production_values(secret_directory: Path) -> dict[str, str]:
         "SUPABASE_ANON_KEY": "test-anon-key",
         "SUPABASE_SERVICE_ROLE_KEY": "test-service-role-key",
         "APP_DOMAIN": "app.example.test",
-        "API_DOMAIN": "api.example.test",
-        "SUPABASE_DOMAIN": "supabase.example.test",
-        "SENTRY_DSN": "https://public@example.test/1",
+        "PUBLIC_ORIGIN": "https://app.example.test",
         "TEMPORAL_BOOTSTRAP_ADMIN_UNTIL": "2026-08-12T00:00:00Z",
     }
     for variable in APPLICATION_IMAGE_VARIABLES:
@@ -212,6 +208,59 @@ def test_production_compose_fails_closed_for_every_required_variable(
     assert missing_variable in output
 
 
+def test_services_derive_every_public_url_from_the_one_public_origin(tmp_path: Path) -> None:
+    if shutil.which("docker") is None:
+        pytest.fail("docker compose is required to validate the production Compose contract")
+    secret_directory = tmp_path / "secrets"
+    secret_directory.mkdir(mode=0o700)
+    for secret_name in SECRET_FILE_NAMES:
+        (secret_directory / secret_name).write_text(f"test-{secret_name}\n")
+    values = _production_values(secret_directory)
+    values["PUBLIC_ORIGIN"] = "https://d111abcdef8.cloudfront.net"
+    environment_file = tmp_path / ".env"
+    _write_env_file(environment_file, values)
+
+    rendered = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            str(environment_file),
+            "-f",
+            str(COMPOSE_PATH),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        env=_compose_environment(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    services = json.loads(rendered.stdout)["services"]
+    origin = "https://d111abcdef8.cloudfront.net"
+
+    # The web image is configured at runtime: no NEXT_PUBLIC_* build values.
+    assert services["web"]["environment"] == {
+        "APP_ENV": "production",
+        "PUBLIC_ORIGIN": origin,
+        "API_INTERNAL_URL": "http://api:8000",
+        "SUPABASE_URL": "http://supabase-gateway:8000",
+        "SUPABASE_ANON_KEY": "test-anon-key",
+    }
+    api = services["api"]["environment"]
+    assert api["API_PUBLIC_BASE_URL"] == f"{origin}/api"
+    assert api["SUPABASE_PUBLIC_URL"] == f"{origin}/supabase"
+    assert api["API_CORS_ORIGINS"] == origin
+    assert api["SUPABASE_URL"] == "http://supabase-gateway:8000"
+    auth = services["supabase-auth"]["environment"]
+    assert auth["GOTRUE_SITE_URL"] == origin
+    assert auth["API_EXTERNAL_URL"] == f"{origin}/supabase"
+    assert services["ingress"]["environment"] == {"APP_DOMAIN": "app.example.test"}
+
+
 def _service_block(source: str, service: str) -> str:
     marker = f"  {service}:\n"
     start = source.index(marker)
@@ -257,8 +306,8 @@ def test_temporal_compose_is_private_bootstrapped_and_runs_every_role() -> None:
 
 def test_compose_network_contract_has_no_default_or_temporal_persistence_escape() -> None:
     source = COMPOSE_PATH.read_text()
-    # Caddy alone needs a public egress edge for ACME; every other network is
-    # private and all services still declare an explicit membership.
+    # Only the ingress network publishes a port (CloudFront's origin); every
+    # other network is private and all services declare an explicit membership.
     assert "  ingress: {}" in source
     for network in ("app", "temporal-control", "temporal-persistence"):
         assert f"  {network}:\n    internal: true" in source
@@ -288,7 +337,6 @@ def test_compose_network_contract_has_no_default_or_temporal_persistence_escape(
         "provider-worker",
         "planning-worker",
         "remotion-worker",
-        "publishing-worker",
     )
     for service in services:
         assert "networks:" in _service_block(source, service), service

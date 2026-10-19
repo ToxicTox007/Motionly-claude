@@ -25,7 +25,10 @@ async function fixture(overrides = {}) {
     ...overrides.external,
   };
   await writeJson(join(externalDir, "preflight.json"), external);
-  await writeJson(join(canaryDir, "external-verification.json"), overrides.canaryExternal ?? external);
+  await writeJson(
+    join(canaryDir, "external-verification.json"),
+    overrides.canaryExternal ?? external,
+  );
   await writeJson(join(canaryDir, "promotion.json"), {
     canary_id: "canary-123",
     previous_stable_revision: "stable-revision",
@@ -88,7 +91,11 @@ test("production-candidate evidence seals matching protected canary evidence", a
 
 test("production-candidate evidence rejects an SLO rejection at any canary stage", async () => {
   const evidence = await fixture({
-    decision25: { mode: "enforce", exit_status: 1, decision: { passed: false, failures: ["p95_regression:projects"] } },
+    decision25: {
+      mode: "enforce",
+      exit_status: 1,
+      decision: { passed: false, failures: ["p95_regression:projects"] },
+    },
   });
   try {
     await assert.rejects(

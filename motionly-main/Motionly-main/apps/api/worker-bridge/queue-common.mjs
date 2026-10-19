@@ -14,7 +14,6 @@ export const allQueueNames = [
   "render",
   "render_gpu",
   "render_remotion",
-  "publish",
   "intelligence",
   "audio_demucs",
   "provider_calls",
@@ -74,21 +73,25 @@ const forbiddenPayloadKeys = new Set([
 
 function isForbiddenPayloadKey(key) {
   const normalized = String(key).toLowerCase().replaceAll("-", "_");
-  return forbiddenPayloadKeys.has(normalized)
-    || normalized.endsWith("_credential")
-    || normalized.endsWith("_credentials")
-    || normalized.endsWith("_secret")
-    || normalized.endsWith("_blob");
+  return (
+    forbiddenPayloadKeys.has(normalized) ||
+    normalized.endsWith("_credential") ||
+    normalized.endsWith("_credentials") ||
+    normalized.endsWith("_secret") ||
+    normalized.endsWith("_blob")
+  );
 }
 
 function isSignedOrInlineMedia(value) {
   if (typeof value !== "string") return false;
-  if (/^data:(?:audio|video|image|application\/octet-stream)[;,]/i.test(value)) return true;
+  if (/^data:(?:audio|video|image|application\/octet-stream)[;,]/i.test(value))
+    return true;
   if (!/^https?:\/\//i.test(value)) return false;
   try {
     const url = new URL(value);
     for (const key of url.searchParams.keys()) {
-      if (/^(?:token|signature|sig|x-amz-|x-goog-|expires$)/i.test(key)) return true;
+      if (/^(?:token|signature|sig|x-amz-|x-goog-|expires$)/i.test(key))
+        return true;
     }
   } catch {
     return true;
@@ -96,7 +99,11 @@ function isSignedOrInlineMedia(value) {
   return false;
 }
 
-export function assertQueuePayloadSafe(value, path = "payload", seen = new Set()) {
+export function assertQueuePayloadSafe(
+  value,
+  path = "payload",
+  seen = new Set(),
+) {
   if (value === null || value === undefined) return;
   if (typeof value === "string") {
     if (isSignedOrInlineMedia(value)) {
@@ -112,7 +119,8 @@ export function assertQueuePayloadSafe(value, path = "payload", seen = new Set()
     throw new Error(`${path} must not contain binary data`);
   }
   if (typeof value !== "object") return;
-  if (seen.has(value)) throw new Error(`${path} must not contain circular data`);
+  if (seen.has(value))
+    throw new Error(`${path} must not contain circular data`);
   seen.add(value);
   try {
     for (const key of Object.keys(value)) {
@@ -139,8 +147,14 @@ export function workflowJobFields(payload = {}) {
       fields[name] = value;
       continue;
     }
-    if (typeof value !== "string" || value.length < 1 || value.length > workflowFieldMaxLengths[name]) {
-      throw new Error(`${name} must be a non-empty identifier no longer than ${workflowFieldMaxLengths[name]} characters`);
+    if (
+      typeof value !== "string" ||
+      value.length < 1 ||
+      value.length > workflowFieldMaxLengths[name]
+    ) {
+      throw new Error(
+        `${name} must be a non-empty identifier no longer than ${workflowFieldMaxLengths[name]} characters`,
+      );
     }
     if (/[\u0000-\u001f\u007f]/.test(value)) {
       throw new Error(`${name} must not contain control characters`);
@@ -154,7 +168,9 @@ function parseQueueNames(raw) {
   const requested = String(raw)
     .split(",")
     .map((name) => name.trim());
-  const invalid = requested.filter((name) => !name || !allQueueNames.includes(name));
+  const invalid = requested.filter(
+    (name) => !name || !allQueueNames.includes(name),
+  );
   if (invalid.length > 0) {
     throw new Error(
       `WORKER_QUEUES contains unknown or empty queue names: ${invalid.join(", ")}`,
@@ -183,7 +199,10 @@ export function isProduction() {
 }
 
 export function apiBaseUrl() {
-  return env("WORKER_API_BASE_URL", env("API_PUBLIC_BASE_URL")).replace(/\/$/, "");
+  return env("WORKER_API_BASE_URL", env("API_PUBLIC_BASE_URL")).replace(
+    /\/$/,
+    "",
+  );
 }
 
 export function workerToken() {
@@ -252,15 +271,16 @@ export function defaultJobOptions() {
 }
 
 export function workerConcurrency(queueName) {
-  const specific = queueName === "render_gpu"
-    ? env("GPU_RENDER_WORKER_CONCURRENCY")
-    : queueName === "render"
-    ? env("RENDER_WORKER_CONCURRENCY")
-    : queueName === "visual_analysis"
-    ? env("VISUAL_ANALYSIS_WORKER_CONCURRENCY", "1")
-    : queueName === "matte_extraction"
-    ? env("MATTE_WORKER_CONCURRENCY", "1")
-    : "";
+  const specific =
+    queueName === "render_gpu"
+      ? env("GPU_RENDER_WORKER_CONCURRENCY")
+      : queueName === "render"
+        ? env("RENDER_WORKER_CONCURRENCY")
+        : queueName === "visual_analysis"
+          ? env("VISUAL_ANALYSIS_WORKER_CONCURRENCY", "1")
+          : queueName === "matte_extraction"
+            ? env("MATTE_WORKER_CONCURRENCY", "1")
+            : "";
   return positiveIntValue(specific || env("WORKER_CONCURRENCY", "3"), 3);
 }
 
@@ -277,8 +297,13 @@ export function positiveIntValue(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function bullTransportAttempts(payload = {}, fallback = defaultJobOptions().attempts) {
-  return payload.workflow_run_id ? 1 : positiveIntValue(payload.max_attempts, fallback);
+export function bullTransportAttempts(
+  payload = {},
+  fallback = defaultJobOptions().attempts,
+) {
+  return payload.workflow_run_id
+    ? 1
+    : positiveIntValue(payload.max_attempts, fallback);
 }
 
 export function bullPriority(priority) {
@@ -290,7 +315,9 @@ export function bullPriority(priority) {
 export function normalizeJobRecord(job, state) {
   const data = job?.data || {};
   const optsAttempts =
-    Number(job?.opts?.attempts || data.max_attempts || env("JOB_ATTEMPTS", "3")) || 3;
+    Number(
+      job?.opts?.attempts || data.max_attempts || env("JOB_ATTEMPTS", "3"),
+    ) || 3;
   return {
     id: String(job?.id || data.id || ""),
     kind: String(data.kind || job?.name || "job"),
@@ -298,8 +325,14 @@ export function normalizeJobRecord(job, state) {
     priority: Number(data.priority || 0),
     attempts: Number(job?.attemptsMade || data.attempts || 0),
     max_attempts: optsAttempts,
-    status: mapBullState(state, job?.attemptsMade || 0, optsAttempts, data.status),
-    enqueued_at: data.enqueued_at || new Date(job?.timestamp || Date.now()).toISOString(),
+    status: mapBullState(
+      state,
+      job?.attemptsMade || 0,
+      optsAttempts,
+      data.status,
+    ),
+    enqueued_at:
+      data.enqueued_at || new Date(job?.timestamp || Date.now()).toISOString(),
     workspace_id: data.workspace_id || null,
     project_id: data.project_id || null,
     resource_id: data.resource_id || null,

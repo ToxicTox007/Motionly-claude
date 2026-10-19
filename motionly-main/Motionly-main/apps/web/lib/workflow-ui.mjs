@@ -20,10 +20,10 @@ const DISCOVERABLE_FIRST_DRAFT_STATES = new Set([
 export function isCanonicalFirstDraftWorkflow(workflow, projectId) {
   return Boolean(
     workflow &&
-      workflow.project_id === projectId &&
-      workflow.workflow_type === FIRST_DRAFT_WORKFLOW_TYPE &&
-      workflow.workflow_version === FIRST_DRAFT_WORKFLOW_VERSION &&
-      DISCOVERABLE_FIRST_DRAFT_STATES.has(workflow.state),
+    workflow.project_id === projectId &&
+    workflow.workflow_type === FIRST_DRAFT_WORKFLOW_TYPE &&
+    workflow.workflow_version === FIRST_DRAFT_WORKFLOW_VERSION &&
+    DISCOVERABLE_FIRST_DRAFT_STATES.has(workflow.state),
   );
 }
 
@@ -44,7 +44,9 @@ export function assertCanonicalWorkflowIdentity(
     throw new Error("Workflow response identity does not match this project.");
   }
   if (expectedWorkflowId && workflow.id !== expectedWorkflowId) {
-    throw new Error("Workflow detail identity does not match the selected run.");
+    throw new Error(
+      "Workflow detail identity does not match the selected run.",
+    );
   }
   return workflow;
 }
@@ -52,10 +54,10 @@ export function assertCanonicalWorkflowIdentity(
 export function isCanonicalDraftReady(workflow) {
   return Boolean(
     workflow &&
-      workflow.state === "draft_ready" &&
-      workflow.draft_render?.id &&
-      workflow.draft_export?.id &&
-      workflow.draft_export.render_job_id === workflow.draft_render.id,
+    workflow.state === "draft_ready" &&
+    workflow.draft_render?.id &&
+    workflow.draft_export?.id &&
+    workflow.draft_export.render_job_id === workflow.draft_render.id,
   );
 }
 
@@ -147,7 +149,10 @@ function canonicalDecisionIntent({
   ].join("\u001f");
 }
 
-export async function proposalDecisionIdempotencyKey(intent, cryptoImpl = globalThis.crypto) {
+export async function proposalDecisionIdempotencyKey(
+  intent,
+  cryptoImpl = globalThis.crypto,
+) {
   if (!cryptoImpl?.subtle || typeof TextEncoder === "undefined") {
     throw new Error("Web Crypto is required for durable proposal decisions.");
   }

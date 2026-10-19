@@ -178,9 +178,15 @@ export function DashboardClient({
           {/* Empty state hero */}
           <section className="bg-card rounded-md border-4 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-10 text-center">
             <div className="size-16 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center mx-auto mb-6 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff]">
-              <Film className="size-7 text-primary-foreground" aria-hidden="true" strokeWidth={2} />
+              <Film
+                className="size-7 text-primary-foreground"
+                aria-hidden="true"
+                strokeWidth={2}
+              />
             </div>
-            <h2 className="text-2xl font-black uppercase text-foreground">No projects yet</h2>
+            <h2 className="text-2xl font-black uppercase text-foreground">
+              No projects yet
+            </h2>
             <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
               Follow the quick onboarding steps below to start transforming your
               footage.
@@ -213,11 +219,14 @@ export function DashboardClient({
               },
               {
                 step: 4,
-                title: "Export & Post",
-                desc: "Compile video drafts up to 1080p and publish directly using OAuth creator accounts.",
+                title: "Export & Download",
+                desc: "Render your edit at up to 1080p and download the finished video.",
               },
             ].map(({ step, title, desc }) => (
-              <div key={step} className="bg-card rounded-md border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-4 flex flex-col gap-3">
+              <div
+                key={step}
+                className="bg-card rounded-md border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-4 flex flex-col gap-3"
+              >
                 <div className="size-8 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold font-mono mb-3 select-none shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
                   {step}
                 </div>
@@ -249,7 +258,9 @@ export function DashboardClient({
           <span className="px-2 py-0.5 font-bold font-mono border-2 border-foreground rounded-md bg-primary text-primary-foreground mb-3 inline-flex">
             Your Workspace
           </span>
-          <h1 className="text-4xl font-black uppercase tracking-tight text-foreground">Your Projects</h1>
+          <h1 className="text-4xl font-black uppercase tracking-tight text-foreground">
+            Your Projects
+          </h1>
           <p className="text-muted-foreground mt-1 text-sm font-mono">
             AI-powered video editing pipeline
           </p>
@@ -271,15 +282,22 @@ export function DashboardClient({
             {/* Thumbnail */}
             <div className="h-40 bg-muted border-b-2 border-foreground flex items-center justify-center relative">
               <span className="absolute top-3 right-3">
-                <span className={cn(
-                  getStatusBadgeClass(featuredProject.uploaded_videos?.[0]?.status),
-                  "rounded-md px-2 py-0.5 font-bold font-mono border-2 border-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
-                )}>
+                <span
+                  className={cn(
+                    getStatusBadgeClass(
+                      featuredProject.uploaded_videos?.[0]?.status,
+                    ),
+                    "rounded-md px-2 py-0.5 font-bold font-mono border-2 border-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]",
+                  )}
+                >
                   {featuredProject.uploaded_videos?.[0]?.status ?? "draft"}
                 </span>
               </span>
               <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] transition-transform group-hover:scale-110">
-                <Play className="size-6 fill-current text-primary-foreground" strokeWidth={2} />
+                <Play
+                  className="size-6 fill-current text-primary-foreground"
+                  strokeWidth={2}
+                />
               </div>
             </div>
 
@@ -352,11 +370,17 @@ export function DashboardClient({
 
               <div className="mt-4 space-y-3">
                 <div className="rounded-md border-2 border-foreground bg-muted p-3 flex justify-between items-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                  <span className="text-xs font-bold font-mono text-muted-foreground">Total Projects</span>
-                  <span className="text-sm font-bold font-mono">{localProjects.length}</span>
+                  <span className="text-xs font-bold font-mono text-muted-foreground">
+                    Total Projects
+                  </span>
+                  <span className="text-sm font-bold font-mono">
+                    {localProjects.length}
+                  </span>
                 </div>
                 <div className="rounded-md border-2 border-foreground bg-muted p-3 flex justify-between items-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                  <span className="text-xs font-bold font-mono text-muted-foreground">Ready to Render</span>
+                  <span className="text-xs font-bold font-mono text-muted-foreground">
+                    Ready to Render
+                  </span>
                   <span className="text-sm font-bold font-mono">
                     {
                       localProjects.filter(
@@ -366,7 +390,9 @@ export function DashboardClient({
                   </span>
                 </div>
                 <div className="rounded-md border-2 border-foreground bg-muted p-3 flex justify-between items-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                  <span className="text-xs font-bold font-mono text-muted-foreground">Draft Phase</span>
+                  <span className="text-xs font-bold font-mono text-muted-foreground">
+                    Draft Phase
+                  </span>
                   <span className="text-sm font-bold font-mono">
                     {
                       localProjects.filter(
@@ -388,7 +414,9 @@ export function DashboardClient({
                 <div className="h-4 border-2 border-foreground bg-muted rounded-md overflow-hidden shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] mt-1">
                   <div
                     className="bg-primary h-full transition-all"
-                    style={{ width: `${Math.min(localProjects.length * 10, 100)}%` }}
+                    style={{
+                      width: `${Math.min(localProjects.length * 10, 100)}%`,
+                    }}
                   />
                 </div>
               </div>
@@ -466,15 +494,20 @@ export function DashboardClient({
                   <div className="h-36 bg-muted border-b-2 border-foreground flex items-center justify-center relative">
                     {/* Status badge overlay */}
                     <span className="absolute top-2 right-2">
-                      <span className={cn(
-                        getStatusBadgeClass(upload?.status),
-                        "rounded-md px-2 py-0.5 font-bold font-mono border-2 border-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
-                      )}>
+                      <span
+                        className={cn(
+                          getStatusBadgeClass(upload?.status),
+                          "rounded-md px-2 py-0.5 font-bold font-mono border-2 border-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]",
+                        )}
+                      >
                         {upload?.status ?? "draft"}
                       </span>
                     </span>
                     <div className="size-10 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] transition-transform group-hover:scale-110">
-                      <Play className="size-4 fill-current text-primary-foreground" strokeWidth={2} />
+                      <Play
+                        className="size-4 fill-current text-primary-foreground"
+                        strokeWidth={2}
+                      />
                     </div>
                   </div>
 
@@ -601,7 +634,10 @@ export function DashboardClient({
               >
                 {deleteLoading ? (
                   <>
-                    <Loader2 className="mr-1.5 size-3.5 animate-spin" strokeWidth={2} />
+                    <Loader2
+                      className="mr-1.5 size-3.5 animate-spin"
+                      strokeWidth={2}
+                    />
                     Deleting...
                   </>
                 ) : (

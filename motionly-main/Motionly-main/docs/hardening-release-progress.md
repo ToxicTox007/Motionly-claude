@@ -23,27 +23,27 @@ The release must preserve the pre-existing dirty worktree. Changes outside the a
 
 ## 2. Agreed product and safety decisions
 
-| Area | Decision in force | Explicitly rejected |
-| --- | --- | --- |
-| Release scope | Complete the full hardening release (`1b`) | Blockers-only or incremental release |
-| Operating model | Production-safe source completion (`3b`) | Deploy-now or destructive production actions |
-| Billing | Billing remains disabled for this release (`1c`); show disabled/unmetered behavior explicitly | Live/test Stripe purchase UX or misleading Free-plan state |
-| Media deletion/quota | Release quota only after physical deletion is durably acknowledged (`2a`) | Soft deletion or logical quota release before cleanup |
-| Stem selection | Fully ship typed, authenticated, persisted `no_vocals` selection (`3a`) | Hiding it, vocals-only behavior, or silent fallback |
-| Local auth | Keep the exact local/development bypass, centralized and fail-closed elsewhere | Raw per-request `SKIP_API_AUTH` decisions or removal of local dev support |
-| Background removal | Block/defer rendering until the requested matte is available | Rendering an export without the requested matte |
-| Analytics idempotency | Add atomic, forward-only idempotency persistence | Destructive cleanup of existing production duplicates |
+| Area                  | Decision in force                                                                             | Explicitly rejected                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Release scope         | Complete the full hardening release (`1b`)                                                    | Blockers-only or incremental release                                      |
+| Operating model       | Production-safe source completion (`3b`)                                                      | Deploy-now or destructive production actions                              |
+| Billing               | Billing remains disabled for this release (`1c`); show disabled/unmetered behavior explicitly | Live/test Stripe purchase UX or misleading Free-plan state                |
+| Media deletion/quota  | Release quota only after physical deletion is durably acknowledged (`2a`)                     | Soft deletion or logical quota release before cleanup                     |
+| Stem selection        | Fully ship typed, authenticated, persisted `no_vocals` selection (`3a`)                       | Hiding it, vocals-only behavior, or silent fallback                       |
+| Local auth            | Keep the exact local/development bypass, centralized and fail-closed elsewhere                | Raw per-request `SKIP_API_AUTH` decisions or removal of local dev support |
+| Background removal    | Block/defer rendering until the requested matte is available                                  | Rendering an export without the requested matte                           |
+| Analytics idempotency | Add atomic, forward-only idempotency persistence                                              | Destructive cleanup of existing production duplicates                     |
 
 ## 3. Current release board
 
-| Task | Status | What it covers | Current state |
-| --- | --- | --- | --- |
-| 1 | **Complete** | Worker/render/queue reliability | Implemented and focused checks passed. |
-| 2 | **Complete** | Generic-media lifecycle, deletion, quota, reconciliation | Implemented and reviewed; focused checks passed. |
-| 3 | **In progress** | Conditional security, billing-disabled behavior, persisted stems, matte lifecycle, analytics, dashboard/frontend | Security and billing changes are complete; persisted no-vocals implementation is in place and focused checks pass; matte, analytics, and frontend/dashboard work remain. |
-| 4 | **Not started** | Compose/web routing, controlled egress, file-secret source configuration | Source-only configuration hardening remains. |
-| 5 | **Not started** | Broad validation, final diff review, release summary | Must happen after remaining implementation; database-backed checks are currently environment-blocked. |
-| 6 | **Complete after this document is written** | Durable in-repository progress/status plan | This document is the artifact. |
+| Task | Status                                      | What it covers                                                                                                   | Current state                                                                                                                                                            |
+| ---- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1    | **Complete**                                | Worker/render/queue reliability                                                                                  | Implemented and focused checks passed.                                                                                                                                   |
+| 2    | **Complete**                                | Generic-media lifecycle, deletion, quota, reconciliation                                                         | Implemented and reviewed; focused checks passed.                                                                                                                         |
+| 3    | **In progress**                             | Conditional security, billing-disabled behavior, persisted stems, matte lifecycle, analytics, dashboard/frontend | Security and billing changes are complete; persisted no-vocals implementation is in place and focused checks pass; matte, analytics, and frontend/dashboard work remain. |
+| 4    | **Not started**                             | Compose/web routing, controlled egress, file-secret source configuration                                         | Source-only configuration hardening remains.                                                                                                                             |
+| 5    | **Not started**                             | Broad validation, final diff review, release summary                                                             | Must happen after remaining implementation; database-backed checks are currently environment-blocked.                                                                    |
+| 6    | **Complete after this document is written** | Durable in-repository progress/status plan                                                                       | This document is the artifact.                                                                                                                                           |
 
 ## 4. Completed work
 
@@ -51,15 +51,15 @@ The release must preserve the pre-existing dirty worktree. Changes outside the a
 
 The worker/render/queue audit findings have been addressed in the following ways:
 
-| Audit concern | Implemented hardening | Main areas changed |
-| --- | --- | --- |
-| Python workers run from ambiguous media paths | Added an explicit Python media working directory to the Python worker images. | `apps/worker/Dockerfile.python`, `Dockerfile.python.demucs`, `Dockerfile.gpu` |
-| Worker jobs could return `{ failed: true }` yet be treated as success | Normalized returned failure payloads so all worker job types propagate failure correctly. | API/worker queue bridge and worker execution paths |
-| FFmpeg cancellation could hang or leave processes/resources behind | Added non-blocking cancellation, termination escalation, and timeout cleanup. | `apps/api/app/services/ffmpeg_render.py` |
-| Canceled exports could leave uploaded artifacts | Added canceled post-upload render artifact cleanup. | Render/retention service paths |
-| Ambiguous Remotion completion could delete canonical artifacts | Protected canonical Remotion artifacts when completion outcome is uncertain. | `apps/worker/src/remotion.mjs` and tests |
-| Queue failure scans/cancellation state could become unbounded or non-durable | Bounded failed-job scans with truncation state and added atomic, expiring cancellation markers. | Queue services and bridge implementations |
-| BullMQ had unreachable lifecycle no-ops | Removed unreachable `start` / `complete` / `fail` no-op paths. | Queue bridge implementations |
+| Audit concern                                                                | Implemented hardening                                                                           | Main areas changed                                                            |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Python workers run from ambiguous media paths                                | Added an explicit Python media working directory to the Python worker images.                   | `apps/worker/Dockerfile.python`, `Dockerfile.python.demucs`, `Dockerfile.gpu` |
+| Worker jobs could return `{ failed: true }` yet be treated as success        | Normalized returned failure payloads so all worker job types propagate failure correctly.       | API/worker queue bridge and worker execution paths                            |
+| FFmpeg cancellation could hang or leave processes/resources behind           | Added non-blocking cancellation, termination escalation, and timeout cleanup.                   | `apps/api/app/services/ffmpeg_render.py`                                      |
+| Canceled exports could leave uploaded artifacts                              | Added canceled post-upload render artifact cleanup.                                             | Render/retention service paths                                                |
+| Ambiguous Remotion completion could delete canonical artifacts               | Protected canonical Remotion artifacts when completion outcome is uncertain.                    | `apps/worker/src/remotion.mjs` and tests                                      |
+| Queue failure scans/cancellation state could become unbounded or non-durable | Bounded failed-job scans with truncation state and added atomic, expiring cancellation markers. | Queue services and bridge implementations                                     |
+| BullMQ had unreachable lifecycle no-ops                                      | Removed unreachable `start` / `complete` / `fail` no-op paths.                                  | Queue bridge implementations                                                  |
 
 **Focused validation already completed:** relevant Python and Node reliability tests passed.
 
@@ -136,14 +136,14 @@ The selected stem is now a persisted resource choice rather than arbitrary clien
 
 **Expected API failure behavior:**
 
-| Condition | Result |
-| --- | --- |
-| Resource is absent | `404 stem_separation_not_found` |
-| Resource kind is wrong | `409 stem_resource_kind_invalid` |
-| Stem separation is not ready | `409 stem_separation_not_ready` |
-| Selected artifact is missing/malformed/outside its exact canonical path | `409 stem_artifact_unavailable` |
-| Storage object inspection fails unexpectedly | `502 stem_artifact_verification_failed` |
-| Revision is stale | Existing `409 collaboration_revision_conflict` |
+| Condition                                                               | Result                                         |
+| ----------------------------------------------------------------------- | ---------------------------------------------- |
+| Resource is absent                                                      | `404 stem_separation_not_found`                |
+| Resource kind is wrong                                                  | `409 stem_resource_kind_invalid`               |
+| Stem separation is not ready                                            | `409 stem_separation_not_ready`                |
+| Selected artifact is missing/malformed/outside its exact canonical path | `409 stem_artifact_unavailable`                |
+| Storage object inspection fails unexpectedly                            | `502 stem_artifact_verification_failed`        |
+| Revision is stale                                                       | Existing `409 collaboration_revision_conflict` |
 
 **Focused validation already completed:**
 
@@ -248,15 +248,15 @@ The analytics audit work remains:
 
 The remaining frontend work must use the hardened API states rather than conceal them:
 
-| Area | Required completion |
-| --- | --- |
-| `apps/web/components/editor/ScalePanel.tsx` | Typed analytics response with an error/failure fallback; persisted stem selector wired to the new authenticated CAS route. |
-| `apps/web/components/editor/preview/VideoPreview.tsx` | Use one shared `available && Boolean(previewUrl)` condition for matte preview behavior. |
-| `apps/web/components/editor-client.tsx` | Targeted matte status revalidation/polling using the exact matte status URL, especially after enabling background removal. |
-| `apps/web/app/(app)/billing/actions.ts` | Independent `env.billingEnabled` guards and an allow-list for plan values. |
-| `apps/web/lib/billing.ts` | Represent billing unavailability/disabled mode explicitly. |
-| Dashboard page and `DashboardClient.tsx` | Remove or accurately relabel the fake storage meter; no fabricated quota display. |
-| Shared contracts | Regenerate/update `packages/shared/src/index.ts`, `packages/shared/src/generated/api.ts`, and `packages/shared/openapi.json` using the existing project convention after API changes. |
+| Area                                                  | Required completion                                                                                                                                                                   |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web/components/editor/ScalePanel.tsx`           | Typed analytics response with an error/failure fallback; persisted stem selector wired to the new authenticated CAS route.                                                            |
+| `apps/web/components/editor/preview/VideoPreview.tsx` | Use one shared `available && Boolean(previewUrl)` condition for matte preview behavior.                                                                                               |
+| `apps/web/components/editor-client.tsx`               | Targeted matte status revalidation/polling using the exact matte status URL, especially after enabling background removal.                                                            |
+| `apps/web/app/(app)/billing/actions.ts`               | Independent `env.billingEnabled` guards and an allow-list for plan values.                                                                                                            |
+| `apps/web/lib/billing.ts`                             | Represent billing unavailability/disabled mode explicitly.                                                                                                                            |
+| Dashboard page and `DashboardClient.tsx`              | Remove or accurately relabel the fake storage meter; no fabricated quota display.                                                                                                     |
+| Shared contracts                                      | Regenerate/update `packages/shared/src/index.ts`, `packages/shared/src/generated/api.ts`, and `packages/shared/openapi.json` using the existing project convention after API changes. |
 
 ### 5.5 Task 4 — Source-only Compose/web/deployment configuration hardening
 
@@ -299,14 +299,14 @@ The remaining implementation should proceed in this order to minimize incompatib
 
 ### Completed validation evidence
 
-| Scope | Result |
-| --- | --- |
-| Worker/render/queue hardening | Focused Python and Node checks passed. |
-| Generic-media lifecycle | Ruff checks/formatting, Python compilation, focused pytest (59 passing), whitespace checks passed. |
-| Security/billing API behavior | `159 passed, 1 skipped, 2 warnings` in targeted pytest suite. |
-| Persisted stem/no-vocals API checks | Targeted Ruff check passed; selected test suite exited 0. |
-| Worker selected-media behavior | `node --check` passed; six focused tests passed. |
-| Renderer | `pnpm run typecheck` passed. |
+| Scope                               | Result                                                                                             |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Worker/render/queue hardening       | Focused Python and Node checks passed.                                                             |
+| Generic-media lifecycle             | Ruff checks/formatting, Python compilation, focused pytest (59 passing), whitespace checks passed. |
+| Security/billing API behavior       | `159 passed, 1 skipped, 2 warnings` in targeted pytest suite.                                      |
+| Persisted stem/no-vocals API checks | Targeted Ruff check passed; selected test suite exited 0.                                          |
+| Worker selected-media behavior      | `node --check` passed; six focused tests passed.                                                   |
+| Renderer                            | `pnpm run typecheck` passed.                                                                       |
 
 ### Blocked validation
 

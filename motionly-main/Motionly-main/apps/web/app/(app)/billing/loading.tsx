@@ -27,7 +27,10 @@ export default function BillingLoading() {
             </div>
             <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 pt-4 border-t border-border">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="border border-border bg-surface/30 p-3 space-y-2">
+                <div
+                  key={i}
+                  className="border border-border bg-surface/30 p-3 space-y-2"
+                >
                   <LoadingPixelSkeleton className="h-3 w-16" />
                   <LoadingPixelSkeleton className="h-5 w-24" />
                 </div>

@@ -31,6 +31,9 @@ class Settings(BaseSettings):
         alias="API_PUBLIC_BASE_URL",
     )
     supabase_url: AnyHttpUrl | None = Field(default=None, alias="SUPABASE_URL")
+    # Supabase as browsers reach it (``<public origin>/supabase``). Signed links
+    # handed to browsers use it; the API and workers call SUPABASE_URL.
+    supabase_public_url: AnyHttpUrl | None = Field(default=None, alias="SUPABASE_PUBLIC_URL")
     supabase_jwt_secret: str | None = Field(default=None, alias="SUPABASE_JWT_SECRET")
     supabase_service_role_key: str | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
     upload_storage_bucket: str = Field(default="raw-uploads", alias="UPLOAD_STORAGE_BUCKET")
@@ -69,19 +72,6 @@ class Settings(BaseSettings):
     editorial_learning_shadow_sample_rate: float = Field(
         default=0, ge=0, le=1, alias="EDITORIAL_LEARNING_SHADOW_SAMPLE_RATE"
     )
-    performance_feedback_enabled: bool = Field(default=False, alias="PERFORMANCE_FEEDBACK_ENABLED")
-    performance_feedback_policy_version: str = Field(
-        default="performance-feedback/v1",
-        min_length=1,
-        max_length=80,
-        alias="PERFORMANCE_FEEDBACK_POLICY_VERSION",
-    )
-    performance_feedback_retention_days: int = Field(
-        default=90, ge=1, le=365, alias="PERFORMANCE_FEEDBACK_RETENTION_DAYS"
-    )
-    performance_feedback_minimum_examples: int = Field(
-        default=3, ge=1, le=10_000, alias="PERFORMANCE_FEEDBACK_MINIMUM_EXAMPLES"
-    )
     retention_export_days: int = Field(default=90, alias="RETENTION_EXPORT_DAYS")
     retention_local_cache_days: int = Field(default=7, alias="RETENTION_LOCAL_CACHE_DAYS")
     media_cache_max_bytes: int = Field(default=10_737_418_240, alias="MEDIA_CACHE_MAX_BYTES")
@@ -104,6 +94,12 @@ class Settings(BaseSettings):
     metrics_bearer_token: str | None = Field(default=None, alias="METRICS_BEARER_TOKEN")
     render_execute_ffmpeg: bool = Field(default=True, alias="RENDER_EXECUTE_FFMPEG")
     ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
+    # gpu: GPU-dependent capabilities run on the GPU-stage workers.
+    # test_fixture: CPU-stage only; CPU workers serve them with labelled
+    # deterministic fixtures. Production refuses test_fixture.
+    ml_execution_mode: Literal["gpu", "test_fixture"] = Field(
+        default="gpu", alias="ML_EXECUTION_MODE"
+    )
     ffmpeg_gpu_encoder: str = Field(default="h264_nvenc", alias="FFMPEG_GPU_ENCODER")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     temporal_address: str | None = Field(default=None, alias="TEMPORAL_ADDRESS")
@@ -233,9 +229,6 @@ class Settings(BaseSettings):
         alias="GPU_LONG_JOB_TIMEOUT_SECONDS",
     )
     rate_limit_per_minute: int = Field(default=120, alias="RATE_LIMIT_PER_MINUTE")
-    publish_token_encryption_key: str | None = Field(
-        default=None, alias="PUBLISH_TOKEN_ENCRYPTION_KEY"
-    )
     admin_api_token: str | None = Field(default=None, alias="ADMIN_API_TOKEN")
     worker_api_token: str | None = Field(default=None, alias="WORKER_API_TOKEN")
     worker_api_base_url: str | None = Field(default=None, alias="WORKER_API_BASE_URL")
@@ -366,33 +359,10 @@ class Settings(BaseSettings):
         default=None,
         alias="BILLING_PORTAL_RETURN_URL",
     )
-    sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
     otel_exporter_otlp_endpoint: str | None = Field(
         default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT"
     )
     remotion_enabled: bool = Field(default=False, alias="REMOTION_ENABLED")
-    publish_sync_completion: bool = Field(default=False, alias="PUBLISH_SYNC_COMPLETION")
-    publish_oauth_state_secret: str | None = Field(default=None, alias="PUBLISH_OAUTH_STATE_SECRET")
-    publish_token_refresh_buffer_seconds: int = Field(
-        default=300,
-        alias="PUBLISH_TOKEN_REFRESH_BUFFER_SECONDS",
-    )
-    publish_retry_backoff_seconds: int = Field(
-        default=60,
-        alias="PUBLISH_RETRY_BACKOFF_SECONDS",
-    )
-    publish_retry_backoff_cap_seconds: int = Field(
-        default=900,
-        alias="PUBLISH_RETRY_BACKOFF_CAP_SECONDS",
-    )
-    publish_retry_max_attempts: int = Field(default=3, alias="PUBLISH_RETRY_MAX_ATTEMPTS")
-    tiktok_client_key: str | None = Field(default=None, alias="TIKTOK_CLIENT_KEY")
-    tiktok_client_secret: str | None = Field(default=None, alias="TIKTOK_CLIENT_SECRET")
-    meta_app_id: str | None = Field(default=None, alias="META_APP_ID")
-    meta_app_secret: str | None = Field(default=None, alias="META_APP_SECRET")
-    meta_graph_api_version: str = Field(default="v22.0", alias="META_GRAPH_API_VERSION")
-    google_client_id: str | None = Field(default=None, alias="GOOGLE_CLIENT_ID")
-    google_client_secret: str | None = Field(default=None, alias="GOOGLE_CLIENT_SECRET")
     stem_separation_provider: str = Field(default="demucs", alias="STEM_SEPARATION_PROVIDER")
     demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
     demucs_model_revision: str = Field(default="demucs==4.1.0", alias="DEMUCS_MODEL_REVISION")
@@ -465,17 +435,9 @@ class Settings(BaseSettings):
         default="",
         alias="LOCAL_AUDIT_PROVIDER_ACCOUNTS",
     )
-    local_audit_publishing_accounts: str = Field(
-        default="",
-        alias="LOCAL_AUDIT_PUBLISHING_ACCOUNTS",
-    )
     local_audit_approved_domains: str = Field(
         default="",
         alias="LOCAL_AUDIT_APPROVED_DOMAINS",
-    )
-    local_audit_allowed_publish_visibilities: str = Field(
-        default="",
-        alias="LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES",
     )
     local_audit_max_per_run_spend_usd: float | None = Field(
         default=None,
@@ -497,6 +459,11 @@ class Settings(BaseSettings):
         default="",
         alias="LOCAL_AUDIT_REMOTE_CLEANUP_POLICY",
     )
+
+    @property
+    def gpu_stage(self) -> Literal["enabled", "not_enabled"]:
+        """Whether GPU-dependent capabilities are real (GPU stage) or fixtures."""
+        return "enabled" if self.ml_execution_mode == "gpu" else "not_enabled"
 
     @property
     def api_auth_bypass_enabled(self) -> bool:
@@ -537,11 +504,6 @@ class Settings(BaseSettings):
                 "outside local development to verify workspace membership."
             )
         if self.app_env == "production":
-            if self.publish_sync_completion:
-                raise ValueError(
-                    "Security violation: PUBLISH_SYNC_COMPLETION cannot be enabled in "
-                    "production environment."
-                )
             if self.force_local_media_storage:
                 raise ValueError(
                     "Security violation: FORCE_LOCAL_MEDIA_STORAGE cannot be enabled in "
@@ -566,6 +528,12 @@ class Settings(BaseSettings):
                         "when Azure OpenAI is configured."
                     )
         return self
+
+    @property
+    def browser_supabase_url(self) -> str | None:
+        """Base URL for browser-facing Supabase links; SUPABASE_URL if unset."""
+        value = self.supabase_public_url or self.supabase_url
+        return str(value).rstrip("/") if value else None
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -597,8 +565,6 @@ def get_settings() -> Settings:
         "SUPABASE_JWT_SECRET",
         "ADMIN_API_TOKEN",
         "WORKER_API_TOKEN",
-        "PUBLISH_TOKEN_ENCRYPTION_KEY",
-        "PUBLISH_OAUTH_STATE_SECRET",
         "REDIS_URL",
         "TEMPORAL_API_KEY",
         "METRICS_BEARER_TOKEN",
@@ -616,9 +582,9 @@ def get_settings() -> Settings:
     # process inherited a similarly named environment variable.
     local_audit_authorization_file = os.getenv("LOCAL_AUDIT_EXTERNAL_AUTHORIZATION_FILE")
     if local_audit_authorization_file:
-        os.environ["LOCAL_AUDIT_EXTERNAL_AUTHORIZATION"] = Path(
-            local_audit_authorization_file
-        ).read_text(encoding="utf-8").strip()
+        os.environ["LOCAL_AUDIT_EXTERNAL_AUTHORIZATION"] = (
+            Path(local_audit_authorization_file).read_text(encoding="utf-8").strip()
+        )
 
     env_file = os.getenv("SETTINGS_ENV_FILE", ".env")
     if env_file == "none":

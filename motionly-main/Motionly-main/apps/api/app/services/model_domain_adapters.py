@@ -458,9 +458,12 @@ def register_clip_routes(
     *,
     primary_provider: object,
     primary_revision: str,
-    fallback_provider: object,
+    fallback_provider: object | None,
     fallback_revision: str = "compatible-hash-clip-v1",
-) -> tuple[ModelRoute, ModelRoute]:
+) -> tuple[ModelRoute, ModelRoute | None]:
+    """Registers local CLIP and, outside production, the hash-embedding test
+    fallback (fixtures/registry.json: stock-embeddings). Pass
+    ``fallback_provider=None`` to register no fallback."""
     operations = (ModelOperation.EMBEDDINGS_TEXT, ModelOperation.EMBEDDINGS_IMAGE)
     primary = ModelRoute(
         route_id="local-clip-primary",
@@ -486,11 +489,13 @@ def register_clip_routes(
         primary.adapter,
         LocalClipEmbeddingsAdapter(primary_provider),
     )
+    gateway.register_route(primary)
+    if fallback_provider is None:
+        return primary, None
     gateway.register_adapter(
         fallback.adapter,
         LocalClipEmbeddingsAdapter(fallback_provider),
     )
-    gateway.register_route(primary)
     gateway.register_route(fallback)
     return primary, fallback
 

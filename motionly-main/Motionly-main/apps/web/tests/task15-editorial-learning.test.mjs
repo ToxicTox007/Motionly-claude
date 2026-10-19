@@ -24,7 +24,10 @@ test("editorial learning is explicit, revisioned, and withdrawable in account se
     component,
     /Source video,\s*transcript text,\s*prompts,\s*URLs,\s*and\s*raw editor content are not used/,
   );
-  assert.match(account, /<EditorialLearningSettings workspaceId=\{workspaceId\} \/>/);
+  assert.match(
+    account,
+    /<EditorialLearningSettings workspaceId=\{workspaceId\} \/>/,
+  );
 });
 
 test("project preference training is blocked by policy instead of analytics signals", async () => {
@@ -47,6 +50,9 @@ test("editorial deployment operations require typed confirmations through server
   assert.match(actions, /formData\.get\("confirmation"\) !== "PROMOTE"/);
   assert.match(actions, /formData\.get\("confirmation"\) !== "ROLLBACK"/);
   assert.match(actions, /if \(!response\.ok\)/);
-  assert.match(page, /Only IDs, item counts, state, and immutable manifest hashes are shown/);
+  assert.match(
+    page,
+    /Only IDs, item counts, state, and immutable manifest hashes are\s+shown/,
+  );
   assert.match(page, /Type <strong>PROMOTE<\/strong>/);
 });

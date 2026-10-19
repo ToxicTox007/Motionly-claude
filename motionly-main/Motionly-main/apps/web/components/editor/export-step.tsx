@@ -9,9 +9,7 @@ import {
   Download,
   Loader2,
   RotateCcw,
-  Send,
   Square,
-  Trash2,
   Video,
 } from "lucide-react";
 import { DEFAULT_RENDER_FPS } from "@motionly/shared";
@@ -26,15 +24,13 @@ import type {
   RenderTemplateId,
 } from "@motionly/shared";
 import {
-  buildApiHeaders,
+  apiFetch,
   editorApiRequest,
-  startAdaptivePolling,
   waitForInteractivePollingTurn,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { shouldToast } from "@/lib/notification-taxonomy";
 import {
-  publishStatusLabel,
   queuedWaitBandLabel,
   renderStatusLabel,
 } from "@/lib/product-flow-status";
@@ -48,7 +44,6 @@ import {
   RepurposePanel,
   type RepurposeTarget,
 } from "./repurpose-panel";
-import { PerformanceFeedbackPanel } from "./performance-feedback-panel";
 import {
   captionSelectionForBulkExport,
   captionSelectionForExport,
@@ -57,8 +52,6 @@ import {
 interface ExportStepProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   initialJobs: RenderJobSummary[];
   initialExports: ExportSummary[];
   captionTrackId?: string | null;
@@ -150,21 +143,6 @@ type RenderUiState =
   | "completed"
   | "failed"
   | "canceled";
-type PublishPlatform = "tiktok" | "instagram" | "youtube";
-type PublishConnection = {
-  id: string;
-  platform: PublishPlatform;
-  external_account_id: string;
-  account_name: string;
-};
-type PublishJob = {
-  id: string;
-  platform: PublishPlatform;
-  status: "queued" | "publishing" | "published" | "failed";
-  external_url?: string | null;
-  error_message?: string | null;
-};
-
 type LocalizedPublishPackage = {
   id: string;
   caption_track_id: string;
@@ -176,8 +154,6 @@ type LocalizedPublishPackage = {
 export function ExportStep({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   initialJobs,
   initialExports,
   captionTrackId,
@@ -227,14 +203,6 @@ export function ExportStep({
   );
   const [streamingJobId, setStreamingJobId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [connections, setConnections] = useState<PublishConnection[]>([]);
-  const [publishJobs, setPublishJobs] = useState<PublishJob[]>([]);
-  const [connectPlatform, setConnectPlatform] =
-    useState<PublishPlatform>("tiktok");
-  const [connectAccountId, setConnectAccountId] = useState("");
-  const [connectAccountName, setConnectAccountName] = useState("");
-  const [connectToken, setConnectToken] = useState("");
-  const [publishCaption, setPublishCaption] = useState("");
   const [brandKits, setBrandKits] = useState<BrandKitResource[]>([]);
   const [selectedBrandKitId, setSelectedBrandKitId] = useState("");
   const [localizedPackages, setLocalizedPackages] = useState<
@@ -324,8 +292,6 @@ export function ExportStep({
       `${env.apiBaseUrl}/phase5/brand-kits`,
       {
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Brand Kit defaults could not be loaded.",
       },
     )
@@ -348,7 +314,7 @@ export function ExportStep({
     };
     // Export defaults are intentionally restored once for this project/session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiAccessToken, projectId, userId, workspaceId]);
+  }, [projectId, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -356,8 +322,6 @@ export function ExportStep({
       `${env.apiBaseUrl}/projects/${projectId}/localized-publish-packages`,
       {
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Localized publishing packages could not be loaded.",
       },
     )
@@ -378,7 +342,7 @@ export function ExportStep({
     return () => {
       cancelled = true;
     };
-  }, [apiAccessToken, projectId, userId, workspaceId]);
+  }, [projectId, workspaceId]);
 
   useEffect(() => {
     onPreviewExportUpdated?.({
@@ -397,26 +361,6 @@ export function ExportStep({
     return () => window.clearInterval(timer);
   }, [isRendering]);
 
-  useEffect(() => {
-    void refreshPublishing();
-    // refreshPublishing reads the latest auth/project props.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiAccessToken, projectId, userId, workspaceId]);
-
-  useEffect(() => {
-    if (
-      !publishJobs.some(
-        (job) => job.status === "queued" || job.status === "publishing",
-      )
-    )
-      return;
-    return startAdaptivePolling(() => refreshPublishing(), {
-      intervalMs: 3000,
-      maxIntervalMs: 9000,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publishJobs]);
-
   async function startRender() {
     setLoading(true);
     setMessage(null);
@@ -427,8 +371,6 @@ export function ExportStep({
       }>(`${env.apiBaseUrl}/projects/${projectId}/renders`, {
         method: "POST",
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Render could not be started. Please try again.",
         body: {
           ...captionSelectionForExport({
@@ -489,8 +431,6 @@ export function ExportStep({
       }>(`${env.apiBaseUrl}/projects/${projectId}/renders/bulk`, {
         method: "POST",
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Bulk export could not be started. Please try again.",
         body: {
           ...captionSelectionForBulkExport({
@@ -640,17 +580,10 @@ export function ExportStep({
 
     async function subscribe() {
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}/events`,
-          {
-            headers: await buildApiHeaders({
-              workspaceId,
-              userId,
-              accessToken: apiAccessToken,
-              json: false,
-            }),
-            signal: abortController.signal,
-          },
+          { signal: abortController.signal },
+          { workspaceId },
         );
         if (!response.ok || !response.body) {
           throw new Error("Render stream unavailable.");
@@ -734,7 +667,7 @@ export function ExportStep({
     };
     // pollRender and refreshExports intentionally read the latest auth/project props.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStreamJobId, apiAccessToken, projectId, userId, workspaceId]);
+  }, [activeStreamJobId, projectId, workspaceId]);
 
   function updateJob(job: RenderJobSummary) {
     setJobs((current) => [
@@ -750,18 +683,10 @@ export function ExportStep({
           await sleep(Math.min(8000, 2500 + attempt * 250), signal);
         }
         await waitForInteractivePollingTurn(signal);
-        const response = await fetch(
+        const response = await apiFetch(
           `${env.apiBaseUrl}/projects/${projectId}/renders/${renderJobId}`,
-          {
-            cache: "no-store",
-            headers: await buildApiHeaders({
-              workspaceId,
-              userId,
-              accessToken: apiAccessToken,
-              json: false,
-            }),
-            signal,
-          },
+          { cache: "no-store", signal },
+          { workspaceId },
         );
         const payload = (await response.json()) as RenderJobSummary & {
           error?: { message?: string };
@@ -818,8 +743,6 @@ export function ExportStep({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Render could not be retried.",
           body: {},
         },
@@ -842,8 +765,6 @@ export function ExportStep({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Render could not be canceled.",
           body: {},
         },
@@ -859,17 +780,10 @@ export function ExportStep({
   }
 
   async function refreshExports(signal?: AbortSignal) {
-    const response = await fetch(
+    const response = await apiFetch(
       `${env.apiBaseUrl}/projects/${projectId}/exports`,
-      {
-        headers: await buildApiHeaders({
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          json: false,
-        }),
-        signal,
-      },
+      { signal },
+      { workspaceId },
     );
     const payload = await response.json();
     signal?.throwIfAborted();
@@ -880,16 +794,10 @@ export function ExportStep({
     setLoading(true);
     setMessage("Creating secure download link...");
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${env.apiBaseUrl}/exports/${exportId}/download-url`,
-        {
-          headers: await buildApiHeaders({
-            workspaceId,
-            userId,
-            accessToken: apiAccessToken,
-            json: false,
-          }),
-        },
+        {},
+        { workspaceId },
       );
       const payload = await response.json();
       if (!response.ok)
@@ -900,136 +808,6 @@ export function ExportStep({
       setMessage(
         `Download link expires in ${payload.expires_in_seconds} seconds.`,
       );
-    } catch (error) {
-      setMessage((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function refreshPublishing() {
-    const headers = await buildApiHeaders({
-      workspaceId,
-      userId,
-      accessToken: apiAccessToken,
-      json: false,
-    });
-    const [connectionsResponse, jobsResponse] = await Promise.all([
-      fetch(`${env.apiBaseUrl}/publish/connections`, {
-        cache: "no-store",
-        headers,
-      }),
-      fetch(`${env.apiBaseUrl}/projects/${projectId}/publish`, {
-        cache: "no-store",
-        headers,
-      }),
-    ]);
-    if (connectionsResponse.ok) {
-      const payload = await connectionsResponse.json();
-      setConnections(payload.connections ?? []);
-    }
-    if (jobsResponse.ok) {
-      const payload = await jobsResponse.json();
-      setPublishJobs(payload.jobs ?? []);
-    }
-  }
-
-  async function connectPublishingAccount() {
-    setLoading(true);
-    setMessage(null);
-    try {
-      await editorApiRequest(`${env.apiBaseUrl}/publish/connections`, {
-        method: "POST",
-        workspaceId,
-        userId,
-        accessToken: apiAccessToken,
-        friendlyError: "Social account could not be connected.",
-        body: {
-          platform: connectPlatform,
-          access_token: connectToken,
-          external_account_id: connectAccountId,
-          account_name: connectAccountName,
-        },
-      });
-      setConnectToken("");
-      setConnectAccountId("");
-      setConnectAccountName("");
-      await refreshPublishing();
-      setMessage(`${socialLabel(connectPlatform)} account connected.`);
-    } catch (error) {
-      setMessage((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function connectPublishingOAuth() {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const payload = await editorApiRequest<{ authorization_url: string }>(
-        `${env.apiBaseUrl}/publish/oauth/${connectPlatform}/start`,
-        {
-          method: "POST",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError: `${socialLabel(connectPlatform)} connection could not be started.`,
-          body: { return_url: window.location.href },
-        },
-      );
-      window.location.assign(payload.authorization_url);
-    } catch (error) {
-      setMessage((error as Error).message);
-      setLoading(false);
-    }
-  }
-
-  async function disconnectPublishingAccount(connectionId: string) {
-    setLoading(true);
-    try {
-      await editorApiRequest(
-        `${env.apiBaseUrl}/publish/connections/${connectionId}`,
-        {
-          method: "DELETE",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError: "Social account could not be disconnected.",
-        },
-      );
-      await refreshPublishing();
-    } catch (error) {
-      setMessage((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function publishExport(connection: PublishConnection) {
-    if (!latestExport) return;
-    setLoading(true);
-    setMessage(`Queueing ${socialLabel(connection.platform)} publish...`);
-    try {
-      await editorApiRequest(
-        `${env.apiBaseUrl}/projects/${projectId}/publish`,
-        {
-          method: "POST",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError: `Could not publish to ${socialLabel(connection.platform)}.`,
-          body: {
-            export_id: latestExport.id,
-            connection_id: connection.id,
-            title: `Motionly export v${latestExport.version}`,
-            caption: publishCaption,
-            privacy: "private",
-          },
-        },
-      );
-      await refreshPublishing();
-      setMessage(`${socialLabel(connection.platform)} publish queued.`);
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -1484,7 +1262,7 @@ export function ExportStep({
                   v{latestExport.version}
                 </p>
                 <p className="text-sm font-black text-foreground">
-                  Ready to post
+                  Ready to download
                 </p>
                 <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 font-mono text-xs text-muted-foreground">
                   <span>
@@ -1525,166 +1303,6 @@ export function ExportStep({
           </div>
         </div>
       )}
-      <section className="space-y-3 border-t-2 border-foreground pt-5">
-        <div>
-          <Label>Direct publish</Label>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Connect an API-enabled creator account, then send the latest export
-            without downloading it.
-          </p>
-        </div>
-        <div>
-          <select
-            aria-label="Social platform"
-            value={connectPlatform}
-            onChange={(event) =>
-              setConnectPlatform(event.target.value as PublishPlatform)
-            }
-            className="flex min-h-11 w-full appearance-none rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 pr-10 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none text-foreground"
-          >
-            <option value="tiktok" className="bg-surface text-foreground">
-              TikTok
-            </option>
-            <option value="instagram" className="bg-surface text-foreground">
-              Instagram
-            </option>
-            <option value="youtube" className="bg-surface text-foreground">
-              YouTube
-            </option>
-          </select>
-        </div>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={connectPublishingOAuth}
-          className="min-h-11 w-full inline-flex items-center justify-center gap-2 rounded-md bg-primary text-primary-foreground border-2 border-foreground hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] focus:outline-none text-xs font-black uppercase"
-        >
-          Connect {socialLabel(connectPlatform)} with OAuth
-        </button>
-        <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground font-mono">
-          Developer fallback
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <input
-            aria-label="Account name"
-            placeholder="Account name"
-            value={connectAccountName}
-            onChange={(event) => setConnectAccountName(event.target.value)}
-            className="flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] focus:outline-none text-foreground"
-          />
-          <input
-            aria-label="Platform account ID"
-            placeholder="Platform account ID"
-            value={connectAccountId}
-            onChange={(event) => setConnectAccountId(event.target.value)}
-            className="flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] focus:outline-none text-foreground"
-          />
-        </div>
-        <input
-          type="password"
-          autoComplete="off"
-          aria-label="Platform access token"
-          placeholder="Platform access token (stored server-side)"
-          value={connectToken}
-          onChange={(event) => setConnectToken(event.target.value)}
-          className="flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] focus:outline-none text-foreground"
-        />
-        <button
-          type="button"
-          className="min-h-11 w-full inline-flex items-center justify-center gap-2 rounded-md bg-surface text-foreground border-2 border-foreground hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none font-black uppercase text-xs"
-          disabled={
-            loading ||
-            connectToken.length < 8 ||
-            !connectAccountId.trim() ||
-            !connectAccountName.trim()
-          }
-          onClick={connectPublishingAccount}
-        >
-          Connect account
-        </button>
-        {connections.length > 0 ? (
-          <div className="space-y-2 border-t-2 border-foreground/20 pt-3">
-            <textarea
-              aria-label="Post caption"
-              placeholder="Post caption"
-              value={publishCaption}
-              onChange={(event) => setPublishCaption(event.target.value)}
-              maxLength={2200}
-              className="flex min-h-20 w-full resize-y rounded-md border-2 border-foreground bg-surface-elevated p-3 text-xs font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none text-foreground"
-            />
-            {connections.map((connection) => {
-              const job = publishJobs.find(
-                (item) => item.platform === connection.platform,
-              );
-              return (
-                <div
-                  key={connection.id}
-                  className="flex items-center justify-between gap-2 border-2 border-foreground bg-surface p-3 rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-black text-foreground">
-                      {socialLabel(connection.platform)} ·{" "}
-                      {connection.account_name}
-                    </p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="rounded px-2 py-0.5 font-bold font-mono text-[9px] uppercase border-2 border-foreground bg-primary text-primary-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
-                        {job ? publishStatusLabel(job.status) : "Connected"}
-                      </span>
-                      {job?.error_message ? (
-                        <span className="text-[10px] font-mono text-danger truncate max-w-[150px]">
-                          {job.error_message}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    {job?.external_url ? (
-                      <a
-                        href={job.external_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex min-h-10 items-center justify-center border-2 border-foreground px-3 text-xs font-bold rounded-md bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms]"
-                      >
-                        View
-                      </a>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="inline-flex min-h-10 items-center justify-center gap-1 px-3 text-xs font-bold border-2 border-foreground rounded-md bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none"
-                      disabled={
-                        loading ||
-                        !latestExport ||
-                        job?.status === "queued" ||
-                        job?.status === "publishing"
-                      }
-                      onClick={() => publishExport(connection)}
-                    >
-                      <Send className="size-3.5" strokeWidth={2} />
-                      Publish
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Disconnect ${connection.account_name}`}
-                      className="inline-flex min-h-10 items-center justify-center px-3 border-2 border-foreground rounded-md bg-danger text-danger-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none"
-                      disabled={loading}
-                      onClick={() => disconnectPublishingAccount(connection.id)}
-                    >
-                      <Trash2 className="size-3.5" strokeWidth={2} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
-      </section>
-      <PerformanceFeedbackPanel
-        projectId={projectId}
-        workspaceId={workspaceId}
-        userId={userId}
-        apiAccessToken={apiAccessToken}
-        platform={connectPlatform}
-      />
       {includeCaptions && !captionSourceAvailable ? (
         <p
           id="export-missing-captions"
@@ -1822,12 +1440,6 @@ function sleep(ms: number, signal?: AbortSignal) {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function socialLabel(platform: PublishPlatform) {
-  return { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube" }[
-    platform
-  ];
 }
 
 function statusLabel(status: RenderJobSummary["status"]) {

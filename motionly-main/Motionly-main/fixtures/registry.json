@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "description": "Every stand-in for a real capability in this repository, and how production keeps it out. kind: 'fixture' (deterministic test stand-in for a real provider or GPU capability; CPU stage and tests only), 'test_infrastructure' (stands in for cloud infrastructure in tests; never deployed), 'demo' (a real code path that charges nothing; allowed in production only in an explicitly labelled demo mode). The leakage gate (apps/api/tests/test_fixture_leakage.py, `pnpm verify --stage leakage`) fails when a stand-in is not registered here, a registered symbol is missing, or production accepts a setting that enables a fixture. A CPU fixture proves the workflow and integration contract, not the production quality or availability of the deferred capability.",
+  "entries": [
+    {
+      "id": "visual-analysis",
+      "kind": "fixture",
+      "label": "Test visual analysis",
+      "symbol": "FixtureVisualIntelligenceProvider",
+      "path": "apps/api/app/services/visual_intelligence.py",
+      "stands_in_for": "GPU visual analysis (CLIP, BLIP, YOLO) on the ML worker",
+      "identified_by": "provider fixture_visual, model fixture-visual-v1",
+      "enabled_by": {
+        "VISUAL_PROVIDER": "fixture"
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "matte",
+      "kind": "fixture",
+      "label": "Test matte",
+      "symbol": "fixture-matte",
+      "path": "apps/worker/src/ml-execution.mjs",
+      "stands_in_for": "GPU segmentation matte on the ML worker",
+      "identified_by": "heartbeat fixture_capabilities provider fixture-matte",
+      "enabled_by": {
+        "ML_EXECUTION_MODE": "test_fixture"
+      },
+      "production": "rejected",
+      "open_defect": "Task 15: the matte fallback labels a black video as a matte."
+    },
+    {
+      "id": "transcription",
+      "kind": "fixture",
+      "label": "Test transcription",
+      "symbol": "FixtureTranscriptionProvider",
+      "path": "apps/api/app/services/transcription_provider.py",
+      "stands_in_for": "Speech-to-text through the model gateway",
+      "identified_by": "provider fixture, model fixture-v1",
+      "enabled_by": {
+        "TRANSCRIPTION_PROVIDER": "fixture"
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "edit-planner",
+      "kind": "fixture",
+      "label": "Test edit plan",
+      "symbol": "FixtureEditPlannerProvider",
+      "path": "apps/api/app/services/edit_planner.py",
+      "stands_in_for": "LLM edit planning through the model gateway",
+      "identified_by": "provider fixture, model fixture-edit-planner-v1",
+      "enabled_by": {
+        "EDIT_PLANNER_PROVIDER": "fixture"
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "stock-video",
+      "kind": "fixture",
+      "label": "Test stock footage",
+      "symbol": "FixtureStockVideoProvider",
+      "path": "apps/api/app/services/stock_video.py",
+      "stands_in_for": "Pexels and Pixabay stock search",
+      "identified_by": "provider fixture, license fixture_internal_demo, fixture:// URLs",
+      "enabled_by": {
+        "ALLOW_FIXTURE_PROVIDERS": "true"
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "stock-embeddings",
+      "kind": "fixture",
+      "label": "Test embeddings",
+      "symbol": "HashClipEmbeddingProvider",
+      "path": "apps/api/app/services/stock_video.py",
+      "stands_in_for": "CLIP text and image embeddings for stock ranking",
+      "identified_by": "model compatible-hash-clip-v1, gateway route compatible-hash-clip-fallback",
+      "enabled_by": {
+        "APP_ENV": "not production"
+      },
+      "production": "unreachable"
+    },
+    {
+      "id": "stem-separation",
+      "kind": "fixture",
+      "label": "Test stems",
+      "symbol": "FixtureStemSeparator",
+      "path": "apps/api/app/services/scale.py",
+      "stands_in_for": "Demucs stem separation on the GPU worker",
+      "identified_by": "stems copied from the source audio",
+      "enabled_by": {
+        "STEM_SEPARATION_PROVIDER": "fixture"
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "video-generation",
+      "kind": "fixture",
+      "label": "Test generated video",
+      "symbol": "FixtureRunwayProvider",
+      "path": "apps/api/app/services/scale.py",
+      "stands_in_for": "Runway Gen-3 video generation",
+      "identified_by": "task ids fixture-*, fixture:// URLs",
+      "enabled_by": {
+        "RUNWAY_API_KEY": ""
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "music",
+      "kind": "fixture",
+      "label": "Test music",
+      "symbol": "FixtureMusicProvider",
+      "path": "apps/api/app/services/music.py",
+      "stands_in_for": "The licensed music catalog",
+      "identified_by": "provider fixture",
+      "enabled_by": {
+        "ALLOW_FIXTURE_PROVIDERS": "true"
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "simulated-export",
+      "kind": "fixture",
+      "label": "Test export",
+      "symbol": "_write_simulated_export",
+      "path": "apps/api/app/services/render_jobs.py",
+      "stands_in_for": "An FFmpeg render (writes a short black clip)",
+      "identified_by": "0.5 s black 180x320 clip",
+      "enabled_by": {
+        "RENDER_EXECUTE_FFMPEG": "false"
+      },
+      "production": "rejected",
+      "open_defect": "Task 15: replaced by real CPU renders and deleted."
+    },
+    {
+      "id": "fixture-media-in-renders",
+      "kind": "fixture",
+      "label": "Test media",
+      "symbol": "fixtureMediaAllowed",
+      "path": "apps/worker/src/remotion.mjs",
+      "stands_in_for": "Renderable media (fixture:// references are skipped)",
+      "identified_by": "fixture:// references",
+      "enabled_by": {
+        "ALLOW_FIXTURE_PROVIDERS": "true"
+      },
+      "production": "rejected"
+    },
+    {
+      "id": "cdn-simulator",
+      "kind": "test_infrastructure",
+      "label": "CloudFront simulator (test infrastructure, not CloudFront)",
+      "symbol": "createEdge",
+      "path": "scripts/cdn-sim/edge.mjs",
+      "stands_in_for": "Amazon CloudFront in front of the origin",
+      "identified_by": "edge service in infra/docker-compose.cpu-stage.yml only",
+      "production": "never_deployed"
+    },
+    {
+      "id": "edge-test-ca",
+      "kind": "test_infrastructure",
+      "label": "Per-run test certificate authority",
+      "symbol": "_generate_edge_tls_material",
+      "path": "scripts/release/write_compose_test_env.py",
+      "stands_in_for": "CloudFront's public certificate",
+      "identified_by": "edge_ca_cert, edge_tls_cert, edge_tls_key secrets of the CPU stage",
+      "production": "never_deployed"
+    },
+    {
+      "id": "release-rehearsal-aws",
+      "kind": "test_infrastructure",
+      "label": "moto (S3, SSM) and a local registry (test infrastructure, not AWS)",
+      "symbol": "start_emulators",
+      "path": "scripts/release/rehearse_release.py",
+      "stands_in_for": "Amazon S3, SSM Parameter Store and GHCR in the release path",
+      "identified_by": "MOTIONLY_ENVIRONMENT=rehearsal, loopback endpoints and registry; refused by every other environment",
+      "production": "never_deployed"
+    },
+    {
+      "id": "release-rehearsal-placeholder-image",
+      "kind": "test_infrastructure",
+      "label": "Release rehearsal placeholder image (no executable)",
+      "symbol": "_push_placeholder_image",
+      "path": "scripts/release/rehearse_release.py",
+      "stands_in_for": "The GPU-stage gpu-worker image in a rehearsal manifest (never started with ComputeProfile=cpu), and the broken API image of the failed-release check",
+      "identified_by": "label org.motionly.rehearsal, PLACEHOLDER.txt",
+      "production": "never_deployed"
+    },
+    {
+      "id": "release-rehearsal-signing-key",
+      "kind": "test_infrastructure",
+      "label": "Throwaway Cosign key of the release rehearsal",
+      "symbol": "prepare_host",
+      "path": "scripts/release/rehearse_release.py",
+      "stands_in_for": "GitHub keyless signing of the release manifest",
+      "identified_by": "MOTIONLY_COSIGN_PUBLIC_KEY, accepted only when MOTIONLY_ENVIRONMENT=rehearsal",
+      "production": "never_deployed"
+    }
+  ]
+}

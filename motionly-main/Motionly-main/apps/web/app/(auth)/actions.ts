@@ -1,20 +1,16 @@
 "use server";
 
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
+import { publicUrl } from "@/lib/public-url";
+import { safeNextPath } from "@/lib/safe-redirect.mjs";
 
-function safeRedirectPath(value: FormDataEntryValue | null) {
-  const path = String(value ?? "/dashboard");
-  if (!path.startsWith("/") || path.startsWith("//")) {
-    return "/dashboard";
-  }
-
-  return path;
-}
-
-function authErrorReason(error: { code?: string; status?: number; message: string }) {
+function authErrorReason(error: {
+  code?: string;
+  status?: number;
+  message: string;
+}) {
   const message = error.message.toLowerCase();
   if (error.code === "over_email_send_rate_limit" || error.status === 429) {
     return "rate_limited";
@@ -25,29 +21,29 @@ function authErrorReason(error: { code?: string; status?: number; message: strin
   return "invalid_credentials";
 }
 
-async function getAuthCallbackUrl() {
-  const headerStore = await headers();
-  const origin = headerStore.get("origin");
-  const forwardedHost = headerStore.get("x-forwarded-host");
-  const forwardedProto = headerStore.get("x-forwarded-proto") ?? "https";
-  const fallbackOrigin = forwardedHost ? `${forwardedProto}://${forwardedHost}` : env.appUrl;
-
-  return `${origin ?? fallbackOrigin}/auth/callback`;
+// Confirmation emails link back to the public origin, never to a value taken
+// from the request (an attacker-controlled Origin header would otherwise
+// choose where the emailed link points).
+function getAuthCallbackUrl() {
+  return publicUrl("/auth/callback").toString();
 }
 
 export async function login(formData: FormData) {
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
-    redirect(safeRedirectPath(formData.get("next")));
+  if (env.skipAuthMiddleware) {
+    redirect(safeNextPath(formData.get("next"), env.appUrl));
   }
 
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
-  const nextPath = safeRedirectPath(formData.get("next"));
+  const nextPath = safeNextPath(formData.get("next"), env.appUrl);
 
   let redirectTo: string | null = null;
   try {
     const supabase = await createClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
     if (error) {
       console.error("motionly_login_failed", {
@@ -70,7 +66,7 @@ export async function login(formData: FormData) {
 }
 
 export async function signup(formData: FormData) {
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
+  if (env.skipAuthMiddleware) {
     redirect("/dashboard");
   }
 
@@ -88,7 +84,7 @@ export async function signup(formData: FormData) {
         data: {
           full_name: fullName,
         },
-        emailRedirectTo: await getAuthCallbackUrl(),
+        emailRedirectTo: getAuthCallbackUrl(),
       },
     });
 
@@ -112,43 +108,8 @@ export async function signup(formData: FormData) {
   }
 }
 
-export async function loginWithGoogle() {
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
-    redirect("/dashboard");
-  }
-
-  if (!env.googleOAuthEnabled) {
-    redirect("/login?error=google_not_configured");
-  }
-
-  let redirectTo: string | null = null;
-  try {
-    const supabase = await createClient();
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: await getAuthCallbackUrl(),
-      },
-    });
-
-    if (error || !data.url) {
-      console.error("motionly_oauth_failed", error);
-      redirectTo = "/login?error=oauth_failed";
-    } else {
-      redirectTo = data.url;
-    }
-  } catch (err: any) {
-    console.error("motionly_oauth_system_error", err);
-    redirectTo = "/login?error=system_error";
-  }
-
-  if (redirectTo) {
-    redirect(redirectTo);
-  }
-}
-
 export async function logout() {
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
+  if (env.skipAuthMiddleware) {
     redirect("/login");
   }
 

@@ -51,10 +51,7 @@ test("long-running editor status polling uses the shared adaptive poller", async
   assert.match(editor, /startAdaptivePolling\(\(\) => poll\(\)/);
   assert.match(ai, /startAdaptivePolling\(\(\) => poll\(\)/);
   assert.match(scale, /startAdaptivePolling\(\(\) => load\(\)/);
-  assert.match(
-    exportStep,
-    /startAdaptivePolling\(\(\) => refreshPublishing\(\)/,
-  );
+  assert.doesNotMatch(exportStep, /refreshPublishing/);
 });
 
 test("render progress uses a stream with visibility-aware polling fallback", async () => {

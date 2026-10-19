@@ -99,14 +99,21 @@ test("workflow identifiers propagate through queue records and shipped bridges s
     },
     "waiting",
   );
-  for (const [key, value] of Object.entries(payload)) assert.equal(record[key], value);
+  for (const [key, value] of Object.entries(payload))
+    assert.equal(record[key], value);
   assert.equal(record.max_attempts, 1);
   assert.equal(record.workflow_max_attempts, 3);
   assert.equal(bullTransportAttempts({ ...payload, max_attempts: 3 }), 1);
   assert.equal(bullTransportAttempts({ max_attempts: 3 }), 3);
 
-  const workerCommon = await readFile(new URL("./queue-common.mjs", import.meta.url), "utf8");
-  const workerBridge = await readFile(new URL("./queue-bridge.mjs", import.meta.url), "utf8");
+  const workerCommon = await readFile(
+    new URL("./queue-common.mjs", import.meta.url),
+    "utf8",
+  );
+  const workerBridge = await readFile(
+    new URL("./queue-bridge.mjs", import.meta.url),
+    "utf8",
+  );
   const shippedCommon = await readFile(
     new URL("../../api/worker-bridge/queue-common.mjs", import.meta.url),
     "utf8",
@@ -122,11 +129,18 @@ test("workflow identifiers propagate through queue records and shipped bridges s
 
 test("queue payloads reject credentials, signed URLs, and binary media", () => {
   assert.throws(
-    () => workflowJobFields({ workflow_run_id: IDS.run, service_role_key: "secret" }),
+    () =>
+      workflowJobFields({
+        workflow_run_id: IDS.run,
+        service_role_key: "secret",
+      }),
     /forbidden/,
   );
   assert.throws(
-    () => assertQueuePayloadSafe({ output: "https://store.test/a?X-Amz-Signature=secret" }),
+    () =>
+      assertQueuePayloadSafe({
+        output: "https://store.test/a?X-Amz-Signature=secret",
+      }),
     /signed URLs/,
   );
   assert.throws(
@@ -150,8 +164,14 @@ test("Temporal attempt keys stay canonical across Bull re-execution", () => {
     },
   });
 
-  assert.equal(deterministicWorkflowAttemptKey(first), "dispatcher-attempt-0001");
-  assert.equal(deterministicWorkflowAttemptKey(first), deterministicWorkflowAttemptKey(replay));
+  assert.equal(
+    deterministicWorkflowAttemptKey(first),
+    "dispatcher-attempt-0001",
+  );
+  assert.equal(
+    deterministicWorkflowAttemptKey(first),
+    deterministicWorkflowAttemptKey(replay),
+  );
   assert.equal(
     deterministicWorkflowAttemptKey(first),
     deterministicWorkflowAttemptKey(stalledReplay),
@@ -161,8 +181,14 @@ test("Temporal attempt keys stay canonical across Bull re-execution", () => {
     deterministicWorkflowAttemptKey(nextTemporalAttempt),
   );
 
-  const left = canonicalizeWorkflowResult({ z: 2, nested: { b: true, a: "x" } });
-  const right = canonicalizeWorkflowResult({ nested: { a: "x", b: true }, z: 2 });
+  const left = canonicalizeWorkflowResult({
+    z: 2,
+    nested: { b: true, a: "x" },
+  });
+  const right = canonicalizeWorkflowResult({
+    nested: { a: "x", b: true },
+    z: 2,
+  });
   assert.equal(left.canonical, '{"nested":{"a":"x","b":true},"z":2}');
   assert.equal(left.hash, right.hash);
   assert.deepEqual(left.value, right.value);
@@ -177,10 +203,16 @@ test("Temporal attempt keys stay canonical across Bull re-execution", () => {
 test("workflow transport uses one Bull attempt while Temporal owns retries", () => {
   const first = workflowJob();
   const second = workflowJob({
-    data: { attempt_key: "dispatcher-attempt-0002", workflow_attempt_number: 2 },
+    data: {
+      attempt_key: "dispatcher-attempt-0002",
+      workflow_attempt_number: 2,
+    },
   });
   const third = workflowJob({
-    data: { attempt_key: "dispatcher-attempt-0003", workflow_attempt_number: 3 },
+    data: {
+      attempt_key: "dispatcher-attempt-0003",
+      workflow_attempt_number: 3,
+    },
   });
 
   for (const job of [first, second, third]) {
@@ -216,8 +248,14 @@ test("domain jobs propagate identifier-only workflow context", () => {
 
 test("workflow error codes normalize to the Temporal identifier grammar", () => {
   assert.equal(normalizeWorkflowErrorCode("Error"), "error");
-  assert.equal(normalizeWorkflowErrorCode("GenericNodeError"), "generic_node_error");
-  assert.equal(normalizeWorkflowErrorCode(" provider failed! "), "provider_failed");
+  assert.equal(
+    normalizeWorkflowErrorCode("GenericNodeError"),
+    "generic_node_error",
+  );
+  assert.equal(
+    normalizeWorkflowErrorCode(" provider failed! "),
+    "provider_failed",
+  );
   assert.equal(normalizeWorkflowErrorCode("***"), "worker_error");
 });
 
@@ -228,7 +266,10 @@ test("runJob begins, executes, and atomically completes workflow metadata", asyn
     calls.push({ name, parameters });
     if (name === "motionly_begin_workflow_step") return activeBeginResult();
     if (name === "motionly_complete_workflow_step") {
-      return { step: { id: IDS.step, state: "succeeded" }, deduplicated: false };
+      return {
+        step: { id: IDS.step, state: "succeeded" },
+        deduplicated: false,
+      };
     }
     assert.fail(`unexpected RPC: ${name}`);
   };
@@ -243,10 +284,10 @@ test("runJob begins, executes, and atomically completes workflow metadata", asyn
 
   assert.deepEqual(result, { ids: ["analysis-1"], status: "ready", z: 2 });
   assert.deepEqual(job.progress, [1, 100]);
-  assert.deepEqual(calls.map((call) => call.name), [
-    "motionly_begin_workflow_step",
-    "motionly_complete_workflow_step",
-  ]);
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["motionly_begin_workflow_step", "motionly_complete_workflow_step"],
+  );
   assert.deepEqual(calls[0].parameters, {
     p_workspace_id: IDS.workspace,
     p_project_id: IDS.project,
@@ -366,7 +407,9 @@ test("exhausted and terminal replay evidence never reaches specialized execution
 
 test("execution errors call fail with bounded retry state and callback errors never mask them", async () => {
   const job = workflowJob();
-  const original = Object.assign(new Error("provider exploded"), { code: "provider_failed" });
+  const original = Object.assign(new Error("provider exploded"), {
+    code: "provider_failed",
+  });
   const calls = [];
 
   await assert.rejects(
@@ -377,17 +420,19 @@ test("execution errors call fail with bounded retry state and callback errors ne
       workflowRpc: async (name, parameters) => {
         calls.push({ name, parameters });
         if (name === "motionly_begin_workflow_step") return activeBeginResult();
-        throw Object.assign(new Error("WORKFLOW_STEP_STALE_CLAIM"), { code: "P0001" });
+        throw Object.assign(new Error("WORKFLOW_STEP_STALE_CLAIM"), {
+          code: "P0001",
+        });
       },
       reportProviderSlo: noSlo,
     }),
     (error) => error === original,
   );
 
-  assert.deepEqual(calls.map((call) => call.name), [
-    "motionly_begin_workflow_step",
-    "motionly_fail_workflow_step",
-  ]);
+  assert.deepEqual(
+    calls.map((call) => call.name),
+    ["motionly_begin_workflow_step", "motionly_fail_workflow_step"],
+  );
   assert.equal(calls[1].parameters.p_claim_token, "claim-token-0001");
   assert.equal(calls[1].parameters.p_error_code, "provider_failed");
   assert.equal(calls[1].parameters.p_error_message, "provider exploded");
@@ -396,7 +441,10 @@ test("execution errors call fail with bounded retry state and callback errors ne
 
 test("final Temporal attempt is reported non-retryable", async () => {
   const job = workflowJob({
-    data: { attempt_key: "dispatcher-attempt-0003", workflow_attempt_number: 3 },
+    data: {
+      attempt_key: "dispatcher-attempt-0003",
+      workflow_attempt_number: 3,
+    },
   });
   let failureParameters;
   await assert.rejects(
@@ -428,7 +476,8 @@ test("unsafe or oversized successful results fail closed and fail the claimed st
         }),
         workflowRpc: async (name) => {
           calls.push(name);
-          if (name === "motionly_begin_workflow_step") return activeBeginResult();
+          if (name === "motionly_begin_workflow_step")
+            return activeBeginResult();
           if (name === "motionly_fail_workflow_step") {
             return { step: { id: IDS.step, state: "queued" }, terminal: false };
           }
@@ -446,7 +495,11 @@ test("unsafe or oversized successful results fail closed and fail the claimed st
 
   await t.test("oversized result", () => {
     assert.throws(
-      () => canonicalizeWorkflowResult({ metadata: "x".repeat(17_000) }, { maxBytes: 1_024 }),
+      () =>
+        canonicalizeWorkflowResult(
+          { metadata: "x".repeat(17_000) },
+          { maxBytes: 1_024 },
+        ),
       (error) => error.code === "workflow_result_oversized",
     );
   });
@@ -454,9 +507,12 @@ test("unsafe or oversized successful results fail closed and fail the claimed st
 
 test("completion fencing failures fail the Bull job and stale fail callbacks cannot mask them", async () => {
   const job = workflowJob();
-  const completionError = Object.assign(new Error("WORKFLOW_STEP_STALE_CLAIM"), {
-    code: "P0001",
-  });
+  const completionError = Object.assign(
+    new Error("WORKFLOW_STEP_STALE_CLAIM"),
+    {
+      code: "P0001",
+    },
+  );
   const calls = [];
 
   await assert.rejects(
@@ -496,13 +552,14 @@ test("workflow RPC defaults consume bounded WORKFLOW_STEP environment values", (
       true,
     );
   } finally {
-    if (originalLease === undefined) delete process.env.WORKFLOW_STEP_LEASE_SECONDS;
+    if (originalLease === undefined)
+      delete process.env.WORKFLOW_STEP_LEASE_SECONDS;
     else process.env.WORKFLOW_STEP_LEASE_SECONDS = originalLease;
-    if (originalResult === undefined) delete process.env.WORKFLOW_STEP_RESULT_MAX_BYTES;
+    if (originalResult === undefined)
+      delete process.env.WORKFLOW_STEP_RESULT_MAX_BYTES;
     else process.env.WORKFLOW_STEP_RESULT_MAX_BYTES = originalResult;
   }
 });
-
 
 test("workflow render_draft normalizes FFmpeg and Remotion results before fenced completion", async (t) => {
   const cases = [
@@ -531,12 +588,14 @@ test("workflow render_draft normalizes FFmpeg and Remotion results before fenced
         queueName: testCase.name === "remotion" ? "render_remotion" : "render",
         data: {
           kind: "render",
-          queue_name: testCase.name === "remotion" ? "render_remotion" : "render",
+          queue_name:
+            testCase.name === "remotion" ? "render_remotion" : "render",
           resource_id: renderId,
           step_key: "render-first-draft-v2",
           step_kind: "render_draft",
           next_run_state: "draft_ready",
-          render_engine: testCase.name === "remotion" ? "remotion_premium" : "ffmpeg_basic",
+          render_engine:
+            testCase.name === "remotion" ? "remotion_premium" : "ffmpeg_basic",
         },
       });
       const calls = [];
@@ -544,9 +603,13 @@ test("workflow render_draft normalizes FFmpeg and Remotion results before fenced
         executeJob: async () => testCase.result,
         workflowRpc: async (name, parameters) => {
           calls.push({ name, parameters });
-          if (name === "motionly_begin_workflow_step") return activeBeginResult();
+          if (name === "motionly_begin_workflow_step")
+            return activeBeginResult();
           if (name === "motionly_complete_workflow_step") {
-            return { step: { id: IDS.step, state: "succeeded" }, deduplicated: false };
+            return {
+              step: { id: IDS.step, state: "succeeded" },
+              deduplicated: false,
+            };
           }
           assert.fail(`unexpected RPC: ${name}`);
         },
@@ -582,7 +645,9 @@ test("returned domain failures fail ordinary BullMQ jobs instead of completing t
       progress.push(value);
     },
     discard() {
-      assert.fail("a returned domain failure must use the normal failed-job path");
+      assert.fail(
+        "a returned domain failure must use the normal failed-job path",
+      );
     },
   };
 

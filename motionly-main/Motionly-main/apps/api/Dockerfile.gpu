@@ -15,8 +15,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/tmp/motionly \
     HOME=/home/motionly
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg nodejs npm libgl1 libglib2.0-0 \
+  && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 \
   && rm -rf /var/lib/apt/lists/*
+
+# Node.js 24 LTS from the pinned official image (Decision D1); Debian's
+# nodejs package is Node 20, which is past end of life.
+COPY --from=node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version && npm --version
 WORKDIR /app
 COPY apps/api/pyproject.toml ./pyproject.toml
 COPY apps/api/requirements-ml.lock ./requirements-ml.lock
@@ -32,7 +40,7 @@ RUN useradd --create-home --uid 10001 motionly \
     /var/data/motionly/storage \
     /var/data/motionly/render-tmp \
     /tmp/motionly \
-  && chown -R motionly:motionly /app /var/cache/motionly /var/data/motionly /tmp/motionly
+  && chown -R motionly:motionly /home/motionly /app /var/cache/motionly /var/data/motionly /tmp/motionly
 WORKDIR /app/apps/worker
 USER motionly
 CMD ["node", "src/worker.mjs", "--loop"]

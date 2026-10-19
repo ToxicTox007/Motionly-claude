@@ -1,8 +1,10 @@
 import { LoadingPixelSkeleton } from "@/components/editor/ui";
+import { PageTitle } from "@/components/page-title";
 
 export default function ProjectDetailsLoading() {
   return (
     <div className="flex min-h-screen flex-col overflow-hidden bg-background">
+      <PageTitle title="Project" />
       <div className="pixel-grid-fine flex min-h-12 items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
         <LoadingPixelSkeleton className="h-6 w-24" />
         <LoadingPixelSkeleton className="h-5 w-40" />

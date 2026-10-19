@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("remotion worker enforces timeout and cancellation polling", async () => {
-  const source = await readFile(new URL("./remotion.mjs", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("./remotion.mjs", import.meta.url),
+    "utf8",
+  );
 
   assert.match(source, /renderTimeoutMs/);
   assert.match(source, /loadRenderJobStatusDirect/);

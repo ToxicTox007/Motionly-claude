@@ -107,7 +107,11 @@ export function PixelSelect({
         {...props}
       >
         {options.map((opt) => (
-          <option key={opt.value} value={opt.value} className="bg-surface text-foreground">
+          <option
+            key={opt.value}
+            value={opt.value}
+            className="bg-surface text-foreground"
+          >
             {opt.label}
           </option>
         ))}
@@ -132,7 +136,6 @@ export function PixelSelect({
 }
 
 export const Select = PixelSelect;
-
 
 export interface LoadingPixelSkeletonProps extends React.HTMLAttributes<HTMLDivElement> {}
 

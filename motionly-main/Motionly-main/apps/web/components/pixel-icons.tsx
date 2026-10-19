@@ -19,7 +19,10 @@ export type PixelIconName =
   | "info"
   | "x";
 
-const pixelRects: Record<PixelIconName, Array<[number, number, number, number]>> = {
+const pixelRects: Record<
+  PixelIconName,
+  Array<[number, number, number, number]>
+> = {
   upload: [
     [7, 2, 2, 8],
     [4, 5, 8, 2],
@@ -160,7 +163,13 @@ export function PixelIcon({
       {...props}
     >
       {pixelRects[name].map(([x, y, width, height], index) => (
-        <rect key={`${name}-${index}`} x={x} y={y} width={width} height={height} />
+        <rect
+          key={`${name}-${index}`}
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+        />
       ))}
     </svg>
   );

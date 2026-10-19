@@ -1,7 +1,7 @@
 # Motionly Technical & Product Documentation
 
 - **Version:** 1.0.0
-- **Date:** July 5, 2026
+- **Date:** July 5, 2026 (updated October 6, 2026: social publishing, Google sign-in and Sentry were removed from the product)
 - **Author:** Staff Software Architect & Technical Writer
 - **Target Audience:** Founder, New CTO, and Onboarding Engineers
 
@@ -59,11 +59,10 @@ Throughout this document, files are cited as clickable links using absolute path
   - [2. Table-by-Table Reference](#2-table-by-table-reference)
   - [3. Migration History Narrative](#3-migration-history-narrative)
   - [4. Tenancy & Row-Level Security Enforcements](#4-tenancy--row-level-security-enforcements)
-- [Part VIII — Security, Billing, Publishing & Ops](#part-viii--security-billing-publishing--ops)
-  - [1. Authentication, Encryption, and bypass flags](#1-authentication-encryption-and-bypass-flags)
+- [Part VIII — Security, Billing & Ops](#part-viii--security-billing--ops)
+  - [1. Authentication and bypass flags](#1-authentication-and-bypass-flags)
   - [2. Billing & Subscription Integrations](#2-billing--subscription-integrations)
-  - [3. Social Publishing Integrations](#3-social-publishing-integrations)
-  - [4. Analytics, Retention & Ops](#4-analytics-retention--ops)
+  - [3. Analytics, Retention & Ops](#3-analytics-retention--ops)
 - [Part IX — Testing & Quality](#part-ix--testing--quality)
   - [1. Test Suites Structure](#1-test-suites-structure)
   - [2. Test Execution Profiles](#2-test-execution-profiles)
@@ -107,7 +106,7 @@ Imagine a physical factory that takes in raw timber (long-form video) and output
 - **The Transcribers & Inspectors (Audio/Visual ML):** Read the text, count the speakers, detect the emotional highs/lows, identify what objects are in the frame, and track where the speaker's face is located.
 - **The Designer (Edit Planner LLM):** Looks at the blueprint (transcript + visual analysis) and decides exactly where to cut, when to zoom, and what stock B-roll to overlay.
 - **The Assembly Worker (FFmpeg/Remotion Renderers):** Glues the pieces together, overlays the text captions, mixes the background music, and polishes the finished product.
-- **The Distributor (Publishing Service):** Ships the finished goods directly to retail stores (TikTok, YouTube, Instagram).
+- **The Shipping Desk (Exports):** Hands the finished video back to the creator, who downloads it through a short-lived signed link.
 
 ---
 
@@ -157,16 +156,15 @@ sequenceDiagram
     Queue->>Worker: Compile ASS subtitles, overlay B-roll, alphamerge matte
     Worker->>DB: Save rendered MP4 to exports bucket
 
-    Creator->>Web: 6. Publish to Socials
-    Web->>API: POST /projects/{id}/publish
-    API->>Queue: Enqueue publish_job
-    Queue->>Worker: Post export URL to YouTube Shorts, TikTok, Instagram
-    Worker->>Creator: Notification: Video Published Successfully!
+    Creator->>Web: 6. Download the Export
+    Web->>API: GET /exports/{id}/download-url
+    API-->>Web: Short-lived signed download URL
+    Web-->>Creator: Browser downloads the finished MP4
 ```
 
 ### Step 1: Onboarding and Workspace Provisioning
 
-When a user signs up via the Web Frontend (`apps/web`), the Supabase Auth system verifies their email/password or OAuth credentials. Behind the scenes, a PostgreSQL database trigger (`public.handle_new_user()`) is fired automatically:
+When a user signs up via the Web Frontend (`apps/web`), the Supabase Auth system verifies their email and password. Behind the scenes, a PostgreSQL database trigger (`public.handle_new_user()`) is fired automatically:
 
 - Creates a `profile` record for the user.
 - Provisions a default `workspace` titled "Creator's Workspace".
@@ -222,9 +220,9 @@ When satisfied, the user clicks "Export". The backend enqueues a `render_job`.
 
 The output video is uploaded to the Supabase `exports` bucket.
 
-### Step 7: Multi-Platform Social Publishing
+### Step 7: Downloading the Export
 
-The user navigates to the export dashboard and selects "Publish". They link their TikTok, YouTube, or Instagram accounts via OAuth. The API retrieves the credentials (which are encrypted at rest using AES-GCM via `TokenCipher`), downloads the video from the exports bucket, and submits the video directly to the platform APIs. A background job polls for completion, notifying the user when their vertical clip is live.
+The user opens the Export panel and selects "Download". The API checks that the export belongs to the user's workspace, records the download, and returns a signed URL that expires within five minutes; the browser then downloads the MP4 directly from the `exports` bucket.
 
 ---
 
@@ -263,7 +261,6 @@ graph TB
         Groq[Groq API<br/>Whisper large-v3-turbo]
         OpenRouter[OpenRouter API<br/>LLM Edit Planner]
         StockAPIs[Pexels & Pixabay APIs<br/>B-Roll Sourcing]
-        Socials[TikTok, YouTube, Instagram APIs<br/>Social Publishing]
     end
 
     %% Client communication
@@ -297,7 +294,6 @@ graph TB
     ModelGateway -->|Selected route| Groq
     ModelGateway -->|Selected route| OpenRouter
     PythonWorker -->|Fetch B-Roll clips| StockAPIs
-    API -->|Post video files| Socials
 ```
 
 ### Architecture Diagram Legend
@@ -306,7 +302,7 @@ graph TB
 - **FastAPI App Gateway (Dark Teal):** The gateway layer responsible for user authorization, API request validation, database connection pooling, and job scheduling.
 - **Data Storage Stack (Orange/Yellow):** The database and object storage buckets managed by Supabase, and the Redis layer powering the job queue.
 - **Background Workers (Purple):** The distributed job processors that handle computationally heavy workloads, isolated from the request-response thread of the API gateway.
-- **Third-Party Services (Grey):** External network APIs queried asynchronously for billing, AI speech, LLMs, media assets, and social publishing.
+- **Third-Party Services (Grey):** External network APIs queried asynchronously for billing, AI speech, LLMs, and media assets.
 
 ---
 
@@ -429,15 +425,15 @@ The Next.js frontend (`apps/web`) leverages the standard App Router under the `a
 
 Below is the routing directory map with detailed analysis:
 
-| Route Path       | File Location                             | Access Gate | Client vs Server | Primary Actions & Data Hydration                                                              |
-| :--------------- | :---------------------------------------- | :---------- | :--------------- | :-------------------------------------------------------------------------------------------- |
-| `/`              | `app/page.tsx`                            | Public      | Server/Client    | Landing page. Fetches static pricing tiers and visual theme selectors.                        |
-| `/login`         | `app/(auth)/login/page.tsx`               | Public      | Client           | Auth entry point. Supabase client-side sign-in with email/password or OAuth (GitHub, Google). |
-| `/dashboard`     | `app/(app)/dashboard/page.tsx`            | Auth-gated  | Client           | Lists user projects. Calls FastAPI `GET /projects` to populate bento grid elements.           |
-| `/projects/new`  | `app/(app)/projects/new/page.tsx`         | Auth-gated  | Client           | Workspace creation. Post-validation submits project title and configuration parameters.       |
-| `/projects/[id]` | `app/(app)/projects/[projectId]/page.tsx` | Auth-gated  | Client           | Core video workspace. Renders editor panels, timelines, previews, and progress bars.          |
-| `/billing`       | `app/(app)/billing/page.tsx`              | Auth-gated  | Client           | Stripe checkout portal. Hydrates status from `GET /billing/status`, shows credit limits.      |
-| `/admin/ops`     | `app/(app)/admin/ops/page.tsx`            | Admin-gated | Client           | Launch Ops page. Retrieves active worker queues, cost attributions, and heartbeat stats.      |
+| Route Path       | File Location                             | Access Gate | Client vs Server | Primary Actions & Data Hydration                                                         |
+| :--------------- | :---------------------------------------- | :---------- | :--------------- | :--------------------------------------------------------------------------------------- |
+| `/`              | `app/page.tsx`                            | Public      | Server/Client    | Landing page. Fetches static pricing tiers and visual theme selectors.                   |
+| `/login`         | `app/(auth)/login/page.tsx`               | Public      | Client           | Auth entry point. Supabase sign-in with email and password.                              |
+| `/dashboard`     | `app/(app)/dashboard/page.tsx`            | Auth-gated  | Client           | Lists user projects. Calls FastAPI `GET /projects` to populate bento grid elements.      |
+| `/projects/new`  | `app/(app)/projects/new/page.tsx`         | Auth-gated  | Client           | Workspace creation. Post-validation submits project title and configuration parameters.  |
+| `/projects/[id]` | `app/(app)/projects/[projectId]/page.tsx` | Auth-gated  | Client           | Core video workspace. Renders editor panels, timelines, previews, and progress bars.     |
+| `/billing`       | `app/(app)/billing/page.tsx`              | Auth-gated  | Client           | Stripe checkout portal. Hydrates status from `GET /billing/status`, shows credit limits. |
+| `/admin/ops`     | `app/(app)/admin/ops/page.tsx`            | Admin-gated | Client           | Launch Ops page. Retrieves active worker queues, cost attributions, and heartbeat stats. |
 
 ---
 
@@ -630,22 +626,21 @@ The backend core (`apps/api`) is built on **FastAPI (Python 3.12)**. The entry p
 
 Every router file resides under `app/api/*`. Below is a comprehensive index of the active endpoints:
 
-| Route Path                        | Method | Purpose                                    | Auth Required | Primary Services & Repositories Called             |
-| :-------------------------------- | :----- | :----------------------------------------- | :------------ | :------------------------------------------------- |
-| `/projects`                       | `POST` | Create a new project                       | Yes           | `SupabaseProjectRepository`                        |
-| `/projects`                       | `GET`  | List projects for active workspace         | Yes           | `SupabaseProjectRepository`                        |
-| `/projects/{id}`                  | `GET`  | Fetch details of a single project          | Yes           | `SupabaseProjectRepository`                        |
-| `/projects/{id}/uploads/init`     | `POST` | Generate signed URL for media upload       | Yes           | `SupabaseUploadRepository`, `StorageSigner`        |
-| `/projects/{id}/uploads/complete` | `POST` | Mark upload complete, trigger processing   | Yes           | `SupabaseUploadRepository`, `PreprocessQueue`      |
-| `/projects/{id}/plans`            | `POST` | Generate AI timeline cut edit plan         | Yes           | `SupabasePlanRepository`, `EditPlannerProvider`    |
-| `/projects/{id}/captions`         | `GET`  | Get subtitle caption tracks                | Yes           | `SupabaseCaptionRepository`                        |
-| `/projects/{id}/renders`          | `POST` | Start a video compilation render job       | Yes           | `SupabaseRenderRepository`, `RenderQueue`          |
-| `/projects/{id}/renders/{jobId}`  | `GET`  | Check render job status and progress       | Yes           | `SupabaseRenderRepository`                         |
-| `/projects/{id}/publish`          | `POST` | Dispatch video file to social network APIs | Yes           | `SupabasePublishingRepository`, `PublishQueue`     |
-| `/billing/status`                 | `GET`  | Fetch user Stripe limits and subscription  | Yes           | `SupabaseBillingRepository`, `StripeBillingClient` |
-| `/billing/checkout`               | `POST` | Generate Stripe checkout portal URL        | Yes           | `SupabaseBillingRepository`, `StripeBillingClient` |
-| `/admin/ops/overview`             | `GET`  | Retrieve queue metrics, cost data          | Yes (Admin)   | `OperationsRepository`, `QueueRegistry`            |
-| `/internal/jobs/{id}/run`         | `POST` | API webhook called by workers              | Yes (Worker)  | `app.services.queue.run_job`                       |
+| Route Path                        | Method | Purpose                                   | Auth Required | Primary Services & Repositories Called             |
+| :-------------------------------- | :----- | :---------------------------------------- | :------------ | :------------------------------------------------- |
+| `/projects`                       | `POST` | Create a new project                      | Yes           | `SupabaseProjectRepository`                        |
+| `/projects`                       | `GET`  | List projects for active workspace        | Yes           | `SupabaseProjectRepository`                        |
+| `/projects/{id}`                  | `GET`  | Fetch details of a single project         | Yes           | `SupabaseProjectRepository`                        |
+| `/projects/{id}/uploads/init`     | `POST` | Generate signed URL for media upload      | Yes           | `SupabaseUploadRepository`, `StorageSigner`        |
+| `/projects/{id}/uploads/complete` | `POST` | Mark upload complete, trigger processing  | Yes           | `SupabaseUploadRepository`, `PreprocessQueue`      |
+| `/projects/{id}/plans`            | `POST` | Generate AI timeline cut edit plan        | Yes           | `SupabasePlanRepository`, `EditPlannerProvider`    |
+| `/projects/{id}/captions`         | `GET`  | Get subtitle caption tracks               | Yes           | `SupabaseCaptionRepository`                        |
+| `/projects/{id}/renders`          | `POST` | Start a video compilation render job      | Yes           | `SupabaseRenderRepository`, `RenderQueue`          |
+| `/projects/{id}/renders/{jobId}`  | `GET`  | Check render job status and progress      | Yes           | `SupabaseRenderRepository`                         |
+| `/billing/status`                 | `GET`  | Fetch user Stripe limits and subscription | Yes           | `SupabaseBillingRepository`, `StripeBillingClient` |
+| `/billing/checkout`               | `POST` | Generate Stripe checkout portal URL       | Yes           | `SupabaseBillingRepository`, `StripeBillingClient` |
+| `/admin/ops/overview`             | `GET`  | Retrieve queue metrics, cost data         | Yes (Admin)   | `OperationsRepository`, `QueueRegistry`            |
+| `/internal/jobs/{id}/run`         | `POST` | API webhook called by workers             | Yes (Worker)  | `app.services.queue.run_job`                       |
 
 ---
 
@@ -662,8 +657,6 @@ Services represent isolated business logic modules:
 - **`stock_video.py` (`PexelsStockVideoProvider` / `PixabayStockVideoProvider`):**
   Searches stock libraries for related B-roll matching B-roll queries.
   - _Failure Mode:_ Falls back to a lexical query keyword parser if semantic embedding matches are missing.
-- **`publishing.py` (`SocialPublishingClient`):**
-  Encrypts and decrypts social integration access tokens. Handles direct binary multi-part uploads to TikTok, Meta Graph API, and YouTube.
 - **`queue.py` (`BullMQQueueRegistry`):**
   Injects job variables into Redis, tracking execution progress and retries.
 - **`billing.py` (`StripeBillingClient`):**
@@ -776,7 +769,6 @@ The background worker daemon (`apps/worker/src/worker.mjs`) manages job polling.
 7. **`broll_matching`:** Queries Pexels/Pixabay APIs, parses response metadata, and maps video segments to timeline B-roll slots.
 8. **`matte_generation`:** Runs MediaPipe SelfieSegmentation to extract the subject, writing a black-and-white mask video (`matte.mp4`) used for transparency composition.
 9. **`render` / `export`:** Executes video rendering pipelines to create final clips.
-10. **`publish_job`:** Connects to social media APIs (TikTok, YouTube, Meta) to upload and publish exported vertical clips.
 
 ---
 
@@ -1128,8 +1120,6 @@ erDiagram
 
     RENDER_JOBS ||--o{ RENDER_JOB_EVENTS : "logs status event"
     RENDER_JOBS ||--o| EXPORTS : "produces export"
-
-    PUBLISH_CONNECTIONS ||--o{ PUBLISH_JOBS : "posts via"
 ```
 
 ---
@@ -1255,15 +1245,15 @@ AS RESTRICTIVE USING (
 The project includes automated security tests written in pgTAP:
 
 - **`phase_0_tenancy_rls_test.sql`:** Simulates different user credentials to verify that queries attempting to select or update projects belonging to other workspaces are blocked, returning empty results or raising errors.
-- **`phase_9_rls_test.sql`:** Tests edge cases for deletion and publishing connection tables to ensure credentials cannot be leaked across tenants.
+- **`phase_9_rls_test.sql`:** Verifies that owners, members, outsiders and disabled members see only their own workspaces, projects and profiles, that signed-in clients cannot call the security-definer plan RPCs, and that the service role keeps its access.
 
 ---
 
 <div style="page-break-after: always;"></div>
 
-# Part VIII — Security, Billing, Publishing & Ops
+# Part VIII — Security, Billing & Ops
 
-## 1. Authentication, Encryption, and bypass flags
+## 1. Authentication and bypass flags
 
 ### Route Security Model
 
@@ -1281,14 +1271,6 @@ During development, developers can set `SKIP_API_AUTH=true` to bypass auth verif
 - **Bypass Action:** If active, the dependency injector defaults all calls to a mock user `00000000-0000-4000-8000-000000000001` and workspace `00000000-0000-4000-8000-000000000002`.
 - **Production Guard:** To prevent production vulnerabilities, `config.py` runs a validation check. If `SKIP_API_AUTH` is enabled while `APP_ENV` is not set to `development` or `local`, the application raises a startup error.
 
-### Access Token Encryption (`TokenCipher`)
-
-To allow users to post directly to social networks (TikTok, YouTube, Instagram), the database stores social API access tokens.
-
-- **Rest Encryption:** Tokens are encrypted before insertion into `public.publish_connections` using the `TokenCipher` utility (`app/services/token_cipher.py`).
-- **Algorithm:** Uses **Fernet symmetric encryption (AES-128 in CBC mode)**. The key is derived by running SHA-256 on the secret `PUBLISH_TOKEN_ENCRYPTION_KEY`.
-- **Prefix Marker:** Encrypted values are prefixed with `enc:v1:`. Unprefixed strings are rejected, and decryption failures raise `publish_token_decryption_failed` errors, prompting the user to reconnect their account.
-
 ---
 
 ## 2. Billing & Subscription Integrations
@@ -1302,21 +1284,7 @@ The billing system is powered by **Stripe** (`app/services/billing.py`):
 
 ---
 
-## 3. Social Publishing Integrations
-
-The publishing pipeline is managed by `app/services/publishing.py`:
-
-- **Platform APIs:** Integrates with TikTok, Meta Graph (Instagram Reels), and YouTube (Shorts).
-- **OAuth Exchange:** Connects accounts by exchanging code parameters for access tokens.
-- **Publishing Queue:** Triggering a publication pushes a task to the `publish_jobs` queue.
-- **Upload Protocol:** The worker downloads the exported video from the Supabase bucket and uploads it to the social platform's media upload endpoints:
-  - **TikTok:** Uses multi-part video uploads.
-  - **YouTube:** Uses chunked media uploads to the YouTube Data API.
-  - **Instagram:** Posts a media container URL, then polls the Graph API until the container is ready before publishing.
-
----
-
-## 4. Analytics, Retention & Ops
+## 3. Analytics, Retention & Ops
 
 ### Outcomes & Cost Attribution
 
@@ -1337,7 +1305,6 @@ To manage storage costs, a retention service runs periodic cleanup tasks:
 
 - **Heartbeats:** Active workers write periodically to `public.worker_heartbeats`. The admin dashboard flags workers as offline if their last heartbeat is older than 90 seconds.
 - **Prometheus Metrics:** The `MetricsRegistry` tracks API request rates, database execution latencies, and queue depths.
-- **Sentry Logging:** Uncaught exceptions are sent to Sentry if `SENTRY_DSN` is configured.
 
 ---
 
@@ -1511,15 +1478,19 @@ Below is a complete index of all active environment variables across the system,
   - _Purpose:_ Runtime stage flag (`production`, `development`, `local`). Restricts security bypasses to non-production envs.
 - **`LOG_LEVEL`** (Default: `INFO`)
   - _Purpose:_ Log verbosity levels (`DEBUG`, `INFO`, `WARNING`, `ERROR`).
-- **`NEXT_PUBLIC_APP_URL`** (Default: _None_)
-  - _Purpose:_ The public URL of the Next.js frontend, used for Stripe redirects and social OAuth callbacks.
-- **`NEXT_PUBLIC_API_BASE_URL`** / `API_PUBLIC_BASE_URL` (Default: _None_)
-  - _Purpose:_ The resolved base URL of the FastAPI gateway, called by client-side queries.
+- **`PUBLIC_ORIGIN`** (Default: _None_)
+  - _Purpose:_ The one public origin. Browsers reach the web app at `/`, the API at `/api`, and Supabase at `/supabase`. The web server reads it at startup (never at build time); it is also the fallback origin for sign-up confirmation links.
+- **`API_INTERNAL_URL`** (Default: _None_)
+  - _Purpose:_ The private-network URL the web server uses to call the FastAPI service.
+- **`API_PUBLIC_BASE_URL`** (Default: _None_)
+  - _Purpose:_ The API as browsers reach it (`<origin>/api`); used for local-storage links.
 
 ### A.2 Supabase & Database Config
 
-- **`SUPABASE_URL`** / `NEXT_PUBLIC_SUPABASE_URL` (Default: _None_)
-  - _Purpose:_ The endpoint URL of the Supabase instance, used for REST calls and Storage.
+- **`SUPABASE_URL`** (Default: _None_)
+  - _Purpose:_ The private-network endpoint of the Supabase gateway, used by the web server, API, and workers for Auth, REST, and Storage.
+- **`SUPABASE_PUBLIC_URL`** (Default: `SUPABASE_URL`)
+  - _Purpose:_ Supabase as browsers reach it (`<origin>/supabase`); signed Storage links handed to browsers use it. Required in production.
 - **`SUPABASE_ANON_KEY`** (Default: _None_)
   - _Purpose:_ Public API key to read data with RLS filters.
 - **`SUPABASE_SERVICE_ROLE_KEY`** (Default: _None_)
@@ -1535,8 +1506,6 @@ Below is a complete index of all active environment variables across the system,
   - _Purpose:_ Bucket name storing raw uploaded user clips and matte files.
 - **`EXPORT_STORAGE_BUCKET`** (Default: `"exports"`)
   - _Purpose:_ Bucket name storing finished, compiled output files.
-- **`PUBLISH_TOKEN_ENCRYPTION_KEY`** (Default: _None_)
-  - _Purpose:_ Cryptographic secret key used by Fernet AES to encrypt social OAuth tokens. Must contain at least 32 characters.
 - **`MEDIA_WORK_DIR`** (Default: `"/var/data/motionly/storage"`)
   - _Purpose:_ Transient local storage path on worker disks used to compile video layers.
 - **`REMOTION_ENABLED`** (Default: `"false"`)
@@ -1578,7 +1547,6 @@ Below is a detailed inventory of directories and key files across the Motionly r
 - `app/api/`: Endpoint modules mapping REST paths to repository calls.
   - `plans.py`: Handles AI planner requests.
   - `renders.py`: Handles export submissions.
-  - `publishing.py`: Manages social channel connectivity.
 - `app/services/`: Services implementing business logic.
   - `edit_planner.py`: Manages LLM prompts and plans validation.
   - `visual_intelligence.py`: Runs local PyTorch models.
@@ -1626,14 +1594,13 @@ Below is a detailed inventory of directories and key files across the Motionly r
 
 Below is an overview of the third-party integrations required by the platform:
 
-| Integration                       | Subsystem / Role        | What breaks if this service goes down?                                                             |
-| :-------------------------------- | :---------------------- | :------------------------------------------------------------------------------------------------- |
-| **Supabase**                      | DB and Object Storage   | The application goes offline. Users cannot log in, projects cannot load, and uploads fail.         |
-| **Stripe**                        | Subscriptions & Billing | Stripe portal redirects fail, and webhook payments are delayed. Users cannot change pricing tiers. |
-| **Groq API**                      | Whisper Transcription   | Video preprocessing is blocked, preventing speech transcription and AI edit planning.              |
-| **OpenRouter API**                | LLM Edit Planner        | Auto-cuts and AI edit plans fail, falling back to a rule-based silence cut list.                   |
-| **Pexels & Pixabay**              | Stock B-roll            | stock video search fails. B-roll recommendations fall back to empty slots.                         |
-| **TikTok / YouTube / Meta Graph** | Publishing              | Social video publishing fails, and job tasks remain in retry status.                               |
-| **Runway API**                    | AI Video Generation     | Generative AI B-roll generation fails, reverting slots to stock video search engines.              |
+| Integration          | Subsystem / Role        | What breaks if this service goes down?                                                             |
+| :------------------- | :---------------------- | :------------------------------------------------------------------------------------------------- |
+| **Supabase**         | DB and Object Storage   | The application goes offline. Users cannot log in, projects cannot load, and uploads fail.         |
+| **Stripe**           | Subscriptions & Billing | Stripe portal redirects fail, and webhook payments are delayed. Users cannot change pricing tiers. |
+| **Groq API**         | Whisper Transcription   | Video preprocessing is blocked, preventing speech transcription and AI edit planning.              |
+| **OpenRouter API**   | LLM Edit Planner        | Auto-cuts and AI edit plans fail, falling back to a rule-based silence cut list.                   |
+| **Pexels & Pixabay** | Stock B-roll            | stock video search fails. B-roll recommendations fall back to empty slots.                         |
+| **Runway API**       | AI Video Generation     | Generative AI B-roll generation fails, reverting slots to stock video search engines.              |
 
 ---

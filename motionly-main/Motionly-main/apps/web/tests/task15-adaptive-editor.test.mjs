@@ -7,7 +7,9 @@ const read = (path) => readFile(new URL(path, root), "utf8");
 
 function functionBody(source, name, nextName) {
   const start = source.indexOf(`function ${name}`);
-  const end = nextName ? source.indexOf(`function ${nextName}`, start + 1) : source.length;
+  const end = nextName
+    ? source.indexOf(`function ${nextName}`, start + 1)
+    : source.length;
   assert.notEqual(start, -1, `${name} should exist`);
   assert.notEqual(end, -1, `${nextName} should exist after ${name}`);
   return source.slice(start, end);
@@ -33,9 +35,19 @@ test("creator mode is the default and editor mode preference persists", async ()
 });
 
 test("creator and professional modes expose intentionally different workspaces", async () => {
-  const workspaces = await read("components/editor/layout/EditorWorkspaces.tsx");
-  const creator = functionBody(workspaces, "CreatorWorkspace", "ProfessionalWorkspace");
-  const professional = functionBody(workspaces, "ProfessionalWorkspace", "MobileTab");
+  const workspaces = await read(
+    "components/editor/layout/EditorWorkspaces.tsx",
+  );
+  const creator = functionBody(
+    workspaces,
+    "CreatorWorkspace",
+    "ProfessionalWorkspace",
+  );
+  const professional = functionBody(
+    workspaces,
+    "ProfessionalWorkspace",
+    "MobileTab",
+  );
 
   assert.match(creator, /data-editor-workspace="creator"/);
   assert.match(creator, /CurrentTaskCard/);
@@ -60,8 +72,14 @@ test("creator mode reduces tiny uppercase labels without weakening professional 
     read("components/editor/layout/EditorWorkspaces.tsx"),
   ]);
 
-  assert.match(css, /data-editor-mode="creator"\] \.uppercase[\s\S]*text-transform: none/);
-  assert.match(css, /data-editor-mode="creator"[\s\S]*text-\\\[9px\\\][\s\S]*font-size: 0\.75rem/);
+  assert.match(
+    css,
+    /data-editor-mode="creator"\] \.uppercase[\s\S]*text-transform: none/,
+  );
+  assert.match(
+    css,
+    /data-editor-mode="creator"[\s\S]*text-\\\[9px\\\][\s\S]*font-size: 0\.75rem/,
+  );
   for (const source of [toolbar, progress, workspaces]) {
     assert.doesNotMatch(source, /text-\[(?:9|10)px\]/);
     assert.doesNotMatch(source, /\buppercase\b/);
@@ -69,8 +87,14 @@ test("creator mode reduces tiny uppercase labels without weakening professional 
 });
 
 test("only one viewport workspace mounts at a time", async () => {
-  const workspaces = await read("components/editor/layout/EditorWorkspaces.tsx");
-  const selector = functionBody(workspaces, "EditorWorkspaces", "MobileWorkspace");
+  const workspaces = await read(
+    "components/editor/layout/EditorWorkspaces.tsx",
+  );
+  const selector = functionBody(
+    workspaces,
+    "EditorWorkspaces",
+    "MobileWorkspace",
+  );
 
   assert.match(workspaces, /useSyncExternalStore/);
   assert.match(workspaces, /\(min-width: 1024px\)/);
@@ -81,13 +105,14 @@ test("only one viewport workspace mounts at a time", async () => {
 });
 
 test("precision keyboard workflows remain active and discoverable in both modes", async () => {
-  const [editor, timelinePanel, timelineShortcuts, toolbar, workspaces] = await Promise.all([
-    read("components/editor-client.tsx"),
-    read("components/editor/timeline/TimelinePanel.tsx"),
-    read("components/editor/timeline/useTimelineKeyboardShortcuts.ts"),
-    read("components/editor/layout/EditorToolbar.tsx"),
-    read("components/editor/layout/EditorWorkspaces.tsx"),
-  ]);
+  const [editor, timelinePanel, timelineShortcuts, toolbar, workspaces] =
+    await Promise.all([
+      read("components/editor-client.tsx"),
+      read("components/editor/timeline/TimelinePanel.tsx"),
+      read("components/editor/timeline/useTimelineKeyboardShortcuts.ts"),
+      read("components/editor/layout/EditorToolbar.tsx"),
+      read("components/editor/layout/EditorWorkspaces.tsx"),
+    ]);
   const timeline = `${timelinePanel}\n${timelineShortcuts}`;
 
   assert.match(editor, /event\.key\.toLowerCase\(\) === "z"/);
@@ -102,8 +127,16 @@ test("precision keyboard workflows remain active and discoverable in both modes"
   assert.match(toolbar, /J K L/);
   assert.match(toolbar, /Ctrl\/⌘ Z/);
 
-  const creator = functionBody(workspaces, "CreatorWorkspace", "ProfessionalWorkspace");
-  const professional = functionBody(workspaces, "ProfessionalWorkspace", "MobileTab");
+  const creator = functionBody(
+    workspaces,
+    "CreatorWorkspace",
+    "ProfessionalWorkspace",
+  );
+  const professional = functionBody(
+    workspaces,
+    "ProfessionalWorkspace",
+    "MobileTab",
+  );
   assert.match(creator, /panels\.bottomPanel/);
   assert.match(professional, /panels\.bottomPanel/);
 });
@@ -119,7 +152,10 @@ test("editor monoliths are decomposed behind focused module boundaries", async (
     ]);
   const lineCount = layout.trimEnd().split("\n").length;
 
-  assert.ok(lineCount < 120, `editor-layout.tsx should stay small; found ${lineCount} lines`);
+  assert.ok(
+    lineCount < 120,
+    `editor-layout.tsx should stay small; found ${lineCount} lines`,
+  );
   assert.match(layout, /EditorToolbar/);
   assert.match(layout, /CreatorProgressRail/);
   assert.match(layout, /EditorWorkspaces/);
@@ -132,6 +168,12 @@ test("editor monoliths are decomposed behind focused module boundaries", async (
   assert.doesNotMatch(editorClient, /function buildCreatorTasks/);
   assert.match(creatorFlow, /export function buildCreatorTasks/);
   assert.match(timelinePanel, /useTimelineKeyboardShortcuts/);
-  assert.doesNotMatch(timelinePanel, /function onKeyDown\(event: KeyboardEvent\)/);
-  assert.match(timelineShortcuts, /export function useTimelineKeyboardShortcuts/);
+  assert.doesNotMatch(
+    timelinePanel,
+    /function onKeyDown\(event: KeyboardEvent\)/,
+  );
+  assert.match(
+    timelineShortcuts,
+    /export function useTimelineKeyboardShortcuts/,
+  );
 });

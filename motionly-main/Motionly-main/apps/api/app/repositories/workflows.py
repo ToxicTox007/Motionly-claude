@@ -2196,7 +2196,7 @@ class SupabaseWorkflowRepository:
                 "p_lease_seconds": lease_seconds,
             },
         )
-        return [OutboxRecord.from_row(row) for row in self._rows(response)]
+        return [OutboxRecord.from_row(row) for row in self._rows(response, allow_empty=True)]
 
     async def claim_outbox_async(
         self, *, lease_owner: str, limit: int = 25, lease_seconds: int = 60
@@ -2210,7 +2210,7 @@ class SupabaseWorkflowRepository:
                 "p_lease_seconds": lease_seconds,
             },
         )
-        return [OutboxRecord.from_row(row) for row in self._rows(response)]
+        return [OutboxRecord.from_row(row) for row in self._rows(response, allow_empty=True)]
 
     def ack_outbox(
         self,
@@ -2425,7 +2425,9 @@ class SupabaseWorkflowRepository:
         return rows
 
     @staticmethod
-    def _rows(response: httpx.Response) -> list[dict[str, Any]]:
+    def _rows(response: httpx.Response, *, allow_empty: bool = False) -> list[dict[str, Any]]:
+        """Rows of an RPC response; ``allow_empty`` for calls where none is normal
+        (claiming an idle outbox)."""
         if response.status_code >= 400:
             try:
                 body = response.json()
@@ -2436,7 +2438,7 @@ class SupabaseWorkflowRepository:
             status = 409 if code in {"P0001", "23505"} else 404 if code == "P0002" else 502
             raise ApiError(status, code.lower(), message)
         rows = response.json()
-        if not isinstance(rows, list) or not rows:
+        if not isinstance(rows, list) or (not rows and not allow_empty):
             raise ApiError(502, "workflow_response_invalid", "Workflow RPC returned no rows.")
         return rows
 

@@ -29,9 +29,16 @@ class StorageSigner:
         base_url: str = "https://api.motionly.invalid",
         supabase_url: str | None = None,
         service_role_key: str | None = None,
+        public_supabase_url: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        # The API signs over the private network (supabase_url). Browsers open
+        # links on the public origin (public_supabase_url); workers fetch on the
+        # private network.
         self.supabase_url = supabase_url.rstrip("/") if supabase_url else None
+        self.public_supabase_url = (
+            public_supabase_url.rstrip("/") if public_supabase_url else self.supabase_url
+        )
         self.service_role_key = service_role_key
 
     def create_signed_upload(
@@ -44,7 +51,9 @@ class StorageSigner:
     ) -> SignedUpload:
         expires_in_seconds = max(1, min(expires_in_seconds, self.MAX_UPLOAD_TTL_SECONDS))
         if self.supabase_url and self.service_role_key:
-            signed_url = self._create_supabase_signed_upload_url(bucket=bucket, path=path)
+            signed_url = self._create_supabase_signed_upload_url(
+                bucket=bucket, path=path, link_base=self.public_supabase_url or self.supabase_url
+            )
             return SignedUpload(
                 url=signed_url,
                 headers={
@@ -72,6 +81,7 @@ class StorageSigner:
             path=path,
             expires_in_seconds=expires_in_seconds,
             maximum_ttl_seconds=self.MAX_DOWNLOAD_TTL_SECONDS,
+            link_base=self.public_supabase_url,
         )
 
     def create_signed_worker_download(
@@ -87,6 +97,7 @@ class StorageSigner:
             path=path,
             expires_in_seconds=expires_in_seconds,
             maximum_ttl_seconds=self.MAX_WORKER_DOWNLOAD_TTL_SECONDS,
+            link_base=self.supabase_url,
         )
 
     def _create_signed_download_with_cap(
@@ -96,6 +107,7 @@ class StorageSigner:
         path: str,
         expires_in_seconds: int,
         maximum_ttl_seconds: int,
+        link_base: str | None,
     ) -> SignedDownload:
         expires_in_seconds = max(1, min(expires_in_seconds, maximum_ttl_seconds))
         if self.supabase_url and self.service_role_key:
@@ -103,6 +115,7 @@ class StorageSigner:
                 bucket=bucket,
                 path=path,
                 expires_in_seconds=expires_in_seconds,
+                link_base=link_base or self.supabase_url,
             )
             return SignedDownload(url=signed_url)
 
@@ -135,7 +148,7 @@ class StorageSigner:
             "content-type": "application/json",
         }
 
-    def _create_supabase_signed_upload_url(self, *, bucket: str, path: str) -> str:
+    def _create_supabase_signed_upload_url(self, *, bucket: str, path: str, link_base: str) -> str:
         encoded_path = quote(path, safe="/")
         response = httpx.post(
             f"{self.supabase_url}/storage/v1/object/upload/sign/{bucket}/{encoded_path}",
@@ -155,7 +168,7 @@ class StorageSigner:
             )
         if signed_path.startswith("http"):
             return signed_path
-        return f"{self.supabase_url}/storage/v1{signed_path}"
+        return f"{link_base}/storage/v1{signed_path}"
 
     def _create_supabase_signed_download_url(
         self,
@@ -163,6 +176,7 @@ class StorageSigner:
         bucket: str,
         path: str,
         expires_in_seconds: int,
+        link_base: str,
     ) -> str:
         encoded_path = quote(path, safe="/")
         response = httpx.post(
@@ -183,4 +197,4 @@ class StorageSigner:
             )
         if signed_path.startswith("http"):
             return signed_path
-        return f"{self.supabase_url}/storage/v1{signed_path}"
+        return f"{link_base}/storage/v1{signed_path}"

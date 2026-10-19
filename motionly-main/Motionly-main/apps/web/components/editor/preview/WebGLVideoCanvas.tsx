@@ -38,7 +38,14 @@ void main() {
   outColor = vec4(clamp(color.rgb, 0.0, 1.0), color.a);
 }`;
 
-export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, saturation, vignette }: WebGLVideoCanvasProps) {
+export function WebGLVideoCanvas({
+  videoRef,
+  active,
+  contrast,
+  brightness,
+  saturation,
+  vignette,
+}: WebGLVideoCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -62,7 +69,11 @@ export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, satur
     gl.useProgram(program);
     const buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW,
+    );
     const position = gl.getAttribLocation(program, "a_position");
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
@@ -82,8 +93,14 @@ export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, satur
     let live = true;
     const render = () => {
       if (!live) return;
-      const width = Math.max(2, canvas.clientWidth * Math.min(2, window.devicePixelRatio || 1));
-      const height = Math.max(2, canvas.clientHeight * Math.min(2, window.devicePixelRatio || 1));
+      const width = Math.max(
+        2,
+        canvas.clientWidth * Math.min(2, window.devicePixelRatio || 1),
+      );
+      const height = Math.max(
+        2,
+        canvas.clientHeight * Math.min(2, window.devicePixelRatio || 1),
+      );
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
@@ -92,7 +109,14 @@ export function WebGLVideoCanvas({ videoRef, active, contrast, brightness, satur
       if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
         try {
           gl.bindTexture(gl.TEXTURE_2D, texture);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            video,
+          );
           gl.uniform1f(uniforms.contrast, contrast);
           gl.uniform1f(uniforms.brightness, brightness);
           gl.uniform1f(uniforms.saturation, saturation);

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "description": "Service-log errors the browser suite is known to cause on the CPU stage, each with the task that fixes it. The log scan reports these separately and fails on anything else. Remove an entry when its task lands; the evidence report lists every entry as not proven.",
+  "defects": [
+    {
+      "id": "worker-media-link-rejected",
+      "task": "Task 15",
+      "service": "cpu-worker",
+      "pattern": "worker_media_signing_invalid",
+      "reason": "The preprocessing worker refuses the internal (http, private address) signed link to uploaded media, so first-draft preprocessing fails on the CPU stage."
+    },
+    {
+      "id": "step-retry-conflict",
+      "task": "Task 15",
+      "service": "postgres",
+      "pattern": "ERROR:\\s+WORKFLOW_STEP_TRANSPORT_CONFLICT",
+      "reason": "A failed first-draft step cannot be enqueued again: the workflow's next attempt has a new job id, and motionly_prepare_workflow_step rejects it as a conflicting step."
+    },
+    {
+      "id": "step-retry-conflict-activity",
+      "task": "Task 15",
+      "service": "temporal-worker",
+      "pattern": "ApplicationError: bullmq_enqueue_unavailable",
+      "reason": "The enqueue activity reports the step-retry conflict as 'temporarily unavailable' and hides the cause, so it retries until the workflow fails."
+    },
+    {
+      "id": "deleted-project-workflow-continues",
+      "task": "Task 15",
+      "service": "postgres",
+      "pattern": "ERROR:\\s+WORKFLOW_NOT_FOUND",
+      "reason": "Deleting a project (or the account that owns it) does not cancel its running first-draft workflow, which keeps calling the database for a run that no longer exists."
+    },
+    {
+      "id": "deleted-project-workflow-continues-rest",
+      "task": "Task 15",
+      "service": "supabase-rest",
+      "pattern": "\"POST /rpc/motionly_(prepare|fail)_workflow_step HTTP/1\\.1\" 500",
+      "reason": "The same orphaned workflow's database calls, as PostgREST logs them (WORKFLOW_NOT_FOUND surfaces as 500)."
+    },
+    {
+      "id": "deleted-project-workflow-continues-gateway",
+      "task": "Task 15",
+      "service": "supabase-gateway",
+      "pattern": "\"POST /rest/v1/rpc/motionly_(prepare|fail)_workflow_step HTTP/1\\.1\" 500",
+      "reason": "The same orphaned workflow's database calls, as the gateway logs them."
+    },
+    {
+      "id": "deleted-project-workflow-continues-worker",
+      "task": "Task 15",
+      "service": "cpu-worker",
+      "pattern": "\"event\":\"(job_failed\".*upload_not_found|workflow_failure_callback_failed\".*WORKFLOW_NOT_FOUND)",
+      "reason": "The same orphaned workflow: its preprocessing job runs after the project was deleted, finds no upload, and its failure callback finds no workflow run."
+    }
+  ]
+}

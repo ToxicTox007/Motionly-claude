@@ -27,10 +27,12 @@ export default function ProjectError({
             <AlertTriangle className="size-5" aria-hidden="true" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-xl font-black uppercase">Project data is unavailable</h1>
+            <h1 className="text-xl font-black uppercase">
+              Project data is unavailable
+            </h1>
             <p className="mt-2 text-sm font-bold text-muted-foreground">
-              Motionly could not load the authoritative project state. Your saved
-              timeline has not been replaced or cleared.
+              Motionly could not load the authoritative project state. Your
+              saved timeline has not been replaced or cleared.
             </p>
           </div>
         </div>

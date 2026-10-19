@@ -16,13 +16,17 @@ test(
   "upload-to-export Remotion golden preserves selected frames and output timing",
   { skip: enabled ? false : "set RUN_RENDERER_ENCODED_TESTS=true" },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "motionly-remotion-parity-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), "motionly-remotion-parity-"),
+    );
     const source = join(directory, "source.mp4");
     const opening = join(directory, "opening.mp4");
     const payoff = join(directory, "payoff.mp4");
     createFixtureVideo(source);
     const server = createRangeServer(source);
-    await new Promise<void>((resolveServer) => server.listen(0, "127.0.0.1", resolveServer));
+    await new Promise<void>((resolveServer) =>
+      server.listen(0, "127.0.0.1", resolveServer),
+    );
     const address = server.address();
     assert(address && typeof address !== "string");
     const sourceUrl = `http://127.0.0.1:${address.port}/source.mp4`;
@@ -35,7 +39,9 @@ test(
       ];
       for (const [index, inputProps] of variants.entries()) {
         const compositions = await getCompositions(serveUrl, { inputProps });
-        const composition = compositions.find((item) => item.id === "MotionlyPremium");
+        const composition = compositions.find(
+          (item) => item.id === "MotionlyPremium",
+        );
         assert(composition);
         await renderMedia({
           composition,
@@ -57,10 +63,18 @@ test(
       assert(durations[1] > durations[0]);
       const openingPixel = probePixel(opening);
       const payoffPixel = probePixel(payoff);
-      assert(openingPixel[0] > openingPixel[2] + 150, `expected red opening: ${openingPixel}`);
-      assert(payoffPixel[2] > payoffPixel[0] + 150, `expected blue payoff: ${payoffPixel}`);
+      assert(
+        openingPixel[0] > openingPixel[2] + 150,
+        `expected red opening: ${openingPixel}`,
+      );
+      assert(
+        payoffPixel[2] > payoffPixel[0] + 150,
+        `expected blue payoff: ${payoffPixel}`,
+      );
     } finally {
-      await new Promise<void>((resolveServer) => server.close(() => resolveServer()));
+      await new Promise<void>((resolveServer) =>
+        server.close(() => resolveServer()),
+      );
       await rm(directory, { recursive: true, force: true });
     }
   },
@@ -163,27 +177,24 @@ function createFixtureVideo(path: string) {
 }
 
 function probePixel(path: string): [number, number, number] {
-  const result = spawnSync(
-    "ffmpeg",
-    [
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-ss",
-      "0.2",
-      "-i",
-      path,
-      "-frames:v",
-      "1",
-      "-vf",
-      "scale=1:1",
-      "-pix_fmt",
-      "rgb24",
-      "-f",
-      "rawvideo",
-      "pipe:1",
-    ],
-  );
+  const result = spawnSync("ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-ss",
+    "0.2",
+    "-i",
+    path,
+    "-frames:v",
+    "1",
+    "-vf",
+    "scale=1:1",
+    "-pix_fmt",
+    "rgb24",
+    "-f",
+    "rawvideo",
+    "pipe:1",
+  ]);
   assert.equal(result.status, 0, String(result.stderr));
   const output = result.stdout as Buffer;
   return [output[0] ?? 0, output[1] ?? 0, output[2] ?? 0];

@@ -1,0 +1,5 @@
+# actionlint configuration.
+self-hosted-runner:
+  # GPU-stage jobs (.github/workflows/gpu-stage.yml) target a self-hosted GPU runner.
+  labels:
+    - gpu

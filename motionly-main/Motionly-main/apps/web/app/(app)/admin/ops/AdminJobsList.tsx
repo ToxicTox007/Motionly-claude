@@ -41,7 +41,8 @@ export function AdminJobsList({
         job.kind.toLowerCase().includes(search.toLowerCase());
 
       const matchesStatus =
-        statusFilter === "all" || job.status.toLowerCase() === statusFilter.toLowerCase();
+        statusFilter === "all" ||
+        job.status.toLowerCase() === statusFilter.toLowerCase();
 
       return matchesSearch && matchesStatus;
     });
@@ -104,15 +105,19 @@ export function AdminJobsList({
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{job.id}</p>
               <p className="text-xs text-muted-foreground mt-1">
-                <span className="font-bold text-foreground">{job.queue_name}</span>{" "}
+                <span className="font-bold text-foreground">
+                  {job.queue_name}
+                </span>{" "}
                 | {job.kind} |{" "}
                 <span
                   className={cn(
                     "rounded border-2 border-foreground px-1.5 py-0.5 text-[10px] font-black uppercase",
-                    ["failed", "dead_letter"].includes(job.status) && "bg-danger text-white",
+                    ["failed", "dead_letter"].includes(job.status) &&
+                      "bg-danger text-white",
                     ["queued"].includes(job.status) && "bg-info text-ink",
                     ["running"].includes(job.status) && "bg-warning text-ink",
-                    ["succeeded"].includes(job.status) && "bg-success text-white",
+                    ["succeeded"].includes(job.status) &&
+                      "bg-success text-white",
                   )}
                 >
                   {job.status}

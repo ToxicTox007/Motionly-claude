@@ -994,25 +994,6 @@ class RenderQueue(BaseQueue):
         )
 
 
-class PublishQueue(BaseQueue):
-    queue_name = "publish"
-    kind = "publish"
-
-    def enqueue_publish(
-        self,
-        *,
-        publish_job_id: UUID,
-        project_id: UUID,
-        workspace_id: UUID,
-    ) -> EnqueuedJob:
-        return self._enqueue(
-            job_id=self._job_id("publish", publish_job_id),
-            workspace_id=workspace_id,
-            project_id=project_id,
-            resource_id=publish_job_id,
-        )
-
-
 class ScaleQueue(BaseQueue):
     queue_name = "intelligence"
     kind = "phase5"

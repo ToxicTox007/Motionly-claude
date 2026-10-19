@@ -1,14 +1,11 @@
-import {
-  ArrowUpRight,
-  Gauge,
-  Settings,
-} from "lucide-react";
+import { ArrowUpRight, Gauge, Settings } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { getBillingStatus } from "@/lib/billing";
 import { env } from "@/lib/env";
+import { usageMeter } from "@/lib/usage-meter.mjs";
 import { cn } from "@/lib/utils";
 import { openCustomerPortal, startCheckout } from "./actions";
 
@@ -20,6 +17,7 @@ export default async function BillingPage({
   const params = (await searchParams) ?? {};
   const error = typeof params.error === "string" ? params.error : null;
   const status = await getBillingStatus();
+  const meter = usageMeter(status.usage);
 
   return (
     <AppShell title="Billing">
@@ -32,26 +30,18 @@ export default async function BillingPage({
               : "Billing Integration Offline"
           }
         >
-          {
-            env.billingEnabled
-              ? "Stripe billing is running in sandbox/test mode. Upgrades will execute in a secure test sandbox and real credit cards will not be charged."
-              : "Stripe billing integration is currently disabled. All workspace plans listed below are mock/demo accounts only."
-          }
+          {env.billingEnabled
+            ? "Stripe billing is running in sandbox/test mode. Upgrades will execute in a secure test sandbox and real credit cards will not be charged."
+            : "Stripe billing integration is currently disabled. All workspace plans listed below are mock/demo accounts only."}
         </Alert>
         {status.subscription.payment_issue ? (
-          <Alert
-            tone="danger"
-            title="Payment issue"
-          >
+          <Alert tone="danger" title="Payment issue">
             Update your payment method to keep future premium renders and
             actions available.
           </Alert>
         ) : null}
         {error ? (
-          <Alert
-            tone="danger"
-            title="Billing action failed"
-          >
+          <Alert tone="danger" title="Billing action failed">
             {error.replaceAll("_", " ")}
           </Alert>
         ) : null}
@@ -114,17 +104,28 @@ export default async function BillingPage({
             <div className="mt-5 flex items-end justify-between gap-4">
               <p className="text-4xl font-black">{status.usage.renders_used}</p>
               <p className="pb-1 text-sm font-semibold text-muted-foreground">
-                of {status.usage.renders_limit} renders
+                {meter.metered
+                  ? `of ${status.usage.renders_limit} renders`
+                  : "renders · unlimited"}
               </p>
             </div>
-            <div className="progress-bar mt-4 h-2.5">
+            {meter.metered && meter.ariaLabel ? (
               <div
-                className="progress-fill h-full"
-                style={{ width: `${status.usage.percent_used}%` }}
-              />
-            </div>
+                className="progress-bar mt-4 h-2.5"
+                role="progressbar"
+                aria-label={meter.ariaLabel}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={meter.percent ?? 0}
+              >
+                <div
+                  className="progress-fill h-full"
+                  style={{ width: `${meter.percent}%` }}
+                />
+              </div>
+            ) : null}
             <p className="mt-3 text-sm text-muted-foreground">
-              {status.usage.remaining_renders} remaining this period.
+              {meter.remainingLabel}
             </p>
           </div>
         </section>
@@ -156,14 +157,15 @@ export default async function BillingPage({
                     </p>
                     <p className="text-sm text-muted-foreground">per month</p>
                   </div>
-                  {isCurrent ? (
-                    <span className="badge">Current</span>
-                  ) : null}
+                  {isCurrent ? <span className="badge">Current</span> : null}
                 </div>
                 <ul className="mt-5 space-y-2 text-sm flex-1">
                   {plan.features.map((feature) => (
                     <li key={feature} className="flex gap-2">
-                      <PixelIcon name="success" className="mt-0.5 size-4 shrink-0 text-primary" />
+                      <PixelIcon
+                        name="success"
+                        className="mt-0.5 size-4 shrink-0 text-primary"
+                      />
                       <span>{feature}</span>
                     </li>
                   ))}

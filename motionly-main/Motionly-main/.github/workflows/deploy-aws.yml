@@ -1,0 +1,93 @@
+name: Deploy signed release to AWS
+
+# After the supply chain signs a release tag, publish the release to the S3
+# releases bucket and have the instance preflight it, then apply it once the
+# production environment approves (infra/aws, docs/ops/compose-vm-deployment.md).
+# GitHub never holds AWS keys or application secrets: it assumes the stack's
+# GitHubDeployRole through OIDC, and the instance reads secrets from SSM itself.
+
+on:
+  workflow_run:
+    workflows: [Supply chain]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: aws-deploy
+  cancel-in-progress: false
+
+jobs:
+  publish-and-preflight:
+    name: Publish the signed release and preflight it on the instance
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    # The deploy role trusts exactly this repository environment.
+    environment: production
+    env:
+      RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
+      RELEASE_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
+      INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Download the signed manifest from the successful supply-chain run
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: release-manifest-${{ github.event.workflow_run.head_sha }}
+          path: release-artifacts
+      - name: Validate the signed archive-bound release inputs before upload
+        run: |
+          set -euo pipefail
+          python scripts/release/generate_release_manifest.py \
+            --validate release-artifacts/release-manifest.json
+          python scripts/release/generate_release_manifest.py \
+            --validate-bundle \
+            --manifest release-artifacts/release-manifest.json \
+            --bundle release-artifacts/release-bundle.tar.gz
+      - name: Assume the deploy role with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Upload the immutable release to S3
+        run: |
+          set -euo pipefail
+          # Never overwrite a published release. The signed manifest is the
+          # publication marker and is written last, so the instance never
+          # accepts a partially published release.
+          for name in release-bundle.tar.gz release-manifest.pem release-manifest.sig release-manifest.json; do
+            aws s3api put-object --bucket "$RELEASE_BUCKET" --key "$RELEASE_ID/$name" \
+              --body "release-artifacts/$name" --if-none-match '*' >/dev/null
+          done
+      - name: Preflight the release on the instance over SSM Run Command
+        run: scripts/deploy/run_on_instance.sh --instance-id "$INSTANCE_ID" --release-id "$RELEASE_ID" --preflight
+
+  apply:
+    name: Apply the release on the instance
+    needs: [publish-and-preflight]
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
+      INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Assume the deploy role with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Apply the release; the agent rolls back if it does not become healthy
+        run: scripts/deploy/run_on_instance.sh --instance-id "$INSTANCE_ID" --release-id "$RELEASE_ID"

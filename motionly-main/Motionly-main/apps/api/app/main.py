@@ -26,11 +26,9 @@ from app.api.localized_publishing import router as localized_publishing_router
 from app.api.media import router as media_router
 from app.api.music import router as music_router
 from app.api.operations import router as operations_router
-from app.api.performance_feedback import router as performance_feedback_router
 from app.api.plans import router as plans_router
 from app.api.projects import router as projects_router
 from app.api.public_reviews import router as public_reviews_router
-from app.api.publishing import router as publishing_router
 from app.api.regeneration import router as regeneration_router
 from app.api.renders import router as renders_router
 from app.api.reviews import router as reviews_router
@@ -67,13 +65,8 @@ from app.repositories.localized_publishing import (
     SupabaseLocalizedPublishingRepository,
 )
 from app.repositories.music import InMemoryMusicRepository, SupabaseMusicRepository
-from app.repositories.performance_feedback import (
-    InMemoryPerformanceFeedbackRepository,
-    SupabasePerformanceFeedbackRepository,
-)
 from app.repositories.plans import InMemoryPlanRepository, SupabasePlanRepository
 from app.repositories.projects import InMemoryProjectRepository, SupabaseProjectRepository
-from app.repositories.publishing import InMemoryPublishingRepository, SupabasePublishingRepository
 from app.repositories.regeneration import (
     InMemoryRegenerationRepository,
     SupabaseRegenerationRepository,
@@ -122,7 +115,6 @@ from app.services.model_provider_bridges import (
 from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
 from app.services.object_references import ObjectReferenceService
 from app.services.operations import MetricsRegistry, OperationsRepository
-from app.services.publishing import PublishOAuthClient, SocialPublishingClient
 from app.services.queue import (
     BrollQueue,
     BullMQQueueRegistry,
@@ -131,7 +123,6 @@ from app.services.queue import (
     MusicQueue,
     PlanQueue,
     PreprocessQueue,
-    PublishQueue,
     QueueRegistry,
     RegenerationQueue,
     RenderQueue,
@@ -157,7 +148,6 @@ from app.services.stock_video import (
 from app.services.storage import StorageSigner
 from app.services.storage_quota import StorageQuotaService
 from app.services.supabase import SupabaseRestClient
-from app.services.token_cipher import TokenCipher
 from app.services.transcription_provider import (
     FixtureTranscriptionProvider,
     WhisperCompatibleHttpProvider,
@@ -184,9 +174,7 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
     app.state.settings = settings
-    app.state.local_audit_live_effects_gate = local_audit_live_effects_gate_from_settings(
-        settings
-    )
+    app.state.local_audit_live_effects_gate = local_audit_live_effects_gate_from_settings(settings)
     app.state.launch_feedback = []
     app.state.metrics_registry = MetricsRegistry()
     app.state.operations_repository = OperationsRepository(
@@ -255,22 +243,6 @@ def create_app() -> FastAPI:
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryRenderRepository(app.state.caption_repository)
-    )
-    token_encryption_key = settings.publish_token_encryption_key
-    if not token_encryption_key:
-        if settings.app_env == "production":
-            raise RuntimeError("PUBLISH_TOKEN_ENCRYPTION_KEY is required in production")
-        token_encryption_key = "motionly-local-publish-token-key-change-me"
-    app.state.publish_token_cipher = TokenCipher(token_encryption_key)
-    app.state.publishing_repository = (
-        SupabasePublishingRepository(
-            supabase_url=str(settings.supabase_url),
-            service_role_key=settings.supabase_service_role_key,
-            token_cipher=app.state.publish_token_cipher,
-            metrics_registry=app.state.metrics_registry,
-        )
-        if settings.supabase_url and settings.supabase_service_role_key
-        else InMemoryPublishingRepository()
     )
     app.state.plan_repository = (
         SupabasePlanRepository(
@@ -370,17 +342,6 @@ def create_app() -> FastAPI:
             default_retention_days=settings.editorial_learning_retention_days
         )
     )
-    app.state.performance_feedback_repository = (
-        SupabasePerformanceFeedbackRepository(
-            supabase_url=str(settings.supabase_url),
-            service_role_key=settings.supabase_service_role_key,
-            default_retention_days=settings.performance_feedback_retention_days,
-        )
-        if settings.supabase_url and settings.supabase_service_role_key
-        else InMemoryPerformanceFeedbackRepository(
-            default_retention_days=settings.performance_feedback_retention_days
-        )
-    )
     app.state.scale_repository = (
         SupabaseScaleRepository(
             supabase_url=str(settings.supabase_url),
@@ -410,32 +371,41 @@ def create_app() -> FastAPI:
         base_url=str(settings.api_public_base_url),
         supabase_url=str(storage_supabase_url) if storage_supabase_url else None,
         service_role_key=storage_service_role_key,
+        # Browsers open signed links on the public origin (N12).
+        public_supabase_url=None
+        if settings.force_local_media_storage
+        else settings.browser_supabase_url,
     )
     app.state.object_storage = create_object_storage(
         root=settings.media_work_dir,
         supabase_url=str(storage_supabase_url) if storage_supabase_url else None,
         service_role_key=storage_service_role_key,
     )
-    task6_uses_supabase = bool(storage_supabase_url and storage_service_role_key)
+    # Upload metadata (object references, quota reservations, upload sessions)
+    # lives in database tables beside uploaded_videos, so it follows the
+    # database even when FORCE_LOCAL_MEDIA_STORAGE keeps the bytes on disk.
+    metadata_in_database = bool(settings.supabase_url and settings.supabase_service_role_key)
+    metadata_supabase_url = str(settings.supabase_url) if metadata_in_database else None
+    metadata_service_role_key = settings.supabase_service_role_key if metadata_in_database else None
     app.state.storage_quota_service = StorageQuotaService(
-        supabase_url=str(storage_supabase_url) if storage_supabase_url else None,
-        service_role_key=storage_service_role_key,
-        in_memory=not task6_uses_supabase,
+        supabase_url=metadata_supabase_url,
+        service_role_key=metadata_service_role_key,
+        in_memory=not metadata_in_database,
     )
     app.state.object_reference_service = ObjectReferenceService(
         storage_signer=app.state.storage_signer,
-        supabase_url=str(storage_supabase_url) if storage_supabase_url else None,
-        service_role_key=storage_service_role_key,
-        in_memory=not task6_uses_supabase,
+        supabase_url=metadata_supabase_url,
+        service_role_key=metadata_service_role_key,
+        in_memory=not metadata_in_database,
     )
     upload_session_db = (
         SupabaseRestClient(
-            supabase_url=str(storage_supabase_url),
-            service_role_key=storage_service_role_key,
+            supabase_url=metadata_supabase_url,
+            service_role_key=metadata_service_role_key,
             repository="upload_sessions",
             metrics_registry=app.state.metrics_registry,
         )
-        if task6_uses_supabase
+        if metadata_in_database
         else None
     )
     app.state.upload_session_service = UploadSessionService(
@@ -468,7 +438,11 @@ def create_app() -> FastAPI:
         raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
     else:
         app.state.queue_registry = QueueRegistry()
-    app.state.gpu_scaling_service = compute_backend_from_settings(settings)
+    # The GPU capacity observer belongs to the GPU stage; CPU-stage
+    # (test_fixture) deployments have no GPU workers to observe.
+    app.state.gpu_scaling_service = (
+        compute_backend_from_settings(settings) if settings.gpu_stage == "enabled" else None
+    )
     app.state.preprocess_queue = PreprocessQueue(app.state.queue_registry)
     app.state.transcription_queue = TranscriptionQueue(app.state.queue_registry)
     app.state.visual_queue = VisualQueue(app.state.queue_registry)
@@ -477,12 +451,7 @@ def create_app() -> FastAPI:
     app.state.broll_queue = BrollQueue(app.state.queue_registry)
     app.state.stock_asset_enrichment_queue = StockAssetEnrichmentQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)
-    app.state.publish_queue = PublishQueue(app.state.queue_registry)
     app.state.scale_queue = ScaleQueue(app.state.queue_registry)
-    app.state.social_publishing_client = SocialPublishingClient(
-        meta_graph_api_version=settings.meta_graph_api_version
-    )
-    app.state.publish_oauth_client = PublishOAuthClient(settings)
     app.state.stem_separator = (
         FixtureStemSeparator()
         if settings.process_role == "api"
@@ -652,7 +621,12 @@ def create_app() -> FastAPI:
                 revision=settings.visual_clip_model_revision,
             ),
             primary_revision=settings.visual_clip_model_revision,
-            fallback_provider=HashClipEmbeddingProvider(model_name=COMPATIBLE_CLIP_MODEL_VERSION),
+            # Hash embeddings are a test fixture; production has no fallback.
+            fallback_provider=(
+                HashClipEmbeddingProvider(model_name=COMPATIBLE_CLIP_MODEL_VERSION)
+                if settings.app_env != "production"
+                else None
+            ),
         )
         from app.services.model_domain_adapters import GatewayClipEmbeddingProvider
 
@@ -721,7 +695,6 @@ def create_app() -> FastAPI:
         allow_headers=[
             "authorization",
             "content-type",
-            "x-motionly-user-id",
             "x-motionly-workspace-id",
             "x-request-id",
         ],
@@ -749,8 +722,6 @@ def create_app() -> FastAPI:
     app.include_router(effects_router)
     app.include_router(regeneration_router)
     app.include_router(renders_router)
-    app.include_router(publishing_router)
-    app.include_router(performance_feedback_router)
     app.include_router(scale_router)
     app.include_router(billing_router)
     app.include_router(analytics_router)

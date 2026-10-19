@@ -4,6 +4,7 @@ const supabaseUrl = process.env.SUPABASE_URL || "http://127.0.0.1:54321";
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const jwtSecret = process.env.SUPABASE_JWT_SECRET || "";
+const publicOrigin = "http://127.0.0.1:3000";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -13,7 +14,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: publicOrigin,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -40,15 +41,16 @@ export default defineConfig({
         ...process.env,
         APP_ENV: "test",
         PROCESS_ROLE: "api",
-        API_PUBLIC_BASE_URL: "http://127.0.0.1:8000",
-        API_CORS_ORIGINS: "http://127.0.0.1:3000",
+        // One public origin: the browser reaches the API and Supabase through
+        // the web server, which proxies /api and /supabase in development.
+        API_PUBLIC_BASE_URL: `${publicOrigin}/api`,
+        API_CORS_ORIGINS: publicOrigin,
         SUPABASE_URL: supabaseUrl,
+        SUPABASE_PUBLIC_URL: `${publicOrigin}/supabase`,
         SUPABASE_ANON_KEY: supabaseAnonKey,
         SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
         SUPABASE_JWT_SECRET: jwtSecret,
         WORKER_API_TOKEN: "e2e-worker-token",
-        PUBLISH_TOKEN_ENCRYPTION_KEY:
-          "e2e-publish-token-key-at-least-32-characters",
         ALLOW_FIXTURE_PROVIDERS: "true",
         VISUAL_PROVIDER: "fixture",
         RENDER_EXECUTE_FFMPEG: "false",
@@ -63,10 +65,9 @@ export default defineConfig({
       timeout: 120_000,
       env: {
         ...process.env,
-        NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
-        NEXT_PUBLIC_API_BASE_URL: "http://127.0.0.1:8000",
-        NEXT_PUBLIC_SUPABASE_URL: supabaseUrl,
-        NEXT_PUBLIC_SUPABASE_ANON_KEY: supabaseAnonKey,
+        APP_ENV: "test",
+        PUBLIC_ORIGIN: publicOrigin,
+        API_INTERNAL_URL: "http://127.0.0.1:8000",
         SUPABASE_URL: supabaseUrl,
         SUPABASE_ANON_KEY: supabaseAnonKey,
       },

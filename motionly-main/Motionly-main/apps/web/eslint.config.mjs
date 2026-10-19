@@ -19,6 +19,13 @@ const eslintConfig = [
       "no-unused-vars": "off",
     },
   },
+  {
+    // Playwright fixtures receive a `use` callback; it is not React's use().
+    files: ["tests/browser/**/*.mjs", "tests/e2e/**/*.mjs"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+    },
+  },
 ];
 
 export default eslintConfig;

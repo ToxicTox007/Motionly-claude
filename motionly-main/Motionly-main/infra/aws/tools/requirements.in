@@ -1,0 +1,7 @@
+# Static validation tools for infra/aws (pnpm verify --stage aws).
+# Regenerate the lock with:
+#   pip-compile --generate-hashes --output-file=infra/aws/tools/requirements.lock infra/aws/tools/requirements.in
+cfn-lint==1.57.2
+# The release agent's S3 and SSM calls in the local release rehearsal (production
+# hosts use the AWS CLI that ships with Amazon Linux 2023).
+awscli==1.46.1

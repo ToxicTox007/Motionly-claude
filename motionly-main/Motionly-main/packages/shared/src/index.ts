@@ -1067,9 +1067,10 @@ export interface UsageSummary {
   period_start: string;
   period_end: string;
   renders_used: number;
-  renders_limit: number;
-  remaining_renders: number;
-  percent_used: number;
+  /** null when the workspace is unmetered */
+  renders_limit: number | null;
+  remaining_renders: number | null;
+  percent_used: number | null;
 }
 
 export interface BillingStatusSummary {

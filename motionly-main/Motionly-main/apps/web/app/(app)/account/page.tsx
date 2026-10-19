@@ -4,6 +4,7 @@ import { EditorialLearningSettings } from "@/components/editorial-learning-setti
 import { Button } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
 import { createClient } from "@/lib/supabase/server";
+import { env } from "@/lib/env";
 import { logout } from "../../(auth)/actions";
 import { updatePassword, updateProfile } from "./actions";
 
@@ -13,12 +14,14 @@ export default async function AccountPage({
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = (await searchParams) ?? {};
-  const notice = typeof params.updated === "string"
-    ? "Profile updated."
-    : typeof params.password === "string"
-      ? "Password updated."
-      : null;
-  const error = typeof params.error === "string" ? params.error.replaceAll("_", " ") : null;
+  const notice =
+    typeof params.updated === "string"
+      ? "Profile updated."
+      : typeof params.password === "string"
+        ? "Password updated."
+        : null;
+  const error =
+    typeof params.error === "string" ? params.error.replaceAll("_", " ") : null;
   let email = "local@motionly.dev";
   let fullName = "Local creator";
   let company = "";
@@ -27,7 +30,7 @@ export default async function AccountPage({
   let workspaceRole = "owner";
   let workspaceId = "00000000-0000-4000-8000-000000000002";
 
-  if (process.env.SKIP_AUTH_MIDDLEWARE !== "true") {
+  if (!env.skipAuthMiddleware) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -40,7 +43,9 @@ export default async function AccountPage({
         .select("full_name,company,role")
         .eq("id", user.id)
         .maybeSingle();
-      fullName = String(profile?.full_name ?? user.user_metadata.full_name ?? "");
+      fullName = String(
+        profile?.full_name ?? user.user_metadata.full_name ?? "",
+      );
       company = String(profile?.company ?? "");
       role = String(profile?.role ?? "");
 
@@ -70,31 +75,38 @@ export default async function AccountPage({
             {(fullName || "C").charAt(0).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
-            <span className="badge badge-primary mb-3 inline-flex">Profile</span>
-            <h2 className="text-4xl font-black tracking-tight">Account settings</h2>
+            <span className="badge badge-primary mb-3 inline-flex">
+              Profile
+            </span>
+            <h2 className="text-4xl font-black tracking-tight">
+              Account settings
+            </h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Manage your creator identity, workspace access, and password.
             </p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
             <div className="min-w-0 text-right">
-              <p className="truncate text-sm font-black">{fullName || "Creator"}</p>
+              <p className="truncate text-sm font-black">
+                {fullName || "Creator"}
+              </p>
               <p className="truncate text-xs text-muted-foreground">{email}</p>
             </div>
-            <span className="badge badge-accent capitalize">{workspaceRole}</span>
+            <span className="badge badge-accent capitalize">
+              {workspaceRole}
+            </span>
           </div>
         </section>
 
-        {notice ? (
-          <Alert tone="success">{notice}</Alert>
-        ) : null}
-        {error ? (
-          <Alert tone="danger">{error}</Alert>
-        ) : null}
+        {notice ? <Alert tone="success">{notice}</Alert> : null}
+        {error ? <Alert tone="danger">{error}</Alert> : null}
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
           {/* Public profile form */}
-          <form action={updateProfile} className="card rounded-xl p-6 space-y-5">
+          <form
+            action={updateProfile}
+            className="card rounded-xl p-6 space-y-5"
+          >
             <div className="flex items-center gap-2">
               <UserRound className="size-5 text-primary" aria-hidden="true" />
               <h3 className="text-lg font-black">Public profile</h3>
@@ -158,7 +170,11 @@ export default async function AccountPage({
               <p className="mt-2 text-sm text-muted-foreground">
                 Log out on this browser before switching accounts.
               </p>
-              <Button type="submit" variant="secondary" className="mt-4 h-11 w-full">
+              <Button
+                type="submit"
+                variant="secondary"
+                className="mt-4 h-11 w-full"
+              >
                 Log out
               </Button>
             </form>
@@ -166,7 +182,10 @@ export default async function AccountPage({
         </div>
 
         {/* Password form */}
-        <form action={updatePassword} className="card rounded-xl p-6 space-y-5 max-w-2xl">
+        <form
+          action={updatePassword}
+          className="card rounded-xl p-6 space-y-5 max-w-2xl"
+        >
           <div className="flex items-center gap-2">
             <KeyRound className="size-5 text-primary" aria-hidden="true" />
             <h3 className="text-lg font-black">Password</h3>
@@ -221,7 +240,9 @@ function Fact({
         {Icon ? <Icon className="size-3.5" aria-hidden="true" /> : null}
         {label}
       </p>
-      <p className="text-sm font-semibold mt-1 truncate">{value || "Not set"}</p>
+      <p className="text-sm font-semibold mt-1 truncate">
+        {value || "Not set"}
+      </p>
     </div>
   );
 }

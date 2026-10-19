@@ -2,17 +2,25 @@ import { Button } from "@/components/button";
 import { Alert, Select, Textarea } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { submitFeedback } from "./actions";
+import { PageTitle } from "@/components/page-title";
 
-export default async function FeedbackPage({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+export default async function FeedbackPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | undefined>>;
+}) {
   const params = await searchParams;
   return (
     <main className="container-content flex min-h-screen flex-col justify-center py-12">
+      <PageTitle title="Feedback" />
       <div className="mb-8 flex items-center gap-3">
         <div className="flex size-11 items-center justify-center rounded border-2 border-foreground bg-primary text-primary-foreground shadow-brutal-sm">
           <PixelIcon name="info" className="size-5" />
         </div>
         <div>
-          <p className="text-sm font-black uppercase text-primary">Motionly beta</p>
+          <p className="text-sm font-black uppercase text-primary">
+            Motionly beta
+          </p>
           <h1 className="text-3xl font-black uppercase">Feedback</h1>
         </div>
       </div>
@@ -33,11 +41,7 @@ export default async function FeedbackPage({ searchParams }: { searchParams?: Pr
         <input type="hidden" name="pageUrl" value="/feedback" />
         <label className="block text-sm font-semibold">
           Category
-          <Select
-            name="category"
-            className="mt-2"
-            defaultValue="general"
-          >
+          <Select name="category" className="mt-2" defaultValue="general">
             <option value="general">General</option>
             <option value="bug">Bug</option>
             <option value="render_quality">Render quality</option>

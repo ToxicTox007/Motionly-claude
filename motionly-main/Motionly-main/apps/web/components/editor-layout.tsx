@@ -71,7 +71,11 @@ export function EditorLayout({
         />
       ) : null}
 
-      <EditorWorkspaces mode={mode} creatorFlow={creatorFlow} panels={children} />
+      <EditorWorkspaces
+        mode={mode}
+        creatorFlow={creatorFlow}
+        panels={children}
+      />
 
       <p className="sr-only" aria-live="polite" aria-atomic="true">
         {mode === "creator"

@@ -32,12 +32,16 @@ test("latest canonical first-draft selection preserves latest-first API order ac
   const olderActive = { ...base, id: "run-old", state: "analyzing" };
   const latestCancelled = { ...base, id: "run-new", state: "cancelled" };
   assert.equal(
-    selectLatestFirstDraftWorkflow([latestCancelled, olderActive], "project-1")?.id,
+    selectLatestFirstDraftWorkflow([latestCancelled, olderActive], "project-1")
+      ?.id,
     "run-new",
   );
   assert.equal(
     selectLatestFirstDraftWorkflow(
-      [{ ...base, project_id: "other" }, { ...base, workflow_version: "v1" }],
+      [
+        { ...base, project_id: "other" },
+        { ...base, workflow_version: "v1" },
+      ],
       "project-1",
     ),
     null,
@@ -46,11 +50,19 @@ test("latest canonical first-draft selection preserves latest-first API order ac
 
 test("canonical detail rejects project and selected-run identity mismatches", () => {
   assert.throws(
-    () => assertCanonicalWorkflowIdentity({ ...base, project_id: "other" }, { projectId: "project-1" }),
+    () =>
+      assertCanonicalWorkflowIdentity(
+        { ...base, project_id: "other" },
+        { projectId: "project-1" },
+      ),
     /identity/,
   );
   assert.throws(
-    () => assertCanonicalWorkflowIdentity(base, { projectId: "project-1", expectedWorkflowId: "other-run" }),
+    () =>
+      assertCanonicalWorkflowIdentity(base, {
+        projectId: "project-1",
+        expectedWorkflowId: "other-run",
+      }),
     /selected run/,
   );
 });
@@ -66,7 +78,10 @@ test("first draft is ready only with matching canonical render and export IDs", 
   assert.equal(isCanonicalDraftReady({ ...ready, state: "assembling" }), false);
   assert.equal(isCanonicalDraftReady({ ...ready, draft_render: null }), false);
   assert.equal(
-    isCanonicalDraftReady({ ...ready, draft_export: { id: "export-1", render_job_id: "unrelated" } }),
+    isCanonicalDraftReady({
+      ...ready,
+      draft_export: { id: "export-1", render_job_id: "unrelated" },
+    }),
     false,
   );
 });
@@ -86,8 +101,14 @@ test("proposal recovery comes only from the workflow artifact identity", () => {
   assert.equal(isProposalRevisionCompatible(1, 3), true);
   assert.equal(isProposalRevisionCompatible(4, 4), true);
   assert.equal(isProposalRevisionCompatible(4, 3), false);
-  assert.equal(proposalIdentityFromWorkflow({ ...detail, state: "assembling" }), null);
-  assert.equal(proposalIdentityFromWorkflow({ ...detail, artifacts: [] }), null);
+  assert.equal(
+    proposalIdentityFromWorkflow({ ...detail, state: "assembling" }),
+    null,
+  );
+  assert.equal(
+    proposalIdentityFromWorkflow({ ...detail, artifacts: [] }),
+    null,
+  );
 });
 
 test("workflow commands preserve canonical run and source lineage", () => {
@@ -97,7 +118,10 @@ test("workflow commands preserve canonical run and source lineage", () => {
     revision: base.revision + 1,
     allowed_actions: ["retry"],
   };
-  assert.equal(assertWorkflowCommandTransition(base, cancelled, "cancel"), cancelled);
+  assert.equal(
+    assertWorkflowCommandTransition(base, cancelled, "cancel"),
+    cancelled,
+  );
 
   const retried = {
     ...base,
@@ -107,7 +131,10 @@ test("workflow commands preserve canonical run and source lineage", () => {
     retry_of_workflow_run_id: base.id,
     allowed_actions: ["cancel"],
   };
-  assert.equal(assertWorkflowCommandTransition(base, retried, "retry"), retried);
+  assert.equal(
+    assertWorkflowCommandTransition(base, retried, "retry"),
+    retried,
+  );
   assert.throws(
     () =>
       assertWorkflowCommandTransition(
@@ -160,7 +187,10 @@ test("workflow and proposal intent keys are deterministic, bounded, and order in
   assert.ok(first.length <= 128);
   assert.notEqual(
     first,
-    await proposalDecisionIdempotencyKey({ ...intent, decision: "reject" }, webcrypto),
+    await proposalDecisionIdempotencyKey(
+      { ...intent, decision: "reject" },
+      webcrypto,
+    ),
   );
 });
 
@@ -181,7 +211,10 @@ test("source contracts hydrate list then detail, poll with headers, and never pe
   assert.match(hook, /assertWorkflowCommandTransition/);
   assert.match(hook, /setWorkflow\(next\)/);
   assert.doesNotMatch(hook, /accessToken[^\n]*[?&=]/);
-  assert.doesNotMatch(aiStep, /sessionStorage|PendingProposalIdentity|crypto\.randomUUID/);
+  assert.doesNotMatch(
+    aiStep,
+    /sessionStorage|PendingProposalIdentity|crypto\.randomUUID/,
+  );
   assert.match(aiStep, /proposalIdentityFromWorkflow/);
   assert.match(aiStep, /isProposalRevisionCompatible/);
   assert.match(aiStep, /onWorkflowRefresh/);

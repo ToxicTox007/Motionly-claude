@@ -47,7 +47,10 @@ test("persisted fingerprint requires the exact same browser file", () => {
   assert.deepEqual(fingerprint, file);
   assert.equal(helpers.sameFile(file, fingerprint), true);
   assert.equal(
-    helpers.sameFile({ ...file, lastModified: file.lastModified + 1 }, fingerprint),
+    helpers.sameFile(
+      { ...file, lastModified: file.lastModified + 1 },
+      fingerprint,
+    ),
     false,
   );
   assert.equal(
@@ -127,10 +130,7 @@ test("upload panel uses multipart init, resume, confirmation, completion, and ab
     source,
     /uploads\/multipart\/\$\{activeSessionId\}\/parts\/\$\{partUrl\.part_number\}\/complete/,
   );
-  assert.match(
-    source,
-    /uploads\/multipart\/\$\{activeSessionId\}\/complete/,
-  );
+  assert.match(source, /uploads\/multipart\/\$\{activeSessionId\}\/complete/);
   assert.match(source, /uploads\/multipart\/\$\{sessionId\}\/abort/);
   assert.match(source, /file\.slice\(range\.start, range\.end\)/);
   assert.match(source, /pending_part_urls/);
@@ -140,7 +140,10 @@ test("upload panel uses multipart init, resume, confirmation, completion, and ab
     /Cancellation could not be confirmed\. Your upload session was kept so you can retry cancellation\./,
   );
   assert.doesNotMatch(source, /Explicit cancellation still forgets/);
-  assert.doesNotMatch(source, /Clearing is intentional after an explicit cancel/);
+  assert.doesNotMatch(
+    source,
+    /Clearing is intentional after an explicit cancel/,
+  );
   assert.doesNotMatch(source, /signed_upload_url/);
 });
 
@@ -164,10 +167,7 @@ test("editor refreshes expiring source and thumbnail URLs and retries media erro
       new URL("components/editor/preview/VideoPreview.tsx", root),
       "utf8",
     ),
-    readFile(
-      new URL("app/(app)/projects/[projectId]/page.tsx", root),
-      "utf8",
-    ),
+    readFile(new URL("app/(app)/projects/[projectId]/page.tsx", root), "utf8"),
   ]);
 
   assert.match(editor, /media\/refresh-urls/);

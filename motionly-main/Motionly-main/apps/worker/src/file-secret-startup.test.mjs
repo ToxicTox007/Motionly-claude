@@ -17,7 +17,9 @@ function runNode(arguments_, environment) {
 }
 
 test("Compose-style FILE secrets start Remotion workers and authenticate Remotion signing", async (t) => {
-  const secretDirectory = await mkdtemp(join(tmpdir(), "motionly-worker-secrets-"));
+  const secretDirectory = await mkdtemp(
+    join(tmpdir(), "motionly-worker-secrets-"),
+  );
   t.after(() => rm(secretDirectory, { force: true, recursive: true }));
 
   const serviceRoleKeyFile = join(secretDirectory, "supabase_service_role_key");

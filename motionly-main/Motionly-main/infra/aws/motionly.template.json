@@ -1,0 +1,1333 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Motionly: CloudFront in front of one EC2 origin in Mumbai, S3 for releases, media and backups, and a GitHub OIDC deploy role (SSM Run Command, no SSH). Rendered from infra/aws/edge-contract.json by scripts/aws/render_template.py.",
+  "Parameters": {
+    "Environment": {
+      "Type": "String",
+      "AllowedValues": [
+        "production",
+        "staging"
+      ],
+      "Description": "Names resources and scopes secrets to /motionly/<environment>/."
+    },
+    "ComputeProfile": {
+      "Type": "String",
+      "AllowedValues": [
+        "cpu",
+        "gpu"
+      ],
+      "Description": "gpu: the production g6.12xlarge GPU instance. cpu: a CPU-only instance for rehearsals; GPU-dependent capabilities are unavailable on it."
+    },
+    "CpuImageId": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
+      "Description": "Amazon Linux 2023 image for the cpu profile."
+    },
+    "GpuImageId": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-amazon-linux-2023/latest/ami-id",
+      "Description": "Deep Learning Base OSS NVIDIA Driver GPU AMI (Amazon Linux 2023) for the gpu profile."
+    },
+    "AvailabilityZone": {
+      "Type": "AWS::EC2::AvailabilityZone::Name",
+      "Default": "ap-south-1a",
+      "Description": "Zone with g6.12xlarge capacity; the data volume lives here."
+    },
+    "CloudFrontOriginPrefixListId": {
+      "Type": "String",
+      "AllowedPattern": "^pl-[0-9a-f]{8,17}$",
+      "Description": "Id of the com.amazonaws.global.cloudfront.origin-facing managed prefix list in ap-south-1 (aws ec2 describe-managed-prefix-lists)."
+    },
+    "OriginVerifySecret": {
+      "Type": "String",
+      "NoEcho": true,
+      "AllowedPattern": "^[A-Za-z0-9_-]{32,256}$",
+      "Description": "Current value of SSM /motionly/<environment>/edge/origin-verify. CloudFront sends it to the origin; the origin rejects requests without it."
+    },
+    "GitHubRepository": {
+      "Type": "String",
+      "AllowedPattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "Description": "owner/name of the repository whose workflows may deploy."
+    },
+    "GitHubDeployEnvironment": {
+      "Type": "String",
+      "Default": "production",
+      "AllowedPattern": "^[A-Za-z0-9_.-]+$",
+      "Description": "GitHub environment the deploy job runs in."
+    },
+    "GitHubOidcProviderArn": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Existing GitHub OIDC provider ARN; leave empty to create one."
+    },
+    "RootVolumeSizeGiB": {
+      "Type": "Number",
+      "Default": 100,
+      "MinValue": 50,
+      "MaxValue": 1000
+    },
+    "DataVolumeSizeGiB": {
+      "Type": "Number",
+      "Default": 500,
+      "MinValue": 100,
+      "MaxValue": 16000
+    }
+  },
+  "Mappings": {
+    "ComputeProfiles": {
+      "gpu": {
+        "InstanceType": "g6.12xlarge"
+      },
+      "cpu": {
+        "InstanceType": "m7i.2xlarge"
+      }
+    }
+  },
+  "Conditions": {
+    "UseGpu": {
+      "Fn::Equals": [
+        {
+          "Ref": "ComputeProfile"
+        },
+        "gpu"
+      ]
+    },
+    "CreateGitHubOidcProvider": {
+      "Fn::Equals": [
+        {
+          "Ref": "GitHubOidcProviderArn"
+        },
+        ""
+      ]
+    }
+  },
+  "Rules": {
+    "MumbaiOnly": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "AWS::Region"
+              },
+              "ap-south-1"
+            ]
+          },
+          "AssertDescription": "Motionly runs in ap-south-1 (Mumbai)."
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "Vpc": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.40.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-vpc"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-igw"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "GatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "CidrBlock": "10.40.0.0/24",
+        "AvailabilityZone": {
+          "Ref": "AvailabilityZone"
+        },
+        "MapPublicIpOnLaunch": false,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-public"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-public"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "DefaultRoute": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "GatewayAttachment",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicSubnetRoutes": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnet"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRouteTable"
+        }
+      }
+    },
+    "OriginSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Motionly origin: HTTP from CloudFront only, HTTPS out",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "SourcePrefixListId": {
+              "Ref": "CloudFrontOriginPrefixListId"
+            },
+            "Description": "CloudFront origin-facing servers only"
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0",
+            "Description": "HTTPS to AWS APIs, image registries and providers"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-origin"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "ReleasesBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              },
+              "BucketKeyEnabled": true
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "expire-old-versions",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 90
+              },
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-releases"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "MediaBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              },
+              "BucketKeyEnabled": true
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "expire-old-versions",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30
+              },
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-media"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "BackupsBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              },
+              "BucketKeyEnabled": true
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "expire-old-versions",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 35
+              },
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-backups"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "ReleasesBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "ReleasesBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": [
+                "s3:*"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ReleasesBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${ReleasesBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "MediaBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "MediaBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": [
+                "s3:*"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "MediaBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${MediaBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "BackupsBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "BackupsBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": [
+                "s3:*"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "BackupsBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${BackupsBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "InstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "motionly-runtime",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ReadEnvironmentSecrets",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:GetParameter",
+                    "ssm:GetParameters",
+                    "ssm:GetParametersByPath"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/motionly/${Environment}/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "ReadReleases",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "ReleasesBucket",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::Sub": "${ReleasesBucket.Arn}/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "ReadWriteMedia",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject",
+                    "s3:ListBucket",
+                    "s3:AbortMultipartUpload",
+                    "s3:ListMultipartUploadParts"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "MediaBucket",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::Sub": "${MediaBucket.Arn}/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "WriteBackups",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "BackupsBucket",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::Sub": "${BackupsBucket.Arn}/*"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-instance"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      }
+    },
+    "DataVolume": {
+      "Type": "AWS::EC2::Volume",
+      "DeletionPolicy": "Snapshot",
+      "UpdateReplacePolicy": "Snapshot",
+      "Properties": {
+        "AvailabilityZone": {
+          "Ref": "AvailabilityZone"
+        },
+        "Size": {
+          "Ref": "DataVolumeSizeGiB"
+        },
+        "VolumeType": "gp3",
+        "Encrypted": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-data"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "LaunchTemplate": {
+      "Type": "AWS::EC2::LaunchTemplate",
+      "Properties": {
+        "LaunchTemplateData": {
+          "ImageId": {
+            "Fn::If": [
+              "UseGpu",
+              {
+                "Ref": "GpuImageId"
+              },
+              {
+                "Ref": "CpuImageId"
+              }
+            ]
+          },
+          "InstanceType": {
+            "Fn::FindInMap": [
+              "ComputeProfiles",
+              {
+                "Ref": "ComputeProfile"
+              },
+              "InstanceType"
+            ]
+          },
+          "IamInstanceProfile": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "InstanceProfile",
+                "Arn"
+              ]
+            }
+          },
+          "MetadataOptions": {
+            "HttpEndpoint": "enabled",
+            "HttpTokens": "required",
+            "HttpPutResponseHopLimit": 1
+          },
+          "BlockDeviceMappings": [
+            {
+              "DeviceName": "/dev/xvda",
+              "Ebs": {
+                "VolumeSize": {
+                  "Ref": "RootVolumeSizeGiB"
+                },
+                "VolumeType": "gp3",
+                "Encrypted": true,
+                "DeleteOnTermination": true
+              }
+            }
+          ],
+          "NetworkInterfaces": [
+            {
+              "DeviceIndex": 0,
+              "SubnetId": {
+                "Ref": "PublicSubnet"
+              },
+              "Groups": [
+                {
+                  "Ref": "OriginSecurityGroup"
+                }
+              ],
+              "AssociatePublicIpAddress": false
+            }
+          ],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Join": [
+                "",
+                [
+                  "#!/bin/bash\nMOTIONLY_DATA_VOLUME_ID=",
+                  {
+                    "Ref": "DataVolume"
+                  },
+                  "\nexport MOTIONLY_DATA_VOLUME_ID\n",
+                  "#!/bin/bash\n# First-boot setup for the Motionly instance (EC2 user data; the template sets\n# MOTIONLY_DATA_VOLUME_ID above this script). Releases are applied later over\n# SSM Run Command (scripts/deploy), never through SSH.\n#   - Mounts the persistent EBS data volume at /srv/motionly, creating its file\n#     system only when the volume is blank.\n#   - Installs Docker, a pinned, checksum-verified Docker Compose plugin and cosign.\n#     The AWS CLI and python3 ship with Amazon Linux 2023.\nset -euo pipefail\n\nCOMPOSE_VERSION=v5.6.0\nCOMPOSE_SHA256=40343e21ca777173e69cff5dbafeb37c6f81f3b0d57d9e597f036e95eb63e76a\n# Verifies signed releases (scripts/deploy/apply_release.sh); the same release\n# the supply-chain workflow signs with (sigstore/cosign-installer v3.8.1).\nCOSIGN_VERSION=v2.4.3\nCOSIGN_SHA256=caaad125acef1cb81d58dcdc454a1e429d09a750d1e9e2b3ed1aed8964454708\nDATA_MOUNT=/srv/motionly\n\n: \"${MOTIONLY_DATA_VOLUME_ID:?the template sets MOTIONLY_DATA_VOLUME_ID}\"\n# On Nitro instances the EBS serial is the volume id without its dash.\ndevice=\"/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${MOTIONLY_DATA_VOLUME_ID/-/}\"\nfor _ in $(seq 1 120); do\n  [ -e \"$device\" ] && break\n  sleep 5\ndone\nif [ ! -e \"$device\" ]; then\n  echo \"motionly-bootstrap: data volume $MOTIONLY_DATA_VOLUME_ID never attached\" >&2\n  exit 1\nfi\nif ! blkid \"$device\" >/dev/null 2>&1; then\n  mkfs.xfs -L motionly-data \"$device\"\nfi\nmkdir -p \"$DATA_MOUNT\"\nuuid=$(blkid -s UUID -o value \"$device\")\nif ! grep -q \"UUID=$uuid\" /etc/fstab; then\n  echo \"UUID=$uuid $DATA_MOUNT xfs defaults,nofail,noatime 0 2\" >>/etc/fstab\nfi\nmountpoint -q \"$DATA_MOUNT\" || mount \"$DATA_MOUNT\"\nchmod 0750 \"$DATA_MOUNT\"\n\ndnf install -y docker\nmkdir -p /etc/docker\n# Docker's data root lives on the data volume so images and volumes survive\n# instance replacement.\ncat >/etc/docker/daemon.json <<JSON\n{\"data-root\": \"$DATA_MOUNT/docker\", \"log-driver\": \"local\", \"log-opts\": {\"max-size\": \"50m\", \"max-file\": \"5\"}}\nJSON\nplugins=/usr/local/lib/docker/cli-plugins\nmkdir -p \"$plugins\"\ncurl -fsSL -o \"$plugins/docker-compose\" \\\n  \"https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64\"\necho \"$COMPOSE_SHA256  $plugins/docker-compose\" | sha256sum -c -\nchmod 0755 \"$plugins/docker-compose\"\ncurl -fsSL -o /usr/local/bin/cosign \\\n  \"https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64\"\necho \"$COSIGN_SHA256  /usr/local/bin/cosign\" | sha256sum -c -\nchmod 0755 /usr/local/bin/cosign\nsystemctl enable --now docker\ndocker compose version\n"
+                ]
+              ]
+            }
+          },
+          "TagSpecifications": [
+            {
+              "ResourceType": "instance",
+              "Tags": [
+                {
+                  "Key": "Name",
+                  "Value": {
+                    "Fn::Sub": "motionly-${Environment}-origin"
+                  }
+                },
+                {
+                  "Key": "motionly:environment",
+                  "Value": {
+                    "Ref": "Environment"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "Instance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "LaunchTemplate": {
+          "LaunchTemplateId": {
+            "Ref": "LaunchTemplate"
+          },
+          "Version": {
+            "Fn::GetAtt": [
+              "LaunchTemplate",
+              "LatestVersionNumber"
+            ]
+          }
+        },
+        "AvailabilityZone": {
+          "Ref": "AvailabilityZone"
+        }
+      }
+    },
+    "DataVolumeAttachment": {
+      "Type": "AWS::EC2::VolumeAttachment",
+      "Properties": {
+        "InstanceId": {
+          "Ref": "Instance"
+        },
+        "VolumeId": {
+          "Ref": "DataVolume"
+        },
+        "Device": "/dev/sdf"
+      }
+    },
+    "OriginAddress": {
+      "Type": "AWS::EC2::EIP",
+      "DependsOn": "GatewayAttachment",
+      "Properties": {
+        "Domain": "vpc",
+        "InstanceId": {
+          "Ref": "Instance"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-origin"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "GitHubOidcProvider": {
+      "Type": "AWS::IAM::OIDCProvider",
+      "Condition": "CreateGitHubOidcProvider",
+      "Properties": {
+        "Url": "https://token.actions.githubusercontent.com",
+        "ClientIdList": [
+          "sts.amazonaws.com"
+        ]
+      }
+    },
+    "GitHubDeployRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Fn::If": [
+                    "CreateGitHubOidcProvider",
+                    {
+                      "Ref": "GitHubOidcProvider"
+                    },
+                    {
+                      "Ref": "GitHubOidcProviderArn"
+                    }
+                  ]
+                }
+              },
+              "Action": [
+                "sts:AssumeRoleWithWebIdentity"
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": {
+                    "Fn::Sub": "repo:${GitHubRepository}:environment:${GitHubDeployEnvironment}"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "motionly-deploy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "UploadReleases",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject",
+                    "s3:GetObject",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "ReleasesBucket",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::Sub": "${ReleasesBucket.Arn}/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "RunReleaseOnTheInstance",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:SendCommand"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Instance}"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "FollowTheCommand",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:GetCommandInvocation",
+                    "ssm:ListCommandInvocations"
+                  ],
+                  "Resource": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-deploy"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "EdgeSecurityHeaders": {
+      "Type": "AWS::CloudFront::ResponseHeadersPolicy",
+      "Properties": {
+        "ResponseHeadersPolicyConfig": {
+          "Name": {
+            "Fn::Sub": "motionly-${Environment}-edge-security"
+          },
+          "Comment": "Security headers; pages keep their own per-request CSP.",
+          "SecurityHeadersConfig": {
+            "StrictTransportSecurity": {
+              "AccessControlMaxAgeSec": 63072000,
+              "IncludeSubdomains": false,
+              "Preload": false,
+              "Override": true
+            },
+            "ContentTypeOptions": {
+              "Override": false
+            },
+            "FrameOptions": {
+              "FrameOption": "DENY",
+              "Override": false
+            },
+            "ReferrerPolicy": {
+              "ReferrerPolicy": "strict-origin-when-cross-origin",
+              "Override": false
+            }
+          },
+          "RemoveHeadersConfig": {
+            "Items": [
+              {
+                "Header": "server"
+              },
+              {
+                "Header": "x-kong-upstream-latency"
+              },
+              {
+                "Header": "x-kong-proxy-latency"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "Distribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "Comment": {
+            "Fn::Sub": "Motionly ${Environment}"
+          },
+          "PriceClass": "PriceClass_200",
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          },
+          "Origins": [
+            {
+              "Id": "motionly-origin",
+              "DomainName": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "ec2-",
+                    {
+                      "Fn::Join": [
+                        "-",
+                        {
+                          "Fn::Split": [
+                            ".",
+                            {
+                              "Ref": "OriginAddress"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    ".ap-south-1.compute.amazonaws.com"
+                  ]
+                ]
+              },
+              "ConnectionAttempts": 3,
+              "ConnectionTimeout": 10,
+              "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "OriginProtocolPolicy": "http-only",
+                "OriginReadTimeout": 60,
+                "OriginKeepaliveTimeout": 5
+              },
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "X-Motionly-Origin-Verify",
+                  "HeaderValue": {
+                    "Ref": "OriginVerifySecret"
+                  }
+                }
+              ]
+            }
+          ],
+          "CacheBehaviors": [
+            {
+              "PathPattern": "/_next/static/*",
+              "TargetOriginId": "motionly-origin",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+              "OriginRequestPolicyId": "bf0718e1-ba1e-49d1-88b1-f726733018ae",
+              "ResponseHeadersPolicyId": {
+                "Ref": "EdgeSecurityHeaders"
+              }
+            },
+            {
+              "PathPattern": "/icon.svg",
+              "TargetOriginId": "motionly-origin",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": true,
+              "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+              "OriginRequestPolicyId": "bf0718e1-ba1e-49d1-88b1-f726733018ae",
+              "ResponseHeadersPolicyId": {
+                "Ref": "EdgeSecurityHeaders"
+              }
+            },
+            {
+              "PathPattern": "/api/*",
+              "TargetOriginId": "motionly-origin",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "POST",
+                "PATCH",
+                "DELETE"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": false,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "OriginRequestPolicyId": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+              "ResponseHeadersPolicyId": {
+                "Ref": "EdgeSecurityHeaders"
+              }
+            },
+            {
+              "PathPattern": "/supabase/*",
+              "TargetOriginId": "motionly-origin",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "POST",
+                "PATCH",
+                "DELETE"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "Compress": false,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "OriginRequestPolicyId": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+              "ResponseHeadersPolicyId": {
+                "Ref": "EdgeSecurityHeaders"
+              }
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "motionly-origin",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "PUT",
+              "POST",
+              "PATCH",
+              "DELETE"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "Compress": false,
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "OriginRequestPolicyId": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+            "ResponseHeadersPolicyId": {
+              "Ref": "EdgeSecurityHeaders"
+            }
+          },
+          "CustomErrorResponses": [
+            {
+              "ErrorCode": 400,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 403,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 404,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 405,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 414,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 416,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 500,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 501,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 502,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 503,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 504,
+              "ErrorCachingMinTTL": 0
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-edge"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "PublicOrigin": {
+      "Description": "PUBLIC_ORIGIN for the release (https://<distribution>.cloudfront.net).",
+      "Value": {
+        "Fn::Sub": "https://${Distribution.DomainName}"
+      }
+    },
+    "DistributionId": {
+      "Value": {
+        "Ref": "Distribution"
+      }
+    },
+    "InstanceId": {
+      "Value": {
+        "Ref": "Instance"
+      }
+    },
+    "ReleasesBucketName": {
+      "Value": {
+        "Ref": "ReleasesBucket"
+      }
+    },
+    "MediaBucketName": {
+      "Value": {
+        "Ref": "MediaBucket"
+      }
+    },
+    "BackupsBucketName": {
+      "Value": {
+        "Ref": "BackupsBucket"
+      }
+    },
+    "GitHubDeployRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "GitHubDeployRole",
+          "Arn"
+        ]
+      }
+    }
+  }
+}

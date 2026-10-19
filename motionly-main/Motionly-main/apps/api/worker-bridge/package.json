@@ -8,5 +8,8 @@
   "dependencies": {
     "bullmq": "5.78.0",
     "ioredis": "5.11.1"
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

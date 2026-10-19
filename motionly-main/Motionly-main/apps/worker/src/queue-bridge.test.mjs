@@ -2,16 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { canceledJobsKey } from "./queue-common.mjs";
-import {
-  getJobsPaged,
-  recordCanceledJob,
-  snapshots,
-} from "./queue-bridge.mjs";
+import { getJobsPaged, recordCanceledJob, snapshots } from "./queue-bridge.mjs";
 
 test("getJobsPaged keeps reading past the first 500 jobs", async () => {
   const calls = [];
-  const first = Array.from({ length: 500 }, (_, index) => ({ id: `job-${index}` }));
-  const second = Array.from({ length: 250 }, (_, index) => ({ id: `job-${index + 500}` }));
+  const first = Array.from({ length: 500 }, (_, index) => ({
+    id: `job-${index}`,
+  }));
+  const second = Array.from({ length: 250 }, (_, index) => ({
+    id: `job-${index + 500}`,
+  }));
   const queue = {
     async getJobs(states, start, end, asc) {
       calls.push({ states, start, end, asc });

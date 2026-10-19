@@ -21,6 +21,14 @@ import {
   workflowJobFields,
   writeBuildStamp,
 } from "./queue-common.mjs";
+import {
+  maintenanceRepeatJobs,
+  assertNoFixturesInProduction,
+  mlExecutionPlan,
+  mlJobsAllowed,
+  workerHeartbeatPayload,
+} from "./ml-execution.mjs";
+import { markAlive } from "./liveness.mjs";
 
 function remotionEnabled() {
   return env("REMOTION_ENABLED") === "true";
@@ -467,7 +475,7 @@ async function runRenderJob(job) {
 }
 
 async function runVisualJob(job) {
-  if (env("ML_WORKER_ENABLED") !== "true") {
+  if (!mlJobsAllowed()) {
     throw new Error(
       "visual_analysis requires the dedicated GPU/ML worker image",
     );
@@ -481,7 +489,7 @@ async function runVisualJob(job) {
 }
 
 async function runMatteJob(job) {
-  if (env("ML_WORKER_ENABLED") !== "true") {
+  if (!mlJobsAllowed()) {
     throw new Error(
       "matte_extraction requires the dedicated GPU/media worker image",
     );
@@ -582,16 +590,7 @@ async function sendHeartbeat() {
         "content-type": "application/json",
         "x-motionly-worker-token": workerToken(),
       },
-      body: JSON.stringify({
-        worker_id: env(
-          "WORKER_ID",
-          `${env("HOSTNAME", "worker")}-${process.pid}`,
-        ),
-        worker_role: env("PROCESS_ROLE", "worker"),
-        queues: queueNames,
-        version: env("APP_VERSION") || null,
-        metadata: { concurrency: env("WORKER_CONCURRENCY", "1") },
-      }),
+      body: JSON.stringify(workerHeartbeatPayload(queueNames)),
     },
   );
   if (!response.ok)
@@ -1161,7 +1160,8 @@ async function latestJobData(job) {
     const queue = job?.queue;
     const client = queue?.client ? await queue.client : null;
     const key = queue?.toKey?.(job.id);
-    if (!client || !key || typeof client.hget !== "function") return job?.data || {};
+    if (!client || !key || typeof client.hget !== "function")
+      return job?.data || {};
     const raw = await client.hget(key, "data");
     const data = raw ? JSON.parse(raw) : null;
     return data && typeof data === "object" ? data : job?.data || {};
@@ -1182,7 +1182,9 @@ function throwIfJobResultFailed(job, result) {
   if (!result?.failed) return;
   const isRender = job?.data?.kind === "render";
   const defaultCode = isRender ? "domain_render_failed" : "domain_job_failed";
-  const defaultMessage = isRender ? "Domain render failed." : "Domain job failed.";
+  const defaultMessage = isRender
+    ? "Domain render failed."
+    : "Domain job failed.";
   const message =
     typeof result.error_message === "string" && result.error_message.trim()
       ? result.error_message
@@ -1277,7 +1279,8 @@ export async function runJob(job, testOverrides = {}) {
           failed: Boolean(result?.failed),
         };
         if (normalizedRender.failed) {
-          normalizedRender.error_code = result?.error_code || "domain_render_failed";
+          normalizedRender.error_code =
+            result?.error_code || "domain_render_failed";
           normalizedRender.error_message =
             result?.error_message || "Domain render failed.";
         }
@@ -1394,9 +1397,11 @@ function createWorker(queueName, connection) {
     const jobData = job?.data || {};
     const errorCode =
       error instanceof Error ? error.code || error.name : "worker_error";
-    const canceled = errorCode === "job_canceled" || jobData.status === "canceled";
+    const canceled =
+      errorCode === "job_canceled" || jobData.status === "canceled";
     const retrying =
-      !canceled && Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
+      !canceled &&
+      Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
     console.error(
       JSON.stringify({
         event: "job_failed",
@@ -1527,15 +1532,14 @@ async function main() {
     console.log("Worker queue config is not set; build check only.");
     return;
   }
+  // Rejects ML queues without the ML image, and any test_fixture setup that
+  // could load real models, encode on a GPU, or run in production.
+  assertNoFixturesInProduction();
+  mlExecutionPlan(queueNames);
   if (
     queueNames.includes("visual_analysis") ||
     queueNames.includes("matte_extraction")
   ) {
-    if (env("ML_WORKER_ENABLED") !== "true") {
-      throw new Error(
-        "visual_analysis and matte_extraction must run with ML_WORKER_ENABLED=true.",
-      );
-    }
     if (!env("SUPABASE_URL") || !env("SUPABASE_SERVICE_ROLE_KEY")) {
       throw new Error(
         "GPU/media queues require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
@@ -1558,22 +1562,12 @@ async function main() {
   let maintenanceQueue = null;
   if (queueNames.includes("maintenance")) {
     maintenanceQueue = queueFor("maintenance", connection);
-    await maintenanceQueue.add(
-      "daily-retention",
-      { kind: "retention", queue_name: "maintenance" },
-      {
-        jobId: "daily-retention",
-        repeat: { pattern: env("RETENTION_CRON", "0 3 * * *") },
-      },
-    );
-    await maintenanceQueue.add(
-      "gpu-autoscaling",
-      { kind: "gpu_autoscaling", queue_name: "maintenance" },
-      {
-        jobId: "gpu-autoscaling",
-        repeat: { pattern: env("GPU_AUTOSCALING_CRON", "*/2 * * * *") },
-      },
-    );
+    for (const job of maintenanceRepeatJobs()) {
+      await maintenanceQueue.add(job.name, job.data, {
+        jobId: job.name,
+        repeat: { pattern: job.pattern },
+      });
+    }
   }
   const workers = queueNames.map((queueName) =>
     createWorker(queueName, connection),
@@ -1586,6 +1580,7 @@ async function main() {
       }),
     );
   });
+  markAlive();
   console.log(
     JSON.stringify({
       event: "worker_ready",
@@ -1603,6 +1598,7 @@ async function main() {
   );
   const heartbeatTimer = setInterval(
     () => {
+      markAlive();
       void sendHeartbeat().catch((error) =>
         console.error(
           JSON.stringify({

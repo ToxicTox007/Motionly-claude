@@ -122,7 +122,9 @@ export function CurrentTaskCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-muted-foreground">Current task</p>
+          <p className="text-sm font-semibold text-muted-foreground">
+            Current task
+          </p>
           <h2 className="mt-1 text-base font-bold">{task.label}</h2>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             {task.description}
@@ -139,7 +141,10 @@ export function CurrentTaskCard({
           aria-valuemax={100}
           aria-valuenow={progress}
         >
-          <div className="h-full bg-primary" style={{ width: `${progress}%` }} />
+          <div
+            className="h-full bg-primary"
+            style={{ width: `${progress}%` }}
+          />
         </div>
       ) : null}
       <div className="mt-3 flex items-center justify-between gap-3 text-sm font-semibold">
@@ -158,13 +163,19 @@ export function CurrentTaskCard({
 
 export function TaskStatusIcon({ status }: { status: CreatorTaskStatus }) {
   if (status === "done") {
-    return <CheckCircle2 className="size-4 shrink-0 text-success" strokeWidth={2} />;
+    return (
+      <CheckCircle2 className="size-4 shrink-0 text-success" strokeWidth={2} />
+    );
   }
   if (status === "active") {
     return <Clock3 className="size-4 shrink-0 text-primary" strokeWidth={2} />;
   }
   if (status === "blocked") {
-    return <RotateCcw className="size-4 shrink-0 text-danger" strokeWidth={2} />;
+    return (
+      <RotateCcw className="size-4 shrink-0 text-danger" strokeWidth={2} />
+    );
   }
-  return <Circle className="size-4 shrink-0 text-muted-foreground" strokeWidth={2} />;
+  return (
+    <Circle className="size-4 shrink-0 text-muted-foreground" strokeWidth={2} />
+  );
 }

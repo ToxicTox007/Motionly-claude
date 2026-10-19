@@ -7,7 +7,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ledgerPath = resolve(root, "scripts/handoff-acceptance.json");
 const ledger = JSON.parse(await readFile(ledgerPath, "utf8"));
 const allowedStatuses = new Set(["pending", "verified", "failed", "blocked"]);
-const requiredCategories = new Set(["task", "product", "architecture", "risk", "slo"]);
+const requiredCategories = new Set([
+  "task",
+  "product",
+  "architecture",
+  "risk",
+  "slo",
+]);
 const failures = [];
 const ids = new Set();
 
@@ -17,16 +23,24 @@ if (!Array.isArray(ledger.items)) failures.push("items must be an array");
 
 for (const [index, item] of (ledger.items ?? []).entries()) {
   const label = item?.id || `item[${index}]`;
-  if (!item?.id || typeof item.id !== "string") failures.push(`${label}: id is required`);
+  if (!item?.id || typeof item.id !== "string")
+    failures.push(`${label}: id is required`);
   if (ids.has(item?.id)) failures.push(`${label}: duplicate id`);
   ids.add(item?.id);
-  if (!requiredCategories.has(item?.category)) failures.push(`${label}: invalid category`);
+  if (!requiredCategories.has(item?.category))
+    failures.push(`${label}: invalid category`);
   if (!item?.criterion || typeof item.criterion !== "string") {
     failures.push(`${label}: criterion is required`);
   }
-  if (!allowedStatuses.has(item?.status)) failures.push(`${label}: invalid status`);
-  for (const field of ["implementation_evidence", "verification_commands", "runtime_evidence"]) {
-    if (!Array.isArray(item?.[field])) failures.push(`${label}: ${field} must be an array`);
+  if (!allowedStatuses.has(item?.status))
+    failures.push(`${label}: invalid status`);
+  for (const field of [
+    "implementation_evidence",
+    "verification_commands",
+    "runtime_evidence",
+  ]) {
+    if (!Array.isArray(item?.[field]))
+      failures.push(`${label}: ${field} must be an array`);
   }
   if (item?.status === "verified") {
     if (!item.implementation_evidence.length) {
@@ -60,7 +74,13 @@ const counts = Object.fromEntries(
     (ledger.items ?? []).filter((item) => item.status === status).length,
   ]),
 );
-console.log(JSON.stringify({ ledger: ledgerPath, total: ledger.items?.length ?? 0, counts }, null, 2));
+console.log(
+  JSON.stringify(
+    { ledger: ledgerPath, total: ledger.items?.length ?? 0, counts },
+    null,
+    2,
+  ),
+);
 if (failures.length) {
   console.error(`Acceptance ledger validation failed (${failures.length}):`);
   for (const failure of failures) console.error(`- ${failure}`);

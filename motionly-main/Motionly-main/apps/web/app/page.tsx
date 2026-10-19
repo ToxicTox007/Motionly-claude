@@ -4,6 +4,7 @@ import { ButtonLink } from "@/components/button";
 import { Badge, Card } from "@/components/brutal-ui";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 import { ThemeMenu } from "@/components/theme-menu";
+import { PageTitle } from "@/components/page-title";
 
 const navItems = [
   { href: "/pricing", label: "Pricing" },
@@ -37,22 +38,54 @@ const pipeline = [
 }>;
 
 const features = [
-  ["upload", "Source preflight", "Audio, duration, format, and warning states stay visible before processing."],
-  ["ai-cut", "AI edit plan", "Generated cuts become editable timeline clips with undo-friendly saves."],
-  ["captions", "Caption timing", "Word-level captions stay inspectable and adjustable in the editor."],
-  ["broll", "B-roll lanes", "B-roll slots land in their own track with visible warnings and disabled states."],
-  ["music", "Music regions", "Beat and mood choices stay editable as timeline regions."],
-  ["export", "Render queue", "Exports surface progress, failure states, and download actions clearly."],
+  [
+    "upload",
+    "Source preflight",
+    "Audio, duration, format, and warning states stay visible before processing.",
+  ],
+  [
+    "ai-cut",
+    "AI edit plan",
+    "Generated cuts become editable timeline clips with undo-friendly saves.",
+  ],
+  [
+    "captions",
+    "Caption timing",
+    "Word-level captions stay inspectable and adjustable in the editor.",
+  ],
+  [
+    "broll",
+    "B-roll lanes",
+    "B-roll slots land in their own track with visible warnings and disabled states.",
+  ],
+  [
+    "music",
+    "Music regions",
+    "Beat and mood choices stay editable as timeline regions.",
+  ],
+  [
+    "export",
+    "Render queue",
+    "Exports surface progress, failure states, and download actions clearly.",
+  ],
 ] satisfies Array<[PixelIconName, string, string]>;
 
 export default function HomePage() {
   return (
     <main className="min-h-screen overflow-hidden">
+      <PageTitle />
       <nav className="sticky top-0 z-40 border-b-4 border-foreground bg-surface px-4 sm:px-6 lg:px-8">
         <div className="container-dashboard flex h-16 items-center justify-between gap-4">
           <Link href="/" className="flex min-w-0 items-center gap-3">
             <span className="flex size-10 shrink-0 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal-sm">
-              <Image src="/icon.svg" alt="Motionly" width={32} height={32} className="size-8" priority />
+              <Image
+                src="/icon.svg"
+                alt="Motionly"
+                width={32}
+                height={32}
+                className="size-8"
+                priority
+              />
             </span>
             <span className="truncate text-lg font-black uppercase text-foreground">
               Motionly
@@ -130,7 +163,10 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section id="features" className="border-b-4 border-foreground bg-surface px-4 py-16 sm:px-6 lg:px-8">
+      <section
+        id="features"
+        className="border-b-4 border-foreground bg-surface px-4 py-16 sm:px-6 lg:px-8"
+      >
         <div className="container-dashboard">
           <div className="max-w-2xl">
             <Badge variant="accent">Workflow</Badge>
@@ -149,7 +185,9 @@ export default function HomePage() {
                     {item.step}
                   </span>
                 </div>
-                <h3 className="mt-5 text-xl font-black uppercase">{item.title}</h3>
+                <h3 className="mt-5 text-xl font-black uppercase">
+                  {item.title}
+                </h3>
                 <p className="mt-2 text-sm font-bold leading-relaxed text-muted-foreground">
                   {item.body}
                 </p>
@@ -212,11 +250,20 @@ export default function HomePage() {
         <div className="container-dashboard flex flex-wrap items-center justify-between gap-5">
           <div className="flex items-center gap-3">
             <span className="flex size-9 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal-sm">
-              <Image src="/icon.svg" alt="" width={28} height={28} className="size-7" />
+              <Image
+                src="/icon.svg"
+                alt=""
+                width={28}
+                height={28}
+                className="size-7"
+              />
             </span>
             <span className="font-black uppercase">Motionly</span>
           </div>
-          <nav className="flex flex-wrap gap-x-5 gap-y-2" aria-label="Footer links">
+          <nav
+            className="flex flex-wrap gap-x-5 gap-y-2"
+            aria-label="Footer links"
+          >
             {[
               { href: "/pricing", label: "Pricing" },
               { href: "/privacy", label: "Privacy" },
@@ -258,7 +305,10 @@ function PixelEditorScene() {
         <div className="flex items-center gap-3 border-b-4 border-foreground bg-background px-4">
           <div className="flex gap-1.5">
             {["bg-danger", "bg-warning", "bg-primary"].map((tone) => (
-              <span key={tone} className={`size-3 border-2 border-foreground ${tone}`} />
+              <span
+                key={tone}
+                className={`size-3 border-2 border-foreground ${tone}`}
+              />
             ))}
           </div>
           <div className="ml-auto rounded border-2 border-foreground bg-surface px-3 py-1 font-mono text-[10px] font-black uppercase">
@@ -302,13 +352,19 @@ function PixelEditorScene() {
 
           <aside className="border-l-4 border-foreground bg-surface-elevated p-3">
             {["Snap", "Cuts", "Render"].map((label, index) => (
-              <div key={label} className="mb-3 border-2 border-foreground bg-surface p-2 shadow-brutal-sm">
+              <div
+                key={label}
+                className="mb-3 border-2 border-foreground bg-surface p-2 shadow-brutal-sm"
+              >
                 <div className="flex justify-between font-mono text-[10px] font-black uppercase">
                   <span>{label}</span>
                   <span>{index === 0 ? "On" : `${72 - index * 18}%`}</span>
                 </div>
                 <div className="mt-2 h-3 border-2 border-foreground bg-muted">
-                  <div className="h-full bg-primary" style={{ width: `${84 - index * 21}%` }} />
+                  <div
+                    className="h-full bg-primary"
+                    style={{ width: `${84 - index * 21}%` }}
+                  />
                 </div>
               </div>
             ))}
@@ -323,13 +379,20 @@ function PixelEditorScene() {
           <div className="relative p-3">
             <div className="absolute bottom-0 top-0 left-[38%] w-1 bg-danger" />
             {tracks.map(([label, color, left, width, top]) => (
-              <div key={label} className="relative mb-2 h-7 border-2 border-foreground bg-surface">
+              <div
+                key={label}
+                className="relative mb-2 h-7 border-2 border-foreground bg-surface"
+              >
                 <span className="absolute left-2 top-1/2 z-10 -translate-y-1/2 bg-background px-1 font-mono text-[9px] font-black uppercase">
                   {label}
                 </span>
                 <span
                   className={`absolute top-1 h-4 border-2 border-foreground ${color}`}
-                  style={{ left: `${left}%`, width: `${width}%`, opacity: top / 64 }}
+                  style={{
+                    left: `${left}%`,
+                    width: `${width}%`,
+                    opacity: top / 64,
+                  }}
                 />
               </div>
             ))}

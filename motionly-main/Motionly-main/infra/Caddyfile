@@ -1,11 +1,8 @@
-{$APP_DOMAIN:localhost} {
-  reverse_proxy web:3000
-}
-
-{$API_DOMAIN:api.localhost} {
-  reverse_proxy api:8000
-}
-
-{$SUPABASE_DOMAIN:supabase.localhost} {
-  reverse_proxy supabase-gateway:8000
+# Production origin behind CloudFront (infra/aws/edge-contract.json): plain
+# HTTP on port 80 for the distribution's domain (CloudFront forwards the viewer
+# Host), so Caddy requests no certificate. The origin guard refuses everything
+# that did not come through the distribution; the shared routes split by path.
+http://{$APP_DOMAIN} {
+	import /etc/caddy/origin-guard.caddy
+	import /etc/caddy/routes.caddy
 }

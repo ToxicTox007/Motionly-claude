@@ -138,7 +138,7 @@ declare
   existing_constraint record;
 begin
   for existing_constraint in
-    select constraint_name
+    select conname as constraint_name
     from pg_constraint
     where conrelid = 'public.signed_url_grants'::regclass
       and contype = 'c'

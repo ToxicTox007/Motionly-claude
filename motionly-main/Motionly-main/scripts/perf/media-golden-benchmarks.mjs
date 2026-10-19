@@ -7,8 +7,11 @@ import { performance } from "node:perf_hooks";
 
 const runLive = process.env.RUN_MEDIA_BENCHMARKS === "1";
 const enforce = process.env.PERF_ENFORCE === "1";
-const scenarioBudgets = parseScenarioBudgets(process.env.MEDIA_BENCHMARK_BUDGETS_JSON);
-const outputPath = process.env.MEDIA_BENCHMARK_OUTPUT || "test-results/media-benchmarks.json";
+const scenarioBudgets = parseScenarioBudgets(
+  process.env.MEDIA_BENCHMARK_BUDGETS_JSON,
+);
+const outputPath =
+  process.env.MEDIA_BENCHMARK_OUTPUT || "test-results/media-benchmarks.json";
 const scenarios = [
   {
     name: "visual_golden",
@@ -26,7 +29,10 @@ const scenarios = [
     name: "ffmpeg_render_golden",
     surface: "ffmpeg_render_export",
     command: "pytest",
-    args: ["apps/api/tests/test_golden_media_pipeline.py", "apps/api/tests/test_ffmpeg_render.py"],
+    args: [
+      "apps/api/tests/test_golden_media_pipeline.py",
+      "apps/api/tests/test_ffmpeg_render.py",
+    ],
   },
   {
     name: "remotion_golden",
@@ -39,12 +45,6 @@ const scenarios = [
     surface: "remotion_export",
     command: "pnpm",
     args: ["--filter", "@motionly/renderer", "test:encoded"],
-  },
-  {
-    name: "publish_pipeline",
-    surface: "publish",
-    command: "pytest",
-    args: ["apps/api/tests/test_publishing.py"],
   },
 ];
 
@@ -74,17 +74,27 @@ await writeBenchmarkOutput({
     disk_free_bytes: await diskFreeBytes("."),
     memory_rss_bytes: process.memoryUsage().rss,
     heap_used_bytes: process.memoryUsage().heapUsed,
-    gpu: process.env.NVIDIA_VISIBLE_DEVICES || process.env.CUDA_VISIBLE_DEVICES || "unreported",
-    cache_dir: process.env.MODEL_CACHE_DIR || process.env.MOTIONLY_MODEL_CACHE_DIR || "unreported",
+    gpu:
+      process.env.NVIDIA_VISIBLE_DEVICES ||
+      process.env.CUDA_VISIBLE_DEVICES ||
+      "unreported",
+    cache_dir:
+      process.env.MODEL_CACHE_DIR ||
+      process.env.MOTIONLY_MODEL_CACHE_DIR ||
+      "unreported",
   },
   scenario_budgets_ms: scenarioBudgets,
   results,
 });
 
 const failed = results.filter((result) => result.exit_code !== 0);
-const budgetFailures = results.filter((result) => result.budget_passed === false);
+const budgetFailures = results.filter(
+  (result) => result.budget_passed === false,
+);
 if (failed.length > 0 || (enforce && budgetFailures.length > 0)) {
-  console.error(`Media benchmark failures: ${[...failed, ...budgetFailures].map((item) => item.name).join(", ")}`);
+  console.error(
+    `Media benchmark failures: ${[...failed, ...budgetFailures].map((item) => item.name).join(", ")}`,
+  );
   process.exit(1);
 }
 
@@ -92,10 +102,17 @@ function parseScenarioBudgets(value) {
   if (!value) return {};
   try {
     const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
-    return Object.fromEntries(Object.entries(parsed).filter(([, budget]) => Number.isFinite(budget) && budget > 0));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("not an object");
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        ([, budget]) => Number.isFinite(budget) && budget > 0,
+      ),
+    );
   } catch (error) {
-    throw new Error(`MEDIA_BENCHMARK_BUDGETS_JSON must be a JSON object of positive millisecond budgets: ${error.message}`);
+    throw new Error(
+      `MEDIA_BENCHMARK_BUDGETS_JSON must be a JSON object of positive millisecond budgets: ${error.message}`,
+    );
   }
 }
 
@@ -121,7 +138,8 @@ async function runScenario(scenario) {
     child.on("close", resolve);
   });
   const durationMs = Math.round(performance.now() - startedAt);
-  const budgetMs = scenarioBudgets[scenario.name] ?? scenarioBudgets[scenario.surface] ?? null;
+  const budgetMs =
+    scenarioBudgets[scenario.name] ?? scenarioBudgets[scenario.surface] ?? null;
   return {
     name: scenario.name,
     surface: scenario.surface,

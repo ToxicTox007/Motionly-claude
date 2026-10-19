@@ -1,0 +1,109 @@
+# cfn-guard policy for infra/aws/motionly.template.json (Task 8).
+# Run by `pnpm verify --stage aws`; apps/api/tests/test_aws_guard.py proves
+# that each rule rejects the template it exists to stop.
+
+let buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+let bucket_policies = Resources.*[ Type == 'AWS::S3::BucketPolicy' ]
+let security_groups = Resources.*[ Type == 'AWS::EC2::SecurityGroup' ]
+let launch_templates = Resources.*[ Type == 'AWS::EC2::LaunchTemplate' ]
+let instances = Resources.*[ Type == 'AWS::EC2::Instance' ]
+let volumes = Resources.*[ Type == 'AWS::EC2::Volume' ]
+let roles = Resources.*[ Type == 'AWS::IAM::Role' ]
+let distributions = Resources.*[ Type == 'AWS::CloudFront::Distribution' ]
+
+rule s3_buckets_private_encrypted_versioned when %buckets !empty {
+    %buckets.Properties {
+        BucketName !exists
+            <<Bucket names are generated so stacks cannot collide>>
+        BucketEncryption.ServerSideEncryptionConfiguration[*].ServerSideEncryptionByDefault.SSEAlgorithm in ['AES256', 'aws:kms']
+            <<Buckets are encrypted at rest>>
+        PublicAccessBlockConfiguration.BlockPublicAcls == true
+        PublicAccessBlockConfiguration.BlockPublicPolicy == true
+        PublicAccessBlockConfiguration.IgnorePublicAcls == true
+        PublicAccessBlockConfiguration.RestrictPublicBuckets == true
+            <<Buckets block every form of public access>>
+        OwnershipControls.Rules[*].ObjectOwnership == 'BucketOwnerEnforced'
+            <<ACLs are disabled>>
+        VersioningConfiguration.Status == 'Enabled'
+            <<Overwritten or deleted objects can be recovered>>
+    }
+}
+
+rule s3_bucket_policies_deny_plain_http when %bucket_policies !empty {
+    %bucket_policies.Properties.PolicyDocument {
+        some Statement[*] {
+            Effect == 'Deny'
+            Condition.Bool.'aws:SecureTransport' == 'false'
+                <<Every bucket policy refuses requests without TLS>>
+        }
+    }
+}
+
+rule origin_reachable_only_from_cloudfront when %security_groups !empty {
+    Resources.*[ Type == 'AWS::EC2::SecurityGroupIngress' ] empty
+        <<Ingress is declared on the security group, nowhere else>>
+    %security_groups.Properties.SecurityGroupIngress[*] {
+        CidrIp !exists
+        CidrIpv6 !exists
+        SourceSecurityGroupId !exists
+        SourcePrefixListId exists
+            <<Only the CloudFront origin-facing prefix list may connect>>
+        IpProtocol == 'tcp'
+        FromPort == 80
+        ToPort == 80
+            <<The origin listens on HTTP 80 only; nothing listens for SSH>>
+    }
+}
+
+rule instances_imdsv2_encrypted_no_key_pair when %launch_templates !empty {
+    %launch_templates.Properties.LaunchTemplateData {
+        MetadataOptions.HttpTokens == 'required'
+        MetadataOptions.HttpPutResponseHopLimit == 1
+            <<IMDSv2 only, unreachable from containers>>
+        KeyName !exists
+            <<No SSH key pair; operators use SSM>>
+        BlockDeviceMappings[*].Ebs.Encrypted == true
+            <<Instance disks are encrypted>>
+    }
+}
+
+rule instances_have_no_key_pair when %instances !empty {
+    %instances.Properties.KeyName !exists
+}
+
+rule volumes_encrypted when %volumes !empty {
+    %volumes.Properties.Encrypted == true
+}
+
+rule iam_no_wildcard_actions when %roles !empty {
+    %roles.Properties.Policies[*].PolicyDocument.Statement[*] {
+        Action[*] != '*'
+        Action[*] != /:\*$/
+            <<IAM actions are listed one by one>>
+    }
+}
+
+rule github_trust_bound_to_one_subject when %roles !empty {
+    let federated = %roles.Properties.AssumeRolePolicyDocument.Statement[ Action[*] == 'sts:AssumeRoleWithWebIdentity' ]
+    when %federated !empty {
+        %federated {
+            Condition.StringLike !exists
+                <<No wildcard subjects>>
+            Condition.StringEquals.'token.actions.githubusercontent.com:aud' == 'sts.amazonaws.com'
+            Condition.StringEquals.'token.actions.githubusercontent.com:sub' exists
+                <<The deploy role trusts one repository environment>>
+        }
+    }
+}
+
+rule cloudfront_https_and_origin_secret when %distributions !empty {
+    %distributions.Properties.DistributionConfig {
+        DefaultCacheBehavior.ViewerProtocolPolicy == 'redirect-to-https'
+        CacheBehaviors[*].ViewerProtocolPolicy == 'redirect-to-https'
+            <<Viewers always end up on HTTPS>>
+        Origins[*].OriginCustomHeaders[*].HeaderName == 'X-Motionly-Origin-Verify'
+            <<CloudFront proves itself to the origin>>
+        CustomErrorResponses[*].ErrorCachingMinTTL == 0
+            <<Per-user errors are never served from the edge cache>>
+    }
+}

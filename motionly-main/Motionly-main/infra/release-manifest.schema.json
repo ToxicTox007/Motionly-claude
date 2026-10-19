@@ -33,7 +33,6 @@
         "MOTIONLY_PROVIDER_WORKER_IMAGE",
         "MOTIONLY_PLANNING_WORKER_IMAGE",
         "MOTIONLY_REMOTION_WORKER_IMAGE",
-        "MOTIONLY_PUBLISHING_WORKER_IMAGE",
         "MOTIONLY_TEMPORAL_SERVER_IMAGE"
       ],
       "properties": {
@@ -46,14 +45,21 @@
         "MOTIONLY_PROVIDER_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" },
         "MOTIONLY_PLANNING_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" },
         "MOTIONLY_REMOTION_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" },
-        "MOTIONLY_PUBLISHING_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" },
         "MOTIONLY_TEMPORAL_SERVER_IMAGE": { "$ref": "#/$defs/digestImage" }
       }
     },
     "sboms": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["api", "web", "cpu-worker", "gpu-worker", "demucs-worker", "remotion-worker", "temporal-server"],
+      "required": [
+        "api",
+        "web",
+        "cpu-worker",
+        "gpu-worker",
+        "demucs-worker",
+        "remotion-worker",
+        "temporal-server"
+      ],
       "properties": {
         "api": { "$ref": "#/$defs/sbomArtifact" },
         "web": { "$ref": "#/$defs/sbomArtifact" },

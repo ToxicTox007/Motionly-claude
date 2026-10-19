@@ -10,7 +10,6 @@ cd apps/renderer
 pnpm render:smoke
 ```
 
-
 ## Preview/export parity contract
 
 Preview and export share one source-timeline evaluator: `packages/shared/src/timeline-eval.mjs` (typed by `timeline-eval.d.mts`). It is consumed by the browser preview (`usePlaybackSync` and timeline seeking) and the Remotion renderer (`apps/renderer/src/timeline.ts`). The evaluator normalizes clips, maps output time through removed source gaps, resolves start/end boundary semantics, and computes output duration. The preview uses the canonical export FPS (`PreviewExportState.fps`, defaulting to `DEFAULT_RENDER_FPS`); it does not use the source upload FPS for frame quantization.

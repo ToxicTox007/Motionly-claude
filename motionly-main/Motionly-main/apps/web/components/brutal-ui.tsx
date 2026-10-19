@@ -12,10 +12,7 @@ import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 
 type AlertTone = "info" | "success" | "warning" | "danger";
 
-export function Panel({
-  className,
-  ...props
-}: HTMLAttributes<HTMLDivElement>) {
+export function Panel({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={cn(
@@ -198,7 +195,10 @@ export function Modal({
       >
         <div className="flex items-start justify-between gap-4 border-b-2 border-foreground pb-3">
           <div className="min-w-0">
-            <h2 id={titleId} className="text-lg font-black uppercase text-foreground">
+            <h2
+              id={titleId}
+              className="text-lg font-black uppercase text-foreground"
+            >
               {title}
             </h2>
             {description ? (
@@ -210,7 +210,12 @@ export function Modal({
               </p>
             ) : null}
           </div>
-          <IconButton label="Close modal" variant="ghost" size="icon" onClick={onClose}>
+          <IconButton
+            label="Close modal"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+          >
             <PixelIcon name="x" className="size-4" />
           </IconButton>
         </div>
@@ -267,9 +272,12 @@ export function Tabs({
 
 export function Progress({
   value,
+  label,
   className,
 }: {
   value: number;
+  /** Accessible name, e.g. "Upload progress". */
+  label: string;
   className?: string;
 }) {
   return (
@@ -279,6 +287,7 @@ export function Progress({
         className,
       )}
       role="progressbar"
+      aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.max(0, Math.min(100, value))}

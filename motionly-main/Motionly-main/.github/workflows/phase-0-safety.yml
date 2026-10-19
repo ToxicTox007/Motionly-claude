@@ -21,11 +21,52 @@ concurrency:
 
 env:
   PNPM_VERSION: 9.15.4
-  NODE_VERSION: "22"
+  NODE_VERSION: "24"
   PYTHON_VERSION: "3.12"
   SUPABASE_CLI_VERSION: 2.104.0
 
 jobs:
+  cpu-stage-verify:
+    name: CPU-stage verify (fresh checkout)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infra/temporal/server/go.mod
+          cache-dependency-path: infra/temporal/server/go.sum
+      - name: Install locked dependencies and CPU media tools
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Run CPU-stage verification stages
+        env:
+          MOTIONLY_PYTHON: python
+        run: pnpm verify --stage static,unit,leakage,contracts,media
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-stage-verify-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
+
   quality-and-contracts:
     runs-on: ubuntu-latest
     steps:
@@ -102,27 +143,101 @@ jobs:
           cache-dependency-path: |
             apps/api/requirements-dev.lock
             apps/api/requirements-ml.lock
-      - uses: supabase/setup-cli@v1
-        with:
-          version: ${{ env.SUPABASE_CLI_VERSION }}
-      - run: |
+      - name: Install locked dependencies (includes the pinned Supabase CLI)
+        run: |
           pnpm install --frozen-lockfile
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
-      - name: Apply all migrations to an empty database
+      - name: Build the database from empty, then pgTAP, repository contracts and schema-matches-code
+        env:
+          MOTIONLY_PYTHON: python
+        run: pnpm verify --stage db
+      - name: Upload database verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: empty-database-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
+
+  # AWS: static template validation and the local release rehearsal (the real
+  # release agent against moto and a local registry). Never calls AWS.
+  aws-release-rehearsal:
+    name: AWS template checks and release rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            infra/aws/tools/requirements.lock
+      - name: Free runner disk for the CPU-stage images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install locked dependencies
         run: |
-          supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
-          supabase db reset --local
-      - name: Verify schema and role/workspace RLS
-        run: supabase test db
-      - name: Exercise repositories against Supabase Auth and REST
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Template checks, image build, release rehearsal
+        env:
+          MOTIONLY_PYTHON: python
+        run: pnpm verify --stage aws
+      - name: Upload AWS results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-release-rehearsal-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
+
+  # The production Compose topology without GPU hardware (slim size). The runner
+  # size for the full size is pending Decision D4.
+  cpu-stage-stack:
+    name: CPU-stage stack from empty volumes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements-dev.lock
+            apps/api/requirements-ml.lock
+      - name: Free runner disk for the CPU-stage images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install locked dependencies
         run: |
-          eval "$(supabase status -o env)"
-          export SUPABASE_URL="$API_URL"
-          export SUPABASE_ANON_KEY="$ANON_KEY"
-          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
-          export SUPABASE_JWT_SECRET="$JWT_SECRET"
-          cd apps/api
-          RUN_SUPABASE_CONTRACTS=1 APP_ENV=test python -m pytest -q tests/integration/test_supabase_repository_contracts.py
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Build, start from empty volumes, check, and tear down
+        env:
+          MOTIONLY_PYTHON: python
+          CPU_STAGE_SIZE: slim
+        run: pnpm verify --stage stack
+      - name: Upload stack results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-stage-stack-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
 
   media-goldens:
     runs-on: ubuntu-latest
@@ -199,8 +314,12 @@ jobs:
           REDIS_URL: redis://127.0.0.1:6379/14
         run: python -m pytest -q tests/test_model_gateway_redis.py
 
-  browser-creator-journey:
+  # The browser suite against the CPU stage behind the CDN simulator, in
+  # Chromium, Firefox, WebKit and two phone layouts (scripts/verify/stages.json).
+  cpu-stage-browser:
+    name: Browser suite against the CPU stage
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -217,29 +336,27 @@ jobs:
           cache-dependency-path: |
             apps/api/requirements-dev.lock
             apps/api/requirements-ml.lock
-      - uses: supabase/setup-cli@v1
-        with:
-          version: ${{ env.SUPABASE_CLI_VERSION }}
-      - name: Install browser-test dependencies
+      - name: Free runner disk for the CPU-stage images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install locked dependencies, browsers and ffmpeg
         run: |
           pnpm install --frozen-lockfile
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
-          pnpm --filter @motionly/web exec playwright install --with-deps chromium
+          pnpm --filter @motionly/web exec playwright install --with-deps chromium firefox webkit
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-      - name: Start clean creator-journey services
-        run: |
-          supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
-          supabase db reset --local
-      - name: Run auth, upload/reload, edit, render, billing, and publish E2E
-        run: |
-          eval "$(supabase status -o env)"
-          export SUPABASE_URL="$API_URL"
-          export SUPABASE_ANON_KEY="$ANON_KEY"
-          export SUPABASE_SERVICE_ROLE_KEY="$SERVICE_ROLE_KEY"
-          export SUPABASE_JWT_SECRET="$JWT_SECRET"
-          cd apps/web
-          pnpm test:e2e
+      - name: Stack from empty volumes, browser suite, log scan, verdict, tear down
+        env:
+          MOTIONLY_PYTHON: python
+          CPU_STAGE_SIZE: slim
+        run: pnpm verify --stage browser
+      - name: Upload browser results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-stage-browser-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
 
   containers:
     runs-on: ubuntu-latest
@@ -252,7 +369,10 @@ jobs:
           docker build --file apps/web/Dockerfile --tag motionly-web:test .
       - name: Verify API startup health
         run: |
-          docker run -d --name motionly-api-health -p 18000:8000 -e APP_ENV=test motionly-api:test
+          # Non-local environments refuse to start without JWT and Supabase
+          # settings; these CI-only values satisfy startup validation and are
+          # never used to reach a real service.
+          docker run -d --name motionly-api-health -p 18000:8000 -e APP_ENV=test -e SUPABASE_JWT_SECRET=ci-only-jwt-secret -e SUPABASE_URL=http://supabase.invalid -e SUPABASE_SERVICE_ROLE_KEY=ci-only-service-role motionly-api:test
           for attempt in {1..30}; do
             curl --fail --silent http://127.0.0.1:18000/health/live && break
             if [ "$attempt" = 30 ]; then docker logs motionly-api-health; exit 1; fi
@@ -353,7 +473,7 @@ jobs:
       - empty-database-and-repositories
       - media-goldens
       - redis-contracts
-      - browser-creator-journey
+      - cpu-stage-browser
       - containers
       - secret-and-dependency-scans
       - phase-10-prelaunch

@@ -4,7 +4,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 const runBrowserPerf = process.env.RUN_BROWSER_PERF === "1";
 const enforce = process.env.PERF_ENFORCE === "1";
 const allowRedirects = process.env.ALLOW_BROWSER_PERF_REDIRECTS === "1";
-const projectId = process.env.PERF_PROJECT_ID || "00000000-0000-4000-8000-000000000001";
+const projectId =
+  process.env.PERF_PROJECT_ID || "00000000-0000-4000-8000-000000000001";
 const outputPath =
   process.env.BROWSER_PERF_OUTPUT || "test-results/browser-performance.json";
 
@@ -25,32 +26,43 @@ const thresholds = {
   firstContentfulPaintMs: Number(process.env.BROWSER_PERF_FCP_MS || 2500),
 };
 
-test.skip(!runBrowserPerf, "Set RUN_BROWSER_PERF=1 to run browser performance checks.");
+test.skip(
+  !runBrowserPerf,
+  "Set RUN_BROWSER_PERF=1 to run browser performance checks.",
+);
 
 test.describe("browser performance surfaces", () => {
   const samples = [];
 
   test.afterAll(async () => {
     if (samples.length === 0) return;
-    await mkdir(outputPath.split("/").slice(0, -1).join("/") || ".", { recursive: true });
+    await mkdir(outputPath.split("/").slice(0, -1).join("/") || ".", {
+      recursive: true,
+    });
     await writeFile(
       outputPath,
-      `${JSON.stringify({
-        schema_version: 1,
-        mode: enforce ? "enforce" : "observe",
-        revision: process.env.DEPLOYMENT_REVISION || "unversioned",
-        environment: process.env.APP_ENV || "local",
-        browser: process.env.BROWSER || "chromium",
-        thresholds,
-        sample_count: samples.length,
-        samples,
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          schema_version: 1,
+          mode: enforce ? "enforce" : "observe",
+          revision: process.env.DEPLOYMENT_REVISION || "unversioned",
+          environment: process.env.APP_ENV || "local",
+          browser: process.env.BROWSER || "chromium",
+          thresholds,
+          sample_count: samples.length,
+          samples,
+        },
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
   });
 
   for (const surface of surfaces) {
-    test(`${surface.name} stays within navigation thresholds`, async ({ page }) => {
+    test(`${surface.name} stays within navigation thresholds`, async ({
+      page,
+    }) => {
       await page.goto(surface.path, { waitUntil: "domcontentloaded" });
       await page.waitForLoadState("load");
 
@@ -61,7 +73,9 @@ test.describe("browser performance surfaces", () => {
       const metrics = await page.evaluate(() => {
         const nav = performance.getEntriesByType("navigation")[0];
         const paint = performance.getEntriesByType("paint");
-        const fcp = paint.find((entry) => entry.name === "first-contentful-paint");
+        const fcp = paint.find(
+          (entry) => entry.name === "first-contentful-paint",
+        );
         return {
           domContentLoadedMs: Math.round(nav.domContentLoadedEventEnd),
           loadMs: Math.round(nav.loadEventEnd),
@@ -73,7 +87,9 @@ test.describe("browser performance surfaces", () => {
 
       samples.push({ surface: surface.name, path: surface.path, ...metrics });
 
-      expect(metrics.domContentLoadedMs).toBeLessThanOrEqual(thresholds.domContentLoadedMs);
+      expect(metrics.domContentLoadedMs).toBeLessThanOrEqual(
+        thresholds.domContentLoadedMs,
+      );
       expect(metrics.loadMs).toBeLessThanOrEqual(thresholds.loadMs);
       if (metrics.firstContentfulPaintMs !== null) {
         expect(metrics.firstContentfulPaintMs).toBeLessThanOrEqual(

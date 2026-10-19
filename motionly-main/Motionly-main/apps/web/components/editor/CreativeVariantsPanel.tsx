@@ -56,8 +56,6 @@ type CreativeVariantSetList = { variant_sets: CreativeVariantSet[] };
 interface CreativeVariantsPanelProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   activePlan: EditPlanRecordSummary | null;
 }
 
@@ -71,19 +69,15 @@ const DIMENSIONS: Array<{ id: CreativeVariantDimension; label: string }> = [
 
 type CreativeVariantRequestOptions = Pick<
   CreativeVariantsPanelProps,
-  "workspaceId" | "userId" | "apiAccessToken"
+  "workspaceId"
 >;
 
-function requestOptions({
-  workspaceId,
-  userId,
-  apiAccessToken,
-}: CreativeVariantRequestOptions) {
-  return { workspaceId, userId, accessToken: apiAccessToken };
+function requestOptions({ workspaceId }: CreativeVariantRequestOptions) {
+  return { workspaceId };
 }
 
 export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
-  const { activePlan, apiAccessToken, projectId, userId, workspaceId } = props;
+  const { activePlan, projectId, workspaceId } = props;
   const [dimensions, setDimensions] = useState<CreativeVariantDimension[]>(() =>
     DIMENSIONS.map((dimension) => dimension.id),
   );
@@ -99,11 +93,11 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
       editorApiRequest<CreativeVariantSetList>(
         `${env.apiBaseUrl}/projects/${projectId}/creative-variants`,
         {
-          ...requestOptions({ workspaceId, userId, apiAccessToken }),
+          ...requestOptions({ workspaceId }),
           friendlyError: "Creative test history could not be loaded.",
         },
       ),
-    [apiAccessToken, projectId, userId, workspaceId],
+    [projectId, workspaceId],
   );
 
   useEffect(() => {
@@ -158,7 +152,7 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
       const created = await editorApiRequest<CreativeVariantSet>(
         `${env.apiBaseUrl}/projects/${projectId}/creative-variants`,
         {
-          ...requestOptions({ workspaceId, userId, apiAccessToken }),
+          ...requestOptions({ workspaceId }),
           method: "POST",
           body: {
             name: `Creative test · ${new Date().toLocaleDateString()}`,
@@ -188,7 +182,7 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
       const updated = await editorApiRequest<CreativeVariantSet>(
         `${env.apiBaseUrl}/projects/${projectId}/creative-variants/${activeSet.id}/selection`,
         {
-          ...requestOptions({ workspaceId, userId, apiAccessToken }),
+          ...requestOptions({ workspaceId }),
           method: "PATCH",
           body: {
             variant_id: variantId,
@@ -200,9 +194,7 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
       setSets((current) =>
         current.map((set) => (set.id === updated.id ? updated : set)),
       );
-      setMessage(
-        "Preferred direction saved for review. Nothing was rendered or published.",
-      );
+      setMessage("Preferred direction saved for review. Nothing was rendered.");
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -244,8 +236,7 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
       </div>
 
       <p className="mt-3 rounded border border-primary/50 bg-primary/10 px-3 py-2 text-xs font-medium text-foreground">
-        Review-only. This does not change the timeline, render media, or
-        publish.
+        Review-only. This does not change the timeline or render media.
       </p>
 
       <div className="mt-4 space-y-3">

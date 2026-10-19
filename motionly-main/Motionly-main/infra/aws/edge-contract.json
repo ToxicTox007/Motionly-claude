@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "description": "How the CloudFront distribution handles Motionly traffic. Single source of truth for the CloudFormation template (Task 8) and for the CPU-stage CDN simulator (scripts/cdn-sim). Facts about CloudFront behaviour are from the AWS CloudFront Developer Guide (checked 2026-10-07); contract tests: apps/api/tests/test_edge_contract.py.",
+  "distribution": {
+    "enabled": true,
+    "price_class": "PriceClass_200",
+    "price_class_note": "PriceClass_200 includes edge locations in India, where Motionly's users are; PriceClass_100 does not.",
+    "http_versions": "http2and3",
+    "ipv6": true,
+    "default_root_object": "",
+    "viewer_certificate": "cloudfront-default",
+    "viewer_security_policy": "TLSv1",
+    "viewer_security_policy_note": "With the default *.cloudfront.net certificate CloudFront sets the TLSv1 policy and it cannot be changed. A stricter policy needs a custom domain and an ACM certificate."
+  },
+  "origin": {
+    "id": "motionly-origin",
+    "description": "The EC2 instance's Caddy ingress, which routes by path (infra/Caddyfile.routes).",
+    "domain": "public DNS name of the instance (Task 8)",
+    "protocol_policy": "http-only",
+    "protocol_note": "CloudFront validates origin certificates against the origin domain name, and no public CA issues certificates for the instance's amazonaws.com name. Traffic between CloudFront and an AWS origin stays on the AWS network; the security group and the origin secret restrict who can reach the origin.",
+    "http_port": 80,
+    "connection_attempts": 3,
+    "connection_timeout_seconds": 10,
+    "response_timeout_seconds": 60,
+    "keepalive_timeout_seconds": 5,
+    "response_completion_timeout_seconds": null,
+    "response_completion_note": "Unset (no maximum): media downloads and multipart part uploads through /supabase can legitimately take longer than any fixed total.",
+    "custom_headers": [
+      {
+        "name": "X-Motionly-Origin-Verify",
+        "value_source": "ssm:/motionly/{environment}/edge/origin-verify",
+        "note": "CloudFront overwrites a viewer-supplied header of the same name. The value is never stored in the repository."
+      }
+    ],
+    "access": {
+      "security_group_ingress": {
+        "prefix_list": "com.amazonaws.global.cloudfront.origin-facing",
+        "protocol": "tcp",
+        "port": 80,
+        "rule_weight": 55
+      },
+      "ssh": false
+    }
+  },
+  "origin_guard": {
+    "description": "Enforced by the origin ingress (Caddy, infra/Caddyfile.origin-guard) for every request, before routing.",
+    "header": "X-Motionly-Origin-Verify",
+    "accepted_values": ["current", "previous"],
+    "value_sources": {
+      "current": "ssm:/motionly/{environment}/edge/origin-verify",
+      "previous": "ssm:/motionly/{environment}/edge/origin-verify-previous"
+    },
+    "value_format": "^[A-Za-z0-9_-]{32,256}$",
+    "previous_optional": true,
+    "rotation": "Add the new value as current and keep the old one as previous until CloudFront has deployed the new value, then drop previous.",
+    "reject_status": 403,
+    "strip_before_upstream": true
+  },
+  "client_address": {
+    "header": "CloudFront-Viewer-Address",
+    "format": "viewer IP and source port, for example 198.51.100.10:46532",
+    "trusted_only_after_origin_guard": true,
+    "origin_header": "X-Motionly-Viewer-IP",
+    "origin_header_format": "the viewer IP without the port; the origin guard sets it and replaces any value the request carried"
+  },
+  "behaviors": [
+    {
+      "path_pattern": "/_next/static/*",
+      "purpose": "Content-hashed Next.js build assets (immutable).",
+      "viewer_protocol_policy": "redirect-to-https",
+      "allowed_methods": ["GET", "HEAD"],
+      "cached_methods": ["GET", "HEAD"],
+      "cache_policy": "Managed-CachingOptimized",
+      "origin_request_policy": "Managed-HostHeaderOnly",
+      "response_headers_policy": "motionly-edge-security",
+      "compress": true
+    },
+    {
+      "path_pattern": "/icon.svg",
+      "purpose": "The site icon (next.config.ts sets a one-day Cache-Control).",
+      "viewer_protocol_policy": "redirect-to-https",
+      "allowed_methods": ["GET", "HEAD"],
+      "cached_methods": ["GET", "HEAD"],
+      "cache_policy": "Managed-CachingOptimized",
+      "origin_request_policy": "Managed-HostHeaderOnly",
+      "response_headers_policy": "motionly-edge-security",
+      "compress": true
+    },
+    {
+      "path_pattern": "/api/*",
+      "purpose": "FastAPI. Authenticated, per-user responses: never cached.",
+      "viewer_protocol_policy": "redirect-to-https",
+      "allowed_methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PUT",
+        "POST",
+        "PATCH",
+        "DELETE"
+      ],
+      "cached_methods": ["GET", "HEAD"],
+      "cache_policy": "Managed-CachingDisabled",
+      "origin_request_policy": "Managed-AllViewerAndCloudFrontHeaders-2022-06",
+      "response_headers_policy": "motionly-edge-security",
+      "compress": false
+    },
+    {
+      "path_pattern": "/supabase/*",
+      "purpose": "Supabase Auth, REST, Storage (signed media links, range requests, multipart part uploads) and Realtime WebSockets: never cached.",
+      "viewer_protocol_policy": "redirect-to-https",
+      "allowed_methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PUT",
+        "POST",
+        "PATCH",
+        "DELETE"
+      ],
+      "cached_methods": ["GET", "HEAD"],
+      "cache_policy": "Managed-CachingDisabled",
+      "origin_request_policy": "Managed-AllViewerAndCloudFrontHeaders-2022-06",
+      "response_headers_policy": "motionly-edge-security",
+      "compress": false
+    },
+    {
+      "path_pattern": "*",
+      "purpose": "Default: Next.js pages (per-request CSP nonce), server actions (POST) and /app-api routes: never cached.",
+      "viewer_protocol_policy": "redirect-to-https",
+      "allowed_methods": [
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PUT",
+        "POST",
+        "PATCH",
+        "DELETE"
+      ],
+      "cached_methods": ["GET", "HEAD"],
+      "cache_policy": "Managed-CachingDisabled",
+      "origin_request_policy": "Managed-AllViewerAndCloudFrontHeaders-2022-06",
+      "response_headers_policy": "motionly-edge-security",
+      "compress": false
+    }
+  ],
+  "websocket_paths": ["/supabase/realtime/v1/websocket"],
+  "cache_policies": {
+    "Managed-CachingDisabled": {
+      "managed_id": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+      "min_ttl": 0,
+      "default_ttl": 0,
+      "max_ttl": 0,
+      "cache_key": {
+        "headers": [],
+        "cookies": "none",
+        "query_strings": "none"
+      },
+      "compressed_objects": false
+    },
+    "Managed-CachingOptimized": {
+      "managed_id": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+      "min_ttl": 1,
+      "default_ttl": 86400,
+      "max_ttl": 31536000,
+      "cache_key": {
+        "headers": [],
+        "cookies": "none",
+        "query_strings": "none"
+      },
+      "compressed_objects": true,
+      "note": "The minimum TTL of 1 s applies even to no-store responses, so only public immutable assets may use this policy."
+    }
+  },
+  "origin_request_policies": {
+    "Managed-AllViewerAndCloudFrontHeaders-2022-06": {
+      "managed_id": "33f36d7e-f396-46d9-90e0-52428a34d9dc",
+      "headers": "all-viewer",
+      "cloudfront_headers": [
+        "CloudFront-Forwarded-Proto",
+        "CloudFront-Viewer-Address",
+        "CloudFront-Viewer-Country",
+        "CloudFront-Viewer-Http-Version",
+        "CloudFront-Viewer-TLS"
+      ],
+      "cloudfront_headers_note": "The managed policy adds every CloudFront header released through June 2022; listed here are the ones Motionly relies on or the simulator emits.",
+      "cookies": "all",
+      "query_strings": "all",
+      "forwards_viewer_host": true,
+      "forwards_authorization": true,
+      "authorization_note": "CloudFront forwards Authorization with an all-viewer-headers origin request policy only because caching is disabled for these behaviors."
+    },
+    "Managed-HostHeaderOnly": {
+      "managed_id": "bf0718e1-ba1e-49d1-88b1-f726733018ae",
+      "headers": ["Host"],
+      "cloudfront_headers": [],
+      "cookies": "none",
+      "query_strings": "none",
+      "forwards_viewer_host": true,
+      "forwards_authorization": false
+    }
+  },
+  "response_headers_policies": {
+    "motionly-edge-security": {
+      "strict_transport_security": {
+        "max_age_seconds": 63072000,
+        "include_subdomains": false,
+        "preload": false,
+        "override": true
+      },
+      "content_type_options": {
+        "value": "nosniff",
+        "override": false
+      },
+      "frame_options": {
+        "value": "DENY",
+        "override": false
+      },
+      "referrer_policy": {
+        "value": "strict-origin-when-cross-origin",
+        "override": false
+      },
+      "content_security_policy": null,
+      "content_security_policy_note": "Pages carry a per-request nonce CSP from apps/web/proxy.ts; the edge must not replace it.",
+      "remove_headers": [
+        "server",
+        "x-kong-upstream-latency",
+        "x-kong-proxy-latency"
+      ]
+    }
+  },
+  "error_caching": {
+    "min_ttl_seconds": 0,
+    "status_codes": [400, 403, 404, 405, 414, 416, 500, 501, 502, 503, 504],
+    "custom_error_pages": false,
+    "note": "CloudFront caches error responses for 10 seconds by default; Motionly's errors are per-user JSON and must reach the client unchanged."
+  }
+}

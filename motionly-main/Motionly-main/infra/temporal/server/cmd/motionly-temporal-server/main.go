@@ -27,6 +27,12 @@ const (
 	maxBootstrapWindow    = 24 * time.Hour
 )
 
+// systemIdentity is the common name of the cluster's own internode and
+// frontend certificates. Only the Temporal container mounts their keys; its
+// internal system worker calls the frontend with the internode certificate and
+// needs cluster-wide access, including the temporal-system namespace.
+const systemIdentity = "temporal"
+
 var knownIdentityRoles = map[string]authorization.Role{
 	"motionly-api":             authorization.RoleReader | authorization.RoleWriter,
 	"motionly-dispatcher":      authorization.RoleReader | authorization.RoleWriter,
@@ -148,6 +154,9 @@ func (m mtlsClaimMapper) GetClaims(authInfo *authorization.AuthInfo) (*authoriza
 		return nil, errors.New("mTLS client certificate is required")
 	}
 	identity := strings.TrimSpace(authInfo.TLSSubject.CommonName)
+	if identity == systemIdentity {
+		return &authorization.Claims{Subject: identity, System: authorization.RoleAdmin}, nil
+	}
 	if role, ok := knownIdentityRoles[identity]; ok {
 		return &authorization.Claims{
 			Subject:    identity,
@@ -175,6 +184,11 @@ func (a mtlsAuthorizer) Authorize(
 	if claims == nil || target == nil || !isKnownSubject(claims.Subject) {
 		return deny(), nil
 	}
+	// Claims come only from the claim mapper, so System admin on the system
+	// identity means the peer presented the cluster's own certificate.
+	if claims.Subject == systemIdentity && claims.System&authorization.RoleAdmin != 0 {
+		return allow(), nil
+	}
 	if isHealthAPI(target.APIName) {
 		return allow(), nil
 	}
@@ -188,6 +202,13 @@ func (a mtlsAuthorizer) Authorize(
 		return deny(), nil
 	}
 	if claims.Subject == "motionly-namespace-bootstrap" {
+		// The CLI calls GetSystemInfo when it connects; describing the
+		// namespace first makes the bootstrap a no-op on every later release.
+		if target.APIName == "/temporal.api.workflowservice.v1.WorkflowService/GetSystemInfo" ||
+			(target.APIName == "/temporal.api.workflowservice.v1.WorkflowService/DescribeNamespace" &&
+				target.Namespace == a.policy.namespace) {
+			return allow(), nil
+		}
 		return deny(), nil
 	}
 	if isSafeClusterReadAPI(target.APIName) {
@@ -219,7 +240,7 @@ func (a mtlsAuthorizer) Authorize(
 }
 
 func isKnownSubject(subject string) bool {
-	if subject == "motionly-diagnostics" || subject == "motionly-namespace-bootstrap" {
+	if subject == systemIdentity || subject == "motionly-diagnostics" || subject == "motionly-namespace-bootstrap" {
 		return true
 	}
 	_, ok := knownIdentityRoles[subject]

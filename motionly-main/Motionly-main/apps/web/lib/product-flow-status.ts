@@ -39,7 +39,8 @@ export const PRODUCT_FLOW_STAGES: ProductFlowStage[] = [
   {
     key: "planning",
     label: "Planning",
-    description: "Timeline structure, b-roll, audio, and style are being drafted",
+    description:
+      "Timeline structure, b-roll, audio, and style are being drafted",
   },
   {
     key: "captions_ready",
@@ -59,7 +60,7 @@ export const PRODUCT_FLOW_STAGES: ProductFlowStage[] = [
   {
     key: "export_ready",
     label: "Export ready",
-    description: "The finished video is available to download or publish",
+    description: "The finished video is ready to download",
   },
 ];
 
@@ -72,13 +73,6 @@ const RENDER_STATUS_LABELS: Record<string, string> = {
   complete: "Export ready",
   failed: "Failed",
   canceled: "Canceled",
-};
-
-const PUBLISH_STATUS_LABELS: Record<string, string> = {
-  queued: "Publish queued",
-  publishing: "Publishing",
-  published: "Published",
-  failed: "Failed",
 };
 
 export function productFlowStageIndex(status: string): number {
@@ -121,10 +115,6 @@ export function uploadStatusMessage(status: string) {
 
 export function renderStatusLabel(status: string) {
   return RENDER_STATUS_LABELS[status] ?? humanizeStatus(status);
-}
-
-export function publishStatusLabel(status: string) {
-  return PUBLISH_STATUS_LABELS[status] ?? humanizeStatus(status);
 }
 
 export function queuedWaitBandLabel(

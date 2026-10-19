@@ -289,6 +289,14 @@
             "title": "Environment",
             "type": "string"
           },
+          "gpu_stage": {
+            "enum": [
+              "enabled",
+              "not_enabled"
+            ],
+            "title": "Gpu Stage",
+            "type": "string"
+          },
           "health": {
             "additionalProperties": true,
             "title": "Health",
@@ -351,6 +359,7 @@
         },
         "required": [
           "environment",
+          "gpu_stage",
           "request_id",
           "queues",
           "recent_renders"
@@ -3885,6 +3894,14 @@
             "title": "Environment",
             "type": "string"
           },
+          "gpu_stage": {
+            "enum": [
+              "enabled",
+              "not_enabled"
+            ],
+            "title": "Gpu Stage",
+            "type": "string"
+          },
           "request_id": {
             "title": "Request Id",
             "type": "string"
@@ -3902,6 +3919,7 @@
           "status",
           "service",
           "environment",
+          "gpu_stage",
           "request_id",
           "components"
         ],
@@ -3944,6 +3962,14 @@
             "title": "Environment",
             "type": "string"
           },
+          "gpu_stage": {
+            "enum": [
+              "enabled",
+              "not_enabled"
+            ],
+            "title": "Gpu Stage",
+            "type": "string"
+          },
           "request_id": {
             "title": "Request Id",
             "type": "string"
@@ -3961,6 +3987,7 @@
           "status",
           "service",
           "environment",
+          "gpu_stage",
           "request_id",
           "dependencies"
         ],
@@ -5917,6 +5944,14 @@
             "title": "Environment",
             "type": "string"
           },
+          "gpu_stage": {
+            "enum": [
+              "enabled",
+              "not_enabled"
+            ],
+            "title": "Gpu Stage",
+            "type": "string"
+          },
           "request_id": {
             "title": "Request Id",
             "type": "string"
@@ -5934,6 +5969,7 @@
           "status",
           "service",
           "environment",
+          "gpu_stage",
           "request_id"
         ],
         "title": "HealthResponse",
@@ -7827,415 +7863,6 @@
           "duration_ms"
         ],
         "title": "PauseMapEntry",
-        "type": "object"
-      },
-      "PerformanceFeedbackInsightsResponse": {
-        "properties": {
-          "data_boundaries": {
-            "default": [
-              "viewer identities and audience demographics",
-              "comments, direct messages, and follower lists",
-              "post copy, transcript text, prompts, and source media",
-              "raw provider payloads and access tokens"
-            ],
-            "items": {
-              "type": "string"
-            },
-            "title": "Data Boundaries",
-            "type": "array"
-          },
-          "minimum_examples": {
-            "title": "Minimum Examples",
-            "type": "integer"
-          },
-          "policy_revision": {
-            "title": "Policy Revision",
-            "type": "integer"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "suggestions": {
-            "items": {
-              "$ref": "#/components/schemas/PerformanceFeedbackSuggestion"
-            },
-            "title": "Suggestions",
-            "type": "array"
-          }
-        },
-        "required": [
-          "status",
-          "policy_revision",
-          "minimum_examples"
-        ],
-        "title": "PerformanceFeedbackInsightsResponse",
-        "type": "object"
-      },
-      "PerformanceFeedbackPolicyResponse": {
-        "properties": {
-          "metrics_ingestion_enabled": {
-            "default": false,
-            "title": "Metrics Ingestion Enabled",
-            "type": "boolean"
-          },
-          "policy_version": {
-            "default": "unacknowledged",
-            "title": "Policy Version",
-            "type": "string"
-          },
-          "retention_days": {
-            "maximum": 365.0,
-            "minimum": 1.0,
-            "title": "Retention Days",
-            "type": "integer"
-          },
-          "revision": {
-            "default": 0,
-            "title": "Revision",
-            "type": "integer"
-          },
-          "revoked_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Revoked At"
-          },
-          "suggestions_enabled": {
-            "default": false,
-            "title": "Suggestions Enabled",
-            "type": "boolean"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
-          "user_id": {
-            "format": "uuid",
-            "title": "User Id",
-            "type": "string"
-          },
-          "workspace_id": {
-            "format": "uuid",
-            "title": "Workspace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "workspace_id",
-          "user_id",
-          "retention_days"
-        ],
-        "title": "PerformanceFeedbackPolicyResponse",
-        "type": "object"
-      },
-      "PerformanceFeedbackPolicyUpdateRequest": {
-        "properties": {
-          "expected_revision": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expected Revision"
-          },
-          "metrics_ingestion_enabled": {
-            "title": "Metrics Ingestion Enabled",
-            "type": "boolean"
-          },
-          "policy_version": {
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Policy Version",
-            "type": "string"
-          },
-          "retention_days": {
-            "anyOf": [
-              {
-                "maximum": 365.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retention Days"
-          },
-          "suggestions_enabled": {
-            "title": "Suggestions Enabled",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "metrics_ingestion_enabled",
-          "suggestions_enabled",
-          "policy_version"
-        ],
-        "title": "PerformanceFeedbackPolicyUpdateRequest",
-        "type": "object"
-      },
-      "PerformanceFeedbackRevocationRequest": {
-        "properties": {
-          "reason": {
-            "default": "user_request",
-            "maxLength": 160,
-            "minLength": 1,
-            "title": "Reason",
-            "type": "string"
-          }
-        },
-        "title": "PerformanceFeedbackRevocationRequest",
-        "type": "object"
-      },
-      "PerformanceFeedbackStatusResponse": {
-        "properties": {
-          "allowed_metrics": {
-            "default": [
-              "views",
-              "average_view_duration_seconds",
-              "completion_rate",
-              "engagement_rate"
-            ],
-            "items": {
-              "type": "string"
-            },
-            "title": "Allowed Metrics",
-            "type": "array"
-          },
-          "default_retention_days": {
-            "maximum": 365.0,
-            "minimum": 1.0,
-            "title": "Default Retention Days",
-            "type": "integer"
-          },
-          "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "excluded_data": {
-            "default": [
-              "viewer identities and audience demographics",
-              "comments, direct messages, and follower lists",
-              "post copy, transcript text, prompts, and source media",
-              "raw provider payloads and access tokens"
-            ],
-            "items": {
-              "type": "string"
-            },
-            "title": "Excluded Data",
-            "type": "array"
-          },
-          "minimum_examples": {
-            "minimum": 1.0,
-            "title": "Minimum Examples",
-            "type": "integer"
-          },
-          "policy_version": {
-            "title": "Policy Version",
-            "type": "string"
-          }
-        },
-        "required": [
-          "enabled",
-          "policy_version",
-          "default_retention_days",
-          "minimum_examples"
-        ],
-        "title": "PerformanceFeedbackStatusResponse",
-        "type": "object"
-      },
-      "PerformanceFeedbackSuggestion": {
-        "properties": {
-          "average_retention_rate": {
-            "maximum": 1.0,
-            "minimum": 0.0,
-            "title": "Average Retention Rate",
-            "type": "number"
-          },
-          "confidence": {
-            "title": "Confidence",
-            "type": "string"
-          },
-          "editor_instruction": {
-            "title": "Editor Instruction",
-            "type": "string"
-          },
-          "is_observational": {
-            "default": true,
-            "title": "Is Observational",
-            "type": "boolean"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/PerformanceFeedbackSuggestionKind"
-          },
-          "recommended_value": {
-            "title": "Recommended Value",
-            "type": "string"
-          },
-          "sample_count": {
-            "minimum": 1.0,
-            "title": "Sample Count",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "kind",
-          "recommended_value",
-          "editor_instruction",
-          "sample_count",
-          "average_retention_rate",
-          "confidence"
-        ],
-        "title": "PerformanceFeedbackSuggestion",
-        "type": "object"
-      },
-      "PerformanceFeedbackSuggestionKind": {
-        "enum": [
-          "captions",
-          "hook_style",
-          "duration"
-        ],
-        "title": "PerformanceFeedbackSuggestionKind",
-        "type": "string"
-      },
-      "PerformanceMetricIngestRequest": {
-        "additionalProperties": false,
-        "description": "An aggregate, post-level snapshot supplied by an authorized integration or creator.",
-        "properties": {
-          "average_view_duration_seconds": {
-            "anyOf": [
-              {
-                "maximum": 86400.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Average View Duration Seconds"
-          },
-          "completion_rate": {
-            "anyOf": [
-              {
-                "maximum": 1.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completion Rate"
-          },
-          "engagement_rate": {
-            "anyOf": [
-              {
-                "maximum": 1.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Engagement Rate"
-          },
-          "observed_at": {
-            "format": "date-time",
-            "title": "Observed At",
-            "type": "string"
-          },
-          "views": {
-            "anyOf": [
-              {
-                "maximum": 2147483647.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Views"
-          }
-        },
-        "required": [
-          "observed_at"
-        ],
-        "title": "PerformanceMetricIngestRequest",
-        "type": "object"
-      },
-      "PerformanceMetricResponse": {
-        "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "expires_at": {
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "observed_at": {
-            "format": "date-time",
-            "title": "Observed At",
-            "type": "string"
-          },
-          "platform": {
-            "$ref": "#/components/schemas/PublishPlatform"
-          },
-          "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
-          },
-          "publish_job_id": {
-            "format": "uuid",
-            "title": "Publish Job Id",
-            "type": "string"
-          },
-          "suggestion_eligible": {
-            "title": "Suggestion Eligible",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "project_id",
-          "publish_job_id",
-          "platform",
-          "observed_at",
-          "expires_at",
-          "suggestion_eligible",
-          "created_at"
-        ],
-        "title": "PerformanceMetricResponse",
         "type": "object"
       },
       "PlanActivateResponse": {
@@ -10175,403 +9802,6 @@
         "title": "PublicReviewResponse",
         "type": "object"
       },
-      "PublishConnectionCreateRequest": {
-        "properties": {
-          "access_token": {
-            "maxLength": 4096,
-            "minLength": 8,
-            "title": "Access Token",
-            "type": "string"
-          },
-          "account_name": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Account Name",
-            "type": "string"
-          },
-          "external_account_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "External Account Id",
-            "type": "string"
-          },
-          "platform": {
-            "$ref": "#/components/schemas/PublishPlatform"
-          }
-        },
-        "required": [
-          "platform",
-          "access_token",
-          "external_account_id",
-          "account_name"
-        ],
-        "title": "PublishConnectionCreateRequest",
-        "type": "object"
-      },
-      "PublishConnectionListResponse": {
-        "properties": {
-          "connections": {
-            "items": {
-              "$ref": "#/components/schemas/PublishConnectionResponse"
-            },
-            "title": "Connections",
-            "type": "array"
-          }
-        },
-        "required": [
-          "connections"
-        ],
-        "title": "PublishConnectionListResponse",
-        "type": "object"
-      },
-      "PublishConnectionResponse": {
-        "properties": {
-          "access_token_expires_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Access Token Expires At"
-          },
-          "account_name": {
-            "title": "Account Name",
-            "type": "string"
-          },
-          "connection_status": {
-            "$ref": "#/components/schemas/PublishConnectionStatus"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "external_account_id": {
-            "title": "External Account Id",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "last_refresh_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Refresh At"
-          },
-          "last_refresh_failure_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Refresh Failure Reason"
-          },
-          "platform": {
-            "$ref": "#/components/schemas/PublishPlatform"
-          },
-          "refresh_token_expires_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Refresh Token Expires At"
-          },
-          "scopes": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Scopes",
-            "type": "array"
-          },
-          "workspace_id": {
-            "format": "uuid",
-            "title": "Workspace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "workspace_id",
-          "platform",
-          "external_account_id",
-          "account_name",
-          "connection_status",
-          "created_at"
-        ],
-        "title": "PublishConnectionResponse",
-        "type": "object"
-      },
-      "PublishConnectionStatus": {
-        "enum": [
-          "active",
-          "reconnect_required"
-        ],
-        "title": "PublishConnectionStatus",
-        "type": "string"
-      },
-      "PublishCreateRequest": {
-        "properties": {
-          "caption": {
-            "default": "",
-            "maxLength": 2200,
-            "title": "Caption",
-            "type": "string"
-          },
-          "connection_id": {
-            "format": "uuid",
-            "title": "Connection Id",
-            "type": "string"
-          },
-          "export_id": {
-            "format": "uuid",
-            "title": "Export Id",
-            "type": "string"
-          },
-          "privacy": {
-            "default": "private",
-            "pattern": "^(private|public|unlisted)$",
-            "title": "Privacy",
-            "type": "string"
-          },
-          "title": {
-            "default": "Motionly export",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "required": [
-          "export_id",
-          "connection_id"
-        ],
-        "title": "PublishCreateRequest",
-        "type": "object"
-      },
-      "PublishJobListResponse": {
-        "properties": {
-          "jobs": {
-            "items": {
-              "$ref": "#/components/schemas/PublishJobResponse"
-            },
-            "title": "Jobs",
-            "type": "array"
-          }
-        },
-        "required": [
-          "jobs"
-        ],
-        "title": "PublishJobListResponse",
-        "type": "object"
-      },
-      "PublishJobResponse": {
-        "properties": {
-          "caption": {
-            "title": "Caption",
-            "type": "string"
-          },
-          "connection_id": {
-            "format": "uuid",
-            "title": "Connection Id",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "duplicate_publish_risk": {
-            "default": false,
-            "title": "Duplicate Publish Risk",
-            "type": "boolean"
-          },
-          "error_category": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Category"
-          },
-          "error_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Code"
-          },
-          "error_message": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Message"
-          },
-          "export_id": {
-            "format": "uuid",
-            "title": "Export Id",
-            "type": "string"
-          },
-          "external_post_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "External Post Id"
-          },
-          "external_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "External Url"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "platform": {
-            "$ref": "#/components/schemas/PublishPlatform"
-          },
-          "privacy": {
-            "title": "Privacy",
-            "type": "string"
-          },
-          "project_id": {
-            "format": "uuid",
-            "title": "Project Id",
-            "type": "string"
-          },
-          "provider_operation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provider Operation Id"
-          },
-          "reconnect_required": {
-            "default": false,
-            "title": "Reconnect Required",
-            "type": "boolean"
-          },
-          "retry_after_seconds": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retry After Seconds"
-          },
-          "retry_count": {
-            "default": 0,
-            "title": "Retry Count",
-            "type": "integer"
-          },
-          "retryable": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retryable"
-          },
-          "status": {
-            "$ref": "#/components/schemas/PublishStatus"
-          },
-          "title": {
-            "title": "Title",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          },
-          "user_message": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Message"
-          },
-          "workspace_id": {
-            "format": "uuid",
-            "title": "Workspace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "workspace_id",
-          "project_id",
-          "export_id",
-          "connection_id",
-          "platform",
-          "status",
-          "title",
-          "caption",
-          "privacy",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "PublishJobResponse",
-        "type": "object"
-      },
       "PublishLanguage": {
         "enum": [
           "en",
@@ -10583,60 +9813,6 @@
           "ar"
         ],
         "title": "PublishLanguage",
-        "type": "string"
-      },
-      "PublishOAuthStartRequest": {
-        "properties": {
-          "return_url": {
-            "format": "uri",
-            "minLength": 1,
-            "title": "Return Url",
-            "type": "string"
-          }
-        },
-        "required": [
-          "return_url"
-        ],
-        "title": "PublishOAuthStartRequest",
-        "type": "object"
-      },
-      "PublishOAuthStartResponse": {
-        "properties": {
-          "authorization_url": {
-            "title": "Authorization Url",
-            "type": "string"
-          }
-        },
-        "required": [
-          "authorization_url"
-        ],
-        "title": "PublishOAuthStartResponse",
-        "type": "object"
-      },
-      "PublishPlatform": {
-        "enum": [
-          "tiktok",
-          "instagram",
-          "youtube"
-        ],
-        "title": "PublishPlatform",
-        "type": "string"
-      },
-      "PublishStatus": {
-        "enum": [
-          "queued",
-          "refreshing_token",
-          "publishing",
-          "uploading",
-          "processing",
-          "published",
-          "retry_scheduled",
-          "reconnect_required",
-          "duplicate_risk_needs_review",
-          "failed",
-          "cancelled"
-        ],
-        "title": "PublishStatus",
         "type": "string"
       },
       "QueueActionResponse": {
@@ -17286,22 +16462,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -17399,22 +16559,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -17520,22 +16664,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -17627,22 +16755,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -17720,22 +16832,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -17833,22 +16929,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -17935,22 +17015,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -18045,22 +17109,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -18151,22 +17199,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -18244,22 +17276,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -18365,22 +17381,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -18468,22 +17468,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -18579,22 +17563,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -18660,22 +17628,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -18735,22 +17687,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -18836,22 +17772,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -18960,22 +17880,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -19035,22 +17939,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -19140,22 +18028,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -19227,22 +18099,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -19332,22 +18188,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -19433,22 +18273,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -19510,22 +18334,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -19605,22 +18413,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -19682,22 +18474,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -19767,22 +18543,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -19842,22 +18602,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -19937,22 +18681,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -20028,22 +18756,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -20115,22 +18827,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -20241,22 +18937,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -20318,22 +18998,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -21316,22 +19980,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -21417,22 +20065,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -21510,22 +20142,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -21585,22 +20201,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -21690,22 +20290,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -21768,22 +20352,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -21873,22 +20441,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -21966,22 +20518,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -22041,22 +20577,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -22146,22 +20666,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -22224,22 +20728,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -22331,22 +20819,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -22406,22 +20878,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -22511,22 +20967,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -22600,22 +21040,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -22685,22 +21109,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -22818,22 +21226,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -22903,22 +21295,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -23020,22 +21396,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -23107,22 +21467,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -23214,22 +21558,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -23301,22 +21629,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -23418,22 +21730,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -23505,22 +21801,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -23606,22 +21886,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -23721,22 +21985,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -23822,22 +22070,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -23919,22 +22151,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -24043,22 +22259,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -24154,22 +22354,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -24255,22 +22439,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -24352,22 +22520,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -24484,22 +22636,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -24581,22 +22717,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -24698,22 +22818,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -24785,22 +22889,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -24900,22 +22988,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -25007,22 +23079,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -25133,22 +23189,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -25224,22 +23264,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -25309,22 +23333,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -25424,22 +23432,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -25525,22 +23517,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -25618,22 +23594,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -25735,22 +23695,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -25836,22 +23780,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -25932,22 +23860,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -26039,22 +23951,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -26124,22 +24020,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -26235,22 +24115,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -26359,22 +24223,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -26439,22 +24287,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -26530,22 +24362,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -26635,22 +24451,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -26736,22 +24536,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -26833,22 +24617,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -26953,22 +24721,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -27012,495 +24764,6 @@
         ]
       }
     },
-    "/projects/{project_id}/performance-feedback/insights": {
-      "get": {
-        "operationId": "get_insights_projects__project_id__performance_feedback_insights_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "platform",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/PublishPlatform"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Platform"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PerformanceFeedbackInsightsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Insights",
-        "tags": [
-          "performance feedback"
-        ]
-      }
-    },
-    "/projects/{project_id}/performance-feedback/policy": {
-      "get": {
-        "operationId": "get_policy_projects__project_id__performance_feedback_policy_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PerformanceFeedbackPolicyResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Policy",
-        "tags": [
-          "performance feedback"
-        ]
-      },
-      "put": {
-        "operationId": "set_policy_projects__project_id__performance_feedback_policy_put",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PerformanceFeedbackPolicyUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PerformanceFeedbackPolicyResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Set Policy",
-        "tags": [
-          "performance feedback"
-        ]
-      }
-    },
-    "/projects/{project_id}/performance-feedback/revoke": {
-      "post": {
-        "operationId": "revoke_policy_projects__project_id__performance_feedback_revoke_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PerformanceFeedbackRevocationRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PerformanceFeedbackPolicyResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Revoke Policy",
-        "tags": [
-          "performance feedback"
-        ]
-      }
-    },
-    "/projects/{project_id}/performance-feedback/status": {
-      "get": {
-        "operationId": "get_status_projects__project_id__performance_feedback_status_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PerformanceFeedbackStatusResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Status",
-        "tags": [
-          "performance feedback"
-        ]
-      }
-    },
     "/projects/{project_id}/phase5/audio-intelligence": {
       "get": {
         "operationId": "get_audio_intelligence_projects__project_id__phase5_audio_intelligence_get",
@@ -27529,22 +24792,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -27624,22 +24871,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -27709,22 +24940,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -27814,22 +25029,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -27911,22 +25110,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -28045,22 +25228,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -28132,22 +25299,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -28247,22 +25398,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -28344,22 +25479,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -28459,22 +25578,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -28570,22 +25673,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -28677,22 +25764,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -28802,22 +25873,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -28913,22 +25968,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -29020,22 +26059,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -29154,22 +26177,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -29276,22 +26283,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -29373,22 +26364,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -29490,22 +26465,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -29575,22 +26534,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -29689,22 +26632,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -29792,22 +26719,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -29877,22 +26788,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -29992,22 +26887,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -30089,22 +26968,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -30194,22 +27057,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -30291,22 +27138,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -30422,22 +27253,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -30519,22 +27334,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -30634,22 +27433,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -30741,22 +27524,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -30858,22 +27625,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -30959,22 +27710,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -31056,22 +27791,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -31171,22 +27890,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -31230,320 +27933,6 @@
         ]
       }
     },
-    "/projects/{project_id}/publish": {
-      "get": {
-        "operationId": "list_publish_jobs_projects__project_id__publish_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublishJobListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Publish Jobs",
-        "tags": [
-          "publishing"
-        ]
-      },
-      "post": {
-        "operationId": "create_publish_job_projects__project_id__publish_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublishCreateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublishJobResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Publish Job",
-        "tags": [
-          "publishing"
-        ]
-      }
-    },
-    "/projects/{project_id}/publish/{publish_job_id}/performance-metrics": {
-      "post": {
-        "description": "Accept only the aggregate metric allow-list for a completed Motionly publish job.",
-        "operationId": "ingest_performance_metric_projects__project_id__publish__publish_job_id__performance_metrics_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "project_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Project Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "publish_job_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Publish Job Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PerformanceMetricIngestRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PerformanceMetricResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Ingest Performance Metric",
-        "tags": [
-          "performance feedback"
-        ]
-      }
-    },
     "/projects/{project_id}/regenerate": {
       "post": {
         "operationId": "regenerate_project_layers_projects__project_id__regenerate_post",
@@ -31572,22 +27961,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -31689,22 +28062,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -31774,22 +28131,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -31875,22 +28216,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -31990,22 +28315,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -32087,22 +28396,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -32192,22 +28485,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -32287,22 +28564,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -32394,22 +28655,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -32479,22 +28724,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -32594,22 +28823,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -32691,22 +28904,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -32806,22 +29003,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -32913,22 +29094,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -33028,22 +29193,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -33129,22 +29278,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -33216,22 +29349,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -33321,22 +29438,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -33408,22 +29509,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -33509,22 +29594,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -33624,22 +29693,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -33725,22 +29778,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -33822,22 +29859,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -33946,22 +29967,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -34057,22 +30062,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -34154,22 +30143,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -34259,22 +30232,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -34356,22 +30313,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -34461,22 +30402,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -34562,22 +30487,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -34649,22 +30558,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -34775,22 +30668,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -34876,22 +30753,6 @@
           },
           {
             "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
             "name": "x-motionly-workspace-id",
             "required": false,
             "schema": {
@@ -34973,22 +30834,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -35084,22 +30929,6 @@
                 }
               ],
               "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
             }
           },
           {
@@ -35313,423 +31142,6 @@
         "summary": "Resolve Public Review",
         "tags": [
           "public client reviews"
-        ]
-      }
-    },
-    "/publish/connections": {
-      "get": {
-        "operationId": "list_connections_publish_connections_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublishConnectionListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Connections",
-        "tags": [
-          "publishing"
-        ]
-      },
-      "post": {
-        "operationId": "create_connection_publish_connections_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublishConnectionCreateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublishConnectionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Connection",
-        "tags": [
-          "publishing"
-        ]
-      }
-    },
-    "/publish/connections/{connection_id}": {
-      "delete": {
-        "operationId": "delete_connection_publish_connections__connection_id__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "connection_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Connection Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Delete Connection",
-        "tags": [
-          "publishing"
-        ]
-      }
-    },
-    "/publish/oauth/{platform}/callback": {
-      "get": {
-        "operationId": "complete_publish_oauth_publish_oauth__platform__callback_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "platform",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/PublishPlatform"
-            }
-          },
-          {
-            "in": "query",
-            "name": "code",
-            "required": true,
-            "schema": {
-              "title": "Code",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "state",
-            "required": true,
-            "schema": {
-              "title": "State",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "307": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Complete Publish Oauth",
-        "tags": [
-          "publishing"
-        ]
-      }
-    },
-    "/publish/oauth/{platform}/start": {
-      "post": {
-        "operationId": "start_publish_oauth_publish_oauth__platform__start_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "platform",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/PublishPlatform"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-user-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-User-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-motionly-workspace-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Motionly-Workspace-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublishOAuthStartRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublishOAuthStartResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Start Publish Oauth",
-        "tags": [
-          "publishing"
         ]
       }
     },

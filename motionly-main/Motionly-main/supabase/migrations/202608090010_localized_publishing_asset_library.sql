@@ -72,7 +72,8 @@ create table if not exists public.asset_library_items (
   updated_at timestamptz not null default now(),
   constraint asset_library_items_project_tenant_fk
     foreign key (workspace_id, source_project_id)
-    references public.projects (workspace_id, id) on delete set null
+    references public.projects (workspace_id, id) on delete set null,
+  unique (workspace_id, id)
 );
 
 create unique index if not exists asset_library_items_workspace_source_key_idx

@@ -11,7 +11,10 @@ import type {
   WorkflowDetail,
   WorkflowRunState,
 } from "@motionly/shared";
-import { renderStatusLabel, uploadStatusMessage } from "@/lib/product-flow-status";
+import {
+  renderStatusLabel,
+  uploadStatusMessage,
+} from "@/lib/product-flow-status";
 import {
   FIRST_DRAFT_STATE_ORDER,
   isCanonicalDraftReady,
@@ -23,11 +26,17 @@ export type CreatorInspectorTab = "ai" | "captions" | "look" | "export";
 
 const WORKFLOW_STAGE_COPY: Record<
   (typeof FIRST_DRAFT_STATE_ORDER)[number],
-  { label: string; description: string; detail: string; actionLabel: string | null }
+  {
+    label: string;
+    description: string;
+    detail: string;
+    actionLabel: string | null;
+  }
 > = {
   uploaded: {
     label: "Uploaded",
-    description: "Source video is registered with the durable first-draft workflow.",
+    description:
+      "Source video is registered with the durable first-draft workflow.",
     detail: "Upload received.",
     actionLabel: null,
   },
@@ -51,7 +60,8 @@ const WORKFLOW_STAGE_COPY: Record<
   },
   assembling: {
     label: "Assembling",
-    description: "PostgreSQL and Temporal are assembling the approved timeline.",
+    description:
+      "PostgreSQL and Temporal are assembling the approved timeline.",
     detail: "Binding the approved plan, timeline, and source lineage.",
     actionLabel: null,
   },
@@ -71,7 +81,9 @@ const WORKFLOW_STAGE_COPY: Record<
 
 function terminalStageIndex(workflow: WorkflowDetail): number {
   if (workflow.draft_render?.id) return workflowStateIndex("draft_rendering");
-  const types = new Set((workflow.artifacts ?? []).map((artifact) => artifact.type));
+  const types = new Set(
+    (workflow.artifacts ?? []).map((artifact) => artifact.type),
+  );
   if (types.has("timeline_revision") || types.has("decision")) {
     return workflowStateIndex("assembling");
   }
@@ -84,7 +96,8 @@ function terminalStageIndex(workflow: WorkflowDetail): number {
 
 function workflowTasks(workflow: WorkflowDetail): CreatorTask[] {
   const stateIndex = workflowStateIndex(workflow.state);
-  const currentIndex = stateIndex >= 0 ? stateIndex : terminalStageIndex(workflow);
+  const currentIndex =
+    stateIndex >= 0 ? stateIndex : terminalStageIndex(workflow);
   const draftReady = isCanonicalDraftReady(workflow);
   const tasks = FIRST_DRAFT_STATE_ORDER.map((state, index): CreatorTask => {
     const copy = WORKFLOW_STAGE_COPY[state];
@@ -196,13 +209,16 @@ export function buildCreatorTasks({
       key: "prepare",
       label: "Prepare",
       shortLabel: "Prepare",
-      description: "Transcript and visual context are prepared for a manual proposal.",
+      description:
+        "Transcript and visual context are prepared for a manual proposal.",
       status: transcriptFailed
         ? "blocked"
         : transcriptReady && (visualReady || visualBlocked)
           ? "done"
           : "active",
-      progress: transcriptReady ? 100 : Math.max(5, transcript?.progress_pct ?? 0),
+      progress: transcriptReady
+        ? 100
+        : Math.max(5, transcript?.progress_pct ?? 0),
       detail: transcriptFailed
         ? transcript?.error_message || "Transcription needs a retry."
         : transcriptReady
@@ -215,7 +231,11 @@ export function buildCreatorTasks({
       label: "Standalone edit",
       shortLabel: "Edit",
       description: "A manual proposal generated in this browser session.",
-      status: hasStandalonePlan ? "done" : transcriptReady ? "active" : "waiting",
+      status: hasStandalonePlan
+        ? "done"
+        : transcriptReady
+          ? "active"
+          : "waiting",
       progress: hasStandalonePlan ? 100 : transcriptReady ? 25 : 0,
       detail: hasStandalonePlan
         ? `Timeline v${activePlan.version} is available.`
@@ -234,7 +254,9 @@ export function buildCreatorTasks({
           : latestRenderJob
             ? "active"
             : "waiting",
-      progress: hasStandaloneExport ? 100 : latestRenderJob?.progress_pct ?? 0,
+      progress: hasStandaloneExport
+        ? 100
+        : (latestRenderJob?.progress_pct ?? 0),
       detail: latestRenderJob
         ? renderStatusLabel(latestRenderJob.status)
         : "No standalone render started.",
@@ -261,7 +283,6 @@ export function inspectorTabForCreatorTask(
     case "draft_rendering":
     case "draft_ready":
     case "export":
-    case "publish":
       return "export";
     case "review":
       return "captions";

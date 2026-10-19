@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  assembleRenderProps,
-  signReferenceAtExecution,
-} from "./remotion.mjs";
+import { assembleRenderProps, signReferenceAtExecution } from "./remotion.mjs";
 
 test("Remotion signs durable source references immediately before use", async () => {
   process.env.WORKER_API_BASE_URL = "https://api.motionly.test/";
@@ -23,7 +20,8 @@ test("Remotion signs durable source references immediately before use", async ()
           return new Response(
             JSON.stringify({
               signed_urls: {
-                [referenceId]: "https://storage.example.test/source.mp4?token=short-lived",
+                [referenceId]:
+                  "https://storage.example.test/source.mp4?token=short-lived",
               },
               ttl_seconds: 7200,
             }),

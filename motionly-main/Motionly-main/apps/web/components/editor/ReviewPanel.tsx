@@ -76,8 +76,6 @@ function parseAssignees(value: string) {
 export function ReviewPanel({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   activePlan,
   mediaRevision,
   uploadedVideoId,
@@ -89,8 +87,6 @@ export function ReviewPanel({
 }: {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   activePlan: EditPlanRecordSummary | null;
   mediaRevision: number | null | undefined;
   uploadedVideoId: string;
@@ -115,8 +111,6 @@ export function ReviewPanel({
   ) =>
     editorApiRequest<T>(`${env.apiBaseUrl}${path}`, {
       workspaceId,
-      userId,
-      accessToken: apiAccessToken,
       method: options?.method,
       body: options?.body,
       friendlyError: "The review could not be updated. Please try again.",

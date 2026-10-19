@@ -155,3 +155,61 @@ def test_release_schema_lists_exactly_the_v2_generator_contract() -> None:
         "size_bytes",
         "files",
     }
+
+
+def test_only_ghcr_or_a_loopback_rehearsal_registry_is_a_valid_image_source() -> None:
+    digest = "a" * 64
+    valid = release_manifest.DIGEST_IMAGE_RE.fullmatch
+    assert valid(f"ghcr.io/motionly/api@sha256:{digest}")
+    # The local release rehearsal's registry; the release agent additionally
+    # requires every image to come from its configured registry, and only a
+    # rehearsal host accepts a loopback one (scripts/deploy/apply_release.sh).
+    assert valid(f"127.0.0.1:15001/motionly/api@sha256:{digest}")
+    assert valid(f"localhost:15001/motionly/api@sha256:{digest}")
+    for invalid in (
+        f"docker.io/motionly/api@sha256:{digest}",
+        f"10.0.0.5:5000/motionly/api@sha256:{digest}",
+        f"127.0.0.1/motionly/api@sha256:{digest}",
+        "127.0.0.1:15001/motionly/api:latest",
+    ):
+        assert not valid(invalid), invalid
+
+
+def test_the_bundle_carries_every_bind_mount_source_of_the_production_topology() -> None:
+    """Found by the release rehearsal: a flow-style mount
+    (`volumes: [./supabase-kong.yml:/kong/kong.yml:ro]`) was left out, so the
+    gateway started without its configuration and never became healthy."""
+    import yaml
+
+    bundle_spec = importlib.util.spec_from_file_location(
+        "release_bundle", ROOT / "scripts" / "release" / "package_release_bundle.py"
+    )
+    assert bundle_spec and bundle_spec.loader
+    bundle = importlib.util.module_from_spec(bundle_spec)
+    sys.modules["release_bundle"] = bundle
+    bundle_spec.loader.exec_module(bundle)
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    def construct(loader, _suffix, node):
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+        return loader.construct_scalar(node)
+
+    Loader.add_multi_constructor("!", construct)
+    compose_file = ROOT / "infra" / "docker-compose.gpu.yml"
+    compose = yaml.load(compose_file.read_text(encoding="utf-8"), Loader=Loader)
+    expected = set()
+    for service in compose["services"].values():
+        for volume in service.get("volumes") or []:
+            source = volume.get("source") if isinstance(volume, dict) else volume.split(":")[0]
+            if isinstance(source, str) and source.startswith("."):
+                expected.add((compose_file.parent / source).resolve().relative_to(ROOT).as_posix())
+
+    carried = {path.relative_to(ROOT).as_posix() for path in bundle.compose_bind_mount_sources()}
+
+    assert "infra/supabase-kong.yml" in expected
+    assert expected <= carried, sorted(expected - carried)

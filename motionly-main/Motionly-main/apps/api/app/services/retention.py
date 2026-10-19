@@ -72,7 +72,6 @@ class RetentionService:
             "transcripts": 0,
             "analytics_events": 0,
             "exports": 0,
-            "expired_performance_feedback_metrics": 0,
             "local_cache_files": 0,
             "local_cache_bytes": 0,
             "expired_upload_sessions": 0,
@@ -112,13 +111,6 @@ class RetentionService:
                 table="exports",
                 older_than_days=self.settings.retention_export_days,
             )
-            # Performance feedback uses its consent-time retention deadline rather than
-            # a deployment-wide analytics duration. It is aggregate-only, but still
-            # removed once the creator-selected expiry is reached.
-            counts["expired_performance_feedback_metrics"] = (
-                self._delete_expired_performance_feedback_metrics()
-            )
-
             # Redact/expire raw provider payloads in transcripts older than 30 days
             cutoff_30 = self._cutoff(30)
             self._request(
@@ -134,14 +126,6 @@ class RetentionService:
         counts["local_cache_files"] = evicted["removed_files"]
         counts["local_cache_bytes"] = evicted["removed_bytes"]
         return counts
-
-    def _delete_expired_performance_feedback_metrics(self) -> int:
-        rows = self._request(
-            "DELETE",
-            "performance_feedback_metrics",
-            params={"expires_at": f"lte.{datetime.now(UTC).isoformat()}"},
-        )
-        return len(rows) if isinstance(rows, list) else 0
 
     def _expire_upload_sessions(self) -> int:
         return self._rpc_count("motionly_expire_upload_sessions")

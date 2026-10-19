@@ -23,12 +23,14 @@ export default async function ProjectsPage({
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = (await searchParams) ?? {};
-  const notice = typeof params.updated === "string"
-    ? "Project updated."
-    : typeof params.deleted === "string"
-      ? "Project deleted."
-      : null;
-  const error = typeof params.error === "string" ? params.error.replaceAll("_", " ") : null;
+  const notice =
+    typeof params.updated === "string"
+      ? "Project updated."
+      : typeof params.deleted === "string"
+        ? "Project deleted."
+        : null;
+  const error =
+    typeof params.error === "string" ? params.error.replaceAll("_", " ") : null;
   const context = await getWorkspaceApiContext();
   if (!context) {
     return (
@@ -59,9 +61,12 @@ export default async function ProjectsPage({
             <p className="text-xs font-black uppercase tracking-widest text-primary">
               Project library
             </p>
-            <h2 className="mt-2 text-3xl font-black tracking-tight">Manage reels</h2>
+            <h2 className="mt-2 text-3xl font-black tracking-tight">
+              Manage reels
+            </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Rename, review, open, and remove projects before they reach export.
+              Rename, review, open, and remove projects before they reach
+              export.
             </p>
           </div>
           <ButtonLink href="/projects/new" className="h-12 shrink-0 gap-2 px-6">
@@ -70,19 +75,18 @@ export default async function ProjectsPage({
           </ButtonLink>
         </section>
 
-        {notice ? (
-          <Alert tone="success">{notice}</Alert>
-        ) : null}
-        {error ? (
-          <Alert tone="danger">{error}</Alert>
-        ) : null}
+        {notice ? <Alert tone="success">{notice}</Alert> : null}
+        {error ? <Alert tone="danger">{error}</Alert> : null}
 
         {projects.length ? (
           <div className="grid gap-4">
             {projects.map((project) => (
               <article key={project.id} className="pixel-panel p-4">
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_110px] lg:items-center">
-                  <form action={updateProject} className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_150px_auto] sm:items-end">
+                  <form
+                    action={updateProject}
+                    className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_150px_auto] sm:items-end"
+                  >
                     <input type="hidden" name="projectId" value={project.id} />
                     <label className="min-w-0">
                       <span className="mb-2 block text-xs font-black uppercase tracking-widest text-muted-foreground">
@@ -109,7 +113,11 @@ export default async function ProjectsPage({
                         <option value="failed">Failed</option>
                       </select>
                     </label>
-                    <Button type="submit" variant="secondary" className="h-11 gap-2">
+                    <Button
+                      type="submit"
+                      variant="secondary"
+                      className="h-11 gap-2"
+                    >
                       <Pencil className="size-4" aria-hidden="true" />
                       Save
                     </Button>
@@ -144,7 +152,11 @@ export default async function ProjectsPage({
                       Open
                     </Link>
                     <form action={deleteProject}>
-                      <input type="hidden" name="projectId" value={project.id} />
+                      <input
+                        type="hidden"
+                        name="projectId"
+                        value={project.id}
+                      />
                       <Button
                         type="submit"
                         variant="secondary"

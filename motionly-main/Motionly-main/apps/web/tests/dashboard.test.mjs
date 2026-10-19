@@ -26,7 +26,9 @@ test("DashboardClient.tsx implements search, sort, and onboarding correctly", as
   assert.match(source, /Upload Video/);
   assert.match(source, /AI Drafting/);
   assert.match(source, /Fine-Tune/);
-  assert.match(source, /Export & Post/);
+  assert.match(source, /Export & Download/);
+  // Motionly does not post to social platforms.
+  assert.doesNotMatch(source, /publish directly|Export & Post/i);
 });
 
 test("DashboardClient.tsx implements secure pixel delete confirmation dialog", async () => {

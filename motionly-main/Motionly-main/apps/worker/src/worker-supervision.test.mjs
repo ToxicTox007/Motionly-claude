@@ -77,11 +77,16 @@ test("killing a Python subprocess rejects the in-flight job and the next call re
   };
 
   await assert.rejects(
-    persistentPythonExecutor("domain", "app.workers.domain_job", { kind: "transcription" }, {
-      spawnImpl,
-      heartbeatIntervalMs: 0,
-      requestTimeoutMs: 25,
-    }),
+    persistentPythonExecutor(
+      "domain",
+      "app.workers.domain_job",
+      { kind: "transcription" },
+      {
+        spawnImpl,
+        heartbeatIntervalMs: 0,
+        requestTimeoutMs: 25,
+      },
+    ),
     (error) => error.code === "subprocess_crashed",
   );
 
@@ -113,11 +118,16 @@ test("broken pipe is detected and surfaced", async () => {
   };
 
   await assert.rejects(
-    persistentPythonExecutor("domain", "app.workers.domain_job", { kind: "render" }, {
-      spawnImpl,
-      heartbeatIntervalMs: 0,
-      requestTimeoutMs: 25,
-    }),
+    persistentPythonExecutor(
+      "domain",
+      "app.workers.domain_job",
+      { kind: "render" },
+      {
+        spawnImpl,
+        heartbeatIntervalMs: 0,
+        requestTimeoutMs: 25,
+      },
+    ),
     (error) => error.code === "python_broken_pipe",
   );
 });
@@ -137,11 +147,16 @@ test("no-response timeout is detected", async () => {
   };
 
   await assert.rejects(
-    persistentPythonExecutor("domain", "app.workers.domain_job", { kind: "render" }, {
-      spawnImpl: childFactory,
-      heartbeatIntervalMs: 0,
-      requestTimeoutMs: 10,
-    }),
+    persistentPythonExecutor(
+      "domain",
+      "app.workers.domain_job",
+      { kind: "render" },
+      {
+        spawnImpl: childFactory,
+        heartbeatIntervalMs: 0,
+        requestTimeoutMs: 10,
+      },
+    ),
     (error) => error.code === "python_response_timeout",
   );
 });
@@ -163,11 +178,16 @@ test("invalid protocol response is handled safely", async () => {
   };
 
   await assert.rejects(
-    persistentPythonExecutor("visual", "app.workers.visual_job", { kind: "visual_analysis" }, {
-      spawnImpl,
-      heartbeatIntervalMs: 0,
-      requestTimeoutMs: 25,
-    }),
+    persistentPythonExecutor(
+      "visual",
+      "app.workers.visual_job",
+      { kind: "visual_analysis" },
+      {
+        spawnImpl,
+        heartbeatIntervalMs: 0,
+        requestTimeoutMs: 25,
+      },
+    ),
     (error) => error.code === "python_protocol_invalid",
   );
 });
@@ -194,7 +214,27 @@ test("subprocess restart backoff is applied and logged", async () => {
   };
 
   await assert.rejects(
-    persistentPythonExecutor("matte", "app.workers.matte_job", { kind: "matte_extraction" }, {
+    persistentPythonExecutor(
+      "matte",
+      "app.workers.matte_job",
+      { kind: "matte_extraction" },
+      {
+        spawnImpl,
+        heartbeatIntervalMs: 0,
+        requestTimeoutMs: 25,
+        restartBackoffMs: 7,
+        restartBackoffCapMs: 7,
+        sleep: async (delay) => delays.push(delay),
+        log: (event) => events.push(event),
+      },
+    ),
+  );
+
+  await persistentPythonExecutor(
+    "matte",
+    "app.workers.matte_job",
+    { kind: "matte_extraction" },
+    {
       spawnImpl,
       heartbeatIntervalMs: 0,
       requestTimeoutMs: 25,
@@ -202,21 +242,13 @@ test("subprocess restart backoff is applied and logged", async () => {
       restartBackoffCapMs: 7,
       sleep: async (delay) => delays.push(delay),
       log: (event) => events.push(event),
-    }),
+    },
   );
 
-  await persistentPythonExecutor("matte", "app.workers.matte_job", { kind: "matte_extraction" }, {
-    spawnImpl,
-    heartbeatIntervalMs: 0,
-    requestTimeoutMs: 25,
-    restartBackoffMs: 7,
-    restartBackoffCapMs: 7,
-    sleep: async (delay) => delays.push(delay),
-    log: (event) => events.push(event),
-  });
-
   assert.deepEqual(delays, [7]);
-  assert.ok(events.some((event) => event.event === "subprocess_restart_scheduled"));
+  assert.ok(
+    events.some((event) => event.event === "subprocess_restart_scheduled"),
+  );
   assert.ok(events.some((event) => event.event === "subprocess_restarted"));
 });
 
@@ -238,25 +270,35 @@ test("restart limit is enforced and emits a structured event", async () => {
   };
 
   await assert.rejects(
-    persistentPythonExecutor("domain", "app.workers.domain_job", { kind: "render" }, {
-      spawnImpl,
-      heartbeatIntervalMs: 0,
-      requestTimeoutMs: 25,
-      maxRestartsPerWindow: 1,
-      restartWindowMs: 60_000,
-      log: (event) => events.push(event),
-    }),
+    persistentPythonExecutor(
+      "domain",
+      "app.workers.domain_job",
+      { kind: "render" },
+      {
+        spawnImpl,
+        heartbeatIntervalMs: 0,
+        requestTimeoutMs: 25,
+        maxRestartsPerWindow: 1,
+        restartWindowMs: 60_000,
+        log: (event) => events.push(event),
+      },
+    ),
   );
 
   await assert.rejects(
-    persistentPythonExecutor("domain", "app.workers.domain_job", { kind: "render" }, {
-      spawnImpl,
-      heartbeatIntervalMs: 0,
-      requestTimeoutMs: 25,
-      maxRestartsPerWindow: 1,
-      restartWindowMs: 60_000,
-      log: (event) => events.push(event),
-    }),
+    persistentPythonExecutor(
+      "domain",
+      "app.workers.domain_job",
+      { kind: "render" },
+      {
+        spawnImpl,
+        heartbeatIntervalMs: 0,
+        requestTimeoutMs: 25,
+        maxRestartsPerWindow: 1,
+        restartWindowMs: 60_000,
+        log: (event) => events.push(event),
+      },
+    ),
     (error) => error.code === "subprocess_restart_limit_exceeded",
   );
 
@@ -281,7 +323,10 @@ test("upload preflight fails fast when the upload row is gone", async () => {
       fetchImpl: async (url, options) => {
         assert.match(String(url), /uploaded_videos/);
         assert.equal(options.headers.apikey, "test-service-role");
-        return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+        return new Response("[]", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       },
     }),
     (error) => error.code === "upload_not_found",
@@ -301,10 +346,10 @@ test("upload preflight accepts matching uploads", async () => {
 
   const row = await ensureUploadRecordExists(job, {
     fetchImpl: async () =>
-      new Response(
-        JSON.stringify([{ id: "video-123", status: "ready" }]),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      new Response(JSON.stringify([{ id: "video-123", status: "ready" }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
   });
 
   assert.deepEqual(row, { id: "video-123", status: "ready" });
@@ -381,7 +426,10 @@ test("Python worker Docker images configure the media import root", async () => 
     "Dockerfile.gpu",
     "Dockerfile.python.demucs",
   ]) {
-    const dockerfile = await readFile(new URL(`../${filename}`, import.meta.url), "utf8");
+    const dockerfile = await readFile(
+      new URL(`../${filename}`, import.meta.url),
+      "utf8",
+    );
     assert.match(dockerfile, /PYTHON_MEDIA_CWD=\/app/);
     assert.match(dockerfile, /WORKDIR \/app\/apps\/worker/);
   }

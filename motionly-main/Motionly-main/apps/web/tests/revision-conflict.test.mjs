@@ -8,13 +8,13 @@ const root = new URL("../", import.meta.url);
 // 1. RevisionConflictError — instantiation from 409 response, properties accessible
 // ---------------------------------------------------------------------------
 test("RevisionConflictError instantiation from 409 response with properties accessible", async () => {
-  const source = await readFile(
-    new URL("lib/client-api.ts", root),
-    "utf8",
-  );
+  const source = await readFile(new URL("lib/client-api.ts", root), "utf8");
 
   // Class extends EditorApiError
-  assert.match(source, /export class RevisionConflictError extends EditorApiError/);
+  assert.match(
+    source,
+    /export class RevisionConflictError extends EditorApiError/,
+  );
   // Has expectedRevision and currentRevision properties
   assert.match(source, /expectedRevision: number/);
   assert.match(source, /currentRevision: number/);
@@ -41,7 +41,7 @@ test("useRevisionTracking initial state is null revision with no conflict", asyn
   // Initial plan revision is null
   assert.match(source, /useState<number \| null>\(null\)/);
   // Initial conflict state is null
-  assert.match(source, /useState<ConflictState \| null>\(null\)/);
+  assert.match(source, /useState<ConflictState \| null>\(\s*null,?\s*\)/);
   // Ref starts as null
   assert.match(source, /useRef<number \| null>\(null\)/);
 });
@@ -133,9 +133,15 @@ test("ConflictDialog renders conflict message and two resolution buttons", async
   // Shows conflict description
   assert.match(source, /Your changes conflict with a newer version/);
   // Reload button exists with label
-  assert.match(source, /aria-label="Reload plan from server and discard local changes"/);
+  assert.match(
+    source,
+    /aria-label="Reload plan from server and discard local changes"/,
+  );
   // Force save button exists with label
-  assert.match(source, /aria-label="Force save your changes, overwriting the newer version"/);
+  assert.match(
+    source,
+    /aria-label="Force save your changes, overwriting the newer version"/,
+  );
   // Shows revision numbers
   assert.match(source, /conflict\.expectedRevision/);
   assert.match(source, /conflict\.currentRevision/);
@@ -189,7 +195,10 @@ test("StaleIndicator renders stale warning message", async () => {
   );
 
   // Default message about outdated render
-  assert.match(source, /Render is outdated — timeline has been modified since last render/);
+  assert.match(
+    source,
+    /Render is outdated — timeline has been modified since last render/,
+  );
   // Uses role="status" for accessibility
   assert.match(source, /role="status"/);
   // Uses aria-live for screen readers
@@ -221,10 +230,7 @@ test("StaleIndicator action button calls onAction when clicked", async () => {
 // 12. client-api 409 detection — mock fetch returning 409, verify RevisionConflictError thrown
 // ---------------------------------------------------------------------------
 test("client-api detects 409 response and throws RevisionConflictError", async () => {
-  const source = await readFile(
-    new URL("lib/client-api.ts", root),
-    "utf8",
-  );
+  const source = await readFile(new URL("lib/client-api.ts", root), "utf8");
 
   // Checks response status for 409
   assert.match(source, /response\.status === 409/);
@@ -233,7 +239,13 @@ test("client-api detects 409 response and throws RevisionConflictError", async (
   // Throws RevisionConflictError with parsed fields
   assert.match(source, /throw new RevisionConflictError\(\{/);
   // Extracts expected_revision from response payload
-  assert.match(source, /expectedRevision: \(payload as any\)\?\.expected_revision/);
+  assert.match(
+    source,
+    /expectedRevision: \(payload as any\)\?\.expected_revision/,
+  );
   // Extracts current_revision from response payload
-  assert.match(source, /currentRevision: \(payload as any\)\?\.current_revision/);
+  assert.match(
+    source,
+    /currentRevision: \(payload as any\)\?\.current_revision/,
+  );
 });

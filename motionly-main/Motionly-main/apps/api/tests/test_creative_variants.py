@@ -57,9 +57,11 @@ def test_creative_variant_set_covers_selected_dimensions_and_never_enqueues_work
     assert stored.kind == "creative_variant_set"
     assert stored.result == {
         "comparison_ready": True,
-        "publish_blocked": True,
         "render_enqueued": False,
     }
+    # Motionly does not publish to social platforms, so nothing mentions it.
+    notes = " ".join(note for variant in response.variants for note in variant.comparison_notes)
+    assert "publish" not in notes.lower()
     assert not hasattr(context.request.app.state, "scale_queue")
 
 

@@ -52,7 +52,8 @@ export async function promoteEditorialDataset(formData: FormData) {
       { expected_revision: expectedRevision },
     );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "editorial_operation_failed";
+    const code =
+      error instanceof Error ? error.message : "editorial_operation_failed";
     redirect(operationUrl(projectId, `error=${encodeURIComponent(code)}`));
   }
   revalidatePath("/admin/editorial-learning");
@@ -61,7 +62,9 @@ export async function promoteEditorialDataset(formData: FormData) {
 
 export async function rollbackEditorialDeployment(formData: FormData) {
   const projectId = String(formData.get("projectId") ?? "");
-  const reason = String(formData.get("reason") ?? "admin_rollback").trim() || "admin_rollback";
+  const reason =
+    String(formData.get("reason") ?? "admin_rollback").trim() ||
+    "admin_rollback";
   if (!projectId || formData.get("confirmation") !== "ROLLBACK") {
     redirect(operationUrl(projectId, "error=rollback_confirmation_required"));
   }
@@ -71,7 +74,8 @@ export async function rollbackEditorialDeployment(formData: FormData) {
       { reason: reason.slice(0, 160) },
     );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "editorial_operation_failed";
+    const code =
+      error instanceof Error ? error.message : "editorial_operation_failed";
     redirect(operationUrl(projectId, `error=${encodeURIComponent(code)}`));
   }
   revalidatePath("/admin/editorial-learning");

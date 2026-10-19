@@ -13,7 +13,10 @@ import {
   durationMsToFrameCount,
   millisecondsToFrameStart,
 } from "@motionly/shared";
-import { manualVisualBackground, safeRendererMediaUrl } from "../manual-media-policy";
+import {
+  manualVisualBackground,
+  safeRendererMediaUrl,
+} from "../manual-media-policy";
 import type { ManualElement } from "@motionly/shared";
 
 export function ManualElements({
@@ -34,10 +37,7 @@ export function ManualElements({
           element.properties.assetUrl ?? element.properties.src,
           { allowDataAudio: true },
         );
-        if (
-          (element.type === "music" || element.type === "sfx") &&
-          audioSrc
-        ) {
+        if ((element.type === "music" || element.type === "sfx") && audioSrc) {
           const volume = Math.max(
             0,
             Math.min(1, Number(element.properties.volume ?? 80) / 100),
@@ -78,9 +78,7 @@ function ManualVisual({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
   const properties = element.properties ?? {};
-  const visualSrc = safeRendererMediaUrl(
-    properties.assetUrl ?? properties.src,
-  );
+  const visualSrc = safeRendererMediaUrl(properties.assetUrl ?? properties.src);
   if (element.type === "broll" && visualSrc) {
     return (
       <AbsoluteFill style={{ opacity: fade * element.opacity }}>

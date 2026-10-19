@@ -147,7 +147,6 @@ async def create_creative_variant_set(
         payload=persisted_payload.model_dump(mode="json"),
         result={
             "comparison_ready": True,
-            "publish_blocked": True,
             "render_enqueued": False,
         },
     )

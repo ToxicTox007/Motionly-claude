@@ -2,7 +2,15 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
-import { Maximize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
+import {
+  Maximize2,
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMs, outputMsToSourceMs } from "@/lib/timeline";
 import type {
@@ -126,10 +134,11 @@ export function VideoPreview({
   onElementSelect,
   sourceClips = [],
 }: VideoPreviewProps) {
-  const { setNodeRef: setCanvasDropRef, isOver: isCanvasDropActive } = useDroppable({
-    id: "canvas",
-    data: { zone: "canvas" },
-  });
+  const { setNodeRef: setCanvasDropRef, isOver: isCanvasDropActive } =
+    useDroppable({
+      id: "canvas",
+      data: { zone: "canvas" },
+    });
   const previewRootRef = React.useRef<HTMLDivElement | null>(null);
   const isPreviewVisible = usePreviewVisibility(previewRootRef);
   const [activeSourceUrl, setActiveSourceUrl] = useState(sourceUrl);
@@ -156,8 +165,14 @@ export function VideoPreview({
     thumbnailUrl && failedPosterUrl !== thumbnailUrl ? thumbnailUrl : null;
   const frameWidth = sourceWidth || activeIntrinsicSize?.width || 16;
   const frameHeight = sourceHeight || activeIntrinsicSize?.height || 9;
-  const previewAspectRatio = getPreviewAspectRatio(previewExport?.outputAspect, frameWidth, frameHeight);
-  const canonicalPreviewFps = normalizeRenderFps(previewExport?.fps ?? DEFAULT_RENDER_FPS);
+  const previewAspectRatio = getPreviewAspectRatio(
+    previewExport?.outputAspect,
+    frameWidth,
+    frameHeight,
+  );
+  const canonicalPreviewFps = normalizeRenderFps(
+    previewExport?.fps ?? DEFAULT_RENDER_FPS,
+  );
   const canonicalPlayheadMs = frameToMilliseconds(
     millisecondsToNearestFrame(playheadMs, canonicalPreviewFps),
     canonicalPreviewFps,
@@ -168,7 +183,10 @@ export function VideoPreview({
     totalDurationMs,
     captionSegments,
   });
-  const videoFilter = [getPreviewFilter(previewLook), previewMotion.filter].filter(Boolean).join(" ") || undefined;
+  const videoFilter =
+    [getPreviewFilter(previewLook), previewMotion.filter]
+      .filter(Boolean)
+      .join(" ") || undefined;
   const objectFit =
     previewExport?.fitMode === "fit"
       ? "contain"
@@ -181,11 +199,13 @@ export function VideoPreview({
       ? `${previewExport.cropX}% ${previewExport.cropY}%`
       : "center");
   const cropScale =
-    previewExport?.fitMode === "custom" ? Math.max(1, previewExport.cropZoom / 100) : 1;
-  const videoTransform = [
-    cropScale > 1 ? `scale(${cropScale})` : null,
-    previewMotion.transform,
-  ].filter(Boolean).join(" ") || undefined;
+    previewExport?.fitMode === "custom"
+      ? Math.max(1, previewExport.cropZoom / 100)
+      : 1;
+  const videoTransform =
+    [cropScale > 1 ? `scale(${cropScale})` : null, previewMotion.transform]
+      .filter(Boolean)
+      .join(" ") || undefined;
   const webglGrade = getWebGLGrade(previewLook);
 
   useEffect(() => {
@@ -232,14 +252,14 @@ export function VideoPreview({
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const onPlay  = () => setIsPlaying(true);
+    const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onEnded = () => setIsPlaying(false);
-    video.addEventListener("play",  onPlay);
+    video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     video.addEventListener("ended", onEnded);
     return () => {
-      video.removeEventListener("play",  onPlay);
+      video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("ended", onEnded);
     };
@@ -255,18 +275,21 @@ export function VideoPreview({
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) video.play();
-    else              video.pause();
+    else video.pause();
   }, [videoRef]);
 
-  const skip = useCallback((deltaS: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    const nextOutputMs = Math.max(
-      0,
-      Math.min(totalDurationMs, playheadMs + deltaS * 1000),
-    );
-    video.currentTime = outputMsToSourceMs(nextOutputMs, sourceClips) / 1000;
-  }, [playheadMs, sourceClips, totalDurationMs, videoRef]);
+  const skip = useCallback(
+    (deltaS: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const nextOutputMs = Math.max(
+        0,
+        Math.min(totalDurationMs, playheadMs + deltaS * 1000),
+      );
+      video.currentTime = outputMsToSourceMs(nextOutputMs, sourceClips) / 1000;
+    },
+    [playheadMs, sourceClips, totalDurationMs, videoRef],
+  );
 
   const toggleMute = useCallback(() => {
     const video = videoRef.current;
@@ -276,16 +299,19 @@ export function VideoPreview({
     setMuted(nextMuted);
   }, [videoRef]);
 
-  const updateVolume = useCallback((nextVolume: number) => {
-    const video = videoRef.current;
-    const clamped = Math.max(0, Math.min(100, nextVolume));
-    setVolume(clamped);
-    if (video) {
-      video.volume = clamped / 100;
-      video.muted = clamped === 0;
-      setMuted(video.muted);
-    }
-  }, [videoRef]);
+  const updateVolume = useCallback(
+    (nextVolume: number) => {
+      const video = videoRef.current;
+      const clamped = Math.max(0, Math.min(100, nextVolume));
+      setVolume(clamped);
+      if (video) {
+        video.volume = clamped / 100;
+        video.muted = clamped === 0;
+        setMuted(video.muted);
+      }
+    },
+    [videoRef],
+  );
 
   const requestFullscreen = useCallback(() => {
     const video = videoRef.current;
@@ -298,15 +324,21 @@ export function VideoPreview({
       ref={previewRootRef}
       className="pixel-grid-fine flex h-full min-h-0 max-w-full flex-col items-center justify-center gap-2 overflow-hidden bg-foreground/[0.02] p-1.5 sm:gap-3 sm:p-4"
     >
-      <h2 id="preview-heading" className="sr-only">Preview</h2>
+      <h2 id="preview-heading" className="sr-only">
+        Preview
+      </h2>
       {/* ── Video + overlays ─────────────────────────────────────────────── */}
-      <div
-        className="relative flex min-h-0 w-full flex-1 items-center justify-center"
-      >
+      <div className="relative flex min-h-0 w-full flex-1 items-center justify-center">
         <div
           ref={setCanvasDropRef}
           className="pixel-corners relative h-auto max-h-[min(100%,calc(100dvh-220px))] min-h-0 w-full max-w-[min(100%,22rem)] overflow-hidden border border-foreground/20 bg-black shadow-[3px_3px_0_hsl(var(--foreground)/0.1)] sm:max-w-[28rem] sm:border-2 sm:shadow-[6px_6px_0_hsl(var(--foreground)/0.12)] lg:h-full lg:max-h-full lg:max-w-full"
-          style={{ aspectRatio: previewAspectRatio, outline: isCanvasDropActive ? "3px solid hsl(var(--primary))" : undefined, outlineOffset: -3 }}
+          style={{
+            aspectRatio: previewAspectRatio,
+            outline: isCanvasDropActive
+              ? "3px solid hsl(var(--primary))"
+              : undefined,
+            outlineOffset: -3,
+          }}
         >
           {/* Video element */}
           {activeSourceUrl ? (
@@ -322,11 +354,16 @@ export function VideoPreview({
                   objectPosition,
                   transform: videoTransform,
                   transformOrigin: previewMotion.transformOrigin,
-                  opacity: previewLook?.mattePreview?.status === "available" ? 0 : 1,
+                  opacity:
+                    previewLook?.mattePreview?.status === "available" ? 0 : 1,
                 }}
                 onLoadedMetadata={(event) => {
                   const video = event.currentTarget;
-                  if (video.videoWidth && video.videoHeight && activeSourceUrl) {
+                  if (
+                    video.videoWidth &&
+                    video.videoHeight &&
+                    activeSourceUrl
+                  ) {
                     setIntrinsicSize({
                       sourceUrl: activeSourceUrl,
                       width: video.videoWidth,
@@ -378,7 +415,7 @@ export function VideoPreview({
                   <span key={index} className="bg-white/50" />
                 ))}
               </div>
-              <p className="text-xs text-muted-foreground/50">
+              <p className="text-xs text-muted-foreground">
                 {isProcessing ? "Processing video…" : "No video yet"}
               </p>
             </div>
@@ -433,7 +470,12 @@ export function VideoPreview({
 
           {isCanvasDropActive ? (
             <div className="pointer-events-none absolute inset-0 z-30 grid grid-cols-10 grid-rows-10 bg-primary/10">
-              {Array.from({ length: 100 }).map((_, index) => <span key={index} className="border-[0.5px] border-primary/15" />)}
+              {Array.from({ length: 100 }).map((_, index) => (
+                <span
+                  key={index}
+                  className="border-[0.5px] border-primary/15"
+                />
+              ))}
             </div>
           ) : null}
         </div>
@@ -447,8 +489,15 @@ export function VideoPreview({
       />
 
       {/* ── Playback controls ────────────────────────────────────────────── */}
-      <div className="flex w-full max-w-md flex-wrap items-center justify-center gap-2" aria-label="Video controls">
-        <ControlButton onClick={() => skip(-5)} title="Back 5 seconds" ariaLabel="Seek back 5 seconds">
+      <div
+        className="flex w-full max-w-md flex-wrap items-center justify-center gap-2"
+        aria-label="Video controls"
+      >
+        <ControlButton
+          onClick={() => skip(-5)}
+          title="Back 5 seconds"
+          ariaLabel="Seek back 5 seconds"
+        >
           <span className="flex items-center gap-1">
             <SkipBack className="size-3.5" />
             <span className="text-[10px] font-bold">5s</span>
@@ -460,19 +509,33 @@ export function VideoPreview({
           aria-label={isPlaying ? "Pause preview video" : "Play preview video"}
           className="pixel-button flex size-11 items-center justify-center bg-primary text-primary-foreground"
         >
-          {isPlaying
-            ? <Pause  className="size-4" />
-            : <Play   className="size-4 translate-x-px" />}
+          {isPlaying ? (
+            <Pause className="size-4" />
+          ) : (
+            <Play className="size-4 translate-x-px" />
+          )}
         </button>
 
-        <ControlButton onClick={() => skip(5)} title="Forward 5 seconds" ariaLabel="Seek forward 5 seconds">
+        <ControlButton
+          onClick={() => skip(5)}
+          title="Forward 5 seconds"
+          ariaLabel="Seek forward 5 seconds"
+        >
           <span className="flex items-center gap-1">
             <span className="text-[10px] font-bold">5s</span>
             <SkipForward className="size-3.5" />
           </span>
         </ControlButton>
-        <ControlButton onClick={toggleMute} title={muted ? "Unmute" : "Mute"} ariaLabel={muted ? "Unmute preview video" : "Mute preview video"}>
-          {muted ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
+        <ControlButton
+          onClick={toggleMute}
+          title={muted ? "Unmute" : "Mute"}
+          ariaLabel={muted ? "Unmute preview video" : "Mute preview video"}
+        >
+          {muted ? (
+            <VolumeX className="size-4" />
+          ) : (
+            <Volume2 className="size-4" />
+          )}
         </ControlButton>
         <label className="flex min-h-11 items-center gap-2 text-sm font-bold text-muted-foreground">
           <span>Volume</span>
@@ -487,16 +550,25 @@ export function VideoPreview({
             className="w-24 accent-primary"
           />
         </label>
-        <ControlButton onClick={requestFullscreen} title="Fullscreen" ariaLabel="Open preview fullscreen">
+        <ControlButton
+          onClick={requestFullscreen}
+          title="Fullscreen"
+          ariaLabel="Open preview fullscreen"
+        >
           <Maximize2 className="size-4" />
         </ControlButton>
       </div>
 
       {/* Timecode */}
-      <p className="border border-border bg-surface px-2 py-1 font-mono text-xs tabular-nums text-muted-foreground shadow-soft" aria-live="polite">
-        <span className="sr-only">Current time </span>{formatMs(playheadMs)}
+      <p
+        className="border border-border bg-surface px-2 py-1 font-mono text-xs tabular-nums text-muted-foreground shadow-soft"
+        aria-live="polite"
+      >
+        <span className="sr-only">Current time </span>
+        {formatMs(playheadMs)}
         <span aria-hidden="true"> / </span>
-        <span className="sr-only">Duration </span>{formatMs(totalDurationMs)}
+        <span className="sr-only">Duration </span>
+        {formatMs(totalDurationMs)}
       </p>
     </div>
   );
@@ -553,7 +625,11 @@ function MattePreviewCanvas({
       ) {
         const width = sourceVideo.videoWidth || canvas.width;
         const height = sourceVideo.videoHeight || canvas.height;
-        if (width > 0 && height > 0 && (canvas.width !== width || canvas.height !== height)) {
+        if (
+          width > 0 &&
+          height > 0 &&
+          (canvas.width !== width || canvas.height !== height)
+        ) {
           canvas.width = width;
           canvas.height = height;
         }
@@ -566,13 +642,23 @@ function MattePreviewCanvas({
       rafId = window.requestAnimationFrame(draw);
     };
 
-    const events = ["play", "pause", "seeked", "timeupdate", "ratechange"] as const;
-    events.forEach((eventName) => sourceVideo.addEventListener(eventName, syncMatte));
+    const events = [
+      "play",
+      "pause",
+      "seeked",
+      "timeupdate",
+      "ratechange",
+    ] as const;
+    events.forEach((eventName) =>
+      sourceVideo.addEventListener(eventName, syncMatte),
+    );
     rafId = window.requestAnimationFrame(draw);
 
     return () => {
       window.cancelAnimationFrame(rafId);
-      events.forEach((eventName) => sourceVideo.removeEventListener(eventName, syncMatte));
+      events.forEach((eventName) =>
+        sourceVideo.removeEventListener(eventName, syncMatte),
+      );
     };
   }, [active, matteSrc, videoRef]);
 
@@ -746,7 +832,9 @@ function getPreviewMotionState({
     objectPosition = `${Math.round(keyframeState.x_pct)}% ${Math.round(keyframeState.y_pct)}%`;
   }
 
-  const boundaries = captionSegments.map((segment) => segment.start_ms).filter((start) => start > 0);
+  const boundaries = captionSegments
+    .map((segment) => segment.start_ms)
+    .filter((start) => start > 0);
   const speedRamp = motion?.speed_ramp;
   if (speedRamp?.enabled || effects.has("speed_ramp")) {
     const amount = pulseAroundBoundaries({
@@ -765,7 +853,9 @@ function getPreviewMotionState({
 
   const beatImpact = motion?.beat_impact;
   if (beatImpact?.enabled || effects.has("beat_impact")) {
-    const impactBoundaries = boundaries.length ? boundaries : fallbackImpactBoundaries(totalDurationMs);
+    const impactBoundaries = boundaries.length
+      ? boundaries
+      : fallbackImpactBoundaries(totalDurationMs);
     const amount =
       pulseAroundBoundaries({
         playheadMs,
@@ -791,19 +881,26 @@ function getPreviewMotionState({
   if (effects.has("flash")) {
     const flashAmount = pulseAroundBoundaries({
       playheadMs,
-      boundaries: boundaries.length ? boundaries : fallbackImpactBoundaries(totalDurationMs),
+      boundaries: boundaries.length
+        ? boundaries
+        : fallbackImpactBoundaries(totalDurationMs),
       fallbackDurationMs: totalDurationMs,
       rampInMs: 50,
       rampOutMs: 180,
       easing: "ease_out",
     });
-    flashOpacity = Math.min(0.36, flashAmount * Math.max(0.16, look.lightLeak * 0.8));
+    flashOpacity = Math.min(
+      0.36,
+      flashAmount * Math.max(0.16, look.lightLeak * 0.8),
+    );
   }
 
   if (effects.has("glitch")) {
     const glitchAmount = pulseAroundBoundaries({
       playheadMs,
-      boundaries: boundaries.length ? boundaries : fallbackImpactBoundaries(totalDurationMs),
+      boundaries: boundaries.length
+        ? boundaries
+        : fallbackImpactBoundaries(totalDurationMs),
       fallbackDurationMs: totalDurationMs,
       rampInMs: 60,
       rampOutMs: 220,
@@ -818,16 +915,25 @@ function getPreviewMotionState({
   const clipDurationMs = Math.max(1, clipEndMs - clipStartMs);
   const localPlayheadMs = playheadMs - clipStartMs;
   const clipEffects = new Set(
-    look.selectedSourceClipId && motion?.clip_effects?.[look.selectedSourceClipId]
+    look.selectedSourceClipId &&
+      motion?.clip_effects?.[look.selectedSourceClipId]
       ? motion.clip_effects[look.selectedSourceClipId]
       : [],
   );
   const onSelectedClip =
-    look.selectedSourceClipId && playheadMs >= clipStartMs && playheadMs <= clipEndMs;
+    look.selectedSourceClipId &&
+    playheadMs >= clipStartMs &&
+    playheadMs <= clipEndMs;
 
   if (onSelectedClip) {
-    if (clipEffects.has("ken_burns") || (motion?.ken_burns.enabled && clipEffects.has("ken_burns"))) {
-      const progress = easePreview(clampNumber(localPlayheadMs / clipDurationMs, 0, 1), motion?.ken_burns.easing ?? "ease_in_out");
+    if (
+      clipEffects.has("ken_burns") ||
+      (motion?.ken_burns.enabled && clipEffects.has("ken_burns"))
+    ) {
+      const progress = easePreview(
+        clampNumber(localPlayheadMs / clipDurationMs, 0, 1),
+        motion?.ken_burns.easing ?? "ease_in_out",
+      );
       const intensity = motion?.ken_burns.intensity ?? 0.08;
       const pan = intensity * 9;
       const direction = motion?.ken_burns.direction ?? "push_in";
@@ -859,7 +965,11 @@ function getPreviewMotionState({
     }
 
     if (clipEffects.has("speed_ramp") && motion?.speed_ramp.enabled) {
-      const amount = clipSpeedRampPreview(localPlayheadMs, clipDurationMs, motion.speed_ramp);
+      const amount = clipSpeedRampPreview(
+        localPlayheadMs,
+        clipDurationMs,
+        motion.speed_ramp,
+      );
       const peakSpeed = motion.speed_ramp.peak_speed;
       playbackRate = 1 + amount * (peakSpeed - 1);
       scale *= 1 + amount * 0.02;
@@ -868,7 +978,9 @@ function getPreviewMotionState({
 
     if (clipEffects.has("beat_impact") && motion?.beat_impact.enabled) {
       const settings = motion.beat_impact;
-      const impactBoundaries = boundaries.length ? boundaries : fallbackImpactBoundaries(totalDurationMs);
+      const impactBoundaries = boundaries.length
+        ? boundaries
+        : fallbackImpactBoundaries(totalDurationMs);
       const amount =
         pulseAroundBoundaries({
           playheadMs,
@@ -880,8 +992,10 @@ function getPreviewMotionState({
         }) * settings.intensity;
       if (amount > 0) {
         scale *= 1 + ((settings.zoom ?? 1.035) - 1) * amount * 2.4;
-        translateX += Math.sin(playheadMs * 0.03) * settings.shake_px * amount * 0.08;
-        translateY += Math.cos(playheadMs * 0.037) * settings.shake_px * amount * 0.08;
+        translateX +=
+          Math.sin(playheadMs * 0.03) * settings.shake_px * amount * 0.08;
+        translateY +=
+          Math.cos(playheadMs * 0.037) * settings.shake_px * amount * 0.08;
         rotateDeg += Math.sin(playheadMs * 0.021) * amount * 1.4;
       }
     }
@@ -893,19 +1007,26 @@ function getPreviewMotionState({
     if (clipEffects.has("flash")) {
       const flashAmount = pulseAroundBoundaries({
         playheadMs,
-        boundaries: boundaries.length ? boundaries : fallbackImpactBoundaries(totalDurationMs),
+        boundaries: boundaries.length
+          ? boundaries
+          : fallbackImpactBoundaries(totalDurationMs),
         fallbackDurationMs: totalDurationMs,
         rampInMs: 50,
         rampOutMs: 180,
         easing: "ease_out",
       });
-      flashOpacity = Math.max(flashOpacity, Math.min(0.36, flashAmount * Math.max(0.16, look.lightLeak * 0.8)));
+      flashOpacity = Math.max(
+        flashOpacity,
+        Math.min(0.36, flashAmount * Math.max(0.16, look.lightLeak * 0.8)),
+      );
     }
 
     if (clipEffects.has("glitch")) {
       const glitchAmount = pulseAroundBoundaries({
         playheadMs,
-        boundaries: boundaries.length ? boundaries : fallbackImpactBoundaries(totalDurationMs),
+        boundaries: boundaries.length
+          ? boundaries
+          : fallbackImpactBoundaries(totalDurationMs),
         fallbackDurationMs: totalDurationMs,
         rampInMs: 60,
         rampOutMs: 220,
@@ -917,7 +1038,9 @@ function getPreviewMotionState({
   }
 
   const transformParts = [
-    translateX || translateY ? `translate(${translateX.toFixed(2)}%, ${translateY.toFixed(2)}%)` : null,
+    translateX || translateY
+      ? `translate(${translateX.toFixed(2)}%, ${translateY.toFixed(2)}%)`
+      : null,
     scale !== 1 ? `scale(${scale.toFixed(4)})` : null,
     rotateDeg ? `rotate(${rotateDeg.toFixed(2)}deg)` : null,
   ].filter(Boolean);
@@ -936,14 +1059,19 @@ function getPreviewMotionState({
   };
 }
 
-function interpolatePreviewKeyframes(keyframes: MotionKeyframe[], playheadMs: number) {
+function interpolatePreviewKeyframes(
+  keyframes: MotionKeyframe[],
+  playheadMs: number,
+) {
   if (!keyframes.length) return null;
   const sorted = [...keyframes].sort((a, b) => a.at_ms - b.at_ms);
   const first = sorted[0];
   if (playheadMs <= first.at_ms) return first;
   const last = sorted[sorted.length - 1];
   if (playheadMs >= last.at_ms) return last;
-  const nextIndex = sorted.findIndex((keyframe) => keyframe.at_ms >= playheadMs);
+  const nextIndex = sorted.findIndex(
+    (keyframe) => keyframe.at_ms >= playheadMs,
+  );
   const from = sorted[Math.max(0, nextIndex - 1)];
   const to = sorted[nextIndex];
   const progress = easePreview(
@@ -967,11 +1095,17 @@ function clipSpeedRampPreview(
 ) {
   let amount = 0;
   if (localPlayheadMs <= settings.ramp_in_ms) {
-    amount = Math.max(amount, easePreview(localPlayheadMs / settings.ramp_in_ms, settings.easing));
+    amount = Math.max(
+      amount,
+      easePreview(localPlayheadMs / settings.ramp_in_ms, settings.easing),
+    );
   }
   const remaining = clipDurationMs - localPlayheadMs;
   if (remaining <= settings.ramp_out_ms) {
-    amount = Math.max(amount, easePreview(remaining / settings.ramp_out_ms, settings.easing));
+    amount = Math.max(
+      amount,
+      easePreview(remaining / settings.ramp_out_ms, settings.easing),
+    );
   }
   return clampNumber(amount, 0, 1);
 }
@@ -991,12 +1125,17 @@ function pulseAroundBoundaries({
   rampOutMs: number;
   easing: MotionSettings["speed_ramp"]["easing"];
 }) {
-  const activeBoundaries = boundaries.length ? boundaries : [0, fallbackDurationMs];
+  const activeBoundaries = boundaries.length
+    ? boundaries
+    : [0, fallbackDurationMs];
   let amount = 0;
   for (const boundary of activeBoundaries) {
     const delta = playheadMs - boundary;
     if (delta < 0 && Math.abs(delta) <= rampInMs) {
-      amount = Math.max(amount, easePreview(1 - Math.abs(delta) / rampInMs, easing));
+      amount = Math.max(
+        amount,
+        easePreview(1 - Math.abs(delta) / rampInMs, easing),
+      );
     }
     if (delta >= 0 && delta <= rampOutMs) {
       amount = Math.max(amount, easePreview(1 - delta / rampOutMs, easing));
@@ -1018,7 +1157,11 @@ function easePreview(
   if (easing === "ease_in") return t * t;
   if (easing === "ease_out") return 1 - Math.pow(1 - t, 2);
   if (easing === "spring") {
-    return clampNumber(1 - Math.cos(t * Math.PI * 1.5) * Math.pow(1 - t, 2), 0, 1);
+    return clampNumber(
+      1 - Math.cos(t * Math.PI * 1.5) * Math.pow(1 - t, 2),
+      0,
+      1,
+    );
   }
   if (easing === "ease_in_out") {
     return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
@@ -1047,25 +1190,36 @@ function PreviewSyncBadges({
 }) {
   const badges = [
     look ? `Look ${look.intensity}%` : null,
-    look && (look.preset || look.grain || look.vignette || look.motionEffects?.length || look.motion)
+    look &&
+    (look.preset ||
+      look.grain ||
+      look.vignette ||
+      look.motionEffects?.length ||
+      look.motion)
       ? "Grade/motion: preview approximation"
       : null,
     look?.backgroundRemoval?.enabled
       ? look.mattePreview?.status === "available"
         ? "Real matte preview"
-        : look.mattePreview?.status === "approximate" || look.mattePreview?.status === "pending"
+        : look.mattePreview?.status === "approximate" ||
+            look.mattePreview?.status === "pending"
           ? "Approximate subject preview"
           : look.mattePreview?.status === "failed"
             ? "Matte preview failed"
             : "Matte preview skipped"
       : null,
     broll ? `B-roll ${broll.density ?? "auto"} (${broll.slotsCount})` : null,
-    audio ? `${audio.includeMusic ? "Music" : "No music"} ${audio.musicVolume}%` : null,
+    audio
+      ? `${audio.includeMusic ? "Music" : "No music"} ${audio.musicVolume}%`
+      : null,
     exportState ? `Crop ${exportState.cropZoom}%` : null,
   ].filter(Boolean);
   if (!badges.length) return null;
   return (
-    <div className="flex max-w-full flex-wrap justify-center gap-1.5 px-1" aria-live="polite">
+    <div
+      className="flex max-w-full flex-wrap justify-center gap-1.5 px-1"
+      aria-live="polite"
+    >
       {badges.map((badge) => (
         <span
           key={badge}
@@ -1094,8 +1248,8 @@ function SafeZoneOverlay() {
 // ── Caption overlay ───────────────────────────────────────────────────────────
 
 interface CaptionOverlayProps {
-  segments:  CaptionSegment[];
-  style:     CaptionStyle;
+  segments: CaptionSegment[];
+  style: CaptionStyle;
   playheadMs: number;
 }
 
@@ -1110,10 +1264,10 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
     style.position_x_pct != null && style.position_y_pct != null
       ? ""
       : style.placement === "upper"
-      ? "top-[12%]"
-      : style.placement === "middle"
-        ? "top-[50%] -translate-y-1/2"
-        : "bottom-[16%]";
+        ? "top-[12%]"
+        : style.placement === "middle"
+          ? "top-[50%] -translate-y-1/2"
+          : "bottom-[16%]";
   const positionedStyle: React.CSSProperties =
     style.position_x_pct != null && style.position_y_pct != null
       ? {
@@ -1124,31 +1278,34 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
       : {};
 
   const inlineStyle: React.CSSProperties = {
-    fontFamily:      style.font_family || "Inter, sans-serif",
-    fontWeight:      style.font_weight || 700,
-    color:           style.text_color  || "#ffffff",
-    textTransform:   style.text_case === "uppercase"
-                       ? "uppercase"
-                       : style.text_case === "title"
-                         ? "capitalize"
-                         : "none",
+    fontFamily: style.font_family || "Inter, sans-serif",
+    fontWeight: style.font_weight || 700,
+    color: style.text_color || "#ffffff",
+    textTransform:
+      style.text_case === "uppercase"
+        ? "uppercase"
+        : style.text_case === "title"
+          ? "capitalize"
+          : "none",
     WebkitTextStroke:
       style.stroke_width_px && style.stroke_color
         ? `${style.stroke_width_px}px ${style.stroke_color}`
         : undefined,
     textShadow: style.shadow ?? "0 3px 12px rgba(0,0,0,0.85)",
-    fontSize:   `${Math.max(18, Math.min(style.font_size_px ?? 32, 52))}px`,
-    lineHeight:  mode === "minimal_line" ? 1.15 : 1.25,
-    maxWidth:    mode === "impact_stamp" || mode === "creator_ticker" ? "88%" : "80%",
-    width:       mode === "impact_stamp" || mode === "creator_ticker" ? "88%" : undefined,
-    textAlign:   mode === "creator_ticker" ? "left" : "center",
+    fontSize: `${Math.max(18, Math.min(style.font_size_px ?? 32, 52))}px`,
+    lineHeight: mode === "minimal_line" ? 1.15 : 1.25,
+    maxWidth:
+      mode === "impact_stamp" || mode === "creator_ticker" ? "88%" : "80%",
+    width:
+      mode === "impact_stamp" || mode === "creator_ticker" ? "88%" : undefined,
+    textAlign: mode === "creator_ticker" ? "left" : "center",
     letterSpacing: `${style.letter_spacing_px ?? 0}px`,
     backgroundColor: captionBackground(style),
     border:
       style.border_color && style.background_opacity > 0
         ? `1px solid ${style.border_color}`
         : undefined,
-    borderRadius: `${mode === "creator_ticker" ? 999 : style.border_radius_px ?? 0}px`,
+    borderRadius: `${mode === "creator_ticker" ? 999 : (style.border_radius_px ?? 0)}px`,
     padding:
       style.background_opacity > 0
         ? `${style.padding_y_px ?? 6}px ${style.padding_x_px ?? 12}px`
@@ -1202,8 +1359,7 @@ function WordSpan({
   mode: CaptionStyle["mode"];
   forceHighlight?: boolean;
 }) {
-  const isActive =
-    playheadMs >= word.start_ms && playheadMs <= word.end_ms;
+  const isActive = playheadMs >= word.start_ms && playheadMs <= word.end_ms;
   const highlighted = isActive || forceHighlight;
   if (mode === "creator_ticker" && highlighted) {
     return (
@@ -1217,20 +1373,26 @@ function WordSpan({
   }
   if (mode === "minimal_line" && highlighted) {
     return (
-      <span style={{ color: accentColor || "#94a3b8", borderBottom: `1px solid ${accentColor || "#94a3b8"}` }}>
+      <span
+        style={{
+          color: accentColor || "#94a3b8",
+          borderBottom: `1px solid ${accentColor || "#94a3b8"}`,
+        }}
+      >
         {word.text}{" "}
       </span>
     );
   }
   return (
-    <span style={{ color: highlighted ? (accentColor || "#facc15") : "inherit" }}>
+    <span style={{ color: highlighted ? accentColor || "#facc15" : "inherit" }}>
       {word.text}{" "}
     </span>
   );
 }
 
 function captionBackground(style: CaptionStyle) {
-  if (!style.background_color || style.background_opacity <= 0) return undefined;
+  if (!style.background_color || style.background_opacity <= 0)
+    return undefined;
   return hexToRgba(style.background_color, style.background_opacity);
 }
 
@@ -1252,7 +1414,7 @@ function ControlButton({
   children,
 }: {
   onClick: () => void;
-  title:   string;
+  title: string;
   ariaLabel: string;
   children: React.ReactNode;
 }) {

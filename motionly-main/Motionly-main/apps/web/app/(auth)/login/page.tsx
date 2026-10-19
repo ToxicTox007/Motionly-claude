@@ -8,8 +8,8 @@ import { useSearchParams } from "next/navigation";
 import { Alert, Input } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { Loader2 } from "lucide-react";
-import { env } from "@/lib/env";
-import { login, loginWithGoogle } from "../actions";
+import { login } from "../actions";
+import { PageTitle } from "@/components/page-title";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -37,9 +37,9 @@ function LoginFormContent() {
   const noticeParam = searchParams.get("notice");
   const nextParam = searchParams.get("next") ?? "/dashboard";
 
-  const [email, setEmail] = useState("");
+  // Fields are uncontrolled and validated from their submitted values:
+  // autofill and typing before hydration set values without input events.
   const [emailError, setEmailError] = useState<string | null>(null);
-  const [password, setPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const validateEmail = (val: string) => {
@@ -56,8 +56,11 @@ function LoginFormContent() {
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    const isEmailValid = validateEmail(email);
-    const isPasswordValid = validatePassword(password);
+    const form = new FormData(e.currentTarget);
+    const isEmailValid = validateEmail(String(form.get("email") ?? ""));
+    const isPasswordValid = validatePassword(
+      String(form.get("password") ?? ""),
+    );
     if (isEmailValid || isPasswordValid) {
       e.preventDefault();
       setEmailError(isEmailValid);
@@ -86,9 +89,18 @@ function LoginFormContent() {
       {/* Logo */}
       <Link href="/" className="group mb-8 inline-flex items-center gap-2.5">
         <div className="flex size-9 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal-sm">
-          <Image src="/icon.svg" alt="Motionly" width={28} height={28} className="size-7" priority />
+          <Image
+            src="/icon.svg"
+            alt="Motionly"
+            width={28}
+            height={28}
+            className="size-7"
+            priority
+          />
         </div>
-        <span className="text-base font-black uppercase text-foreground">Motionly</span>
+        <span className="text-base font-black uppercase text-foreground">
+          Motionly
+        </span>
       </Link>
 
       <p className="text-xs font-black uppercase tracking-wider text-muted-foreground font-mono">
@@ -125,12 +137,10 @@ function LoginFormContent() {
           name="email"
           type="email"
           required
-          value={email}
           onChange={(e) => {
-            setEmail(e.target.value);
             if (emailError) setEmailError(validateEmail(e.target.value));
           }}
-          onBlur={() => setEmailError(validateEmail(email))}
+          onBlur={(e) => setEmailError(validateEmail(e.currentTarget.value))}
           aria-describedby={emailError ? "email-error" : undefined}
           aria-invalid={Boolean(emailError)}
           className={emailError ? "border-danger" : ""}
@@ -155,12 +165,13 @@ function LoginFormContent() {
           name="password"
           type="password"
           required
-          value={password}
           onChange={(e) => {
-            setPassword(e.target.value);
-            if (passwordError) setPasswordError(validatePassword(e.target.value));
+            if (passwordError)
+              setPasswordError(validatePassword(e.target.value));
           }}
-          onBlur={() => setPasswordError(validatePassword(password))}
+          onBlur={(e) =>
+            setPasswordError(validatePassword(e.currentTarget.value))
+          }
           aria-describedby={passwordError ? "password-error" : undefined}
           aria-invalid={Boolean(passwordError)}
           className={passwordError ? "border-danger" : ""}
@@ -174,26 +185,12 @@ function LoginFormContent() {
 
       <SubmitButton />
 
-      {env.googleOAuthEnabled && (
-        <button
-          formAction={loginWithGoogle}
-          formNoValidate
-          className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2.5 rounded border-2 border-foreground bg-surface text-sm font-black uppercase text-foreground shadow-brutal-sm transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none focus:outline-none"
-        >
-          {/* Google icon */}
-          <svg className="size-4" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-          </svg>
-          Continue with Google
-        </button>
-      )}
-
       <p className="mt-5 text-center text-sm text-muted-foreground font-mono">
         Need an account?{" "}
-        <Link href="/signup" className="inline-flex min-h-10 items-center font-bold text-foreground hover:underline">
+        <Link
+          href="/signup"
+          className="inline-flex min-h-10 items-center font-bold text-foreground hover:underline"
+        >
           Sign up
         </Link>
       </p>
@@ -202,19 +199,24 @@ function LoginFormContent() {
 }
 
 export default function LoginPage() {
-  if (typeof window !== "undefined" && window.process?.env?.NEXT_PUBLIC_SKIP_AUTH_MIDDLEWARE === "true") {
-    return null;
-  }
-
   return (
     <main className="min-h-screen grid lg:grid-cols-2">
+      <PageTitle title="Log in" />
       {/* Left decorative panel */}
       <div className="relative hidden flex-col items-center justify-center overflow-hidden border-r-4 border-foreground bg-surface lg:flex">
         <div className="relative text-center px-12">
           <div className="mb-6 inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal">
-            <Image src="/icon.svg" alt="" width={46} height={46} className="size-12" />
+            <Image
+              src="/icon.svg"
+              alt=""
+              width={46}
+              height={46}
+              className="size-12"
+            />
           </div>
-          <h2 className="text-3xl font-black uppercase tracking-tight text-foreground">Make polished reels.</h2>
+          <h2 className="text-3xl font-black uppercase tracking-tight text-foreground">
+            Make polished reels.
+          </h2>
           <p className="mt-3 text-muted-foreground max-w-xs font-mono text-xs">
             Upload a clip. AI edits it. You post.
           </p>
@@ -222,17 +224,33 @@ export default function LoginPage() {
           <div className="mt-10 w-[260px] rounded border-2 border-foreground bg-background overflow-hidden shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] mx-auto text-left">
             <div className="flex h-8 items-center gap-1.5 border-b-2 border-foreground px-3 bg-surface-elevated">
               {["bg-red-400", "bg-amber-400", "bg-green-400"].map((c, i) => (
-                <div key={i} className={`size-2 rounded border border-foreground ${c}`} />
+                <div
+                  key={i}
+                  className={`size-2 rounded border border-foreground ${c}`}
+                />
               ))}
-              <span className="ml-auto text-[9px] font-bold text-muted-foreground/60 font-mono">Motionly</span>
+              <span className="ml-auto text-[9px] font-bold text-muted-foreground font-mono">
+                Motionly
+              </span>
             </div>
             <div className="p-3 space-y-2">
-              {["AI Timeline", "Captions", "B-roll", "Music", "Export"].map((item, i) => (
-                <div key={item} className={`h-7 rounded border-2 border-foreground flex items-center px-2.5 ${i === 0 ? "bg-primary text-primary-foreground shadow-[1px_1px_0px_#000]" : "bg-surface"}`}>
-                  <span className={`text-[9px] font-bold ${i === 0 ? "text-primary-foreground" : "text-muted-foreground"}`}>{item}</span>
-                  {i === 0 && <PixelIcon name="play" className="ml-auto size-3" />}
-                </div>
-              ))}
+              {["AI Timeline", "Captions", "B-roll", "Music", "Export"].map(
+                (item, i) => (
+                  <div
+                    key={item}
+                    className={`h-7 rounded border-2 border-foreground flex items-center px-2.5 ${i === 0 ? "bg-primary text-primary-foreground shadow-[1px_1px_0px_#000]" : "bg-surface"}`}
+                  >
+                    <span
+                      className={`text-[9px] font-bold ${i === 0 ? "text-primary-foreground" : "text-muted-foreground"}`}
+                    >
+                      {item}
+                    </span>
+                    {i === 0 && (
+                      <PixelIcon name="play" className="ml-auto size-3" />
+                    )}
+                  </div>
+                ),
+              )}
             </div>
           </div>
         </div>

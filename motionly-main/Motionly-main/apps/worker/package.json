@@ -3,16 +3,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node --env-file=.env src/worker.mjs --check",
-    "dev": "node --env-file=.env src/worker.mjs --loop",
-    "lint": "node --env-file=.env src/worker.mjs --check",
-    "start": "node --env-file=.env src/worker.mjs --loop",
-    "typecheck": "node --env-file=.env src/worker.mjs --check",
-    "test": "node --env-file=.env --test src/*.test.mjs && node --env-file=.env src/worker.mjs --check"
+    "build": "node src/worker.mjs --check",
+    "dev": "node --env-file-if-exists=.env src/worker.mjs --loop",
+    "lint": "node src/worker.mjs --check",
+    "start": "node --env-file-if-exists=.env src/worker.mjs --loop",
+    "typecheck": "node src/worker.mjs --check",
+    "test": "node --test src/*.test.mjs && node src/worker.mjs --check"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.106.2",
     "bullmq": "5.78.0",
     "ioredis": "5.11.1"
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

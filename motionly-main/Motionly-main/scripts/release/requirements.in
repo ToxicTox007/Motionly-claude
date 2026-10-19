@@ -1,0 +1,4 @@
+# Release tooling run in CI (scripts/release/package_release_bundle.py).
+# Regenerate the lock with:
+#   pip-compile --generate-hashes --strip-extras --output-file=scripts/release/requirements.lock scripts/release/requirements.in
+pyyaml==6.0.3

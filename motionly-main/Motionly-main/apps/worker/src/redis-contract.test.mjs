@@ -23,7 +23,8 @@ test(
       async (job) => {
         if (job.name === "retry-once") {
           retryExecutions += 1;
-          if (retryExecutions === 1) throw new Error("recorded transient failure");
+          if (retryExecutions === 1)
+            throw new Error("recorded transient failure");
           return { outcome: "success" };
         }
         terminalExecutions += 1;
@@ -31,13 +32,21 @@ test(
       },
       { connection: workerConnection, concurrency: 1 },
     );
-    await Promise.all([queue.waitUntilReady(), events.waitUntilReady(), worker.waitUntilReady()]);
+    await Promise.all([
+      queue.waitUntilReady(),
+      events.waitUntilReady(),
+      worker.waitUntilReady(),
+    ]);
     try {
       const completed = waitFor(events, "completed", "retry-idempotent");
       const first = await queue.add(
         "retry-once",
         { source_id: "render-1" },
-        { jobId: "retry-idempotent", attempts: 3, backoff: { type: "fixed", delay: 20 } },
+        {
+          jobId: "retry-idempotent",
+          attempts: 3,
+          backoff: { type: "fixed", delay: 20 },
+        },
       );
       const duplicate = await queue.add(
         "retry-once",
@@ -47,29 +56,44 @@ test(
       assert.equal(first.id, duplicate.id);
       await completed;
       assert.equal(retryExecutions, 2);
-      assert.equal((await first.getState()), "completed");
+      assert.equal(await first.getState(), "completed");
 
       const failed = waitFor(events, "failed", "terminal-failure");
       const terminal = await queue.add(
         "always-fails",
         {},
-        { jobId: "terminal-failure", attempts: 2, backoff: { type: "fixed", delay: 20 } },
+        {
+          jobId: "terminal-failure",
+          attempts: 2,
+          backoff: { type: "fixed", delay: 20 },
+        },
       );
       await failed;
       assert.equal(terminalExecutions, 2);
-      assert.equal((await terminal.getState()), "failed");
-      assert.equal((await queue.getJob(terminal.id)).failedReason, "recorded terminal failure");
+      assert.equal(await terminal.getState(), "failed");
+      assert.equal(
+        (await queue.getJob(terminal.id)).failedReason,
+        "recorded terminal failure",
+      );
     } finally {
-      await Promise.allSettled([worker.close(), events.close(), queue.obliterate({ force: true })]);
+      await Promise.allSettled([
+        worker.close(),
+        events.close(),
+        queue.obliterate({ force: true }),
+      ]);
       await queue.close();
-      for (const redis of [workerConnection, eventsConnection, connection]) redis.disconnect();
+      for (const redis of [workerConnection, eventsConnection, connection])
+        redis.disconnect();
     }
   },
 );
 
 function waitFor(events, event, jobId) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${event}`)), 15_000);
+    const timeout = setTimeout(
+      () => reject(new Error(`Timed out waiting for ${event}`)),
+      15_000,
+    );
     const listener = (args) => {
       if (String(args.jobId) !== jobId) return;
       clearTimeout(timeout);

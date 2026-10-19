@@ -22,7 +22,6 @@ from app.services.queue import (
     MusicQueue,
     PlanQueue,
     PreprocessQueue,
-    PublishQueue,
     QueueJobStatus,
     QueueRegistry,
     RenderQueue,
@@ -80,7 +79,6 @@ def test_phase8_queue_job_ids_are_deterministic_across_job_types() -> None:
     music = MusicQueue(registry)
     effects = EffectsQueue(registry)
     render = RenderQueue(registry)
-    publish = PublishQueue(registry)
 
     jobs = [
         preprocess.enqueue_video_preprocess(
@@ -145,17 +143,12 @@ def test_phase8_queue_job_ids_are_deterministic_across_job_types() -> None:
             workspace_id=workspace_id,
             render_engine="remotion_premium",
         ),
-        publish.enqueue_publish(
-            publish_job_id=resource_id,
-            project_id=project_id,
-            workspace_id=workspace_id,
-        ),
     ]
 
     assert jobs[0].id == jobs[1].id
     assert jobs[10].id == jobs[11].id
     assert jobs[11].queue_name == "render_remotion"
-    assert len(registry.jobs) == 11
+    assert len(registry.jobs) == 10
 
 
 def test_phase8_ready_preprocess_and_transcription_paths_are_idempotent(

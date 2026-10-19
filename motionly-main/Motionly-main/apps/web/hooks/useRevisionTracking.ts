@@ -25,13 +25,18 @@ export function useRevisionTracking(projectId: string, planId: string | null) {
   const [planRevision, setPlanRevision] = useState<number | null>(null);
   const [mediaRevision, setMediaRevision] = useState<number | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
-  const [conflictState, setConflictState] = useState<ConflictState | null>(null);
+  const [conflictState, setConflictState] = useState<ConflictState | null>(
+    null,
+  );
 
   // Keep a ref for the current revision so async callbacks always read latest
   const planRevisionRef = useRef<number | null>(null);
 
   const updateRevision = useCallback(
-    (newRevision: number | null | undefined, kind: "plan" | "media" = "plan") => {
+    (
+      newRevision: number | null | undefined,
+      kind: "plan" | "media" = "plan",
+    ) => {
       if (newRevision == null) return; // Old API without revision support
       if (kind === "plan") {
         setPlanRevision(newRevision);

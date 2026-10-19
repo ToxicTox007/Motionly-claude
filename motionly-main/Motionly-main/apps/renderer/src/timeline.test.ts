@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { outputDurationMs, outputTimeToSourceTime, sourceTimelineClips } from "./timeline.js";
+import {
+  outputDurationMs,
+  outputTimeToSourceTime,
+  sourceTimelineClips,
+} from "./timeline.js";
 import type { MotionlyRenderProps } from "./types.js";
 
-function props(cuts: MotionlyRenderProps["editPlan"]["cuts"]): MotionlyRenderProps {
+function props(
+  cuts: MotionlyRenderProps["editPlan"]["cuts"],
+): MotionlyRenderProps {
   return {
-    sourceVideo: { src: "https://media.example/source.mp4", width: 320, height: 180, duration_ms: 6000 },
+    sourceVideo: {
+      src: "https://media.example/source.mp4",
+      width: 320,
+      height: 180,
+      duration_ms: 6000,
+    },
     editPlan: {
       schema_version: 1,
       style: "founder",
@@ -51,8 +62,14 @@ test("editing the source cut list changes Remotion frame/time assembly", () => {
   assert.equal(outputTimeToSourceTime(first, 1250).sourceTimeMs, 3250);
   assert.equal(outputTimeToSourceTime(edited, 1250).sourceTimeMs, 2250);
   assert.deepEqual(
-    sourceTimelineClips(first).map((clip) => [clip.output_start_ms, clip.source_start_ms]),
-    [[0, 0], [1000, 3000]],
+    sourceTimelineClips(first).map((clip) => [
+      clip.output_start_ms,
+      clip.source_start_ms,
+    ]),
+    [
+      [0, 0],
+      [1000, 3000],
+    ],
   );
 });
 

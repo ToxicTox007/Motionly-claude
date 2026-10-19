@@ -6,7 +6,11 @@ export function safeRendererMediaUrl(
   value: unknown,
   { allowDataAudio = false }: { allowDataAudio?: boolean } = {},
 ): string | null {
-  if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f\s]/.test(value)) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    /[\u0000-\u001f\u007f\s]/.test(value)
+  ) {
     return null;
   }
   if (
@@ -18,14 +22,13 @@ export function safeRendererMediaUrl(
   }
   try {
     const parsed = new URL(value);
-    const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
-    return (
-      parsed.protocol === "http:" &&
+    const loopback =
+      parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+    return parsed.protocol === "http:" &&
       loopback &&
       /^\/media\/\d+$/.test(parsed.pathname) &&
       !parsed.username &&
       !parsed.password
-    )
       ? parsed.toString()
       : null;
   } catch {

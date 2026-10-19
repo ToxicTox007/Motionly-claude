@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
-# Apply an immutable Motionly release on the single approved Azure VM host.
-# This command takes only a non-secret release SHA. The VM managed identity reads
-# release artifacts from Blob Storage and credentials from Key Vault locally.
+# Apply an immutable Motionly release on the AWS instance (infra/aws). GitHub
+# runs this over SSM Run Command with only a non-secret release id
+# (scripts/deploy/run_on_instance.sh). The instance role reads the release from
+# S3 and secrets from SSM Parameter Store under /motionly/<environment>/; no
+# secret value is ever passed as an argument or written to the Compose env file
+# except the few upstream images that cannot read files.
 set -euo pipefail
+# Command substitutions such as release_dir="$(fetch_release)" keep set -e.
+shopt -s inherit_errexit
 umask 077
 
 usage() {
   echo "Usage: $0 --release-id <git-sha> [--preflight] | --rollback" >&2
   exit 64
+}
+
+refuse() {
+  echo "$1" >&2
+  exit 78
 }
 
 release_id=""
@@ -32,29 +42,44 @@ while [[ "$#" -gt 0 ]]; do
 done
 [[ "$mode" == "rollback" || "$release_id" =~ ^[0-9a-f]{7,64}$ ]] || usage
 
-host_config="/etc/motionly/host.env"
-[[ -r "$host_config" ]] || {
-  echo "Missing root-owned host configuration: $host_config" >&2
-  exit 78
-}
+host_config="${MOTIONLY_HOST_CONFIG:-/etc/motionly/host.env}"
+[[ -r "$host_config" ]] || refuse "Missing root-owned host configuration: $host_config"
 # shellcheck disable=SC1090
 source "$host_config"
 
-for value in MOTIONLY_RELEASE_ROOT MOTIONLY_AGENT_ROOT MOTIONLY_KEY_VAULT_NAME MOTIONLY_RELEASE_STORAGE_ACCOUNT MOTIONLY_RELEASE_CONTAINER MOTIONLY_GHCR_USERNAME MOTIONLY_COSIGN_IDENTITY_REGEXP MOTIONLY_APP_DOMAIN MOTIONLY_API_DOMAIN MOTIONLY_SUPABASE_DOMAIN MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL; do
-  [[ -n "${!value:-}" ]] || {
-    echo "$value is required in $host_config" >&2
-    exit 78
-  }
+for value in MOTIONLY_RELEASE_ROOT MOTIONLY_AGENT_ROOT MOTIONLY_ENVIRONMENT MOTIONLY_AWS_REGION MOTIONLY_RELEASE_BUCKET MOTIONLY_COMPUTE_PROFILE MOTIONLY_REGISTRY MOTIONLY_COSIGN_IDENTITY_REGEXP MOTIONLY_APP_DOMAIN MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL; do
+  [[ -n "${!value:-}" ]] || refuse "$value is required in $host_config"
 done
-[[ "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" =~ ^temporalio/admin-tools@sha256:[a-f0-9]{64}$ ]] || {
-  echo "TEMPORAL_ADMIN_TOOLS_IMAGE must be a digest-pinned upstream Temporal admin-tools image" >&2
-  exit 78
-}
-[[ "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] || {
-  echo "MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL must be an RFC3339 timestamp" >&2
-  exit 78
-}
-for command in az docker cosign python3 tar install; do
+case "$MOTIONLY_ENVIRONMENT" in
+  production | staging | rehearsal) ;;
+  *) refuse "MOTIONLY_ENVIRONMENT must be production, staging or rehearsal" ;;
+esac
+case "$MOTIONLY_COMPUTE_PROFILE" in
+  gpu | cpu) ;;
+  *) refuse "MOTIONLY_COMPUTE_PROFILE must be gpu or cpu" ;;
+esac
+# The local release rehearsal (scripts/release/rehearse_release.py) runs this
+# agent against emulated AWS endpoints, a loopback registry, a test signing key
+# and the CPU-stage overlay. A real environment refuses every one of these.
+if [[ "$MOTIONLY_ENVIRONMENT" != rehearsal ]]; then
+  [[ -z "${MOTIONLY_COSIGN_PUBLIC_KEY:-}" ]] || refuse "MOTIONLY_COSIGN_PUBLIC_KEY is only allowed in rehearsal"
+  [[ -z "${MOTIONLY_COMPOSE_OVERLAY:-}" ]] || refuse "MOTIONLY_COMPOSE_OVERLAY is only allowed in rehearsal"
+  [[ -z "${MOTIONLY_REHEARSAL_EXTRA_SECRETS:-}" ]] || refuse "MOTIONLY_REHEARSAL_EXTRA_SECRETS is only allowed in rehearsal"
+  if env | grep -q '^COMPOSE_'; then
+    refuse "COMPOSE_* environment overrides are only allowed in rehearsal"
+  fi
+  if env | grep -q '^AWS_ENDPOINT_URL'; then
+    refuse "AWS endpoint overrides are only allowed in rehearsal"
+  fi
+  [[ ! "$MOTIONLY_REGISTRY" =~ ^(127\.0\.0\.1|localhost): ]] || refuse "a loopback registry is only allowed in rehearsal"
+  [[ -n "${MOTIONLY_REGISTRY_USERNAME:-}" ]] || refuse "MOTIONLY_REGISTRY_USERNAME is required in $host_config"
+fi
+[[ "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" =~ ^temporalio/admin-tools@sha256:[a-f0-9]{64}$ ]] \
+  || refuse "TEMPORAL_ADMIN_TOOLS_IMAGE must be a digest-pinned upstream Temporal admin-tools image"
+[[ "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] \
+  || refuse "MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL must be an RFC3339 timestamp"
+
+for command in aws docker cosign python3 tar install; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "$command is required by the release agent" >&2
     exit 127
@@ -62,36 +87,38 @@ for command in az docker cosign python3 tar install; do
 done
 docker compose version >/dev/null
 
+export AWS_REGION="$MOTIONLY_AWS_REGION" AWS_DEFAULT_REGION="$MOTIONLY_AWS_REGION"
+ssm_prefix="/motionly/${MOTIONLY_ENVIRONMENT}"
 releases_dir="$MOTIONLY_RELEASE_ROOT/releases"
 manifests_dir="$MOTIONLY_RELEASE_ROOT/manifests"
 current_link="$MOTIONLY_RELEASE_ROOT/current"
 previous_link="$MOTIONLY_RELEASE_ROOT/previous"
 mkdir -p -m 700 "$releases_dir" "$manifests_dir"
 
-blob_download() {
-  local blob_name="$1"
+s3_download() {
+  local name="$1"
   local destination="$2"
-  az storage blob download \
-    --auth-mode login \
-    --only-show-errors \
-    --account-name "$MOTIONLY_RELEASE_STORAGE_ACCOUNT" \
-    --container-name "$MOTIONLY_RELEASE_CONTAINER" \
-    --name "$release_id/$blob_name" \
-    --file "$destination" \
-    --overwrite false >/dev/null
+  aws s3 cp --only-show-errors "s3://$MOTIONLY_RELEASE_BUCKET/$release_id/$name" "$destination"
 }
 
 validate_release() {
   local release_dir="$1"
   local manifest="$release_dir/release-manifest.json"
   "$MOTIONLY_AGENT_ROOT/bin/generate-release-manifest" --validate "$manifest"
-  cosign verify-blob \
-    --certificate "$release_dir/release-manifest.pem" \
-    --signature "$release_dir/release-manifest.sig" \
-    --certificate-identity-regexp "$MOTIONLY_COSIGN_IDENTITY_REGEXP" \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    "$manifest" >/dev/null
-  python3 - "$manifest" "$release_id" <<'PY'
+  if [[ -n "${MOTIONLY_COSIGN_PUBLIC_KEY:-}" ]]; then
+    # Rehearsal only (refused above otherwise): the test signing key.
+    # The test key's signature is not in a transparency log.
+    cosign verify-blob --key "$MOTIONLY_COSIGN_PUBLIC_KEY" --insecure-ignore-tlog=true \
+      --signature "$release_dir/release-manifest.sig" "$manifest" >/dev/null
+  else
+    cosign verify-blob \
+      --certificate "$release_dir/release-manifest.pem" \
+      --signature "$release_dir/release-manifest.sig" \
+      --certificate-identity-regexp "$MOTIONLY_COSIGN_IDENTITY_REGEXP" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      "$manifest" >/dev/null
+  fi
+  python3 - "$manifest" "$release_id" "$MOTIONLY_REGISTRY" <<'PY'
 import json
 import sys
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -99,6 +126,10 @@ revision = manifest.get("revision")
 release_identity = manifest.get("release_id", revision)
 if revision != sys.argv[2] or release_identity != sys.argv[2]:
     raise SystemExit("signed release manifest does not match requested release ID")
+registry = sys.argv[3].rstrip("/") + "/"
+foreign = sorted(name for name, image in manifest["images"].items() if not image.startswith(registry))
+if foreign:
+    raise SystemExit(f"release images must come from {registry}: {', '.join(foreign)}")
 PY
 }
 
@@ -110,6 +141,8 @@ validate_release_bundle() {
     --bundle "$release_dir/release-bundle.tar.gz"
 }
 
+# Runs in a command substitution; every step fails it explicitly as well
+# (verification must never be skipped), removing any partial download.
 fetch_release() {
   local release_dir="$releases_dir/$release_id"
   if [[ -e "$release_dir" ]]; then
@@ -117,8 +150,8 @@ fetch_release() {
       echo "existing release directory is incomplete: $release_dir" >&2
       exit 65
     }
-    validate_release "$release_dir"
-    validate_release_bundle "$release_dir"
+    validate_release "$release_dir" || exit 65
+    validate_release_bundle "$release_dir" || exit 65
     [[ -f "$release_dir/bundle/infra/docker-compose.gpu.yml" ]] || {
       echo "existing release directory lacks extracted Compose configuration" >&2
       exit 65
@@ -129,69 +162,77 @@ fetch_release() {
 
   local scratch_dir
   scratch_dir="$(mktemp -d "$releases_dir/.${release_id}.XXXXXX")"
-  local success=false
-  cleanup_release_scratch() {
-    if [[ "$success" != true ]]; then
-      rm -rf "$scratch_dir"
-    fi
+  abandon() {
+    rm -rf "$scratch_dir"
+    echo "release $release_id was not accepted: $1" >&2
+    exit 65
   }
-  trap cleanup_release_scratch RETURN
 
-  blob_download release-manifest.json "$scratch_dir/release-manifest.json"
-  blob_download release-manifest.sig "$scratch_dir/release-manifest.sig"
-  blob_download release-manifest.pem "$scratch_dir/release-manifest.pem"
+  s3_download release-manifest.json "$scratch_dir/release-manifest.json" || abandon "manifest download failed"
+  s3_download release-manifest.sig "$scratch_dir/release-manifest.sig" || abandon "signature download failed"
+  s3_download release-manifest.pem "$scratch_dir/release-manifest.pem" || abandon "certificate download failed"
   # Authenticate the manifest before retrieving or unpacking the larger archive.
-  validate_release "$scratch_dir"
-  blob_download release-bundle.tar.gz "$scratch_dir/release-bundle.tar.gz"
+  validate_release "$scratch_dir" || abandon "manifest verification failed"
+  s3_download release-bundle.tar.gz "$scratch_dir/release-bundle.tar.gz" || abandon "bundle download failed"
   # Check compressed bytes and canonical extracted-file inventory before tar extraction.
-  validate_release_bundle "$scratch_dir"
-  mkdir -m 700 "$scratch_dir/bundle"
-  tar -xzf "$scratch_dir/release-bundle.tar.gz" -C "$scratch_dir/bundle"
-  [[ -f "$scratch_dir/bundle/infra/docker-compose.gpu.yml" ]] || {
-    echo "release bundle lacks production Compose configuration" >&2
-    exit 65
-  }
-  if ! mv "$scratch_dir" "$release_dir"; then
-    echo "release directory already exists; refusing to replace it" >&2
-    exit 65
-  fi
-  success=true
+  validate_release_bundle "$scratch_dir" || abandon "bundle verification failed"
+  mkdir -m 700 "$scratch_dir/bundle" || abandon "could not create the bundle directory"
+  tar -xzf "$scratch_dir/release-bundle.tar.gz" -C "$scratch_dir/bundle" || abandon "bundle extraction failed"
+  [[ -f "$scratch_dir/bundle/infra/docker-compose.gpu.yml" ]] \
+    || abandon "release bundle lacks production Compose configuration"
+  mv "$scratch_dir" "$release_dir" || abandon "release directory already exists; refusing to replace it"
   printf '%s\n' "$release_dir"
 }
 
+# Writes one SSM parameter's value to a file. The value goes from the AWS CLI's
+# stdout straight to disk; it is never held in a shell variable or argv.
+read_parameter() {
+  local name="$1"
+  local destination="$2"
+  local required="${3:-required}"
+  local errors="${destination}.err"
+  if aws ssm get-parameter --with-decryption --name "$ssm_prefix/$name" \
+    --query Parameter.Value --output text >"$destination" 2>"$errors"; then
+    rm -f "$errors"
+    return 0
+  fi
+  if [[ "$required" != required ]] && grep -q ParameterNotFound "$errors"; then
+    : >"$destination"
+    rm -f "$errors"
+    return 0
+  fi
+  echo "could not read SSM parameter $ssm_prefix/$name:" >&2
+  cat "$errors" >&2
+  rm -f "$errors" "$destination"
+  exit 69
+}
+
 fetch_secret_to_file() {
-  local key_vault_name="$1"
+  local parameter="$1"
   local destination="$2"
   local required="${3:-required}"
   local temporary="${destination}.tmp"
-  if [[ "$required" == required ]]; then
-    az keyvault secret show --only-show-errors --vault-name "$MOTIONLY_KEY_VAULT_NAME" \
-      --name "$key_vault_name" --query value --output tsv > "$temporary"
-  elif ! az keyvault secret show --only-show-errors --vault-name "$MOTIONLY_KEY_VAULT_NAME" \
-      --name "$key_vault_name" --query value --output tsv > "$temporary" 2>/dev/null; then
-    : > "$temporary"
-  fi
+  read_parameter "$parameter" "$temporary" "$required"
   python3 - "$temporary" "$destination" <<'PY'
 from pathlib import Path
 import sys
 source, destination = map(Path, sys.argv[1:])
 value = source.read_text(encoding="utf-8").rstrip("\n")
 if "\n" in value or "\r" in value:
-    raise SystemExit("Key Vault secret values must be single-line")
+    raise SystemExit("SSM secret values must be single-line")
 destination.write_text(value + "\n", encoding="utf-8")
-destination.chmod(0o600)
+destination.chmod(0o444)
 source.unlink(missing_ok=True)
 PY
 }
 
-# PEM certificates and keys are base64 encoded in Key Vault so multiline material
+# PEM certificates and keys are base64 encoded in SSM so multiline material
 # never enters shell variables, command arguments, Compose interpolation, or logs.
 fetch_base64_secret_to_file() {
-  local key_vault_name="$1"
+  local parameter="$1"
   local destination="$2"
   local temporary="${destination}.b64.tmp"
-  az keyvault secret show --only-show-errors --vault-name "$MOTIONLY_KEY_VAULT_NAME" \
-    --name "$key_vault_name" --query value --output tsv > "$temporary"
+  read_parameter "$parameter" "$temporary"
   python3 - "$temporary" "$destination" <<'PY'
 import base64
 from pathlib import Path
@@ -201,11 +242,11 @@ encoded = source.read_bytes().strip()
 try:
     value = base64.b64decode(encoded, validate=True)
 except Exception as error:
-    raise SystemExit("Key Vault base64 secret is invalid") from error
+    raise SystemExit("SSM base64 secret is invalid") from error
 if not value or b"\x00" in value:
-    raise SystemExit("Key Vault base64 secret is empty or unsafe")
+    raise SystemExit("SSM base64 secret is empty or unsafe")
 destination.write_bytes(value)
-destination.chmod(0o600)
+destination.chmod(0o444)
 source.unlink(missing_ok=True)
 PY
 }
@@ -217,8 +258,6 @@ write_release_inputs() {
   local env_file="$release_dir/compose.env"
   mkdir -m 700 "$secrets_dir"
 
-  # Keep secret bytes in protected files.  No secret value is captured in a
-  # shell variable or passed to another process as an argument.
   fetch_secret_to_file postgres-password "$secrets_dir/postgres_password"
   fetch_secret_to_file redis-password "$secrets_dir/redis_password"
   fetch_secret_to_file temporal-db-password "$secrets_dir/temporal_db_password"
@@ -227,14 +266,22 @@ write_release_inputs() {
   fetch_secret_to_file supabase-anon-key "$secrets_dir/supabase_anon_key"
   fetch_secret_to_file admin-api-token "$secrets_dir/admin_api_token"
   fetch_secret_to_file worker-api-token "$secrets_dir/worker_api_token"
-  fetch_secret_to_file publish-token-encryption-key "$secrets_dir/publish_token_encryption_key"
-  fetch_secret_to_file publish-oauth-state-secret "$secrets_dir/publish_oauth_state_secret"
-  fetch_secret_to_file groq-api-key "$secrets_dir/groq_api_key"
-  fetch_secret_to_file openrouter-api-key "$secrets_dir/openrouter_api_key"
-  fetch_secret_to_file runway-api-key "$secrets_dir/runway_api_key"
-  fetch_secret_to_file azure-openai-api-key "$secrets_dir/azure_openai_api_key" optional
   fetch_secret_to_file metrics-bearer-token "$secrets_dir/metrics_bearer_token"
-  fetch_secret_to_file sentry-dsn "$secrets_dir/sentry_dsn"
+  # Provider keys: the application's production validation requires the ones
+  # production uses; a missing parameter leaves an empty file.
+  fetch_secret_to_file groq-api-key "$secrets_dir/groq_api_key" optional
+  fetch_secret_to_file openrouter-api-key "$secrets_dir/openrouter_api_key" optional
+  fetch_secret_to_file runway-api-key "$secrets_dir/runway_api_key" optional
+  fetch_secret_to_file azure-openai-api-key "$secrets_dir/azure_openai_api_key" optional
+  # Origin guard (infra/aws/edge-contract.json): CloudFront sends the current
+  # value; the previous one exists only while a rotation deploys.
+  fetch_secret_to_file edge/origin-verify "$secrets_dir/edge_origin_verify"
+  fetch_secret_to_file edge/origin-verify-previous "$secrets_dir/edge_origin_verify_previous" optional
+  # Rehearsal only (refused above otherwise): files the CPU-stage overlay
+  # mounts, such as the CloudFront simulator's test certificate.
+  for name in ${MOTIONLY_REHEARSAL_EXTRA_SECRETS:-}; do
+    fetch_base64_secret_to_file "$name" "$secrets_dir/${name//-/_}"
+  done
   for name in temporal-ca-cert temporal-server-cert temporal-server-key temporal-internode-cert temporal-internode-key temporal-api-cert temporal-api-key temporal-dispatcher-cert temporal-dispatcher-key temporal-worker-cert temporal-worker-key temporal-reconciler-cert temporal-reconciler-key temporal-namespace-bootstrap-cert temporal-namespace-bootstrap-key temporal-diagnostics-cert temporal-diagnostics-key; do
     fetch_base64_secret_to_file "$name" "$secrets_dir/${name//-/_}"
   done
@@ -247,17 +294,17 @@ if not password or "\n" in password or "\r" in password:
     raise SystemExit("redis password is invalid")
 target = Path(sys.argv[2])
 target.write_text(f"redis://:{password}@redis:6379/0\n", encoding="utf-8")
-target.chmod(0o600)
+target.chmod(0o444)
 PY
 
   # Compose interpolation receives only non-secret release topology and image
-  # metadata.  Services read secret values from /run/secrets at startup.
-  python3 - "$manifest" "$env_file" "$secrets_dir" "${MOTIONLY_APP_DOMAIN:?}" "${MOTIONLY_API_DOMAIN:?}" "${MOTIONLY_SUPABASE_DOMAIN:?}" "${MOTIONLY_AZURE_OPENAI_ENDPOINT:-}" "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" <<'PY'
+  # metadata, plus the values upstream images can read only from environment.
+  python3 - "$manifest" "$env_file" "$secrets_dir" "${MOTIONLY_APP_DOMAIN:?}" "${MOTIONLY_AZURE_OPENAI_ENDPOINT:-}" "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
-manifest_path, env_path, secrets_dir, app_domain, api_domain, supabase_domain, azure_endpoint, temporal_admin_tools_image, bootstrap_admin_until = sys.argv[1:]
+manifest_path, env_path, secrets_dir, app_domain, azure_endpoint, temporal_admin_tools_image, bootstrap_admin_until = sys.argv[1:]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 secret_root = Path(secrets_dir)
 def secret(name: str) -> str:
@@ -274,10 +321,9 @@ environment = {
     "SUPABASE_JWT_SECRET": secret("supabase_jwt_secret"),
     "SUPABASE_ANON_KEY": secret("supabase_anon_key"),
     "SUPABASE_SERVICE_ROLE_KEY": secret("supabase_service_role_key"),
-    "SENTRY_DSN": secret("sentry_dsn"),
+    # One public origin (the CloudFront domain): /api and /supabase on it.
     "APP_DOMAIN": app_domain,
-    "API_DOMAIN": api_domain,
-    "SUPABASE_DOMAIN": supabase_domain,
+    "PUBLIC_ORIGIN": f"https://{app_domain}",
 }
 if azure_endpoint:
     environment["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
@@ -291,16 +337,23 @@ os.chmod(env_path, 0o600)
 PY
 }
 
-login_ghcr() {
-  az keyvault secret show --only-show-errors --vault-name "$MOTIONLY_KEY_VAULT_NAME" \
-    --name ghcr-read-token --query value --output tsv \
-    | docker login ghcr.io --username "$MOTIONLY_GHCR_USERNAME" --password-stdin >/dev/null
+login_registry() {
+  # Only the rehearsal's loopback registry runs without credentials (checked above).
+  [[ -n "${MOTIONLY_REGISTRY_USERNAME:-}" ]] || return 0
+  aws ssm get-parameter --with-decryption --name "$ssm_prefix/registry-read-token" \
+    --query Parameter.Value --output text \
+    | docker login "$MOTIONLY_REGISTRY" --username "$MOTIONLY_REGISTRY_USERNAME" --password-stdin >/dev/null
 }
 
 compose_for() {
   local release_dir="$1"
   shift
-  docker compose --project-name motionly --env-file "$release_dir/compose.env" -f "$release_dir/bundle/infra/docker-compose.gpu.yml" "$@"
+  local -a files=(-f "$release_dir/bundle/infra/docker-compose.gpu.yml")
+  [[ -z "${MOTIONLY_COMPOSE_OVERLAY:-}" ]] || files+=(-f "$MOTIONLY_COMPOSE_OVERLAY")
+  local -a profiles=()
+  # ComputeProfile=cpu (infra/aws) has no GPU, so the GPU services stay off.
+  [[ "$MOTIONLY_COMPUTE_PROFILE" != gpu ]] || profiles=(--profile gpu)
+  docker compose --project-name motionly "${profiles[@]}" --env-file "$release_dir/compose.env" "${files[@]}" "$@"
 }
 
 validate_temporal_canary_gate() {
@@ -310,13 +363,19 @@ validate_temporal_canary_gate() {
     --overlap-proof "$MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE"
 }
 
+# Called as `if ! activate_release ...`, where bash ignores `set -e`; every
+# step therefore fails the function explicitly.
 activate_release() {
   local release_dir="$1"
-  compose_for "$release_dir" config -q
-  compose_for "$release_dir" pull
-  compose_for "$release_dir" up -d --wait --wait-timeout 240 --remove-orphans
+  # GPU workers prefetch model weights before they report healthy.
+  local wait_timeout=600
+  [[ "$MOTIONLY_COMPUTE_PROFILE" != gpu ]] || wait_timeout=1200
+  compose_for "$release_dir" config -q || return 1
+  compose_for "$release_dir" pull --quiet || return 1
+  compose_for "$release_dir" up -d --wait --wait-timeout "$wait_timeout" --remove-orphans || return 1
   compose_for "$release_dir" exec -T api \
-    python -c "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/health/live').status == 200"
+    python -c "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/health/live').status == 200" \
+    || return 1
 }
 
 record_current_release() {
@@ -330,6 +389,20 @@ record_current_release() {
   chmod 600 "$manifests_dir/current.json"
 }
 
+# After a failed activation: bring back the release that was running, which
+# is still `current` (it changes only after a release becomes healthy).
+restore_current_release() {
+  [[ -L "$current_link" ]] || {
+    echo "No current release is recorded to restore" >&2
+    exit 66
+  }
+  local current_dir
+  current_dir="$(readlink -f "$current_link")"
+  activate_release "$current_dir"
+  echo "Restored the running release $(basename "$current_dir")" >&2
+}
+
+# Operator rollback (--rollback): go back to the release before `current`.
 rollback_previous_release() {
   [[ -L "$previous_link" ]] || {
     echo "No previous release is recorded for rollback" >&2
@@ -345,7 +418,7 @@ rollback_previous_release() {
 }
 
 if [[ "$mode" == "rollback" ]]; then
-  login_ghcr
+  login_registry
   rollback_previous_release
   exit 0
 fi
@@ -353,16 +426,16 @@ fi
 release_dir="$(fetch_release)"
 if [[ "$mode" == "preflight" ]]; then
   validate_temporal_canary_gate "$release_dir"
-  echo "Validated signed release $release_id and Temporal canary evidence; no containers or Key Vault values were changed."
+  echo "Validated signed release $release_id and Temporal canary evidence; no containers or secrets were changed."
   exit 0
 fi
 
 validate_temporal_canary_gate "$release_dir"
 write_release_inputs "$release_dir"
-login_ghcr
+login_registry
 if ! activate_release "$release_dir"; then
-  echo "Release $release_id failed health verification; attempting recorded image rollback." >&2
-  rollback_previous_release
+  echo "Release $release_id failed health verification; restoring the running release." >&2
+  restore_current_release
   exit 70
 fi
 record_current_release "$release_dir"

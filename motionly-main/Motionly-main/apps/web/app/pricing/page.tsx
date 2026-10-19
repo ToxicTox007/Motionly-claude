@@ -5,6 +5,7 @@ import { startCheckout } from "@/app/(app)/billing/actions";
 import { fallbackBillingStatus } from "@/lib/billing";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
+import { PageTitle } from "@/components/page-title";
 
 export default async function PricingPage({
   searchParams,
@@ -14,7 +15,9 @@ export default async function PricingPage({
   await searchParams;
 
   // Identify featured plan: most expensive non-free plan
-  const paidPlans = fallbackBillingStatus.plans.filter((p) => p.price_cents > 0);
+  const paidPlans = fallbackBillingStatus.plans.filter(
+    (p) => p.price_cents > 0,
+  );
   const featuredKey =
     paidPlans.length > 0
       ? paidPlans.reduce((a, b) => (b.price_cents > a.price_cents ? b : a)).key
@@ -22,19 +25,24 @@ export default async function PricingPage({
 
   return (
     <main className="container-content min-h-screen py-12 sm:py-16">
+      <PageTitle title="Pricing" />
       <div className="mb-10 text-center">
         <Badge variant="primary">Pricing</Badge>
         <h1 className="mt-4 text-5xl font-black uppercase sm:text-6xl">
           Plans for reel production.
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-base font-bold text-muted-foreground">
-          Start watermarked, upgrade when B-roll, higher limits, priority queueing, or team
-          workflows become part of your reel pipeline.
+          Start watermarked, upgrade when B-roll, higher limits, priority
+          queueing, or team workflows become part of your reel pipeline.
         </p>
       </div>
 
       {!env.billingEnabled ? (
-        <Alert tone="warning" title="Billing checkout is offline" className="mb-8">
+        <Alert
+          tone="warning"
+          title="Billing checkout is offline"
+          className="mb-8"
+        >
           Plan cartridges are visible for comparison, but checkout buttons stay
           disabled until billing keys are configured.
         </Alert>
@@ -48,7 +56,8 @@ export default async function PricingPage({
               key={plan.key}
               className={cn(
                 "relative flex min-h-[28rem] flex-col p-5",
-                isFeatured && "bg-primary text-primary-foreground shadow-brutal-lg",
+                isFeatured &&
+                  "bg-primary text-primary-foreground shadow-brutal-lg",
               )}
             >
               {isFeatured ? (
@@ -61,7 +70,12 @@ export default async function PricingPage({
               <p className="mt-3 text-5xl font-black">
                 {formatPrice(plan.price_cents)}
               </p>
-              <p className={cn("text-sm font-bold", isFeatured ? "text-ink" : "text-muted-foreground")}>
+              <p
+                className={cn(
+                  "text-sm font-bold",
+                  isFeatured ? "text-ink" : "text-muted-foreground",
+                )}
+              >
                 per month
               </p>
 
@@ -70,7 +84,10 @@ export default async function PricingPage({
               <ul className="space-y-3 text-sm flex-1">
                 {plan.features.map((feature) => (
                   <li key={feature} className="flex gap-2 font-bold">
-                    <PixelIcon name="success" className="mt-0.5 size-4 shrink-0" />
+                    <PixelIcon
+                      name="success"
+                      className="mt-0.5 size-4 shrink-0"
+                    />
                     <span>{feature}</span>
                   </li>
                 ))}
@@ -78,7 +95,11 @@ export default async function PricingPage({
 
               <div className="mt-6">
                 {plan.key === "free" ? (
-                  <ButtonLink href="/signup" variant="secondary" className="w-full">
+                  <ButtonLink
+                    href="/signup"
+                    variant="secondary"
+                    className="w-full"
+                  >
                     Start free
                   </ButtonLink>
                 ) : env.billingEnabled ? (

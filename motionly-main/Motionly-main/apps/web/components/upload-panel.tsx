@@ -12,8 +12,8 @@ import {
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/button";
-import { buildApiHeaders } from "@/lib/client-api";
-import { env, resolveProxiedUrl } from "@/lib/env";
+import { apiFetch } from "@/lib/client-api";
+import { env } from "@/lib/env";
 import { shouldToast } from "@/lib/notification-taxonomy";
 import {
   SignedUploadError,
@@ -39,8 +39,6 @@ import { useToast } from "./toast";
 type UploadPanelProps = {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   hasExistingSource?: boolean;
 };
 
@@ -108,8 +106,6 @@ const idleProbe: BrowserMediaProbe = {
 export function UploadPanel({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   hasExistingSource = false,
 }: UploadPanelProps) {
   const router = useRouter();
@@ -332,20 +328,17 @@ export function UploadPanel({
     cancelRequestedRef.current = false;
     setPhase("uploading");
     setProgress(0);
-    setMessage(persistedSession ? "Checking saved upload..." : "Registering upload...");
+    setMessage(
+      persistedSession ? "Checking saved upload..." : "Registering upload...",
+    );
     const controller = new AbortController();
     abortRef.current = controller;
     let sessionRecord = persistedSession;
-    let requestHeaders: Record<string, string> | null = null;
+    // Every call reads the session's current token: an upload can outlive
+    // the token it started with.
+    const auth = { workspaceId };
 
     try {
-      const headers = await buildApiHeaders({
-        workspaceId,
-        userId,
-        accessToken: apiAccessToken,
-      });
-      requestHeaders = headers;
-
       let totalParts: number;
       let partSizeBytes: number;
       let completedParts: number;
@@ -356,12 +349,14 @@ export function UploadPanel({
 
       if (sessionRecord) {
         if (!sameFile(file, sessionRecord.file)) {
-          throw new Error("The selected file does not match the saved upload session.");
+          throw new Error(
+            "The selected file does not match the saved upload session.",
+          );
         }
         const resumed = await fetchMultipartSession(
           projectId,
           sessionRecord.sessionId,
-          headers,
+          auth,
           controller.signal,
         );
         if (
@@ -371,11 +366,15 @@ export function UploadPanel({
           resumed.total_parts !== sessionRecord.totalParts ||
           resumed.part_size_bytes !== sessionRecord.partSizeBytes
         ) {
-          throw new Error("The saved upload fingerprint no longer matches the server session.");
+          throw new Error(
+            "The saved upload fingerprint no longer matches the server session.",
+          );
         }
         if (["aborted", "expired", "failed"].includes(resumed.status)) {
           clearRememberedSession();
-          throw new Error(`The saved upload session is ${resumed.status}. Start a new upload.`);
+          throw new Error(
+            `The saved upload session is ${resumed.status}. Start a new upload.`,
+          );
         }
         activeVideoId = resumed.video_id;
         activeSessionId = resumed.session_id;
@@ -395,11 +394,11 @@ export function UploadPanel({
             : "Resuming saved upload...",
         );
       } else {
-        const initResponse = await fetch(
+        const initResponse = await apiFetch(
           `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/init`,
           {
             method: "POST",
-            headers: { ...headers, "content-type": "application/json" },
+            headers: { "content-type": "application/json" },
             body: JSON.stringify({
               filename: preflight.filename,
               mime_type: preflight.mimeType,
@@ -407,10 +406,15 @@ export function UploadPanel({
             }),
             signal: controller.signal,
           },
+          auth,
         );
-        const initialized = (await readJson(initResponse)) as MultipartUploadInitResponse;
+        const initialized = (await readJson(
+          initResponse,
+        )) as MultipartUploadInitResponse;
         if (!initResponse.ok) {
-          throw new Error(apiErrorMessage(initialized, "Upload could not be initialized."));
+          throw new Error(
+            apiErrorMessage(initialized, "Upload could not be initialized."),
+          );
         }
         activeVideoId = initialized.video_id;
         activeSessionId = initialized.session_id;
@@ -443,7 +447,7 @@ export function UploadPanel({
           const refreshed = await fetchMultipartSession(
             projectId,
             activeSessionId,
-            headers,
+            auth,
             controller.signal,
           );
           if (["aborted", "expired", "failed"].includes(refreshed.status)) {
@@ -457,7 +461,9 @@ export function UploadPanel({
           );
           if (completedParts >= totalParts) break;
           if (!partUrls.length) {
-            throw new Error("The server did not return the next pending upload part.");
+            throw new Error(
+              "The server did not return the next pending upload part.",
+            );
           }
         }
 
@@ -476,7 +482,7 @@ export function UploadPanel({
 
           const uploadPart = () =>
             putBlobWithProgress(
-              resolveProxiedUrl(partUrl.upload_url) ?? partUrl.upload_url,
+              partUrl.upload_url,
               partBlob,
               partUrl.upload_headers,
               controller.signal,
@@ -500,18 +506,22 @@ export function UploadPanel({
               error instanceof SignedUploadError &&
               (error.status === 401 || error.status === 403)
             ) {
-              setMessage(`Refreshing upload URL for part ${partUrl.part_number}...`);
+              setMessage(
+                `Refreshing upload URL for part ${partUrl.part_number}...`,
+              );
               const refreshed = await fetchMultipartSession(
                 projectId,
                 activeSessionId,
-                headers,
+                auth,
                 controller.signal,
               );
               const replacement = refreshed.pending_part_urls.find(
                 (candidate) => candidate.part_number === partUrl.part_number,
               );
               if (!replacement) {
-                throw new Error("The server did not refresh the expired upload URL.");
+                throw new Error(
+                  "The server did not refresh the expired upload URL.",
+                );
               }
               partUrl = replacement;
               // A signed URL is refreshed and retried at most once per part.
@@ -521,21 +531,31 @@ export function UploadPanel({
             }
           }
 
-          setMessage(`Confirming part ${partUrl.part_number} of ${totalParts}...`);
-          const confirmResponse = await fetch(
+          setMessage(
+            `Confirming part ${partUrl.part_number} of ${totalParts}...`,
+          );
+          const confirmResponse = await apiFetch(
             `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${activeSessionId}/parts/${partUrl.part_number}/complete`,
             {
               method: "POST",
-              headers: { ...headers, "content-type": "application/json" },
+              headers: { "content-type": "application/json" },
               body: JSON.stringify(
                 uploadedPart.etag ? { etag: uploadedPart.etag } : {},
               ),
               signal: controller.signal,
             },
+            auth,
           );
-          const confirmed = (await readJson(confirmResponse)) as MultipartPartCompleteResponse;
+          const confirmed = (await readJson(
+            confirmResponse,
+          )) as MultipartPartCompleteResponse;
           if (!confirmResponse.ok) {
-            throw new Error(apiErrorMessage(confirmed, `Part ${partUrl.part_number} could not be confirmed.`));
+            throw new Error(
+              apiErrorMessage(
+                confirmed,
+                `Part ${partUrl.part_number} could not be confirmed.`,
+              ),
+            );
           }
           completedParts = confirmed.completed_parts;
           serverUploadedBytes = confirmed.uploaded_bytes;
@@ -551,18 +571,23 @@ export function UploadPanel({
 
       setProgress(100);
       setMessage("Completing multipart upload...");
-      const completeResponse = await fetch(
+      const completeResponse = await apiFetch(
         `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${activeSessionId}/complete`,
         {
           method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({}),
           signal: controller.signal,
         },
+        auth,
       );
-      const completePayload = (await readJson(completeResponse)) as MultipartUploadCompleteResponse;
+      const completePayload = (await readJson(
+        completeResponse,
+      )) as MultipartUploadCompleteResponse;
       if (!completeResponse.ok) {
-        throw new Error(apiErrorMessage(completePayload, "Upload could not be completed."));
+        throw new Error(
+          apiErrorMessage(completePayload, "Upload could not be completed."),
+        );
       }
 
       // Completion is durable and idempotent. The processing page owns the
@@ -573,7 +598,7 @@ export function UploadPanel({
       const readyUpload = await waitForUploadReady(
         projectId,
         completePayload.video_id,
-        headers,
+        auth,
         controller.signal,
         (status) => {
           if (!isCurrentOperation()) return;
@@ -595,15 +620,8 @@ export function UploadPanel({
         if (!cancelRequestedRef.current) return;
         const sessionId = sessionRecord?.sessionId;
         try {
-          const headers =
-            requestHeaders ??
-            (await buildApiHeaders({
-              workspaceId,
-              userId,
-              accessToken: apiAccessToken,
-            }));
           if (sessionId) {
-            await cancelUploadRegistration(projectId, sessionId, headers);
+            await cancelUploadRegistration(projectId, sessionId, auth);
           }
         } catch {
           setPhase("failed");
@@ -650,12 +668,9 @@ export function UploadPanel({
     const sessionId = persistedSession?.sessionId;
     try {
       if (sessionId) {
-        const headers = await buildApiHeaders({
+        await cancelUploadRegistration(projectId, sessionId, {
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
         });
-        await cancelUploadRegistration(projectId, sessionId, headers);
       }
       clearRememberedSession();
       setPhase("canceled");
@@ -689,11 +704,17 @@ export function UploadPanel({
           event.currentTarget.classList.add("border-primary", "bg-primary/10");
         }}
         onDragLeave={(event) => {
-          event.currentTarget.classList.remove("border-primary", "bg-primary/10");
+          event.currentTarget.classList.remove(
+            "border-primary",
+            "bg-primary/10",
+          );
         }}
         onDrop={(event) => {
           event.preventDefault();
-          event.currentTarget.classList.remove("border-primary", "bg-primary/10");
+          event.currentTarget.classList.remove(
+            "border-primary",
+            "bg-primary/10",
+          );
           if (isWorking) return;
           selectFile(event.dataTransfer.files.item(0));
         }}
@@ -703,6 +724,7 @@ export function UploadPanel({
           type="file"
           accept="video/mp4,video/quicktime,video/webm"
           disabled={isWorking}
+          aria-label="Choose a video file to upload"
           className="sr-only"
           onChange={(event) => selectFile(event.target.files?.item(0) ?? null)}
         />
@@ -713,8 +735,12 @@ export function UploadPanel({
             <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto mb-4">
               <CheckCircle2 className="size-7" aria-hidden="true" />
             </div>
-            <h2 className="text-lg font-black uppercase text-foreground">Upload complete</h2>
-            <p className="text-sm text-muted-foreground">Your video was uploaded and validated successfully.</p>
+            <h2 className="text-lg font-black uppercase text-foreground">
+              Upload complete
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Your video was uploaded and validated successfully.
+            </p>
           </div>
         )}
 
@@ -724,22 +750,33 @@ export function UploadPanel({
             <div className="size-14 rounded-md border-2 border-foreground bg-danger text-white shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto">
               <XCircle className="size-7" aria-hidden="true" />
             </div>
-            <h2 className="text-lg font-black uppercase text-foreground">Upload failed</h2>
-            <p className="text-sm text-muted-foreground">Something went wrong. Review the details and retry.</p>
+            <h2 className="text-lg font-black uppercase text-foreground">
+              Upload failed
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Something went wrong. Review the details and retry.
+            </p>
           </div>
         )}
 
         {/* Phase: uploading */}
         {phase === "uploading" && (
           <div className="flex w-full max-w-xs flex-col gap-3">
-            <p className="text-lg font-black uppercase text-foreground">{message ?? "Uploading…"}</p>
-            <div className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden" aria-label="Upload progress">
+            <p className="text-lg font-black uppercase text-foreground">
+              {message ?? "Uploading…"}
+            </p>
+            <div
+              className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
+              aria-label="Upload progress"
+            >
               <div
                 className="bg-primary h-full transition-all"
                 style={{ width: `${progress}%` }}
               />
             </div>
-            <p className="text-sm font-mono font-bold text-primary">{progress}%</p>
+            <p className="text-sm font-mono font-bold text-primary">
+              {progress}%
+            </p>
           </div>
         )}
 
@@ -747,24 +784,44 @@ export function UploadPanel({
         {phase === "processing" && (
           <div className="flex flex-col items-center gap-3 bg-card border-2 border-foreground p-6 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] w-full max-w-sm">
             <div className="flex gap-1">
-              <span className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce" style={{ animationDelay: "0ms" }} />
-              <span className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce" style={{ animationDelay: "150ms" }} />
-              <span className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce" style={{ animationDelay: "300ms" }} />
+              <span
+                className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce"
+                style={{ animationDelay: "0ms" }}
+              />
+              <span
+                className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce"
+                style={{ animationDelay: "150ms" }}
+              />
+              <span
+                className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce"
+                style={{ animationDelay: "300ms" }}
+              />
             </div>
-            <p className="text-lg font-black uppercase text-foreground">Processing…</p>
-            <p className="text-sm font-mono text-muted-foreground">{message ?? "Running server media validation…"}</p>
+            <p className="text-lg font-black uppercase text-foreground">
+              Processing…
+            </p>
+            <p className="text-sm font-mono text-muted-foreground">
+              {message ?? "Running server media validation…"}
+            </p>
           </div>
         )}
 
         {/* Phase: idle / preflight / canceled */}
-        {(phase === "idle" || phase === "preflight" || phase === "canceled") && (
+        {(phase === "idle" ||
+          phase === "preflight" ||
+          phase === "canceled") && (
           <>
             <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto mb-4">
-              <UploadCloud className="size-7 text-primary-foreground" aria-hidden="true" />
+              <UploadCloud
+                className="size-7 text-primary-foreground"
+                aria-hidden="true"
+              />
             </div>
             <div>
               <h2 className="text-lg font-black uppercase text-foreground">
-                {hasExistingSource ? "Replace source video" : "Upload source video"}
+                {hasExistingSource
+                  ? "Replace source video"
+                  : "Upload source video"}
               </h2>
               <p className="mt-1 max-w-md text-sm text-muted-foreground">
                 {hasExistingSource
@@ -774,14 +831,22 @@ export function UploadPanel({
             </div>
             <div className="flex flex-wrap justify-center gap-2">
               {["MP4", "MOV", "WebM"].map((fmt) => (
-                <span key={fmt} className="rounded-md border-2 border-foreground bg-muted px-3 py-1 text-xs font-mono font-bold text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+                <span
+                  key={fmt}
+                  className="rounded-md border-2 border-foreground bg-muted px-3 py-1 text-xs font-mono font-bold text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+                >
                   {fmt}
                 </span>
               ))}
             </div>
             {persistedSession ? (
               <p className="max-w-md border-2 border-foreground bg-primary/10 p-3 text-sm font-mono font-bold text-foreground rounded-md">
-                Reselect <span className="break-all text-primary">{persistedSession.file.name}</span> to resume from server-confirmed progress. File bytes are not stored locally.
+                Reselect{" "}
+                <span className="break-all text-primary">
+                  {persistedSession.file.name}
+                </span>{" "}
+                to resume from server-confirmed progress. File bytes are not
+                stored locally.
               </p>
             ) : null}
             <div className="flex flex-wrap justify-center gap-3">
@@ -800,7 +865,11 @@ export function UploadPanel({
                   disabled={isWorking}
                   className="inline-flex h-10 items-center justify-center bg-background text-foreground border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-4 text-sm font-bold uppercase tracking-wider disabled:opacity-50"
                 >
-                  <X className="mr-2 size-4" aria-hidden="true" strokeWidth={2.5} />
+                  <X
+                    className="mr-2 size-4"
+                    aria-hidden="true"
+                    strokeWidth={2.5}
+                  />
                   Clear
                 </button>
               ) : null}
@@ -895,7 +964,10 @@ export function UploadPanel({
                 key={warning}
                 className="border-2 border-foreground bg-danger/10 px-3 py-2.5 text-sm text-danger rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex gap-2 items-start mb-2 font-mono font-bold"
               >
-                <AlertTriangle className="size-4 mt-0.5 shrink-0 text-danger" aria-hidden="true" />
+                <AlertTriangle
+                  className="size-4 mt-0.5 shrink-0 text-danger"
+                  aria-hidden="true"
+                />
                 <span>{warning}</span>
               </div>
             ))}
@@ -907,21 +979,30 @@ export function UploadPanel({
                   key={warning}
                   className="border-2 border-foreground bg-amber-500/10 px-3 py-2.5 text-sm text-amber-600 dark:text-amber-400 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex gap-2 items-start mb-2 font-mono font-bold"
                 >
-                  <AlertTriangle className="size-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+                  <AlertTriangle
+                    className="size-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"
+                    aria-hidden="true"
+                  />
                   <span>{warning}</span>
                 </div>
               ))}
             {!preflight.warnings.length && !isCheckingMedia ? (
               <div className="flex items-center gap-2 border-2 border-foreground bg-emerald-500/10 px-3 py-2.5 text-sm font-mono font-bold text-emerald-600 dark:text-emerald-400 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                <CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                <CheckCircle2
+                  className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                  aria-hidden="true"
+                />
                 <span>
-                  Browser preflight passed. Upload will run server validation for
-                  codec, audio, frame rate, decode, and render readiness.
+                  Browser preflight passed. Upload will run server validation
+                  for codec, audio, frame rate, decode, and render readiness.
                 </span>
               </div>
             ) : null}
             <div>
-              <div className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden" aria-label="Upload progress">
+              <div
+                className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
+                aria-label="Upload progress"
+              >
                 <div
                   className="bg-primary h-full transition-all"
                   style={{ width: `${progress}%` }}
@@ -1059,7 +1140,9 @@ function MetadataRow({ label, value }: { label: string; value: string }) {
       <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
         {label}
       </p>
-      <p className="mt-0.5 break-all text-xs font-mono font-bold text-foreground">{value}</p>
+      <p className="mt-0.5 break-all text-xs font-mono font-bold text-foreground">
+        {value}
+      </p>
     </div>
   );
 }
@@ -1072,16 +1155,19 @@ async function readJson(response: Response) {
 async function fetchMultipartSession(
   projectId: string,
   sessionId: string,
-  headers: Record<string, string>,
+  auth: { workspaceId: string },
   signal: AbortSignal,
 ): Promise<MultipartUploadSessionResponse> {
-  const response = await fetch(
+  const response = await apiFetch(
     `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${sessionId}`,
-    { headers, signal, cache: "no-store" },
+    { signal, cache: "no-store" },
+    auth,
   );
   const payload = (await readJson(response)) as MultipartUploadSessionResponse;
   if (!response.ok) {
-    throw new Error(apiErrorMessage(payload, "Saved upload could not be resumed."));
+    throw new Error(
+      apiErrorMessage(payload, "Saved upload could not be resumed."),
+    );
   }
   return payload;
 }
@@ -1089,15 +1175,18 @@ async function fetchMultipartSession(
 async function cancelUploadRegistration(
   projectId: string,
   sessionId: string,
-  headers: Record<string, string>,
+  auth: { workspaceId: string },
 ) {
-  const response = await fetch(
+  const response = await apiFetch(
     `${env.apiBaseUrl}/projects/${projectId}/uploads/multipart/${sessionId}/abort`,
-    { method: "POST", headers },
+    { method: "POST" },
+    auth,
   );
   if (!response.ok) {
     const payload = await readJson(response);
-    throw new Error(apiErrorMessage(payload, "Upload session could not be aborted."));
+    throw new Error(
+      apiErrorMessage(payload, "Upload session could not be aborted."),
+    );
   }
 }
 
@@ -1119,18 +1208,13 @@ function apiErrorMessage(payload: unknown, fallback: string): string {
 async function waitForUploadReady(
   projectId: string,
   videoId: string,
-  headers: Record<string, string>,
+  auth: { workspaceId: string },
   signal: AbortSignal,
   onStatus: (status: string) => void,
 ) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     await sleep(2500, signal);
-    const uploadResponse = await fetchUpload(
-      projectId,
-      videoId,
-      headers,
-      signal,
-    );
+    const uploadResponse = await fetchUpload(projectId, videoId, auth, signal);
     const status = String(uploadResponse.status);
     onStatus(status);
     if (status === "ready") return uploadResponse;
@@ -1148,15 +1232,13 @@ async function waitForUploadReady(
 async function fetchUpload(
   projectId: string,
   videoId: string,
-  headers: Record<string, string>,
+  auth: { workspaceId: string },
   signal: AbortSignal,
 ) {
-  const response = await fetch(
+  const response = await apiFetch(
     `${env.apiBaseUrl}/projects/${projectId}/uploads/${videoId}`,
-    {
-      headers,
-      signal,
-    },
+    { signal },
+    auth,
   );
   const payload = await readJson(response);
   if (!response.ok)

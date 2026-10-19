@@ -29,7 +29,8 @@ function SubmitButton() {
 
 export function NewProjectClient() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState("");
+  // The field is uncontrolled and validated from its submitted value:
+  // autofill and typing before hydration set values without input events.
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -38,12 +39,14 @@ export function NewProjectClient() {
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    setTitle(val);
-    setError(val && !val.trim() ? "Project name cannot contain only spaces." : null);
+    setError(
+      val && !val.trim() ? "Project name cannot contain only spaces." : null,
+    );
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    if (!title.trim()) {
+    const title = new FormData(e.currentTarget).get("title");
+    if (!String(title ?? "").trim()) {
       e.preventDefault();
       setError("Project name cannot be empty.");
       inputRef.current?.focus();
@@ -75,7 +78,7 @@ export function NewProjectClient() {
         </div>
         <div className="space-y-3">
           <label
-            className="text-sm font-bold uppercase tracking-widest text-muted-foreground/70"
+            className="text-sm font-bold uppercase tracking-widest text-muted-foreground"
             htmlFor="title"
           >
             Project Name
@@ -87,7 +90,6 @@ export function NewProjectClient() {
             required
             maxLength={120}
             placeholder="Founder story cutdown"
-            value={title}
             onChange={handleTitleChange}
             aria-describedby={error ? "title-error" : undefined}
             className="pixel-input h-14 w-full px-5 text-lg font-medium transition-all hover:border-primary/40 focus:outline-none"
@@ -103,7 +105,8 @@ export function NewProjectClient() {
       </form>
 
       <p className="mt-8 text-center font-mono text-sm font-bold text-muted-foreground">
-        The next screen keeps upload validation and accepted file rules unchanged.
+        The next screen keeps upload validation and accepted file rules
+        unchanged.
       </p>
     </div>
   );

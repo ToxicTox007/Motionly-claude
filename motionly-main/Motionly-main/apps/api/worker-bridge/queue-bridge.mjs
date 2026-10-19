@@ -93,7 +93,11 @@ async function jobs(connection) {
   return records.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-export async function getJobsPaged(queue, states, { pageSize = JOB_SCAN_PAGE_SIZE } = {}) {
+export async function getJobsPaged(
+  queue,
+  states,
+  { pageSize = JOB_SCAN_PAGE_SIZE } = {},
+) {
   const records = [];
   let start = 0;
   while (true) {
@@ -140,7 +144,8 @@ export async function recordCanceledJob(
 ) {
   const key = canceledJobsKey(queueName);
   const normalizedJobId = String(jobId || "").trim();
-  if (!normalizedJobId) throw new Error("Canceled queue job identity is required");
+  if (!normalizedJobId)
+    throw new Error("Canceled queue job identity is required");
   const expiresAt = now + retentionSeconds * 1000;
   const result = await connection.eval(
     CANCELED_JOB_MARKER_SCRIPT,
@@ -199,7 +204,9 @@ export async function snapshots(
       if (job.data?.status === "canceled") continue;
       const attemptsMade = Number(job.attemptsMade || 0);
       const maxAttempts = Number(
-        job.opts?.attempts || job.data?.max_attempts || env("JOB_ATTEMPTS", "3"),
+        job.opts?.attempts ||
+          job.data?.max_attempts ||
+          env("JOB_ATTEMPTS", "3"),
       );
       if (job.data?.status === "dead_letter" || attemptsMade >= maxAttempts) {
         deadLetter += 1;
@@ -255,10 +262,16 @@ async function retry(connection, payload) {
     throw new Error(`Canceled queue job cannot be retried: ${payload.id}`);
   }
   if (state === "active" || state === "completed") {
-    throw new Error(`Queue job cannot be retried while ${state}: ${payload.id}`);
+    throw new Error(
+      `Queue job cannot be retried while ${state}: ${payload.id}`,
+    );
   }
-  if (!["failed", "delayed", "waiting", "prioritized", "paused"].includes(state)) {
-    throw new Error(`Queue job is not retryable in state ${state}: ${payload.id}`);
+  if (
+    !["failed", "delayed", "waiting", "prioritized", "paused"].includes(state)
+  ) {
+    throw new Error(
+      `Queue job is not retryable in state ${state}: ${payload.id}`,
+    );
   }
   await job.updateData({
     ...job.data,
@@ -282,7 +295,9 @@ async function cancel(connection, payload) {
   if (!job) throw new Error(`Queue job was not found: ${payload.id}`);
   const state = await job.getState();
   if (state === "completed" || state === "failed") {
-    throw new Error(`Queue job can no longer be canceled in state ${state}: ${payload.id}`);
+    throw new Error(
+      `Queue job can no longer be canceled in state ${state}: ${payload.id}`,
+    );
   }
   const wasCanceled = job.data?.status === "canceled";
   await job.updateData({ ...job.data, status: "canceled" });
@@ -312,7 +327,9 @@ async function runBullMqStalledCheck(connection, queueName) {
   try {
     await checker.startStalledCheckTimer();
     // BullMQ marks candidates on one pass and moves lock-less jobs on the next.
-    await new Promise((resolve) => setTimeout(resolve, STALLED_CHECK_INTERVAL_MS * 3));
+    await new Promise((resolve) =>
+      setTimeout(resolve, STALLED_CHECK_INTERVAL_MS * 3),
+    );
   } finally {
     await checker.close(true);
   }
@@ -326,11 +343,15 @@ function stuckCandidates(active, cutoff) {
 }
 
 async function markStuckDeadLetter(connection, payload) {
-  const cutoff = Date.now() - Math.max(1, Number(payload.timeout_seconds || 1)) * 1000;
+  const cutoff =
+    Date.now() - Math.max(1, Number(payload.timeout_seconds || 1)) * 1000;
   const transitioned = [];
   for (const queueName of queueNames) {
     const queue = queueFor(queueName, connection);
-    const candidates = stuckCandidates(await getJobsPaged(queue, ["active"]), cutoff);
+    const candidates = stuckCandidates(
+      await getJobsPaged(queue, ["active"]),
+      cutoff,
+    );
     if (candidates.length === 0) continue;
     await runBullMqStalledCheck(connection, queueName);
     for (const candidate of candidates) {
@@ -349,12 +370,16 @@ async function markStuckDeadLetter(connection, payload) {
 }
 
 async function recoverStuck(connection, payload) {
-  const cutoff = Date.now() - Math.max(1, Number(payload.timeout_seconds || 1)) * 1000;
+  const cutoff =
+    Date.now() - Math.max(1, Number(payload.timeout_seconds || 1)) * 1000;
   const backoffSeconds = Math.max(1, Number(payload.backoff_seconds || 30));
   const transitioned = [];
   for (const queueName of queueNames) {
     const queue = queueFor(queueName, connection);
-    const candidates = stuckCandidates(await getJobsPaged(queue, ["active"]), cutoff);
+    const candidates = stuckCandidates(
+      await getJobsPaged(queue, ["active"]),
+      cutoff,
+    );
     if (candidates.length === 0) continue;
     await runBullMqStalledCheck(connection, queueName);
     for (const candidate of candidates) {
@@ -387,7 +412,8 @@ async function execute(command, connection, payload) {
   if (command === "retry") return retry(connection, payload);
   if (command === "cancel") return cancel(connection, payload);
   if (command === "recover-stuck") return recoverStuck(connection, payload);
-  if (command === "mark-stuck-dead-letter") return markStuckDeadLetter(connection, payload);
+  if (command === "mark-stuck-dead-letter")
+    return markStuckDeadLetter(connection, payload);
   throw new Error(`Unsupported queue bridge command: ${command}`);
 }
 
@@ -404,13 +430,19 @@ async function serve(connection) {
       let request = {};
       try {
         request = JSON.parse(line);
-        const result = await execute(request.command, connection, request.payload || {});
+        const result = await execute(
+          request.command,
+          connection,
+          request.payload || {},
+        );
         process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
       } catch (error) {
-        process.stdout.write(`${JSON.stringify({
-          id: request.id || null,
-          error: error instanceof Error ? error.message : String(error),
-        })}\n`);
+        process.stdout.write(
+          `${JSON.stringify({
+            id: request.id || null,
+            error: error instanceof Error ? error.message : String(error),
+          })}\n`,
+        );
       }
     }
   }
@@ -418,8 +450,22 @@ async function serve(connection) {
 
 async function main() {
   const command = process.argv[2];
-  if (!["enqueue", "job", "jobs", "snapshots", "retry", "cancel", "mark-stuck-dead-letter", "recover-stuck", "serve"].includes(command)) {
-    throw new Error("Usage: queue-bridge.mjs [enqueue|job|jobs|snapshots|retry|cancel|mark-stuck-dead-letter|recover-stuck|serve]");
+  if (
+    ![
+      "enqueue",
+      "job",
+      "jobs",
+      "snapshots",
+      "retry",
+      "cancel",
+      "mark-stuck-dead-letter",
+      "recover-stuck",
+      "serve",
+    ].includes(command)
+  ) {
+    throw new Error(
+      "Usage: queue-bridge.mjs [enqueue|job|jobs|snapshots|retry|cancel|mark-stuck-dead-letter|recover-stuck|serve]",
+    );
   }
   const connection = bullConnection();
   try {
@@ -435,9 +481,14 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
     process.exit(1);
   });
 }

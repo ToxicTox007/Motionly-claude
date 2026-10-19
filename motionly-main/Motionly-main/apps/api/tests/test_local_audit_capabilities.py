@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -19,8 +18,6 @@ from app.core.local_audit import (
     LocalAuditLiveEffectsGate,
     compile_local_audit_policy,
 )
-from app.repositories.publishing import InMemoryPublishingRepository
-from app.schemas.publishing import PublishPlatform, PublishStatus
 from app.services.model_gateway import (
     AdapterResult,
     ChatMessage,
@@ -32,7 +29,6 @@ from app.services.model_gateway import (
     PlanningRequest,
     budget_scope,
 )
-from app.services.publishing import PublishedPost, execute_publish_job
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = ROOT / "apps" / "api" / "scripts" / "audit_local_capabilities.py"
@@ -65,9 +61,7 @@ def _environment(secret_directory: Path, *, effects_enabled: bool = False) -> di
         "SUPABASE_ANON_KEY": "local-audit-anon-key-123",
         "SUPABASE_SERVICE_ROLE_KEY": "local-audit-service-key-123",
         "APP_DOMAIN": "app.audit.localhost",
-        "API_DOMAIN": "api.audit.localhost",
-        "SUPABASE_DOMAIN": "supabase.audit.localhost",
-        "SENTRY_DSN": "https://public@sentry.audit.invalid/1",
+        "PUBLIC_ORIGIN": "https://app.audit.localhost:18443",
         "TEMPORAL_BOOTSTRAP_ADMIN_UNTIL": "2027-01-01T00:00:00Z",
         "MOTIONLY_API_IMAGE": "motionly-api:dev",
         "MOTIONLY_WEB_IMAGE": "motionly-web:dev",
@@ -78,7 +72,6 @@ def _environment(secret_directory: Path, *, effects_enabled: bool = False) -> di
         "MOTIONLY_PROVIDER_WORKER_IMAGE": "motionly-provider-worker:dev",
         "MOTIONLY_PLANNING_WORKER_IMAGE": "motionly-planning-worker:dev",
         "MOTIONLY_REMOTION_WORKER_IMAGE": "motionly-remotion-worker:dev",
-        "MOTIONLY_PUBLISHING_WORKER_IMAGE": "motionly-publishing-worker:dev",
         "MOTIONLY_TEMPORAL_SERVER_IMAGE": "motionly-temporal-server:local-audit",
         "TEMPORAL_ADMIN_TOOLS_IMAGE": "temporalio/admin-tools@sha256:" + "a" * 64,
         "LOCAL_AUDIT_MODE": "true",
@@ -88,18 +81,7 @@ def _environment(secret_directory: Path, *, effects_enabled: bool = False) -> di
         "LOCAL_AUDIT_PROVIDER_ACCOUNTS": json.dumps(
             [{"provider": "openrouter", "account_id": "openrouter-audit-001"}]
         ),
-        "LOCAL_AUDIT_PUBLISHING_ACCOUNTS": json.dumps(
-            [
-                {"provider": "youtube", "account_id": "youtube-audit-001"},
-                {"provider": "tiktok", "account_id": "tiktok-audit-001"},
-                {"provider": "instagram", "account_id": "instagram-audit-001"},
-            ]
-        ),
-        "LOCAL_AUDIT_APPROVED_DOMAINS": (
-            "openrouter.ai,open.tiktokapis.com,graph.facebook.com,"
-            "www.googleapis.com,oauth2.googleapis.com"
-        ),
-        "LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES": "private,unlisted",
+        "LOCAL_AUDIT_APPROVED_DOMAINS": "openrouter.ai",
         "LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD": "1.25",
         "LOCAL_AUDIT_MAX_TOTAL_SPEND_USD": "5.00",
         "LOCAL_AUDIT_REMOTE_CLEANUP_OWNER": "audit-owner-dev",
@@ -202,6 +184,10 @@ def test_successful_preflight_is_redacted_and_keeps_live_effects_denied_by_defau
     [
         (
             lambda values, _secrets: values.update({"APP_DOMAIN": "app.motionly.com"}),
+            "production_domain_not_allowed",
+        ),
+        (
+            lambda values, _secrets: values.update({"PUBLIC_ORIGIN": "https://app.motionly.com"}),
             "production_domain_not_allowed",
         ),
         (
@@ -315,67 +301,6 @@ def test_model_gate_denies_before_budget_reservation_or_adapter_invocation(tmp_p
     }
 
 
-def test_publishing_gate_denies_before_refresh_signed_url_or_provider_publish(
-    tmp_path: Path,
-) -> None:
-    secrets = _protected_secrets(tmp_path)
-    gate = _gate(_environment(secrets, effects_enabled=False), secrets)
-    workspace_id, project_id, export_id = uuid4(), uuid4(), uuid4()
-    repository = InMemoryPublishingRepository()
-    connection = repository.create_connection(
-        workspace_id=workspace_id,
-        platform=PublishPlatform.YOUTUBE,
-        access_token="access-token",
-        refresh_token="refresh-token",
-        token_expires_at=datetime.now(UTC) - timedelta(minutes=5),
-        external_account_id="youtube-audit-001",
-        account_name="Audit YouTube channel",
-    )
-    job = repository.create_job(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        export_id=export_id,
-        connection_id=connection.id,
-        platform=connection.platform,
-        status=PublishStatus.QUEUED,
-        title="Audit export",
-        caption="",
-        privacy="private",
-    )
-    calls = {"refresh": 0, "sign": 0, "publish": 0}
-
-    class OAuthClient:
-        def refresh(self, _connection):
-            calls["refresh"] += 1
-            raise AssertionError("the gate must deny before OAuth refresh")
-
-    class StorageSigner:
-        def create_signed_download(self, **_kwargs):
-            calls["sign"] += 1
-            raise AssertionError("the gate must deny before signed URL creation")
-
-    class Client:
-        def publish(self, **_kwargs):
-            calls["publish"] += 1
-            return PublishedPost(external_post_id="unexpected")
-
-    with pytest.raises(LocalAuditEffectsDenied, match="blocked"):
-        execute_publish_job(
-            publishing_repository=repository,
-            render_repository=object(),
-            storage_signer=StorageSigner(),
-            client=Client(),
-            oauth_client=OAuthClient(),
-            live_effects_gate=gate,
-            job_id=job.id,
-            workspace_id=workspace_id,
-        )
-
-    assert calls == {"refresh": 0, "sign": 0, "publish": 0}
-    updated_job = repository.get_job(job_id=job.id, workspace_id=workspace_id)
-    assert updated_job.status == PublishStatus.QUEUED
-
-
 @pytest.mark.skipif(not shutil.which("docker"), reason="Docker CLI is unavailable")
 def test_local_audit_compose_overlay_renders_without_starting_services(tmp_path: Path) -> None:
     secrets = _protected_secrets(tmp_path)
@@ -454,6 +379,28 @@ def test_plan_only_cli_writes_only_redacted_json_to_stdout() -> None:
         "images_built": False,
         "images_pulled": False,
         "provider_calls": False,
-        "publishing_calls": False,
         "files_written": False,
     }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes only")
+def test_secret_files_may_be_read_only_inside_a_private_directory(tmp_path: Path) -> None:
+    """Containers run as non-root, so secret files are 0444 inside a 0700 directory."""
+    check = local_audit_capabilities._protected_path_errors
+    directory = tmp_path / "secrets"
+    directory.mkdir()
+    directory.chmod(0o700)
+    secret = directory / "postgres_password"
+    secret.write_text("value", encoding="utf-8")
+
+    secret.chmod(0o444)
+    assert check(directory, is_directory=True) == []
+    assert check(secret, is_directory=False, secret_file=True) == []
+    # The env file is not a mounted secret: it stays owner-only.
+    assert check(secret, is_directory=False) == ["protected_input_permissions_not_private"]
+    secret.chmod(0o666)
+    assert check(secret, is_directory=False, secret_file=True) == [
+        "protected_input_permissions_not_private"
+    ]
+    directory.chmod(0o755)
+    assert check(directory, is_directory=True) == ["protected_input_permissions_not_private"]

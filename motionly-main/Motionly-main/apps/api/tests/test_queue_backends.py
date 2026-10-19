@@ -212,3 +212,17 @@ def test_queue_backpressure_blocks_overloaded_queue() -> None:
 
     assert exc_info.value.status_code == 429
     assert exc_info.value.code == "queue_backpressure"
+
+
+def test_render_compute_tier_routes_to_its_dedicated_queue() -> None:
+    registry = QueueRegistry()
+    queue = RenderQueue(registry)
+    cpu = queue.enqueue_render(
+        render_job_id=uuid4(), project_id=uuid4(), workspace_id=uuid4(), compute_tier="cpu"
+    )
+    gpu = queue.enqueue_render(
+        render_job_id=uuid4(), project_id=uuid4(), workspace_id=uuid4(), compute_tier="gpu"
+    )
+
+    assert cpu.queue_name == "render"
+    assert gpu.queue_name == "render_gpu"

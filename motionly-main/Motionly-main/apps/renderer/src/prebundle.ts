@@ -8,7 +8,7 @@
  * to deploy time rather than the first user's render.
  *
  * Usage (in worker startup command):
- *   node --loader ts-node/esm src/prebundle.ts && node ../worker/src/worker.mjs --loop
+ *   node --import ./ts-node-register.mjs src/prebundle.ts && node ../worker/src/worker.mjs --loop
  *
  * The bundle path is written to .remotion-bundle so render-cli.ts can reuse
  * it on every subsequent render without re-bundling.

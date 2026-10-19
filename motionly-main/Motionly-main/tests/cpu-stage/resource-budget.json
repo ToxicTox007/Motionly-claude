@@ -1,0 +1,651 @@
+{
+  "schema_version": 1,
+  "decision": "D2",
+  "basis": "measured peak x 1.25",
+  "status": "approved",
+  "size": "slim",
+  "description": "CPU-stage resource and page-load budgets (Decision D2, approved 2026-10-08): each budget is 1.25x the higher of two measured baselines on the slim stack, startup plus stack checks (measurement) and the browser suite in five setups (browser_measurement). Page-load budgets are the p95 load time per setup; Firefox is excluded (browser.excluded_navigation gives the reason). The perf verify stage enforces them. Restarts, OOM kills and failed one-shots fail every run regardless of budgets.",
+  "services": {
+    "api": {
+      "baseline_peak_memory_bytes": 189897113,
+      "baseline_peak_cpu_percent": 25.1,
+      "budget_memory_bytes": 286785535,
+      "budget_cpu_percent": 39.6,
+      "browser_peak_memory_bytes": 229428428,
+      "browser_peak_cpu_percent": 31.64
+    },
+    "cpu-worker": {
+      "baseline_peak_memory_bytes": 125304832,
+      "baseline_peak_cpu_percent": 22.1,
+      "budget_memory_bytes": 240517120,
+      "budget_cpu_percent": 93.6,
+      "browser_peak_memory_bytes": 192413696,
+      "browser_peak_cpu_percent": 74.85
+    },
+    "edge": {
+      "baseline_peak_memory_bytes": 30880563,
+      "baseline_peak_cpu_percent": 7.97,
+      "budget_memory_bytes": 54263808,
+      "budget_cpu_percent": 13.0,
+      "browser_peak_memory_bytes": 43411046,
+      "browser_peak_cpu_percent": 10.38
+    },
+    "ingress": {
+      "baseline_peak_memory_bytes": 48423239,
+      "baseline_peak_cpu_percent": 0.0,
+      "budget_memory_bytes": 65719500,
+      "budget_cpu_percent": 1.9,
+      "browser_peak_memory_bytes": 52575600,
+      "browser_peak_cpu_percent": 1.52
+    },
+    "postgres": {
+      "baseline_peak_memory_bytes": 150156083,
+      "baseline_peak_cpu_percent": 69.5,
+      "budget_memory_bytes": 212336640,
+      "budget_cpu_percent": 86.9,
+      "browser_peak_memory_bytes": 169869312,
+      "browser_peak_cpu_percent": 63.38
+    },
+    "redis": {
+      "baseline_peak_memory_bytes": 13725859,
+      "baseline_peak_cpu_percent": 4.7,
+      "budget_memory_bytes": 17157324,
+      "budget_cpu_percent": 6.0,
+      "browser_peak_memory_bytes": 13725859,
+      "browser_peak_cpu_percent": 4.73
+    },
+    "remotion-worker": {
+      "baseline_peak_memory_bytes": 57378078,
+      "baseline_peak_cpu_percent": 0.0,
+      "budget_memory_bytes": 71722598,
+      "budget_cpu_percent": 1.5,
+      "browser_peak_memory_bytes": 55564042,
+      "browser_peak_cpu_percent": 1.15
+    },
+    "supabase-auth": {
+      "baseline_peak_memory_bytes": 32327598,
+      "baseline_peak_cpu_percent": 0.1,
+      "budget_memory_bytes": 40409498,
+      "budget_cpu_percent": 19.0,
+      "browser_peak_memory_bytes": 31698452,
+      "browser_peak_cpu_percent": 15.16
+    },
+    "supabase-gateway": {
+      "baseline_peak_memory_bytes": 186751385,
+      "baseline_peak_cpu_percent": 11.3,
+      "budget_memory_bytes": 245235712,
+      "budget_cpu_percent": 19.5,
+      "browser_peak_memory_bytes": 196188569,
+      "browser_peak_cpu_percent": 15.55
+    },
+    "supabase-rest": {
+      "baseline_peak_memory_bytes": 28919726,
+      "baseline_peak_cpu_percent": 3.3,
+      "budget_memory_bytes": 36883660,
+      "budget_cpu_percent": 4.2,
+      "browser_peak_memory_bytes": 29506928,
+      "browser_peak_cpu_percent": 3.07
+    },
+    "supabase-storage": {
+      "baseline_peak_memory_bytes": 119852236,
+      "baseline_peak_cpu_percent": 64.2,
+      "budget_memory_bytes": 153747455,
+      "budget_cpu_percent": 80.3,
+      "browser_peak_memory_bytes": 122997964,
+      "browser_peak_cpu_percent": 43.28
+    },
+    "temporal": {
+      "baseline_peak_memory_bytes": 113141350,
+      "baseline_peak_cpu_percent": 16.1,
+      "budget_memory_bytes": 194641920,
+      "budget_cpu_percent": 22.0,
+      "browser_peak_memory_bytes": 155713536,
+      "browser_peak_cpu_percent": 17.59
+    },
+    "temporal-dispatcher": {
+      "baseline_peak_memory_bytes": 86025175,
+      "baseline_peak_cpu_percent": 14.4,
+      "budget_memory_bytes": 107531469,
+      "budget_cpu_percent": 24.7,
+      "browser_peak_memory_bytes": 82145443,
+      "browser_peak_cpu_percent": 19.69
+    },
+    "temporal-postgres": {
+      "baseline_peak_memory_bytes": 164836147,
+      "baseline_peak_cpu_percent": 57.5,
+      "budget_memory_bytes": 213909504,
+      "budget_cpu_percent": 71.9,
+      "browser_peak_memory_bytes": 171127603,
+      "browser_peak_cpu_percent": 47.96
+    },
+    "temporal-worker": {
+      "baseline_peak_memory_bytes": 68964843,
+      "baseline_peak_cpu_percent": 25.5,
+      "budget_memory_bytes": 196476928,
+      "budget_cpu_percent": 31.9,
+      "browser_peak_memory_bytes": 157181542,
+      "browser_peak_cpu_percent": 21.11
+    },
+    "web": {
+      "baseline_peak_memory_bytes": 106220748,
+      "baseline_peak_cpu_percent": 12.1,
+      "budget_memory_bytes": 197787648,
+      "budget_cpu_percent": 27.3,
+      "browser_peak_memory_bytes": 158230118,
+      "browser_peak_cpu_percent": 21.83
+    },
+    "workflow-reconciler": {
+      "baseline_peak_memory_bytes": 62704844,
+      "baseline_peak_cpu_percent": 12.6,
+      "budget_memory_bytes": 93978624,
+      "budget_cpu_percent": 20.4,
+      "browser_peak_memory_bytes": 75182899,
+      "browser_peak_cpu_percent": 16.31
+    }
+  },
+  "measurement": {
+    "source": "test-results/cpu-stage/resources.json",
+    "size": "slim",
+    "date": "2026-10-06",
+    "machine": "GitHub Codespace, 2 vCPU, 7.7 GiB RAM",
+    "scenario": "start from empty volumes, then the stack-stage checks (no user load)",
+    "sample_rounds": 13,
+    "duration_seconds": 93.0,
+    "startup_seconds": 39.2
+  },
+  "browser": {
+    "wall_seconds": 898.1,
+    "projects": {
+      "chromium": {
+        "tests": 29,
+        "passed": 28,
+        "skipped": 0,
+        "expected_failures": 1,
+        "seconds": 342.0
+      },
+      "firefox": {
+        "tests": 29,
+        "passed": 28,
+        "skipped": 0,
+        "expected_failures": 1,
+        "seconds": 336.1
+      },
+      "webkit": {
+        "tests": 29,
+        "passed": 28,
+        "skipped": 0,
+        "expected_failures": 1,
+        "seconds": 366.4
+      },
+      "pixel-7": {
+        "tests": 29,
+        "passed": 28,
+        "skipped": 0,
+        "expected_failures": 1,
+        "seconds": 289.0
+      },
+      "iphone-14": {
+        "tests": 29,
+        "passed": 28,
+        "skipped": 0,
+        "expected_failures": 1,
+        "seconds": 317.8
+      }
+    },
+    "navigation": {
+      "by_project": {
+        "chromium": {
+          "ttfb_ms": {
+            "count": 47,
+            "p50": 108,
+            "p95": 500,
+            "max": 1310
+          },
+          "dom_content_loaded_ms": {
+            "count": 47,
+            "p50": 393,
+            "p95": 1215,
+            "max": 2075
+          },
+          "load_ms": {
+            "count": 47,
+            "p50": 477,
+            "p95": 1781,
+            "max": 2075
+          }
+        },
+        "firefox": {
+          "ttfb_ms": {
+            "count": 107,
+            "p50": 0,
+            "p95": 327,
+            "max": 408
+          },
+          "dom_content_loaded_ms": {
+            "count": 107,
+            "p50": 23,
+            "p95": 506,
+            "max": 832
+          },
+          "load_ms": {
+            "count": 107,
+            "p50": 24,
+            "p95": 832,
+            "max": 1155
+          }
+        },
+        "webkit": {
+          "ttfb_ms": {
+            "count": 47,
+            "p50": 80,
+            "p95": 357,
+            "max": 385
+          },
+          "dom_content_loaded_ms": {
+            "count": 47,
+            "p50": 209,
+            "p95": 566,
+            "max": 1097
+          },
+          "load_ms": {
+            "count": 47,
+            "p50": 500,
+            "p95": 935,
+            "max": 1317
+          }
+        },
+        "pixel-7": {
+          "ttfb_ms": {
+            "count": 55,
+            "p50": 48,
+            "p95": 330,
+            "max": 436
+          },
+          "dom_content_loaded_ms": {
+            "count": 55,
+            "p50": 193,
+            "p95": 572,
+            "max": 729
+          },
+          "load_ms": {
+            "count": 55,
+            "p50": 331,
+            "p95": 709,
+            "max": 848
+          }
+        },
+        "iphone-14": {
+          "ttfb_ms": {
+            "count": 55,
+            "p50": 66,
+            "p95": 239,
+            "max": 324
+          },
+          "dom_content_loaded_ms": {
+            "count": 55,
+            "p50": 176,
+            "p95": 468,
+            "max": 703
+          },
+          "load_ms": {
+            "count": 55,
+            "p50": 380,
+            "p95": 665,
+            "max": 894
+          }
+        }
+      },
+      "by_path": {
+        "/": {
+          "ttfb_ms": {
+            "count": 15,
+            "p50": 36,
+            "p95": 88,
+            "max": 97
+          },
+          "dom_content_loaded_ms": {
+            "count": 15,
+            "p50": 159,
+            "p95": 419,
+            "max": 643
+          },
+          "load_ms": {
+            "count": 15,
+            "p50": 380,
+            "p95": 626,
+            "max": 823
+          }
+        },
+        "/account": {
+          "ttfb_ms": {
+            "count": 4,
+            "p50": 165,
+            "p95": 282,
+            "max": 299
+          },
+          "dom_content_loaded_ms": {
+            "count": 4,
+            "p50": 314,
+            "p95": 597,
+            "max": 636
+          },
+          "load_ms": {
+            "count": 4,
+            "p50": 444,
+            "p95": 629,
+            "max": 643
+          }
+        },
+        "/billing": {
+          "ttfb_ms": {
+            "count": 4,
+            "p50": 214,
+            "p95": 259,
+            "max": 260
+          },
+          "dom_content_loaded_ms": {
+            "count": 4,
+            "p50": 354,
+            "p95": 406,
+            "max": 411
+          },
+          "load_ms": {
+            "count": 4,
+            "p50": 466,
+            "p95": 624,
+            "max": 643
+          }
+        },
+        "/copyright": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 23,
+            "p95": 31,
+            "max": 33
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 141,
+            "p95": 208,
+            "max": 224
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 273,
+            "p95": 332,
+            "max": 341
+          }
+        },
+        "/dashboard": {
+          "ttfb_ms": {
+            "count": 2,
+            "p50": 130,
+            "p95": 131,
+            "max": 131
+          },
+          "dom_content_loaded_ms": {
+            "count": 2,
+            "p50": 182,
+            "p95": 190,
+            "max": 191
+          },
+          "load_ms": {
+            "count": 2,
+            "p50": 216,
+            "p95": 237,
+            "max": 239
+          }
+        },
+        "/login": {
+          "ttfb_ms": {
+            "count": 107,
+            "p50": 46,
+            "p95": 191,
+            "max": 454
+          },
+          "dom_content_loaded_ms": {
+            "count": 107,
+            "p50": 215,
+            "p95": 793,
+            "max": 1752
+          },
+          "load_ms": {
+            "count": 107,
+            "p50": 426,
+            "p95": 1364,
+            "max": 1794
+          }
+        },
+        "/no-such-page": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 16,
+            "p95": 38,
+            "max": 39
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 132,
+            "p95": 177,
+            "max": 180
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 272,
+            "p95": 294,
+            "max": 297
+          }
+        },
+        "/pricing": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 21,
+            "p95": 48,
+            "max": 50
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 114,
+            "p95": 313,
+            "max": 354
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 323,
+            "p95": 522,
+            "max": 566
+          }
+        },
+        "/privacy": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 25,
+            "p95": 65,
+            "max": 73
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 122,
+            "p95": 269,
+            "max": 279
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 390,
+            "p95": 491,
+            "max": 495
+          }
+        },
+        "/projects": {
+          "ttfb_ms": {
+            "count": 9,
+            "p50": 137,
+            "p95": 198,
+            "max": 201
+          },
+          "dom_content_loaded_ms": {
+            "count": 9,
+            "p50": 213,
+            "p95": 398,
+            "max": 401
+          },
+          "load_ms": {
+            "count": 9,
+            "p50": 270,
+            "p95": 478,
+            "max": 535
+          }
+        },
+        "/projects/:id": {
+          "ttfb_ms": {
+            "count": 70,
+            "p50": 226,
+            "p95": 423,
+            "max": 1310
+          },
+          "dom_content_loaded_ms": {
+            "count": 70,
+            "p50": 388,
+            "p95": 743,
+            "max": 2075
+          },
+          "load_ms": {
+            "count": 70,
+            "p50": 512,
+            "p95": 1071,
+            "max": 2075
+          }
+        },
+        "/projects/new": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 163,
+            "p95": 280,
+            "max": 289
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 342,
+            "p95": 549,
+            "max": 569
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 342,
+            "p95": 816,
+            "max": 820
+          }
+        },
+        "/refund": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 36,
+            "p95": 55,
+            "max": 59
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 168,
+            "p95": 211,
+            "max": 220
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 308,
+            "p95": 422,
+            "max": 448
+          }
+        },
+        "/signup": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 26,
+            "p95": 49,
+            "max": 54
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 202,
+            "p95": 499,
+            "max": 545
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 490,
+            "p95": 720,
+            "max": 751
+          }
+        },
+        "/terms": {
+          "ttfb_ms": {
+            "count": 5,
+            "p50": 36,
+            "p95": 44,
+            "max": 46
+          },
+          "dom_content_loaded_ms": {
+            "count": 5,
+            "p50": 154,
+            "p95": 451,
+            "max": 499
+          },
+          "load_ms": {
+            "count": 5,
+            "p50": 339,
+            "p95": 774,
+            "max": 857
+          }
+        },
+        "blank": {
+          "ttfb_ms": {
+            "count": 60,
+            "p50": 0,
+            "p95": 0,
+            "max": 0
+          },
+          "dom_content_loaded_ms": {
+            "count": 60,
+            "p50": 12,
+            "p95": 30,
+            "max": 50
+          },
+          "load_ms": {
+            "count": 60,
+            "p50": 14,
+            "p95": 31,
+            "max": 54
+          }
+        }
+      }
+    },
+    "budget_navigation_load_p95_ms": {
+      "chromium": 2227,
+      "webkit": 1169,
+      "pixel-7": 887,
+      "iphone-14": 832
+    },
+    "budget_wall_seconds": 1123,
+    "excluded_navigation": [
+      {
+        "project": "firefox",
+        "reason": "Firefox's Navigation Timing values on the CPU stage are implausible (time to first byte p50 0 ms, load p50 24 ms, against 330-500 ms in every other setup), so they cannot serve as a baseline. Firefox still runs every browser test and quality gate; only its page-load timings are left out of the budgets."
+      }
+    ]
+  },
+  "browser_measurement": {
+    "source": [
+      "test-results/cpu-stage/resources.json",
+      "test-results/browser/report.json"
+    ],
+    "date": "2026-10-07",
+    "machine": "GitHub Codespace, 2 vCPU, 7.7 GiB RAM",
+    "scenario": "the browser suite in five setups against the slim stack",
+    "sample_rounds": 125,
+    "duration_seconds": 964.1
+  },
+  "approval": {
+    "decision": "D2",
+    "date": "2026-10-08",
+    "factor": 1.25
+  }
+}

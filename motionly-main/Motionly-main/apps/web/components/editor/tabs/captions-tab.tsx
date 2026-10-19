@@ -20,8 +20,6 @@ import { cn } from "@/lib/utils";
 interface CaptionsTabProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   initialTracks: CaptionTrackSummary[];
   activePlan: EditPlanRecordSummary | null;
   onTrackUpdated: (track: CaptionTrackSummary) => void;
@@ -67,8 +65,6 @@ const outputLanguages = [
 export function CaptionsTab({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   initialTracks,
   activePlan,
   onTrackUpdated,
@@ -131,40 +127,33 @@ export function CaptionsTab({
         track?: CaptionTrackSummary | null;
         status: "ready" | "queued";
         status_url?: string | null;
-      }>(
-        endpoint,
-        {
-          method: activeTrack ? "PATCH" : "POST",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError:
-            "Caption settings could not be saved. Please try again.",
-          body: {
-            preset,
-            hide_filler_words: hideFillerWords,
-            style,
-            output_language: outputLanguage,
-          },
+      }>(endpoint, {
+        method: activeTrack ? "PATCH" : "POST",
+        workspaceId,
+        friendlyError: "Caption settings could not be saved. Please try again.",
+        body: {
+          preset,
+          hide_filler_words: hideFillerWords,
+          style,
+          output_language: outputLanguage,
         },
-      );
+      });
       const track = await resolveQueuedLayer({
         submission: payload,
         immediate: payload.track,
         apiBaseUrl: env.apiBaseUrl,
-        options: { workspaceId, userId, accessToken: apiAccessToken },
+        options: { workspaceId },
         load: async () => {
           const result = await editorApiRequest<{
             tracks: CaptionTrackSummary[];
           }>(`${env.apiBaseUrl}/projects/${projectId}/captions`, {
             workspaceId,
-            userId,
-            accessToken: apiAccessToken,
           });
           return result.tracks[0] ?? null;
         },
         resourceLabel: "Captions",
-        onProgress: (progress) => setMessage(`Generating captions: ${progress}%`),
+        onProgress: (progress) =>
+          setMessage(`Generating captions: ${progress}%`),
       });
       applyTrack(track);
       setMessage("Caption style updated.");
@@ -189,8 +178,6 @@ export function CaptionsTab({
         {
           method: "PATCH",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "Caption text could not be saved. Please try again.",
           body: { segments },
         },
@@ -222,8 +209,6 @@ export function CaptionsTab({
       {
         method: "PATCH",
         workspaceId,
-        userId,
-        accessToken: apiAccessToken,
         friendlyError: "Caption highlights could not be saved.",
         body: { caption_highlights },
       },
@@ -525,7 +510,14 @@ export function CaptionsTab({
                     <span className="block truncate font-bold">
                       {segment.text}
                     </span>
-                    <span className={cn("text-[10px] mt-0.5 block font-mono", selectedSegmentIndex === index ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                    <span
+                      className={cn(
+                        "text-[10px] mt-0.5 block font-mono",
+                        selectedSegmentIndex === index
+                          ? "text-primary-foreground/80"
+                          : "text-muted-foreground",
+                      )}
+                    >
                       {segment.start_ms} - {segment.end_ms} ms
                     </span>
                   </button>
@@ -607,7 +599,10 @@ export function CaptionsTab({
           className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
         >
           {loading ? (
-            <Loader2 className="size-4 animate-spin text-primary-foreground" strokeWidth={2} />
+            <Loader2
+              className="size-4 animate-spin text-primary-foreground"
+              strokeWidth={2}
+            />
           ) : (
             <RefreshCw className="size-4" strokeWidth={2} />
           )}
@@ -621,7 +616,10 @@ export function CaptionsTab({
           className="h-11 px-2 text-xs font-black rounded border-2 border-foreground bg-primary text-primary-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms]"
         >
           {loading ? (
-            <Loader2 className="mr-2 size-4 animate-spin text-primary-foreground" strokeWidth={2} />
+            <Loader2
+              className="mr-2 size-4 animate-spin text-primary-foreground"
+              strokeWidth={2}
+            />
           ) : (
             <Save className="mr-2 size-4" strokeWidth={2} />
           )}

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import httpx
@@ -22,6 +22,8 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     environment: str
+    # "not_enabled": GPU-dependent capabilities are labelled CPU-stage fixtures.
+    gpu_stage: Literal["enabled", "not_enabled"]
     request_id: str
 
 
@@ -111,6 +113,7 @@ def _public_health_response(request: Request) -> HealthResponse:
         status="ok",
         service="motionly-api",
         environment=settings.app_env,
+        gpu_stage=settings.gpu_stage,
         request_id=request.state.request_id,
     )
 
@@ -124,6 +127,7 @@ async def dependencies(request: Request, actor: ActorDep) -> DependencyHealthRes
         status=aggregate,
         service="motionly-api",
         environment=request.app.state.settings.app_env,
+        gpu_stage=request.app.state.settings.gpu_stage,
         request_id=request.state.request_id,
         dependencies=checks,
     )
@@ -142,6 +146,7 @@ async def deep(request: Request, actor: ActorDep) -> DeepHealthResponse:
         status=aggregate,
         service="motionly-api",
         environment=request.app.state.settings.app_env,
+        gpu_stage=request.app.state.settings.gpu_stage,
         request_id=request.state.request_id,
         components=components,
     )

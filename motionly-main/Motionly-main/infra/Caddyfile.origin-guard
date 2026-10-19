@@ -1,0 +1,27 @@
+# Origin guard: only CloudFront reaches the origin (infra/aws/edge-contract.json,
+# origin_guard). CloudFront adds X-Motionly-Origin-Verify with the current
+# secret; during a rotation the previous secret is accepted too. Every other
+# request gets 403 before any route runs. caddy-entrypoint.sh validates the
+# secrets and exports them; the routes strip the header before proxying.
+@origin_unverified {
+	not {
+		header_regexp X-Motionly-Origin-Verify ^[A-Za-z0-9_-]{32,256}$
+		header X-Motionly-Origin-Verify {env.MOTIONLY_ORIGIN_VERIFY_CURRENT}
+		header X-Motionly-Origin-Verify {env.MOTIONLY_ORIGIN_VERIFY_PREVIOUS}
+	}
+}
+handle @origin_unverified {
+	respond "Forbidden" 403
+}
+
+# The viewer's address, for Auth's per-viewer rate limits
+# (GOTRUE_RATE_LIMIT_HEADER). Only CloudFront's CloudFront-Viewer-Address
+# ("IP:port") is trusted, and only on requests that passed the guard above (the
+# rest get 403); a value the viewer sent is always removed first. The port is
+# dropped so that one viewer is one rate-limit key.
+request_header -X-Motionly-Viewer-IP
+map {http.request.header.CloudFront-Viewer-Address} {motionly_viewer_ip} {
+	~^([0-9A-Fa-f:.]+):[0-9]{1,5}$ "${1}"
+	default ""
+}
+request_header X-Motionly-Viewer-IP {motionly_viewer_ip}

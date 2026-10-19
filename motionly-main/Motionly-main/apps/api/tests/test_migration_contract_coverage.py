@@ -21,9 +21,19 @@ MIGRATION_TEST_CONTRACTS = {
         "task_20_localized_publishing_asset_library_test.sql",
         ("localized_publish_packages", "asset_library_items", "service_role"),
     ),
-    "202608090011_performance_feedback_loop.sql": (
-        "task_21_performance_feedback_test.sql",
-        ("performance_feedback_policies", "motionly_capture_performance_metric", "service_role"),
+    "202610060002_drop_removed_features.sql": (
+        "task_4_removed_features_test.sql",
+        ("publish_jobs", "performance_feedback_metrics", "tenant_integrity_constraint_manifest"),
+    ),
+    "202610070001_project_deletion_removes_history.sql": (
+        "task_26_project_deletion_test.sql",
+        (
+            "IMMUTABLE_RECORD",
+            "workflow_step_attempts",
+            "timeline_revisions",
+            "ai_edit_proposal_decisions",
+            "auth.users",
+        ),
     ),
     "202608110001_asset_library_durable_references.sql": (
         "task_23_asset_library_durable_references_test.sql",

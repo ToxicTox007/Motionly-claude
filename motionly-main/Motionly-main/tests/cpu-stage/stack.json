@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "description": "CPU-stage stack: the production Compose topology (infra/docker-compose.gpu.yml) plus infra/docker-compose.cpu-stage.yml, built from this checkout. GPU services are never started; their image variables name tags that are never built or pulled.",
+  "project": "motionly-cpu-stage",
+  "compose_files": [
+    "infra/docker-compose.gpu.yml",
+    "infra/docker-compose.cpu-stage.yml"
+  ],
+  "sizes": {
+    "slim": "One CPU worker serves every Python queue; the Remotion worker serves render_remotion. Fits a 2-CPU / 7 GB machine.",
+    "full": "Every production CPU worker service, plus cpu-fixture-worker for the queues the GPU services serve in production."
+  },
+  "public_origin": "https://127.0.0.1:18443",
+  "edge_http": "http://127.0.0.1:18081",
+  "origin_direct": "http://127.0.0.1:18080",
+  "temporal_admin_tools_image": "temporalio/admin-tools@sha256:d5c44013f11fe0a171914ba44e28f62199f872e41162713b52fcd92a39f52edf",
+  "images": {
+    "motionly-api:cpu-stage": {
+      "dockerfile": "apps/api/Dockerfile"
+    },
+    "motionly-web:cpu-stage": {
+      "dockerfile": "apps/web/Dockerfile"
+    },
+    "motionly-cpu-worker:cpu-stage": {
+      "dockerfile": "apps/worker/Dockerfile.python"
+    },
+    "motionly-remotion-worker:cpu-stage": {
+      "dockerfile": "apps/worker/Dockerfile"
+    },
+    "motionly-temporal-server:cpu-stage": {
+      "dockerfile": "infra/temporal/server/Dockerfile"
+    }
+  },
+  "image_variables": {
+    "MOTIONLY_API_IMAGE": "motionly-api:cpu-stage",
+    "MOTIONLY_WEB_IMAGE": "motionly-web:cpu-stage",
+    "MOTIONLY_CPU_FFMPEG_WORKER_IMAGE": "motionly-cpu-worker:cpu-stage",
+    "MOTIONLY_GPU_WORKER_IMAGE": "motionly-gpu-worker:gpu-stage-only",
+    "MOTIONLY_GPU_FFMPEG_WORKER_IMAGE": "motionly-gpu-ffmpeg-worker:gpu-stage-only",
+    "MOTIONLY_DEMUCS_WORKER_IMAGE": "motionly-cpu-worker:cpu-stage",
+    "MOTIONLY_PROVIDER_WORKER_IMAGE": "motionly-cpu-worker:cpu-stage",
+    "MOTIONLY_PLANNING_WORKER_IMAGE": "motionly-cpu-worker:cpu-stage",
+    "MOTIONLY_REMOTION_WORKER_IMAGE": "motionly-remotion-worker:cpu-stage",
+    "MOTIONLY_TEMPORAL_SERVER_IMAGE": "motionly-temporal-server:cpu-stage"
+  },
+  "one_shots": [
+    "volume-permissions",
+    "temporal-db-init",
+    "temporal-schema",
+    "temporal-namespace",
+    "db-migrate"
+  ]
+}

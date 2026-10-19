@@ -23,29 +23,29 @@ No deployment, Docker start/reset, Supabase reset, real-secret rotation, destruc
 
 ### Status by original task
 
-| Original task | Status | Short conclusion |
-| --- | --- | --- |
-| 1. Static build and lint baseline | **Partially implemented** | CI/scripts and prior focused checks exist, but current full static validation is incomplete and the worker script requires a missing local `.env`. |
-| 2. Stable same-origin routing | **Partially implemented** | Browser callers use relative `/api`, but production topology still relies on Next rewrites to a distinct API host and Caddy lacks explicit app-host path routing. |
-| 3. Controlled egress | **Partially implemented** | Private Docker networks and proxy clearing exist; an explicit provider allowlist/egress boundary and positive/negative runtime tests do not. |
-| 4. File-secret contract and rotation readiness | **Partially implemented** | Substantial `_FILE` and Key Vault/release-agent support exists; some upstream environment interpolation and no real rotation/reload rehearsal remain. |
-| 5. Python worker import startup | **Runtime/container proof required** | The `/app` CWD source repair and static tests exist; final built-image startup/import proof has not run. |
-| 6. BullMQ failure normalization | **Source-complete** | Returned `{ failed: true }` is converted to an exception before a job can complete successfully. |
-| 7. Remotion completion/cleanup idempotency | **Source-complete** | State-aware cleanup protects a canonical artifact after an ambiguous completion result. |
-| 8. FFmpeg bounded cancellation | **Source-complete** | Cancellation/timeout cleanup uses bounded terminate → kill escalation and avoids unread-pipe deadlock. |
-| 9. Queue cancellation and bounded snapshots | **Source-complete (scoped)** | Cancellation markers and failed-job snapshot scans are bounded; general job listing pagination remains a separate concern. |
-| 10. Atomic generic-media creation | **Source-complete** | Persistent creation is a single service-role RPC with all-or-nothing session/reservation/parts persistence. |
-| 11. Strict media finalization/deletion | **Source-complete** | Durable deletion intent and fenced physical-deletion acknowledgement prevent early quota release. |
-| 12. Migration/reconciliation/repair tooling | **Partially implemented** | Safe forward migrations, expiry cleanup, and proof-only backfill primitives exist; a complete operator-run reconciliation/repair tool does not. |
-| 13. Local storage/metrics exposure | **Partially implemented** | Production guards exist, but routes are still registered universally and ingress/runtime evidence is required. |
-| 14. Workspace selection/auth callback | **Source-complete** | Membership-checked selection uses 303 redirect; callback errors return safely to login. |
-| 15. Explicit matte capability | **Not implemented** | Background removal can still persist/queue without a guaranteed exact matte, and renders can still proceed without one. |
-| 16. Safe billing disable/shell fallback | **Partially implemented** | API purchase paths are disabled and unmetered entitlements exist; web fallback/actions can still present or request misleading billing state. |
-| 17. Authoritative dashboard/analytics | **Partially implemented** | Dashboard storage is fabricated; analytics summary filter, plan ownership, and atomic idempotency are incomplete. |
-| 18. Full `no_vocals` selection | **Partially implemented** | Persisted authenticated API/render propagation exists; UI/contract wiring and several no-fallback regressions remain. |
-| 19. Observability/health/reconciliation signals | **Partially implemented** | Metrics, heartbeats, and some reconciliation exist; rollout-grade dependency readiness, alerts, and reconciler operational signals are not proven. |
-| 20. Release-grade E2E validation matrix | **Partially implemented** | Focused UI/unit/contract tests exist; no CI-gated production-like matrix exercises the complete browser → proxy → API → queue → worker → storage path. |
-| 21. Coordinated release and rollback rehearsal | **Runtime/deployment evidence required** | Release/canary/rollback scripts exist, but no approved deployment or real rehearsal occurred. |
+| Original task                                   | Status                                   | Short conclusion                                                                                                                                                  |
+| ----------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Static build and lint baseline               | **Partially implemented**                | CI/scripts and prior focused checks exist, but current full static validation is incomplete and the worker script requires a missing local `.env`.                |
+| 2. Stable same-origin routing                   | **Partially implemented**                | Browser callers use relative `/api`, but production topology still relies on Next rewrites to a distinct API host and Caddy lacks explicit app-host path routing. |
+| 3. Controlled egress                            | **Partially implemented**                | Private Docker networks and proxy clearing exist; an explicit provider allowlist/egress boundary and positive/negative runtime tests do not.                      |
+| 4. File-secret contract and rotation readiness  | **Partially implemented**                | Substantial `_FILE` and SSM Parameter Store/release-agent support exists; some upstream environment interpolation and no real rotation/reload rehearsal remain.   |
+| 5. Python worker import startup                 | **Runtime/container proof required**     | The `/app` CWD source repair and static tests exist; final built-image startup/import proof has not run.                                                          |
+| 6. BullMQ failure normalization                 | **Source-complete**                      | Returned `{ failed: true }` is converted to an exception before a job can complete successfully.                                                                  |
+| 7. Remotion completion/cleanup idempotency      | **Source-complete**                      | State-aware cleanup protects a canonical artifact after an ambiguous completion result.                                                                           |
+| 8. FFmpeg bounded cancellation                  | **Source-complete**                      | Cancellation/timeout cleanup uses bounded terminate → kill escalation and avoids unread-pipe deadlock.                                                            |
+| 9. Queue cancellation and bounded snapshots     | **Source-complete (scoped)**             | Cancellation markers and failed-job snapshot scans are bounded; general job listing pagination remains a separate concern.                                        |
+| 10. Atomic generic-media creation               | **Source-complete**                      | Persistent creation is a single service-role RPC with all-or-nothing session/reservation/parts persistence.                                                       |
+| 11. Strict media finalization/deletion          | **Source-complete**                      | Durable deletion intent and fenced physical-deletion acknowledgement prevent early quota release.                                                                 |
+| 12. Migration/reconciliation/repair tooling     | **Partially implemented**                | Safe forward migrations, expiry cleanup, and proof-only backfill primitives exist; a complete operator-run reconciliation/repair tool does not.                   |
+| 13. Local storage/metrics exposure              | **Partially implemented**                | Production guards exist, but routes are still registered universally and ingress/runtime evidence is required.                                                    |
+| 14. Workspace selection/auth callback           | **Source-complete**                      | Membership-checked selection uses 303 redirect; callback errors return safely to login.                                                                           |
+| 15. Explicit matte capability                   | **Not implemented**                      | Background removal can still persist/queue without a guaranteed exact matte, and renders can still proceed without one.                                           |
+| 16. Safe billing disable/shell fallback         | **Partially implemented**                | API purchase paths are disabled and unmetered entitlements exist; web fallback/actions can still present or request misleading billing state.                     |
+| 17. Authoritative dashboard/analytics           | **Partially implemented**                | Dashboard storage is fabricated; analytics summary filter, plan ownership, and atomic idempotency are incomplete.                                                 |
+| 18. Full `no_vocals` selection                  | **Partially implemented**                | Persisted authenticated API/render propagation exists; UI/contract wiring and several no-fallback regressions remain.                                             |
+| 19. Observability/health/reconciliation signals | **Partially implemented**                | Metrics, heartbeats, and some reconciliation exist; rollout-grade dependency readiness, alerts, and reconciler operational signals are not proven.                |
+| 20. Release-grade E2E validation matrix         | **Partially implemented**                | Focused UI/unit/contract tests exist; no CI-gated production-like matrix exercises the complete browser → proxy → API → queue → worker → storage path.            |
+| 21. Coordinated release and rollback rehearsal  | **Runtime/deployment evidence required** | Release/canary/rollback scripts exist, but no approved deployment or real rehearsal occurred.                                                                     |
 
 ### What is genuinely complete in source today
 
@@ -72,14 +72,14 @@ These are source-complete controls, not deployment completion claims. They still
 
 The following checks were run during this session or were recorded as completed focused checks. They are useful evidence but do not replace the broad release matrix.
 
-| Scope | Evidence |
-| --- | --- |
-| Security/billing API batch | `python -m pytest tests/test_config.py tests/test_auth_projects_storage.py tests/test_billing.py tests/test_service_hardening.py tests/test_renders.py -q` → `159 passed, 1 skipped, 2 warnings`. |
-| Persisted stem/no-vocals API paths | Targeted Ruff check passed; `tests/test_scale.py tests/test_ffmpeg_render.py tests/test_renders.py -q` exited `0`. |
-| Worker selected-media behavior | `node --check src/remotion.mjs` plus focused worker media tests passed: 6 tests. |
-| Renderer | `pnpm run typecheck` in `apps/renderer` passed. |
-| Generic-media lifecycle | Recorded focused pytest result: 59 tests passed, with one external deprecation warning; Ruff/format/compilation/whitespace checks passed. |
-| Diff whitespace | `git diff --check` exited `0` on the current dirty worktree. |
+| Scope                              | Evidence                                                                                                                                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security/billing API batch         | `python -m pytest tests/test_config.py tests/test_auth_projects_storage.py tests/test_billing.py tests/test_service_hardening.py tests/test_renders.py -q` → `159 passed, 1 skipped, 2 warnings`. |
+| Persisted stem/no-vocals API paths | Targeted Ruff check passed; `tests/test_scale.py tests/test_ffmpeg_render.py tests/test_renders.py -q` exited `0`.                                                                                |
+| Worker selected-media behavior     | `node --check src/remotion.mjs` plus focused worker media tests passed: 6 tests.                                                                                                                  |
+| Renderer                           | `pnpm run typecheck` in `apps/renderer` passed.                                                                                                                                                   |
+| Generic-media lifecycle            | Recorded focused pytest result: 59 tests passed, with one external deprecation warning; Ruff/format/compilation/whitespace checks passed.                                                         |
+| Diff whitespace                    | `git diff --check` exited `0` on the current dirty worktree.                                                                                                                                      |
 
 Known validation limits:
 
@@ -91,24 +91,24 @@ Known validation limits:
 
 The original plan correctly required several facts that source inspection cannot establish. Their state is shown separately so code completion does not hide operational work.
 
-| Discovery gate | Current state | What remains |
-| --- | --- | --- |
-| Actual outbound provider callers/domains/IP behavior and available egress enforcement | **Pending operational discovery** | Inventory all deployed API/worker roles, provider domains/DNS behavior, and choose an enforceable proxy/firewall policy. |
-| Active Stripe subscriptions/checkout/portal contractual obligations | **Pending operational discovery** | Run a non-mutating subscription/checkout/customer-portal inventory before disabling billing in a real environment. |
-| Existing generic-media/orphan/object-reference/B-roll/export counts | **Pending operational discovery** | Run a read-only classification report against a target database/storage environment. |
-| Secret ownership/consumer map and rollback-safe rotation order | **Partially documented, not rehearsed** | Assign owners, issue new credentials, prove dual-compatible rollout/restart behavior, then approve revocation order. |
-| Storage provider idempotent-delete behavior for already-missing objects | **Not proven against provider** | Execute a controlled non-production storage contract test and document expected missing-object response semantics. |
+| Discovery gate                                                                        | Current state                           | What remains                                                                                                             |
+| ------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Actual outbound provider callers/domains/IP behavior and available egress enforcement | **Pending operational discovery**       | Inventory all deployed API/worker roles, provider domains/DNS behavior, and choose an enforceable proxy/firewall policy. |
+| Active Stripe subscriptions/checkout/portal contractual obligations                   | **Pending operational discovery**       | Run a non-mutating subscription/checkout/customer-portal inventory before disabling billing in a real environment.       |
+| Existing generic-media/orphan/object-reference/B-roll/export counts                   | **Pending operational discovery**       | Run a read-only classification report against a target database/storage environment.                                     |
+| Secret ownership/consumer map and rollback-safe rotation order                        | **Partially documented, not rehearsed** | Assign owners, issue new credentials, prove dual-compatible rollout/restart behavior, then approve revocation order.     |
+| Storage provider idempotent-delete behavior for already-missing objects               | **Not proven against provider**         | Execute a controlled non-production storage contract test and document expected missing-object response semantics.       |
 
 ## Target architecture cross-check
 
-| Architecture element | Current state | Remaining work |
-| --- | --- | --- |
-| Browser uses same-origin `/` and `/api` | **Partial** | Client API base is relative, but current production Next rewrite/Caddy routing still depends on a separate API host. Make one explicit app-host path-routing contract and test it in Compose. |
-| Caddy routes app/API/Supabase deterministically | **Partial** | Caddy currently has separate app/API/Supabase host blocks. Add/verify explicit app-host `/api/*` and any required `/supabase/*` behavior or use private service upstreams without public cross-origin dependency. |
-| Redis, databases, Supabase control plane, Temporal persistence private | **Partially source-implemented** | Internal Docker networks exist; prove the real deployment attaches only intended ingress/egress paths. |
-| Provider egress only through a controlled boundary | **Not complete** | Introduce an allowlisted egress proxy/firewall/network policy and validate allowed/denied requests. |
-| File-backed secrets | **Partial** | `_FILE` support/release-agent secret files exist, but all consumers/upstream images and rotation procedure need runtime proof. |
-| Generic media atomic lifecycle | **Source-complete** | Apply migrations and prove against a target database/storage system. |
+| Architecture element                                                   | Current state                    | Remaining work                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser uses same-origin `/` and `/api`                                | **Partial**                      | Client API base is relative, but current production Next rewrite/Caddy routing still depends on a separate API host. Make one explicit app-host path-routing contract and test it in Compose.                     |
+| Caddy routes app/API/Supabase deterministically                        | **Partial**                      | Caddy currently has separate app/API/Supabase host blocks. Add/verify explicit app-host `/api/*` and any required `/supabase/*` behavior or use private service upstreams without public cross-origin dependency. |
+| Redis, databases, Supabase control plane, Temporal persistence private | **Partially source-implemented** | Internal Docker networks exist; prove the real deployment attaches only intended ingress/egress paths.                                                                                                            |
+| Provider egress only through a controlled boundary                     | **Not complete**                 | Introduce an allowlisted egress proxy/firewall/network policy and validate allowed/denied requests.                                                                                                               |
+| File-backed secrets                                                    | **Partial**                      | `_FILE` support/release-agent secret files exist, but all consumers/upstream images and rotation procedure need runtime proof.                                                                                    |
+| Generic media atomic lifecycle                                         | **Source-complete**              | Apply migrations and prove against a target database/storage system.                                                                                                                                              |
 
 # Detailed task-by-task cross-check
 
@@ -192,7 +192,7 @@ A Compose/infrastructure integration test showing an allowed service reaches an 
 - Compose mounts Docker secrets and exposes `_FILE` variables for several application-managed secrets.
 - `apps/api/app/core/config.py` loads an allowlisted set of secret-file values when a direct environment value is absent.
 - `apps/worker/src/file-secret-startup.test.mjs` demonstrates worker/Remotion loading a token from a secret file.
-- `scripts/deploy/apply_release.sh` retrieves Key Vault secrets into release-specific permission-restricted files; [`docs/security/secrets.md`](security/secrets.md) documents the model.
+- `scripts/deploy/apply_release.sh` retrieves SSM Parameter Store secrets into release-specific permission-restricted files; [`docs/security/secrets.md`](security/secrets.md) documents the model.
 - Deployment-contract tests inspect portions of the file-secret/release-agent behavior.
 
 ### Still left
@@ -497,7 +497,7 @@ Run a live browser/Supabase integration test for two workspaces, membership revo
 
 ### Done / evidence
 
-- Web package declares Playwright and a separate `test:e2e` command.
+- Web package declares Playwright and a `test:browser` command; `pnpm verify --stage browser` runs the browser suite against the CPU stage in five setups.
 - Focused Playwright workflow UI tests, Node source-contract tests, API unit/contract tests, worker tests, migrations, and deployment scripts exist.
 - Existing CI workflows cover portions of static validation, supply chain, contracts, and deployment artifact flow.
 
@@ -517,7 +517,7 @@ Run a live browser/Supabase integration test for two workspaces, membership revo
 
 - `scripts/canary-gate.mjs` has staged 5/25/100 canary, SLO comparison, HTTPS/authorization checks, failure rollback request, and stable-health verification logic.
 - `scripts/canary-gate.test.mjs` has simulated success/failure/rollback coverage.
-- `.github/workflows/deploy-compose-vm.yml` stages signed release artifacts through the managed VM release agent.
+- `.github/workflows/deploy-aws.yml` publishes signed release artifacts to S3 and applies them through the instance's release agent over SSM Run Command.
 - `scripts/deploy/apply_release.sh` records previous/current releases and attempts reactivation of the previously recorded release when activation/liveness fails.
 
 ### Still left

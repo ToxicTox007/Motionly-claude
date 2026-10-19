@@ -1,79 +1,26 @@
 "use client";
 
+import { fetchWithSession, type ApiAuth } from "@/lib/api-session.mjs";
 import { normalizeQueuedLayerStatusUrl } from "@/lib/queued-status-url.mjs";
 import { createClient } from "@/lib/supabase/browser";
 
-type BuildApiHeadersOptions = {
-  workspaceId: string;
-  userId?: string;
-  accessToken?: string;
-  json?: boolean;
-};
-
-type CachedSession = {
-  accessToken?: string;
-  userId?: string;
-  expiresAt: number;
-};
-
-const SESSION_CACHE_TTL_MS = 30_000;
-let cachedSession: CachedSession | null = null;
-let pendingSession: Promise<CachedSession> | null = null;
-
-export async function buildApiHeaders({
-  workspaceId,
-  userId,
-  accessToken,
-  json = true,
-}: BuildApiHeadersOptions) {
-  let token = accessToken;
-  let sessionUserId = userId;
-  if (!token) {
-    const session = await getCachedSession();
-    token = session.accessToken;
-    sessionUserId = session.userId ?? userId;
-  }
-
-  if (!token) {
-    throw new Error("Your session expired. Sign in again before continuing.");
-  }
-
-  return {
-    ...(json ? { "content-type": "application/json" } : {}),
-    authorization: `Bearer ${token}`,
-    "x-motionly-workspace-id": workspaceId,
-    "x-motionly-user-id": sessionUserId ?? "",
-  };
-}
-
-async function getCachedSession(): Promise<CachedSession> {
-  const now = Date.now();
-  if (cachedSession && cachedSession.expiresAt > now) return cachedSession;
-  if (!pendingSession) {
-    pendingSession = readSession().finally(() => {
-      pendingSession = null;
-    });
-  }
-  cachedSession = await pendingSession;
-  return cachedSession;
-}
-
-async function readSession(): Promise<CachedSession> {
-  const supabase = createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  return {
-    accessToken: session?.access_token,
-    userId: session?.user.id,
-    expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
-  };
+/**
+ * fetch() for the API: authenticated with the browser session's current
+ * token, renewed and retried once if the API rejects it.
+ */
+export function apiFetch(
+  input: string,
+  init: RequestInit,
+  { workspaceId, json = false }: ApiAuth,
+): Promise<Response> {
+  return fetchWithSession(createClient().auth, input, init, {
+    workspaceId,
+    json,
+  });
 }
 
 type EditorApiRequestOptions = {
   workspaceId: string;
-  userId?: string;
-  accessToken?: string;
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: Record<string, unknown>;
   friendlyError?: string;
@@ -140,8 +87,6 @@ export async function editorApiRequest<T>(
   path: string,
   {
     workspaceId,
-    userId,
-    accessToken,
     method = "GET",
     body,
     friendlyError = "That action could not be completed. Please try again.",
@@ -149,34 +94,27 @@ export async function editorApiRequest<T>(
     signal,
   }: EditorApiRequestOptions,
 ): Promise<T> {
-  let headers;
-  try {
-    headers = await buildApiHeaders({
-      workspaceId,
-      userId,
-      accessToken,
-      json: json && method !== "GET",
-    });
-  } catch (err: any) {
-    throw new EditorApiError({
-      message:
-        err.message || "Authentication session expired. Please sign in again.",
-      status: 401,
-      code: "auth_session_expired",
-      technicalMessage: err.message,
-    });
-  }
-
   let response: Response;
   try {
-    response = await fetch(path, {
-      method,
-      headers,
-      body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
-      cache: method === "GET" ? "no-store" : undefined,
-      signal,
-    });
+    response = await apiFetch(
+      path,
+      {
+        method,
+        body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
+        cache: method === "GET" ? "no-store" : undefined,
+        signal,
+      },
+      { workspaceId, json: json && method !== "GET" },
+    );
   } catch (err: any) {
+    if (err.name === "SessionExpiredError") {
+      throw new EditorApiError({
+        message: err.message,
+        status: 401,
+        code: "auth_session_expired",
+        technicalMessage: err.message,
+      });
+    }
     if (err.name === "AbortError" || err.message?.includes("aborted")) {
       throw new EditorApiError({
         message: "The request was cancelled.",

@@ -16,20 +16,6 @@ from app.services.stock_video import FixtureStockVideoProvider
 from tests.test_broll import make_broll_repository, make_creator_billing_repository
 
 
-def test_production_blocks_publish_sync_completion(monkeypatch) -> None:
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-secret")
-    monkeypatch.setenv("SUPABASE_URL", "https://supabase.example.com")
-    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
-    monkeypatch.setenv("PUBLISH_SYNC_COMPLETION", "true")
-    get_settings.cache_clear()
-
-    with pytest.raises(ValidationError) as exc_info:
-        get_settings()
-
-    assert "PUBLISH_SYNC_COMPLETION" in str(exc_info.value)
-
-
 def test_production_blocks_force_local_media_storage(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-secret")
@@ -163,6 +149,7 @@ def test_production_worker_rejects_unknown_ai_provider(
             "app_env": "production",
             "process_role": "worker",
             "supabase_url": "https://supabase.example.com",
+            "supabase_public_url": "https://app.example.com/supabase",
             "supabase_service_role_key": "service-role",
             "redis_url": "redis://redis.example.com:6379",
             "worker_api_token": "worker-secret",
@@ -204,6 +191,7 @@ def test_production_worker_rejects_missing_ai_provider_credentials(
             "app_env": "production",
             "process_role": "worker",
             "supabase_url": "https://supabase.example.com",
+            "supabase_public_url": "https://app.example.com/supabase",
             "supabase_service_role_key": "service-role",
             "redis_url": "redis://redis.example.com:6379",
             "worker_api_token": "worker-secret",

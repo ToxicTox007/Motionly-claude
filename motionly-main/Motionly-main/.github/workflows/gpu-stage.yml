@@ -1,0 +1,102 @@
+# GPU-stage validation. Deferred during the CPU-only stage.
+#
+# This workflow is the only place where the full release Compose topology,
+# including the GPU services that request `gpus: all`, is started. It never runs
+# automatically: it must be dispatched by hand, and the `gpu-stage` environment
+# must be configured with required reviewers so each run needs explicit approval.
+name: GPU stage
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Run ID of the successful supply-chain run that built the release
+        required: true
+        type: string
+      release_sha:
+        description: Commit SHA of that release (names the signed manifest artifact)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-stage-${{ inputs.release_sha }}
+  cancel-in-progress: false
+
+jobs:
+  release-compose-integration:
+    name: Full ephemeral Compose integration (GPU stage)
+    runs-on: [self-hosted, linux, x64, gpu]
+    environment: gpu-stage
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    env:
+      COMPOSE_PROJECT_NAME: motionly-release-${{ github.run_id }}
+    steps:
+      # The runner context is not available in job-level env, so derive the
+      # scratch directory from it at run time.
+      - name: Set the ephemeral release input directory
+        run: echo "RELEASE_INPUT_ROOT=${RUNNER_TEMP}/motionly-release-compose-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+      - name: Download the signed release manifest from the chosen supply-chain run
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.release_run_id }}
+          name: release-manifest-${{ inputs.release_sha }}
+          path: release-artifacts
+      - name: Log in to GHCR with the workflow read token
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate, extract, and prepare the signed release topology
+        run: |
+          set -euo pipefail
+          python scripts/release/generate_release_manifest.py \
+            --validate-bundle \
+            --manifest release-artifacts/release-manifest.json \
+            --bundle release-artifacts/release-bundle.tar.gz
+          mkdir -p "$RELEASE_INPUT_ROOT/bundle"
+          tar -xzf release-artifacts/release-bundle.tar.gz -C "$RELEASE_INPUT_ROOT/bundle"
+          python scripts/release/write_compose_test_env.py \
+            --manifest release-artifacts/release-manifest.json \
+            --env-file "$RELEASE_INPUT_ROOT/compose.env" \
+            --secrets-dir "$RELEASE_INPUT_ROOT/secrets"
+      - name: Validate and pull the exact release topology
+        run: |
+          set -euo pipefail
+          docker compose --profile gpu --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" config -q
+          docker compose --profile gpu --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" pull
+      - name: Start and verify the full Compose release topology
+        run: |
+          set -euo pipefail
+          docker compose --profile gpu --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" up -d --wait --wait-timeout 240 --remove-orphans
+          docker compose --profile gpu --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" exec -T api \
+            python -c "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/health/live').status == 200"
+          docker compose --profile gpu --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" exec -T web \
+            node -e "fetch('http://127.0.0.1:3000/login').then(response => { if (!response.ok) process.exit(1) })"
+      - name: Collect Compose logs
+        if: always()
+        run: >-
+          docker compose --profile gpu --env-file "$RELEASE_INPUT_ROOT/compose.env"
+          -f infra/docker-compose.gpu.yml logs --no-color > "$RELEASE_INPUT_ROOT/compose.log" || true
+      - name: Upload release integration logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-compose-logs-${{ inputs.release_sha }}
+          path: ${{ runner.temp }}/motionly-release-compose-${{ github.run_id }}/compose.log
+          if-no-files-found: warn
+      - name: Remove ephemeral Compose resources and generated secrets
+        if: always()
+        run: |
+          docker compose --profile gpu --env-file "$RELEASE_INPUT_ROOT/compose.env" -f "$RELEASE_INPUT_ROOT/bundle/infra/docker-compose.gpu.yml" down -v --remove-orphans || true
+          rm -rf "$RELEASE_INPUT_ROOT"

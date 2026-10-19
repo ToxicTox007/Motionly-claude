@@ -21,11 +21,11 @@ export { outputMsToSourceMs } from "@motionly/shared";
 
 // ── Track accent colours (Tailwind utility strings) ──────────────────────────
 const TRACK_COLORS: Record<string, string> = {
-  video:   "bg-teal-500/80",
-  broll:   "bg-amber-500/80",
+  video: "bg-teal-500/80",
+  broll: "bg-amber-500/80",
   caption: "bg-violet-500/80",
-  music:   "bg-rose-500/80",
-  zoom:    "bg-sky-500/80",
+  music: "bg-rose-500/80",
+  zoom: "bg-sky-500/80",
   transition: "bg-cyan-500/80",
   overlay: "bg-fuchsia-500/80",
   sfx: "bg-orange-500/80",
@@ -49,7 +49,8 @@ export function buildTimelineState({
   musicSelection,
 }: BuildTimelineInput): TimelineState {
   const document = activePlan?.plan?.timeline ?? null;
-  const totalDurationMs = document?.duration_ms ?? upload?.duration_ms ?? 30_000;
+  const totalDurationMs =
+    document?.duration_ms ?? upload?.duration_ms ?? 30_000;
 
   // ── Video track: one clip per cut in the edit plan ───────────────────────
   const cuts = document?.clips ?? activePlan?.plan?.cuts ?? [];
@@ -91,35 +92,36 @@ export function buildTimelineState({
         sourceRef: { kind: "broll_slot" as const, id: layer.id },
       }))
     : brollSlots
-    .filter((s) => s.status !== "disabled")
-    .map((slot) => ({
-      id: `broll-${slot.id}`,
-      trackKind: "broll" as const,
-      startMs: slot.start_ms,
-      endMs: slot.end_ms,
-      label:
-        (slot.keywords?.[0] ?? slot.intent ?? "B-roll").slice(0, 28),
-      colorClass: TRACK_COLORS.broll,
-      disabled: false,
-      sourceRef: { kind: "broll_slot" as const, id: slot.id },
-    }));
+        .filter((s) => s.status !== "disabled")
+        .map((slot) => ({
+          id: `broll-${slot.id}`,
+          trackKind: "broll" as const,
+          startMs: slot.start_ms,
+          endMs: slot.end_ms,
+          label: (slot.keywords?.[0] ?? slot.intent ?? "B-roll").slice(0, 28),
+          colorClass: TRACK_COLORS.broll,
+          disabled: false,
+          sourceRef: { kind: "broll_slot" as const, id: slot.id },
+        }));
 
   // ── Caption track: one clip per segment ─────────────────────────────────
   const captionSegments = document?.captions?.length
     ? document.captions
-    : captionTrack?.segments ?? [];
-  const captionClips: TimelineClip[] = captionSegments.map(
-    (seg) => ({
-      id: `caption-${seg.id ?? seg.index}`,
-      trackKind: "caption" as const,
-      startMs: seg.start_ms,
-      endMs: seg.end_ms,
-      label: seg.text.slice(0, 32),
-      colorClass: TRACK_COLORS.caption,
-      disabled: false,
-      sourceRef: { kind: "caption_segment" as const, id: seg.id ?? undefined, index: seg.index },
-    }),
-  );
+    : (captionTrack?.segments ?? []);
+  const captionClips: TimelineClip[] = captionSegments.map((seg) => ({
+    id: `caption-${seg.id ?? seg.index}`,
+    trackKind: "caption" as const,
+    startMs: seg.start_ms,
+    endMs: seg.end_ms,
+    label: seg.text.slice(0, 32),
+    colorClass: TRACK_COLORS.caption,
+    disabled: false,
+    sourceRef: {
+      kind: "caption_segment" as const,
+      id: seg.id ?? undefined,
+      index: seg.index,
+    },
+  }));
 
   // ── Music track: editable regions from the music selection ───────────────
   const musicRegions = musicSelection?.regions?.length
@@ -140,31 +142,40 @@ export function buildTimelineState({
 
   const manualElements = document
     ? [...document.manual_layers, ...document.transitions]
-    : activePlan?.plan?.manual_elements ?? [];
-  musicClips.push(...manualElements.filter((element) => element.type === "music").map((element) => ({
-    id: `element-${element.id}`,
-    trackKind: "music" as const,
-    startMs: element.start_ms,
-    endMs: element.end_ms,
-    label: element.name,
-    colorClass: TRACK_COLORS.music,
-    disabled: false,
-    sourceRef: { kind: "manual_element" as const, id: element.id },
-  })));
-  const manualClips = (kind: "transition" | "overlay" | "sfx") => manualElements
-    .filter((element) => kind === "overlay"
-      ? ["text", "caption", "overlay", "shape", "graphic"].includes(element.type) && element.zone === "timeline"
-      : element.type === kind)
-    .map((element) => ({
-      id: `element-${element.id}`,
-      trackKind: kind,
-      startMs: element.start_ms,
-      endMs: element.end_ms,
-      label: element.name,
-      colorClass: TRACK_COLORS[kind],
-      disabled: false,
-      sourceRef: { kind: "manual_element" as const, id: element.id },
-    }));
+    : (activePlan?.plan?.manual_elements ?? []);
+  musicClips.push(
+    ...manualElements
+      .filter((element) => element.type === "music")
+      .map((element) => ({
+        id: `element-${element.id}`,
+        trackKind: "music" as const,
+        startMs: element.start_ms,
+        endMs: element.end_ms,
+        label: element.name,
+        colorClass: TRACK_COLORS.music,
+        disabled: false,
+        sourceRef: { kind: "manual_element" as const, id: element.id },
+      })),
+  );
+  const manualClips = (kind: "transition" | "overlay" | "sfx") =>
+    manualElements
+      .filter((element) =>
+        kind === "overlay"
+          ? ["text", "caption", "overlay", "shape", "graphic"].includes(
+              element.type,
+            ) && element.zone === "timeline"
+          : element.type === kind,
+      )
+      .map((element) => ({
+        id: `element-${element.id}`,
+        trackKind: kind,
+        startMs: element.start_ms,
+        endMs: element.end_ms,
+        label: element.name,
+        colorClass: TRACK_COLORS[kind],
+        disabled: false,
+        sourceRef: { kind: "manual_element" as const, id: element.id },
+      }));
 
   const tracks: TimelineTrack[] = [
     {
@@ -232,10 +243,10 @@ export function formatMs(ms: number): string {
 }
 
 /** Generate ruler tick timestamps for a given total duration. */
-export function rulerTicks(totalMs: number): Array<{ ms: number; label: string }> {
-  const steps = [
-    1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000,
-  ];
+export function rulerTicks(
+  totalMs: number,
+): Array<{ ms: number; label: string }> {
+  const steps = [1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000];
   // Target ~8 ticks across the ruler
   const targetInterval = totalMs / 8;
   const interval =

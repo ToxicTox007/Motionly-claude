@@ -139,7 +139,9 @@ export function uploadSessionStorageKey(
 }
 
 /** Serialize through an explicit allowlist so future response fields cannot leak. */
-export function serializeUploadSession(session: PersistedUploadSession): string {
+export function serializeUploadSession(
+  session: PersistedUploadSession,
+): string {
   return JSON.stringify({
     version: RESUMABLE_UPLOAD_VERSION,
     sessionId: session.sessionId,
@@ -263,7 +265,10 @@ export function putBlobWithProgress(
       xhr.setRequestHeader(key, value);
     }
     xhr.upload.onprogress = (event) => {
-      onProgress(event.loaded, event.lengthComputable ? event.total : blob.size);
+      onProgress(
+        event.loaded,
+        event.lengthComputable ? event.total : blob.size,
+      );
     };
     xhr.onload = () =>
       finish(() => {

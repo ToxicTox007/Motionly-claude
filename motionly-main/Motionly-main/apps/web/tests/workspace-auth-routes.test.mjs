@@ -10,7 +10,7 @@ async function source(path) {
 
 test("workspace selection uses POST-safe redirects and surfaces recoverable errors", async () => {
   const [route, dashboard] = await Promise.all([
-    source("app/api/workspaces/select/route.ts"),
+    source("app/app-api/workspaces/select/route.ts"),
     source("app/(app)/dashboard/page.tsx"),
   ]);
 
@@ -22,7 +22,10 @@ test("workspace selection uses POST-safe redirects and surfaces recoverable erro
     /import \{ AppShell \} from "@\/components\/app-shell";/g,
   );
   assert.equal(appShellImports?.length, 1);
-  assert.match(dashboard, /searchParams\?: Promise<Record<string, string \| string\[\] \| undefined>>/);
+  assert.match(
+    dashboard,
+    /searchParams\?: Promise<Record<string, string \| string\[\] \| undefined>>/,
+  );
   assert.match(dashboard, /error=\{workspaceError\}/);
 });
 
@@ -32,5 +35,8 @@ test("auth callback redirects failed exchanges to login and only succeeds after 
   assert.match(callback, /callback_missing/);
   assert.match(callback, /callback_failed/);
   assert.match(callback, /exchangeCodeForSession\(code\)/);
-  assert.match(callback, /NextResponse\.redirect\(new URL\("\/dashboard", request\.url\), 303\)/);
+  assert.match(
+    callback,
+    /NextResponse\.redirect\(publicUrl\("\/dashboard"\), 303\)/,
+  );
 });

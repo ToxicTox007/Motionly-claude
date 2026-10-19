@@ -4,13 +4,30 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 
-test("env.ts implements placeholder protection and production restrictions", async () => {
-  const source = await readFile(new URL("lib/env.ts", root), "utf8");
+test("runtime config refuses placeholder keys and the auth bypass in production", async () => {
+  const { parseServerConfig } = await import("../lib/runtime-config.mjs");
+  const production = {
+    APP_ENV: "production",
+    PUBLIC_ORIGIN: "https://d111abcdef8.cloudfront.net",
+    API_INTERNAL_URL: "http://api:8000",
+    SUPABASE_URL: "http://supabase-gateway:8000",
+  };
 
-  // Verify production check includes SUPABASE_ANON_KEY security violations
-  assert.match(source, /const finalSupabaseAnonKey =/);
-  assert.match(source, /finalSupabaseAnonKey === "build-placeholder"/);
-  assert.match(source, /throw new Error\("Security violation/);
+  for (const key of ["build-placeholder", "replace-with-supabase-anon-key"]) {
+    assert.throws(
+      () => parseServerConfig({ ...production, SUPABASE_ANON_KEY: key }),
+      /SUPABASE_ANON_KEY must be the deployment's anon key/,
+    );
+  }
+  assert.throws(
+    () =>
+      parseServerConfig({
+        ...production,
+        SUPABASE_ANON_KEY: "anon-key-value",
+        SKIP_AUTH_MIDDLEWARE: "true",
+      }),
+    /SKIP_AUTH_MIDDLEWARE is only allowed/,
+  );
 });
 
 test("client-api.ts catches and friendly-maps AbortError and network failures", async () => {

@@ -240,10 +240,13 @@ await connection.quit();
             kind="paused_queue_contract",
             queue_name="maintenance",
         )
+        # Other contracts in the same Redis database may legitimately retain
+        # canceled jobs, so compare against this test's own pre-pause baseline.
+        baseline = next(item for item in registry.snapshots() if item.queue_name == "maintenance")
         _run_worker_node(pause_script, redis_url=redis_url)
         snapshot = next(item for item in registry.snapshots() if item.queue_name == "maintenance")
         assert snapshot.queued >= 1
-        assert snapshot.canceled == 0
+        assert snapshot.canceled == baseline.canceled
     finally:
         _run_worker_node(resume_script, redis_url=redis_url)
         try:

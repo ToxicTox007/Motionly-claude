@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Sequence
+import contextlib
+from collections.abc import Coroutine, Sequence
+from pathlib import Path
+from typing import Any
 
 from app.core.config import Settings, get_settings
 from app.core.production import validate_production_settings
@@ -15,6 +18,31 @@ ALLOWED_ROLES = (
     "temporal-worker",
     "workflow-reconciler",
 )
+
+# Refreshed while a role runs; the Compose health check fails once it goes
+# stale, so a release whose orchestration role hangs never reports healthy.
+ORCHESTRATION_LIVENESS_FILE = Path("/tmp/motionly-orchestration-alive")
+LIVENESS_INTERVAL_SECONDS = 15.0
+
+
+async def run_with_liveness(
+    role: Coroutine[Any, Any, None],
+    file: Path = ORCHESTRATION_LIVENESS_FILE,
+    *,
+    interval_seconds: float = LIVENESS_INTERVAL_SECONDS,
+) -> None:
+    async def refresh() -> None:
+        while True:
+            file.touch()
+            await asyncio.sleep(interval_seconds)
+
+    refresher = asyncio.create_task(refresh())
+    try:
+        await role
+    finally:
+        refresher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await refresher
 
 
 async def run_role(role: str, settings: Settings) -> None:
@@ -42,7 +70,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise RuntimeError(
             f"PROCESS_ROLE {configured_role!r} does not match requested role {args.role!r}"
         )
-    asyncio.run(run_role(args.role, settings))
+    asyncio.run(run_with_liveness(run_role(args.role, settings)))
 
 
 if __name__ == "__main__":

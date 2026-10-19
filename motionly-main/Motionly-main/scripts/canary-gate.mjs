@@ -9,7 +9,12 @@ import { verifyExternalVerification } from "./external-verification-gate.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultContractPath = resolve(root, "scripts/perf/slo-contract.json");
 const defaultSloScriptPath = resolve(root, "scripts/perf/assert-slo.mjs");
-const terminalStates = new Set(["export_ready", "failed", "cancelled", "superseded"]);
+const terminalStates = new Set([
+  "export_ready",
+  "failed",
+  "cancelled",
+  "superseded",
+]);
 
 /**
  * Runs a staged deployment canary. The public function is dependency-injectable
@@ -24,21 +29,32 @@ export async function runCanaryGate({
   runSlo = defaultRunSlo,
   sleep = defaultSleep,
   stagePercentages = [5, 25, 100],
-  stageWaitSeconds = readNonNegativeInteger(environment.CANARY_STAGE_WAIT_SECONDS, 300),
+  stageWaitSeconds = readNonNegativeInteger(
+    environment.CANARY_STAGE_WAIT_SECONDS,
+    300,
+  ),
   allowInsecureUrls = false,
 } = {}) {
-  if (!fetchImpl) throw new Error("A fetch implementation is required for the canary gate.");
-  if (!isNonEmptyString(revision)) throw new Error("A deployment revision is required.");
+  if (!fetchImpl)
+    throw new Error("A fetch implementation is required for the canary gate.");
+  if (!isNonEmptyString(revision))
+    throw new Error("A deployment revision is required.");
   const endpoints = requiredEndpoints(environment, { allowInsecureUrls });
   const verification = allowInsecureUrls
     ? null
     : verifyExternalVerification({
-      environment,
-      endpoints: [endpoints.promote, endpoints.rollback, endpoints.metrics, endpoints.health],
-    });
+        environment,
+        endpoints: [
+          endpoints.promote,
+          endpoints.rollback,
+          endpoints.metrics,
+          endpoints.health,
+        ],
+      });
   const stages = validateStages(stagePercentages);
   await mkdir(evidenceDir, { recursive: true });
-  if (verification) await writeJson(evidenceDir, "external-verification.json", verification);
+  if (verification)
+    await writeJson(evidenceDir, "external-verification.json", verification);
 
   let promotion = null;
   try {
@@ -54,7 +70,9 @@ export async function runCanaryGate({
       fetchImpl,
     });
     if (baseline.revision !== promotion.stableRevision) {
-      throw new Error("Stable baseline metrics did not identify the promoted stable revision.");
+      throw new Error(
+        "Stable baseline metrics did not identify the promoted stable revision.",
+      );
     }
     await writeJson(evidenceDir, "baseline.json", baseline);
 
@@ -96,7 +114,9 @@ export async function runCanaryGate({
         decision: parseJsonOutput(decision.stdout),
       });
       if (decision.status !== 0) {
-        throw new Error(`SLO enforcement rejected the ${percentage}% canary stage.`);
+        throw new Error(
+          `SLO enforcement rejected the ${percentage}% canary stage.`,
+        );
       }
       if (index < stages.length - 1 && stageWaitSeconds > 0) {
         await sleep(stageWaitSeconds * 1000);
@@ -141,10 +161,15 @@ async function startCanary({ endpoints, revision, fetchImpl, evidenceDir }) {
     requireJson: true,
   });
   const canaryId = requiredResponseString(response, "canary_id");
-  const stableRevision = requiredResponseString(response, "previous_stable_revision");
+  const stableRevision = requiredResponseString(
+    response,
+    "previous_stable_revision",
+  );
   const rollbackToken = requiredResponseString(response, "rollback_token");
   if (stableRevision === revision) {
-    throw new Error("Canary promotion must identify a distinct stable revision.");
+    throw new Error(
+      "Canary promotion must identify a distinct stable revision.",
+    );
   }
   await writeJson(evidenceDir, "promotion.json", {
     canary_id: canaryId,
@@ -184,12 +209,16 @@ async function rollbackAndVerify({
     preserve_forward_migrations: true,
   });
 
-  const healthUrl = withQuery(endpoints.health, { revision: promotion.stableRevision });
+  const healthUrl = withQuery(endpoints.health, {
+    revision: promotion.stableRevision,
+  });
   const response = await fetchImpl(healthUrl, {
     headers: { authorization: `Bearer ${endpoints.token}` },
   });
   if (!response.ok) {
-    throw new Error(`Stable revision health check failed with HTTP ${response.status}.`);
+    throw new Error(
+      `Stable revision health check failed with HTTP ${response.status}.`,
+    );
   }
   const contentType = response.headers.get("content-type") || "";
   let returnedRevision = null;
@@ -198,7 +227,9 @@ async function rollbackAndVerify({
     if (body && typeof body === "object" && typeof body.revision === "string") {
       returnedRevision = body.revision;
       if (returnedRevision !== promotion.stableRevision) {
-        throw new Error("Stable health response revision did not match the rollback target.");
+        throw new Error(
+          "Stable health response revision did not match the rollback target.",
+        );
       }
     }
   } else {
@@ -212,8 +243,13 @@ async function rollbackAndVerify({
 }
 
 async function fetchMetrics({ url, revision, fetchImpl }) {
-  const response = await fetchImpl(withQuery(url, { revision, window_seconds: "300" }));
-  if (!response.ok) throw new Error(`Canary metrics request failed with HTTP ${response.status}.`);
+  const response = await fetchImpl(
+    withQuery(url, { revision, window_seconds: "300" }),
+  );
+  if (!response.ok)
+    throw new Error(
+      `Canary metrics request failed with HTTP ${response.status}.`,
+    );
   let payload;
   try {
     payload = await response.json();
@@ -235,13 +271,17 @@ async function postJson({ url, token, body, fetchImpl, requireJson }) {
     },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new Error(`Canary control request failed with HTTP ${response.status}.`);
+  if (!response.ok)
+    throw new Error(
+      `Canary control request failed with HTTP ${response.status}.`,
+    );
   const text = await response.text();
   if (!requireJson && !text) return null;
   try {
     return JSON.parse(text);
   } catch {
-    if (requireJson) throw new Error("Canary promotion response was not valid JSON.");
+    if (requireJson)
+      throw new Error("Canary promotion response was not valid JSON.");
     return null;
   }
 }
@@ -265,17 +305,33 @@ function defaultRunSlo({ contractPath, canaryPath, baselinePath, revision }) {
     { encoding: "utf8" },
   );
   if (result.error) throw result.error;
-  return { status: result.status ?? 1, stdout: result.stdout || "", stderr: result.stderr || "" };
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+  };
 }
 
 function requiredEndpoints(environment, { allowInsecureUrls }) {
   const token = requiredEnvironment(environment, "DEPLOY_TOKEN");
   return {
     token,
-    promote: checkedUrl(requiredEnvironment(environment, "CANARY_PROMOTE_HOOK"), allowInsecureUrls),
-    rollback: checkedUrl(requiredEnvironment(environment, "CANARY_ROLLBACK_HOOK"), allowInsecureUrls),
-    metrics: checkedUrl(requiredEnvironment(environment, "CANARY_METRICS_URL"), allowInsecureUrls),
-    health: checkedUrl(requiredEnvironment(environment, "STAGING_HEALTH_URL"), allowInsecureUrls),
+    promote: checkedUrl(
+      requiredEnvironment(environment, "CANARY_PROMOTE_HOOK"),
+      allowInsecureUrls,
+    ),
+    rollback: checkedUrl(
+      requiredEnvironment(environment, "CANARY_ROLLBACK_HOOK"),
+      allowInsecureUrls,
+    ),
+    metrics: checkedUrl(
+      requiredEnvironment(environment, "CANARY_METRICS_URL"),
+      allowInsecureUrls,
+    ),
+    health: checkedUrl(
+      requiredEnvironment(environment, "STAGING_HEALTH_URL"),
+      allowInsecureUrls,
+    ),
   };
 }
 
@@ -286,18 +342,25 @@ function checkedUrl(value, allowInsecureUrls) {
   } catch {
     throw new Error("Canary endpoint must be an absolute URL.");
   }
-  if (parsed.username || parsed.password) throw new Error("Canary endpoints cannot include URL credentials.");
+  if (parsed.username || parsed.password)
+    throw new Error("Canary endpoints cannot include URL credentials.");
   if (!["https:", "http:"].includes(parsed.protocol)) {
     throw new Error("Canary endpoints must use HTTP(S).");
   }
   if (!allowInsecureUrls && parsed.protocol !== "https:") {
-    throw new Error("Canary endpoints must use HTTPS outside executable local tests.");
+    throw new Error(
+      "Canary endpoints must use HTTPS outside executable local tests.",
+    );
   }
   return parsed.toString();
 }
 
 function validateStages(values) {
-  if (!Array.isArray(values) || values.length !== 3 || values.join(",") !== "5,25,100") {
+  if (
+    !Array.isArray(values) ||
+    values.length !== 3 ||
+    values.join(",") !== "5,25,100"
+  ) {
     throw new Error("Canary stages must be exactly 5, 25, and 100 percent.");
   }
   return values;
@@ -305,24 +368,30 @@ function validateStages(values) {
 
 function requiredEnvironment(environment, name) {
   const value = environment[name];
-  if (!isNonEmptyString(value)) throw new Error(`Missing required canary environment variable: ${name}`);
+  if (!isNonEmptyString(value))
+    throw new Error(`Missing required canary environment variable: ${name}`);
   return value;
 }
 
 function requiredResponseString(response, key) {
   const value = response?.[key];
-  if (!isNonEmptyString(value)) throw new Error(`Canary promotion response requires ${key}.`);
+  if (!isNonEmptyString(value))
+    throw new Error(`Canary promotion response requires ${key}.`);
   return value;
 }
 
 function withQuery(rawUrl, values) {
   const url = new URL(rawUrl);
-  for (const [key, value] of Object.entries(values)) url.searchParams.set(key, value);
+  for (const [key, value] of Object.entries(values))
+    url.searchParams.set(key, value);
   return url;
 }
 
 async function writeJson(directory, name, value) {
-  await writeFile(resolve(directory, name), `${JSON.stringify(value, null, 2)}\n`);
+  await writeFile(
+    resolve(directory, name),
+    `${JSON.stringify(value, null, 2)}\n`,
+  );
 }
 
 function parseJsonOutput(value) {
@@ -334,14 +403,18 @@ function parseJsonOutput(value) {
 }
 
 function messageForEvidence(error) {
-  return error instanceof Error ? error.message.slice(0, 500) : "Unknown rollback failure.";
+  return error instanceof Error
+    ? error.message.slice(0, 500)
+    : "Unknown rollback failure.";
 }
 
 function readNonNegativeInteger(value, fallback) {
   if (value === undefined || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error("CANARY_STAGE_WAIT_SECONDS must be a non-negative integer.");
+    throw new Error(
+      "CANARY_STAGE_WAIT_SECONDS must be a non-negative integer.",
+    );
   }
   return parsed;
 }
@@ -364,7 +437,9 @@ function parseArgs(values) {
   return args;
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain =
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const args = parseArgs(process.argv.slice(2));
   runCanaryGate({
@@ -372,9 +447,13 @@ if (isMain) {
     contractPath: args.contract || defaultContractPath,
     evidenceDir: args["evidence-dir"] || resolve(root, "test-results/canary"),
   })
-    .then((result) => console.log(JSON.stringify({ passed: true, ...result }, null, 2)))
+    .then((result) =>
+      console.log(JSON.stringify({ passed: true, ...result }, null, 2)),
+    )
     .catch((error) => {
-      console.error(error instanceof Error ? error.message : "Canary gate failed.");
+      console.error(
+        error instanceof Error ? error.message : "Canary gate failed.",
+      );
       process.exitCode = 1;
     });
 }

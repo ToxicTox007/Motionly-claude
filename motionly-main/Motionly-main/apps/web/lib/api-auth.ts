@@ -2,11 +2,12 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { isAdminIdentityAllowed } from "@/lib/admin-auth.mjs";
 import { createClient } from "@/lib/supabase/server";
+import { env } from "@/lib/env";
 
 export const WORKSPACE_COOKIE_NAME = "motionly_workspace_id";
 
 export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
-  if (process.env.SKIP_AUTH_MIDDLEWARE === "true") {
+  if (env.skipAuthMiddleware) {
     const mockUserId = "00000000-0000-4000-8000-000000000001";
     const mockWorkspaceId = "00000000-0000-4000-8000-000000000002";
     return {

@@ -10,7 +10,7 @@ import type {
   StockVideoAssetSummary,
 } from "@motionly/shared";
 import {
-  buildApiHeaders,
+  apiFetch,
   editorApiRequest,
   resolveQueuedLayer,
 } from "@/lib/client-api";
@@ -21,8 +21,6 @@ import type { PreviewBrollState } from "../preview/VideoPreview";
 interface BrollTabProps {
   projectId: string;
   workspaceId: string;
-  userId: string;
-  apiAccessToken: string;
   initialSlots: BrollSlotSummary[];
   activePlanId: string | null;
   activePlanBrollDensity: BrollDensity | null;
@@ -48,8 +46,6 @@ function reverseDensityMap(val: number): BrollDensity {
 export function BrollTab({
   projectId,
   workspaceId,
-  userId,
-  apiAccessToken,
   initialSlots,
   activePlanId,
   activePlanBrollDensity,
@@ -87,30 +83,25 @@ export function BrollTab({
         slots?: BrollSlotSummary[] | null;
         status: "ready" | "queued";
         status_url?: string | null;
-      }>(
-        `${env.apiBaseUrl}/projects/${projectId}/broll/generate`,
-        {
-          method: "POST",
-          workspaceId,
-          userId,
-          accessToken: apiAccessToken,
-          friendlyError:
-            "B-roll could not be generated. Please try another density or try again.",
-          body: {
-            density,
-            force: true,
-          },
+      }>(`${env.apiBaseUrl}/projects/${projectId}/broll/generate`, {
+        method: "POST",
+        workspaceId,
+        friendlyError:
+          "B-roll could not be generated. Please try another density or try again.",
+        body: {
+          density,
+          force: true,
         },
-      );
+      });
       const slots = await resolveQueuedLayer({
         submission: payload,
         immediate: payload.slots,
         apiBaseUrl: env.apiBaseUrl,
-        options: { workspaceId, userId, accessToken: apiAccessToken },
+        options: { workspaceId },
         load: async () => {
           const result = await editorApiRequest<{ slots: BrollSlotSummary[] }>(
             `${env.apiBaseUrl}/projects/${projectId}/broll`,
-            { workspaceId, userId, accessToken: apiAccessToken },
+            { workspaceId },
           );
           return result.slots;
         },
@@ -144,8 +135,6 @@ export function BrollTab({
         {
           method: "POST",
           workspaceId,
-          userId,
-          accessToken: apiAccessToken,
           friendlyError: "B-roll selection could not be saved.",
           body: {
             asset_id: assetId,
@@ -172,15 +161,10 @@ export function BrollTab({
     try {
       const params = new URLSearchParams();
       if (searchQuery.trim()) params.set("query", searchQuery.trim());
-      const response = await fetch(
+      const response = await apiFetch(
         `${env.apiBaseUrl}/projects/${projectId}/broll/${slot.id}/search?${params}`,
-        {
-          headers: await buildApiHeaders({
-            workspaceId,
-            userId,
-            accessToken: apiAccessToken,
-          }),
-        },
+        {},
+        { workspaceId },
       );
       const payload = await response.json();
       if (!response.ok)
@@ -274,7 +258,10 @@ export function BrollTab({
         className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
       >
         {loading ? (
-          <Loader2 className="size-4 animate-spin text-primary-foreground" strokeWidth={2} />
+          <Loader2
+            className="size-4 animate-spin text-primary-foreground"
+            strokeWidth={2}
+          />
         ) : (
           <Sparkles className="size-4" strokeWidth={2} />
         )}
@@ -381,7 +368,10 @@ function SlotRow({
           </div>
         </div>
         {saving ? (
-          <Loader2 className="size-4 animate-spin text-primary shrink-0 self-center" strokeWidth={2} />
+          <Loader2
+            className="size-4 animate-spin text-primary shrink-0 self-center"
+            strokeWidth={2}
+          />
         ) : null}
       </div>
     </div>
@@ -410,7 +400,9 @@ function AssetPicker({
   return (
     <div className="card rounded-lg border-4 border-foreground p-4 sm:p-5 shadow-[6px_6px_0px_#000] bg-surface relative z-10 space-y-4">
       <div className="flex items-center justify-between gap-3 border-b-2 border-foreground pb-2.5">
-        <Label className="mb-0 text-xs font-black uppercase text-foreground">Choose Alternative</Label>
+        <Label className="mb-0 text-xs font-black uppercase text-foreground">
+          Choose Alternative
+        </Label>
         <button
           onClick={onClose}
           aria-label="Close asset picker"
@@ -449,7 +441,9 @@ function AssetPicker({
               aria-label={`${selected ? "Selected" : "Select"} B-roll asset ${asset.title}`}
               className={cn(
                 "group overflow-hidden border-2 border-foreground bg-muted text-left transition-all duration-[100ms] hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] rounded disabled:cursor-not-allowed",
-                selected ? "border-primary/50 ring-2 ring-primary" : "border-border",
+                selected
+                  ? "border-primary/50 ring-2 ring-primary"
+                  : "border-border",
               )}
             >
               <div className="relative aspect-video">
@@ -488,7 +482,7 @@ function AssetThumb({
           className={cn("h-full w-full object-cover", disabled && "grayscale")}
         />
       ) : (
-        <Film className="size-4 text-muted-foreground/40" strokeWidth={1.5} />
+        <Film className="size-4 text-muted-foreground" strokeWidth={1.5} />
       )}
     </div>
   );

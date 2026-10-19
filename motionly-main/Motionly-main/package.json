@@ -10,6 +10,7 @@
     "test": "turbo test",
     "format": "prettier --check .",
     "docs:check": "node scripts/check_docs.mjs",
+    "verify": "node scripts/verify/verify.mjs",
     "perf:k6": "k6 run scripts/perf/k6-api-workflows.js",
     "perf:bullmq": "node scripts/perf/bullmq-queue-load.mjs",
     "perf:browser": "pnpm --filter @motionly/web perf:browser",
@@ -33,5 +34,8 @@
       "postcss@<8.5.10": "8.5.10",
       "ws@>=8.0.0 <8.21.0": "8.21.0"
     }
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

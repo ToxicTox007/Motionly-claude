@@ -123,8 +123,8 @@ export function ConflictDialog({
           </p>
           <p>
             <strong className="font-black">Force Save</strong> — overwrite the
-            server version with your local changes. The other person&apos;s edits
-            will be lost.
+            server version with your local changes. The other person&apos;s
+            edits will be lost.
           </p>
         </div>
       </div>

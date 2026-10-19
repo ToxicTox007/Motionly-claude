@@ -29,6 +29,7 @@ def make_admin_request(workspace_id):
             state=SimpleNamespace(
                 settings=SimpleNamespace(
                     app_env="test",
+                    gpu_stage="enabled",
                     admin_api_token=None,
                     admin_user_id_list=set(),
                     admin_workspace_id_list={str(workspace_id)},
@@ -432,13 +433,6 @@ def test_every_admin_route_requires_the_admin_authorization_dependency(monkeypat
     from app.core.config import get_settings
 
     get_settings.cache_clear()
-    from app.repositories.publishing import SupabasePublishingRepository
-
-    monkeypatch.setattr(
-        SupabasePublishingRepository,
-        "encrypt_legacy_tokens",
-        lambda _self: 0,
-    )
     from app.main import app
 
     try:

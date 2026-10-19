@@ -12,9 +12,7 @@ x-local-audit-environment: &local-audit-environment
   LOCAL_AUDIT_TARGET: "${LOCAL_AUDIT_TARGET:?LOCAL_AUDIT_TARGET must be a sandbox target}"
   LOCAL_AUDIT_RUN_ID: "${LOCAL_AUDIT_RUN_ID:?LOCAL_AUDIT_RUN_ID must identify this audit run}"
   LOCAL_AUDIT_PROVIDER_ACCOUNTS: "${LOCAL_AUDIT_PROVIDER_ACCOUNTS:?LOCAL_AUDIT_PROVIDER_ACCOUNTS must list named sandbox accounts}"
-  LOCAL_AUDIT_PUBLISHING_ACCOUNTS: "${LOCAL_AUDIT_PUBLISHING_ACCOUNTS:?LOCAL_AUDIT_PUBLISHING_ACCOUNTS must list named sandbox accounts}"
   LOCAL_AUDIT_APPROVED_DOMAINS: "${LOCAL_AUDIT_APPROVED_DOMAINS:?LOCAL_AUDIT_APPROVED_DOMAINS must list exact hosts}"
-  LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES: "${LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES:?LOCAL_AUDIT_ALLOWED_PUBLISH_VISIBILITIES must limit visibility}"
   LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD: "${LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD:?LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD is required}"
   LOCAL_AUDIT_MAX_TOTAL_SPEND_USD: "${LOCAL_AUDIT_MAX_TOTAL_SPEND_USD:?LOCAL_AUDIT_MAX_TOTAL_SPEND_USD is required}"
   LOCAL_AUDIT_REMOTE_CLEANUP_OWNER: "${LOCAL_AUDIT_REMOTE_CLEANUP_OWNER:?LOCAL_AUDIT_REMOTE_CLEANUP_OWNER is required}"
@@ -62,6 +60,9 @@ services:
   supabase-gateway:
     profiles: [local-audit]
 
+  db-migrate:
+    profiles: [local-audit]
+
   api:
     profiles: [local-audit]
     environment:
@@ -87,14 +88,23 @@ services:
 
   web:
     profiles: [local-audit]
+    environment:
+      # The audit origin is a local host name, valid only outside production.
+      APP_ENV: local
 
   ingress:
     profiles: [local-audit]
+    # Reached directly on loopback, without CloudFront: no origin guard.
+    entrypoint: ["caddy"]
+    command:
+      ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    secrets: !reset []
     ports: !override
       - "127.0.0.1:18080:80"
       - "127.0.0.1:18443:443"
     volumes: !override
       - ./Caddyfile.local-audit:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.routes:/etc/caddy/routes.caddy:ro
       - caddy-data:/data
       - caddy-config:/config
 
@@ -148,13 +158,6 @@ services:
       - local_audit_external_authorization
 
   remotion-worker:
-    profiles: [local-audit]
-    environment:
-      <<: *local-audit-environment
-    secrets:
-      - local_audit_external_authorization
-
-  publishing-worker:
     profiles: [local-audit]
     environment:
       <<: *local-audit-environment

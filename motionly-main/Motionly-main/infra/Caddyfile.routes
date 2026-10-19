@@ -1,0 +1,34 @@
+# One public origin, routed by path. Imported by every ingress site
+# (Caddyfile, Caddyfile.cpu-stage, Caddyfile.local-audit); Compose mounts this
+# file at /etc/caddy/routes.caddy.
+#
+#   /api/*       FastAPI      (prefix stripped: /api/projects -> /projects)
+#   /supabase/*  Kong gateway (prefix stripped: /supabase/auth/v1 -> /auth/v1)
+#   everything   Next.js
+#
+# Every proxied request:
+#   - drops the origin secret (it must never reach a service or its logs);
+#   - reports X-Forwarded-Proto https: the ingress itself speaks plain HTTP to
+#     CloudFront, but every edge behavior redirects plain-HTTP viewers to
+#     HTTPS, so the viewer always used HTTPS (Next.js builds absolute redirect
+#     URLs from this header).
+handle_path /api/* {
+	reverse_proxy api:8000 {
+		header_up -X-Motionly-Origin-Verify
+		header_up X-Forwarded-Proto https
+	}
+}
+
+handle_path /supabase/* {
+	reverse_proxy supabase-gateway:8000 {
+		header_up -X-Motionly-Origin-Verify
+		header_up X-Forwarded-Proto https
+	}
+}
+
+handle {
+	reverse_proxy web:3000 {
+		header_up -X-Motionly-Origin-Verify
+		header_up X-Forwarded-Proto https
+	}
+}

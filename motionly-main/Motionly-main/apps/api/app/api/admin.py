@@ -65,6 +65,7 @@ async def ops_overview(
     )
     return AdminOverviewResponse(
         environment=settings.app_env,
+        gpu_stage=settings.gpu_stage,
         request_id=request.state.request_id,
         queues=queue_snapshots,
         recent_renders=[

@@ -5,7 +5,7 @@
 # Chrome/Chromium is required by @remotion/renderer for headless frame capture.
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 
 # ── System dependencies ───────────────────────────────────────────────────────
 # Install Chromium and all shared libraries it needs for headless rendering.
@@ -75,7 +75,7 @@ COPY apps/renderer ./apps/renderer
 # This step is skipped if SKIP_PREBUNDLE=true (useful for faster dev builds).
 RUN if [ "${SKIP_PREBUNDLE}" != "true" ]; then \
         cd apps/renderer && \
-        node --loader ts-node/esm src/prebundle.ts; \
+        node --import ./ts-node-register.mjs src/prebundle.ts; \
     fi
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ RUN useradd --create-home --uid 10001 motionly \
         /var/data/motionly/storage \
         /var/data/motionly/render-tmp \
         /tmp/motionly \
-    && chown -R motionly:motionly /app /var/cache/motionly /var/data/motionly /tmp/motionly
+    && chown -R motionly:motionly /home/motionly /app /var/cache/motionly /var/data/motionly /tmp/motionly
 USER motionly
 
 CMD ["node", "src/worker.mjs", "--loop"]

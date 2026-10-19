@@ -173,10 +173,7 @@ def build_creative_variants(
                 comparison_notes=[
                     f"Primary test: {primary_label.lower()}.",
                     "All other directions stay at the active-plan control for a fair comparison.",
-                    (
-                        "Review-only: selecting this direction does not render, alter "
-                        "the timeline, or publish."
-                    ),
+                    "Review-only: selecting this direction does not render or alter the timeline.",
                 ],
             )
         )

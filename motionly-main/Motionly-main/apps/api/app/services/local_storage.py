@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import shutil
 import time
@@ -128,7 +129,9 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
             headers=self._storage_headers(),
             timeout=180,
         ) as response:
-            if response.status_code == 404:
+            if response.status_code >= 400 and _is_missing_object(
+                response.status_code, response.read()
+            ):
                 raise ApiError(404, "storage_object_missing", "Uploaded video was not found.")
             if response.status_code >= 400:
                 raise ApiError(
@@ -151,8 +154,16 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
     ) -> ObjectMetadata:
         encoded_path = quote(path, safe="/")
         url = f"{self.supabase_url}/storage/v1/object/{bucket}/{encoded_path}"
-        response = httpx.head(url, headers=self._storage_headers(), timeout=30)
-        if response.status_code == 404:
+        # The info endpoint, unlike HEAD, has a body that tells a missing
+        # object apart from a missing bucket or a rejected key.
+        response = httpx.get(
+            f"{self.supabase_url}/storage/v1/object/info/{bucket}/{encoded_path}",
+            headers=self._storage_headers(),
+            timeout=30,
+        )
+        if response.status_code >= 400 and _is_missing_object(
+            response.status_code, response.content
+        ):
             raise ApiError(404, "storage_object_missing", "Uploaded video was not found.")
         if response.status_code >= 400:
             raise ApiError(
@@ -161,8 +172,9 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
                 "Uploaded object could not be verified.",
             )
         try:
-            size_bytes = int(response.headers["content-length"])
-        except (KeyError, ValueError) as exc:
+            info = response.json()
+            size_bytes = int(info["size"])
+        except (KeyError, TypeError, ValueError) as exc:
             raise ApiError(
                 502,
                 "storage_inspection_failed",
@@ -197,7 +209,7 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
         return ObjectMetadata(
             size_bytes=size_bytes,
             sha256=digest,
-            etag=response.headers.get("etag"),
+            etag=info.get("etag"),
         )
 
     def delete_object(self, *, bucket: str, path: str) -> None:
@@ -249,6 +261,23 @@ class SupabaseBackedObjectStorage(LocalObjectStorage):
             "apikey": self.service_role_key,
             "authorization": f"Bearer {self.service_role_key}",
         }
+
+
+def _is_missing_object(status_code: int, body: bytes) -> bool:
+    """Supabase Storage answers a missing object with 400 and a JSON body whose
+    statusCode is "404" and error "not_found"; a missing bucket says "Bucket
+    not found" instead."""
+    if status_code == 404:
+        return True
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return False
+    return (
+        isinstance(payload, dict)
+        and str(payload.get("statusCode")) == "404"
+        and payload.get("error") == "not_found"
+    )
 
 
 def create_object_storage(

@@ -1,0 +1,211 @@
+# CPU-stage overlay. Apply on top of the production topology:
+#
+#   docker compose --project-name motionly-cpu-stage --env-file <generated> \
+#     -f infra/docker-compose.gpu.yml -f infra/docker-compose.cpu-stage.yml \
+#     --profile slim|full up -d --wait
+#
+# Images come from this checkout (scripts/verify/cpu_stage_stack.py build) and
+# the env file and secrets are generated per run
+# (scripts/release/write_compose_test_env.py --cpu-stage). The GPU services
+# need `--profile gpu` and are never started here. GPU-dependent capabilities
+# run as labelled deterministic test fixtures (ML_EXECUTION_MODE=test_fixture),
+# and external AI/media providers use their fixture providers. Production
+# refuses every one of these settings.
+#
+# Sizes: `slim` runs one CPU worker for every Python queue (fits a 2-CPU / 7 GB
+# machine); `full` runs each production CPU worker service plus
+# cpu-fixture-worker for the queues the GPU services serve in production.
+name: motionly-cpu-stage
+
+x-cpu-stage-environment: &cpu-stage-environment
+  APP_ENV: cpu-stage
+  ML_EXECUTION_MODE: test_fixture
+  ALLOW_FIXTURE_PROVIDERS: "true"
+  VISUAL_PROVIDER: fixture
+  TRANSCRIPTION_PROVIDER: fixture
+  EDIT_PLANNER_PROVIDER: fixture
+  STEM_SEPARATION_PROVIDER: fixture
+  STOCK_VIDEO_PROVIDER: fixture
+  # Audio intelligence models (pyannote, wav2vec, YAMNet) ship only in the ML
+  # images; the CPU stage runs without them.
+  AUDIO_ML_PROVIDER: disabled
+  FFMPEG_GPU_ENABLED: "false"
+  MODEL_PREFETCH: "false"
+
+services:
+  volume-permissions:
+    mem_limit: 64m
+
+  postgres:
+    mem_limit: 1024m
+
+  temporal-postgres:
+    mem_limit: 512m
+
+  temporal-db-init:
+    mem_limit: 128m
+
+  temporal-schema:
+    mem_limit: 256m
+
+  temporal:
+    mem_limit: 768m
+
+  temporal-namespace:
+    mem_limit: 256m
+
+  redis:
+    mem_limit: 256m
+
+  supabase-auth:
+    mem_limit: 256m
+    environment:
+      # Short-lived tokens, so the browser suite sees them expire and renew
+      # (apps/web/tests/browser/session.spec.mjs). They must outlive the web
+      # proxy's renewal margin (lib/supabase/session-renewal.mjs, 120 s).
+      GOTRUE_JWT_EXP: "150"
+      # Every browser test is one viewer behind the CDN simulator, and short
+      # tokens renew often: raise the per-viewer limit on /token (default
+      # 150 per 5 minutes) so the suite is not throttled.
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: "600"
+
+  supabase-rest:
+    mem_limit: 256m
+
+  supabase-storage:
+    mem_limit: 512m
+
+  supabase-gateway:
+    mem_limit: 512m
+
+  db-migrate:
+    mem_limit: 256m
+
+  api:
+    environment: *cpu-stage-environment
+    mem_limit: 1024m
+
+  temporal-dispatcher:
+    environment: *cpu-stage-environment
+    mem_limit: 384m
+
+  temporal-worker:
+    environment: *cpu-stage-environment
+    mem_limit: 512m
+
+  workflow-reconciler:
+    environment: *cpu-stage-environment
+    mem_limit: 384m
+
+  web:
+    environment:
+      # A plain-HTTP loopback origin is valid only outside production.
+      APP_ENV: cpu-stage
+    mem_limit: 512m
+
+  ingress:
+    # The guarded origin. Bound to loopback so the stack checker can prove that
+    # requests which bypass the edge (no origin secret) are refused.
+    ports: !override
+      - "127.0.0.1:18080:80"
+    volumes: !override
+      - ./Caddyfile.cpu-stage:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.routes:/etc/caddy/routes.caddy:ro
+      - ./Caddyfile.origin-guard:/etc/caddy/origin-guard.caddy:ro
+      - ./caddy-entrypoint.sh:/etc/caddy/caddy-entrypoint.sh:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    mem_limit: 128m
+
+  # CloudFront simulator: TEST INFRASTRUCTURE, not CloudFront. It applies
+  # infra/aws/edge-contract.json in front of the ingress, with HTTPS from a
+  # per-run test CA (edge_ca_cert in the generated secrets directory). Viewers
+  # use https://127.0.0.1:18443; http://127.0.0.1:18081 redirects to it.
+  edge:
+    image: node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+    restart: unless-stopped
+    command: ["node", "/opt/cdn-sim/main.mjs"]
+    user: "1000:1000"
+    read_only: true
+    environment:
+      CDN_SIM_CONTRACT: /opt/edge-contract.json
+      CDN_SIM_ORIGIN: http://ingress:80
+      CDN_SIM_TLS_CERT: /run/secrets/edge_tls_cert
+      CDN_SIM_TLS_KEY: /run/secrets/edge_tls_key
+      CDN_SIM_SECRETS_DIR: /run/secrets
+      CDN_SIM_HTTPS_PORT: "8443"
+      CDN_SIM_HTTP_PORT: "8080"
+      CDN_SIM_PUBLIC_HTTPS_PORT: "18443"
+    secrets: [edge_origin_verify, edge_tls_cert, edge_tls_key]
+    volumes:
+      - ../scripts/cdn-sim:/opt/cdn-sim:ro
+      - ./aws/edge-contract.json:/opt/edge-contract.json:ro
+    ports:
+      - "127.0.0.1:18443:8443"
+      - "127.0.0.1:18081:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('net').connect(8443,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    depends_on: [ingress]
+    networks: [ingress]
+    mem_limit: 128m
+
+  remotion-worker:
+    environment: *cpu-stage-environment
+    mem_limit: 2048m
+
+  # --- full: the production CPU worker services -------------------------------
+  cpu-ffmpeg-worker:
+    profiles: [full]
+    environment: *cpu-stage-environment
+    mem_limit: 1024m
+
+  demucs-worker:
+    profiles: [full]
+    environment: *cpu-stage-environment
+    mem_limit: 768m
+
+  provider-worker:
+    profiles: [full]
+    environment: *cpu-stage-environment
+    mem_limit: 768m
+
+  planning-worker:
+    profiles: [full]
+    environment: *cpu-stage-environment
+    mem_limit: 768m
+
+  # Serves the queues that gpu-inference-worker and matte-worker serve in
+  # production, with labelled test fixtures only.
+  cpu-fixture-worker:
+    extends: { file: docker-compose.gpu.yml, service: cpu-ffmpeg-worker }
+    profiles: [full]
+    environment:
+      <<: *cpu-stage-environment
+      WORKER_QUEUES: visual_analysis,transcription,matte_extraction
+      WORKER_CONCURRENCY: "1"
+    mem_limit: 768m
+
+  # --- slim: one CPU worker for every Python queue ----------------------------
+  cpu-worker:
+    extends: { file: docker-compose.gpu.yml, service: cpu-ffmpeg-worker }
+    profiles: [slim]
+    environment:
+      <<: *cpu-stage-environment
+      WORKER_QUEUES: upload_preprocess,render,transcription,visual_analysis,matte_extraction,planning,stock_search,stock_asset_enrichment,audio,intelligence,maintenance,audio_demucs,provider_calls
+      WORKER_CONCURRENCY: "2"
+    mem_limit: 1536m
+
+secrets:
+  edge_tls_cert:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/edge_tls_cert
+  edge_tls_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/edge_tls_key

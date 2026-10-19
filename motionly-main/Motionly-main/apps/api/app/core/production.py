@@ -17,9 +17,17 @@ ORCHESTRATION_PROCESS_ROLES = {
 def validate_production_settings(settings: object) -> None:
     if settings.app_env != "production":
         return
+    if getattr(settings, "ml_execution_mode", "gpu") != "gpu":
+        raise RuntimeError(
+            "ML_EXECUTION_MODE=test_fixture is not allowed in production; "
+            "GPU-dependent capabilities must run on the GPU workers"
+        )
 
     process_role = str(settings.process_role).strip().lower()
     deployment_mode = str(settings.temporal_deployment_mode).strip().lower()
+    if process_role not in ORCHESTRATION_PROCESS_ROLES:
+        # The API and the Python workers sign links that browsers open.
+        _require_public_supabase_url(settings)
     temporal_roles = {
         "api": ("api", "motionly-api"),
         "temporal-dispatcher": ("dispatcher", "motionly-dispatcher"),
@@ -133,6 +141,9 @@ def validate_production_settings(settings: object) -> None:
 
     if settings.allow_fixture_providers:
         raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
+    if not getattr(settings, "render_execute_ffmpeg", True):
+        # Without FFmpeg, renders write a short black test clip (fixtures/registry.json).
+        raise RuntimeError("RENDER_EXECUTE_FFMPEG must be true in production")
     if settings.stem_separation_provider != "demucs":
         raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
     explicit_gateway_routes = bool(str(getattr(settings, "model_gateway_routes", "") or "").strip())
@@ -232,8 +243,6 @@ def validate_production_settings(settings: object) -> None:
         "SUPABASE_JWT_SECRET": settings.supabase_jwt_secret,
         "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
         "WORKER_API_TOKEN": settings.worker_api_token,
-        "PUBLISH_OAUTH_STATE_SECRET": settings.publish_oauth_state_secret,
-        "SENTRY_DSN": settings.sentry_dsn,
         "METRICS_BEARER_TOKEN": settings.metrics_bearer_token,
     }
     missing = [name for name, value in required.items() if not value]
@@ -254,8 +263,6 @@ def validate_production_settings(settings: object) -> None:
     ):
         raise RuntimeError("Stripe settings are required when BILLING_ENABLED=true")
 
-    if settings.publish_sync_completion:
-        raise RuntimeError("PUBLISH_SYNC_COMPLETION must be false in production")
     if settings.force_local_media_storage:
         raise RuntimeError("FORCE_LOCAL_MEDIA_STORAGE must be false in production")
 
@@ -264,3 +271,14 @@ def _reject_local_url(name: str, value: str) -> None:
     lowered = value.lower()
     if any(host in lowered for host in ("localhost", "127.0.0.1", "0.0.0.0", ".invalid")):
         raise RuntimeError(f"{name} must be a real deployed HTTPS URL in production")
+
+
+def _require_public_supabase_url(settings: object) -> None:
+    value = getattr(settings, "supabase_public_url", None)
+    if not value:
+        raise RuntimeError(
+            "SUPABASE_PUBLIC_URL is required in production (Supabase as browsers reach it)"
+        )
+    if not str(value).lower().startswith("https://"):
+        raise RuntimeError("SUPABASE_PUBLIC_URL must be a real deployed HTTPS URL in production")
+    _reject_local_url("SUPABASE_PUBLIC_URL", str(value))
