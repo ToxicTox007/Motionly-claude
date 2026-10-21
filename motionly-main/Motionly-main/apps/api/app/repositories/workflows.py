@@ -491,6 +491,39 @@ class OutboxRecord:
 
 
 @dataclass(frozen=True)
+class WorkflowCancellationRecord:
+    """A durable request to cancel an orphaned Temporal workflow.
+
+    Written by the project-delete trigger into a table with no foreign key to
+    projects/workflow_runs, so it survives the ON DELETE CASCADE that removes
+    the run itself. The dispatcher claims these and cancels Temporal by
+    ``temporal_workflow_id``.
+    """
+
+    id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    workflow_run_id: UUID
+    temporal_workflow_id: str
+    reason: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    dispatched_at: datetime | None = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> WorkflowCancellationRecord:
+        return cls(
+            id=UUID(row["id"]),
+            workspace_id=UUID(row["workspace_id"]),
+            project_id=UUID(row["project_id"]),
+            workflow_run_id=UUID(row["workflow_run_id"]),
+            temporal_workflow_id=row["temporal_workflow_id"],
+            reason=row.get("reason") or "project_deleted",
+            created_at=_datetime(row.get("created_at")),
+            dispatched_at=_optional_datetime(row.get("dispatched_at")),
+        )
+
+
+@dataclass(frozen=True)
 class BeginStepResult:
     step: WorkflowStepRecord
     attempt: WorkflowAttemptRecord | None
@@ -506,6 +539,7 @@ class InMemoryWorkflowRepository:
         self.events: dict[UUID, WorkflowEventRecord] = {}
         self.artifacts: dict[UUID, WorkflowArtifactRecord] = {}
         self.outbox: dict[UUID, OutboxRecord] = {}
+        self.cancellations: dict[UUID, WorkflowCancellationRecord] = {}
         self._run_keys: dict[tuple[UUID, UUID, str, str], UUID] = {}
         self._step_keys: dict[tuple[UUID, str], UUID] = {}
         self._attempt_keys: dict[tuple[UUID, str], UUID] = {}
@@ -1210,6 +1244,59 @@ class InMemoryWorkflowRepository:
             item.updated_at = now
             return item
 
+    def record_project_delete_cancellation(
+        self,
+        *,
+        run: WorkflowRunRecord,
+        reason: str = "project_deleted",
+    ) -> WorkflowCancellationRecord:
+        """Test/in-memory stand-in for the project-delete trigger insert."""
+        with self._lock:
+            for existing in self.cancellations.values():
+                if existing.workflow_run_id == run.id:
+                    return existing
+            record = WorkflowCancellationRecord(
+                id=uuid4(),
+                workspace_id=run.workspace_id,
+                project_id=run.project_id,
+                workflow_run_id=run.id,
+                temporal_workflow_id=run.temporal_workflow_id,
+                reason=reason,
+            )
+            self.cancellations[record.id] = record
+            return record
+
+    def claim_workflow_cancellations(
+        self, *, limit: int = 50, now: datetime | None = None
+    ) -> list[WorkflowCancellationRecord]:
+        now = now or datetime.now(UTC)
+        if not 1 <= limit <= 200:
+            raise ApiError(
+                422,
+                "workflow_cancellation_limit_invalid",
+                "Cancellation claim limit is invalid.",
+            )
+        with self._lock:
+            pending = sorted(
+                (c for c in self.cancellations.values() if c.dispatched_at is None),
+                key=lambda c: c.created_at,
+            )[:limit]
+            claimed: list[WorkflowCancellationRecord] = []
+            for record in pending:
+                dispatched = WorkflowCancellationRecord(
+                    id=record.id,
+                    workspace_id=record.workspace_id,
+                    project_id=record.project_id,
+                    workflow_run_id=record.workflow_run_id,
+                    temporal_workflow_id=record.temporal_workflow_id,
+                    reason=record.reason,
+                    created_at=record.created_at,
+                    dispatched_at=now,
+                )
+                self.cancellations[record.id] = dispatched
+                claimed.append(dispatched)
+            return claimed
+
     def begin_step(
         self,
         *,
@@ -1824,6 +1911,11 @@ class InMemoryWorkflowRepository:
     async def fail_outbox_async(self, **values: Any) -> OutboxRecord:
         return self.fail_outbox(**values)
 
+    async def claim_workflow_cancellations_async(
+        self, **values: Any
+    ) -> list[WorkflowCancellationRecord]:
+        return self.claim_workflow_cancellations(**values)
+
 
 class SupabaseWorkflowRepository:
     def __init__(
@@ -2211,6 +2303,32 @@ class SupabaseWorkflowRepository:
             },
         )
         return [OutboxRecord.from_row(row) for row in self._rows(response, allow_empty=True)]
+
+    def claim_workflow_cancellations(
+        self, *, limit: int = 50
+    ) -> list[WorkflowCancellationRecord]:
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_claim_workflow_cancellations",
+            json={"p_limit": limit},
+        )
+        return [
+            WorkflowCancellationRecord.from_row(row)
+            for row in self._rows(response, allow_empty=True)
+        ]
+
+    async def claim_workflow_cancellations_async(
+        self, *, limit: int = 50
+    ) -> list[WorkflowCancellationRecord]:
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_claim_workflow_cancellations",
+            json={"p_limit": limit},
+        )
+        return [
+            WorkflowCancellationRecord.from_row(row)
+            for row in self._rows(response, allow_empty=True)
+        ]
 
     def ack_outbox(
         self,

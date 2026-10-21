@@ -19,10 +19,9 @@
     "@remotion/bundler": "4.0.431",
     "@remotion/cli": "4.0.431",
     "@remotion/renderer": "4.0.431",
-    "remotion": "4.0.431",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "zod": "4.3.6"
+    "remotion": "4.0.431"
   },
   "devDependencies": {
     "@types/node": "24.19.1",

@@ -2,6 +2,10 @@ import type { BillingStatusSummary } from "@motionly/shared";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 
+// Offline degradation only. Real plan prices (INR paise) come from the API,
+// which reads apps/api/app/config/plans.json — the single source of truth. This
+// fallback deliberately carries price_paise: 0 so prices are never duplicated
+// here; the UI shows the live catalogue whenever the API is reachable.
 const unavailableWorkspaceId = "00000000-0000-0000-0000-000000000000";
 
 export const fallbackBillingStatus: BillingStatusSummary = {
@@ -16,8 +20,8 @@ export const fallbackBillingStatus: BillingStatusSummary = {
   current_plan: {
     key: "free",
     name: "Free",
-    price_cents: 0,
-    currency: "usd",
+    price_paise: 0,
+    currency: "INR",
     interval: "month",
     entitlements: {
       monthly_renders: 3,
@@ -42,8 +46,8 @@ export const fallbackBillingStatus: BillingStatusSummary = {
     {
       key: "free",
       name: "Free",
-      price_cents: 0,
-      currency: "usd",
+      price_paise: 0,
+      currency: "INR",
       interval: "month",
       entitlements: {
         monthly_renders: 3,
@@ -67,8 +71,8 @@ export const fallbackBillingStatus: BillingStatusSummary = {
     {
       key: "creator",
       name: "Creator",
-      price_cents: 2900,
-      currency: "usd",
+      price_paise: 0,
+      currency: "INR",
       interval: "month",
       entitlements: {
         monthly_renders: 30,
@@ -87,8 +91,8 @@ export const fallbackBillingStatus: BillingStatusSummary = {
     {
       key: "pro",
       name: "Pro",
-      price_cents: 7900,
-      currency: "usd",
+      price_paise: 0,
+      currency: "INR",
       interval: "month",
       entitlements: {
         monthly_renders: 100,
@@ -112,8 +116,8 @@ export const fallbackBillingStatus: BillingStatusSummary = {
     {
       key: "agency",
       name: "Agency",
-      price_cents: 19900,
-      currency: "usd",
+      price_paise: 0,
+      currency: "INR",
       interval: "month",
       entitlements: {
         monthly_renders: 250,
@@ -177,5 +181,49 @@ export async function getBillingStatus(): Promise<BillingStatusSummary> {
     return (await response.json()) as BillingStatusSummary;
   } catch {
     return fallbackBillingStatus;
+  }
+}
+
+// A single in-app receipt as the billing history table and receipt view render
+// it. Mirrors the API's PaymentReceipt (apps/api/app/schemas/billing.py); the
+// amount is in INR paise.
+export type PaymentReceiptSummary = {
+  id: string;
+  workspace_id: string;
+  kind: string; // "charge" | "refund"
+  plan?: string | null;
+  amount_paise: number;
+  currency?: string;
+  gateway_event_id?: string | null;
+  gateway_order_id?: string | null;
+  reason?: string | null;
+  created_at: string;
+  demo_notice?: string;
+};
+
+// Payment history for the acting workspace, read from the API's receipts store.
+// Returns an empty list on any failure so the billing page still renders (the
+// owner just sees "no payments yet"); the history surface is otherwise
+// owner-gated by the page.
+export async function getPaymentHistory(): Promise<PaymentReceiptSummary[]> {
+  const context = await getWorkspaceApiContext();
+  if (!context) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${env.apiBaseUrl}/billing/history`, {
+      headers: context.headers,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const body = (await response.json()) as {
+      receipts?: PaymentReceiptSummary[];
+    };
+    return body.receipts ?? [];
+  } catch {
+    return [];
   }
 }

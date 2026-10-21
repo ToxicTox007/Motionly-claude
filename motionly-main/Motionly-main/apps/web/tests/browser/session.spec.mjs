@@ -2,7 +2,12 @@
 // short-lived tokens (GOTRUE_JWT_EXP in infra/docker-compose.cpu-stage.yml),
 // so a page left open past the token's expiry must keep working: browser API
 // calls use the renewed token, and page loads renew the session on the server.
-import { expect, signIn, test } from "./support/fixtures.mjs";
+import {
+  accessTokenClaims,
+  expect,
+  signIn,
+  test,
+} from "./support/fixtures.mjs";
 import { createSourceVideo } from "./support/media.mjs";
 
 let media;
@@ -12,20 +17,6 @@ test.beforeAll(() => {
 });
 
 test.afterAll(() => media?.remove());
-
-/** The access token's claims, read from the Supabase session cookie. */
-async function accessTokenClaims(context) {
-  const chunks = (await context.cookies())
-    .filter((cookie) => /^sb-motionly-auth-token(\.\d+)?$/.test(cookie.name))
-    .sort((a, b) => a.name.localeCompare(b.name, "en", { numeric: true }))
-    .map((cookie) => cookie.value)
-    .join("");
-  const json = chunks.startsWith("base64-")
-    ? Buffer.from(chunks.slice("base64-".length), "base64url").toString("utf8")
-    : decodeURIComponent(chunks);
-  const payload = JSON.parse(json).access_token.split(".")[1];
-  return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-}
 
 test("an upload started after the page's access token expired still succeeds", async ({
   page,

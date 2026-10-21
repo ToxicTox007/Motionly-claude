@@ -43,6 +43,7 @@ import {
   proposalDecisionIdempotencyKey,
   proposalIdentityFromWorkflow,
 } from "@/lib/workflow-ui.mjs";
+import { EditorialMemoryIndicator } from "../editorial-memory-indicator";
 
 interface AIStepProps {
   projectId: string;
@@ -1109,7 +1110,7 @@ export function AIStep({
   return (
     <div className="space-y-6" aria-live="polite">
       <div className="space-y-2">
-        <h2 className="text-xl font-black tracking-tight">AI Edit</h2>
+        <h2 className="text-xl font-bold tracking-tight">AI Edit</h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
           AI analyzes the video and prepares an edit proposal for your review.
           Nothing changes on the timeline until you approve it.
@@ -1118,7 +1119,7 @@ export function AIStep({
 
       {/* Visual analysis status */}
       <div
-        className="card rounded-xl flex items-start gap-3 p-4 text-sm"
+        className="flex items-start gap-3 rounded-neu-lg bg-surface p-4 text-sm shadow-neu-raised"
         data-testid="visual-analysis-status"
       >
         {visualStatus.status === "processing" ? (
@@ -1148,13 +1149,16 @@ export function AIStep({
 
       {/* Best moments */}
       <section
-        className="card rounded-xl space-y-4 p-5"
+        className="space-y-4 rounded-neu-xl bg-surface p-5 shadow-neu-raised"
         aria-labelledby="best-moments-title"
         data-testid="best-moments"
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 id="best-moments-title" className="text-base font-black">
+            <h3
+              id="best-moments-title"
+              className="text-base font-bold tracking-tight"
+            >
               Best moments
             </h3>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -1193,7 +1197,7 @@ export function AIStep({
             />
           </div>
           <div
-            className="flex rounded-lg border border-foreground p-1"
+            className="inline-flex gap-1 rounded-full bg-surface p-1 shadow-neu-inset-sm"
             role="tablist"
           >
             {clipDurations.map((duration) => {
@@ -1211,9 +1215,9 @@ export function AIStep({
                   aria-selected={clipDuration === duration}
                   disabled={clipRecommendations !== null && !available}
                   onClick={() => setClipDuration(duration)}
-                  className={`rounded px-2 py-1 text-xs font-black transition-colors ${
+                  className={`min-h-9 rounded-full px-3 text-xs font-semibold transition-shadow duration-200 ${
                     clipDuration === duration
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-primary text-primary-foreground shadow-neu-glow"
                       : "text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                   }`}
                 >
@@ -1226,7 +1230,7 @@ export function AIStep({
 
         {clipMessage ? (
           <p
-            className="rounded border border-foreground/30 bg-muted/40 px-3 py-2 text-xs"
+            className="rounded-neu bg-surface px-3 py-2 text-xs shadow-neu-inset-sm"
             role="status"
           >
             {clipMessage}
@@ -1235,7 +1239,7 @@ export function AIStep({
 
         {clipRecommendations ? (
           <div className="space-y-3">
-            <p className="text-[11px] font-medium text-muted-foreground">
+            <p className="text-xs font-medium text-muted-foreground">
               Signals used: transcript
               {clipRecommendations.signal_availability.audio_intelligence
                 ? " + audio intelligence"
@@ -1252,29 +1256,29 @@ export function AIStep({
               ?.clips.map((clip) => (
                 <article
                   key={clip.id}
-                  className={`rounded-lg border p-3 ${
+                  className={`rounded-neu-md bg-surface p-3 ${
                     selectedClipId === clip.id
-                      ? "border-primary bg-primary/5"
-                      : "border-foreground/30 bg-surface"
+                      ? "shadow-neu-glow ring-2 ring-primary/50"
+                      : "shadow-neu-raised-sm"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-xs font-black">
+                      <p className="text-xs font-bold tabular-nums">
                         #{clip.rank} · {formatClipTimestamp(clip.start_ms)}–
                         {formatClipTimestamp(clip.end_ms)}
                         <span className="ml-2 text-primary">
                           {clip.score}/100
                         </span>
                       </p>
-                      <p className="mt-1 truncate text-sm font-bold">
+                      <p className="mt-1 truncate text-sm font-semibold">
                         {clip.headline}
                       </p>
                     </div>
                     <button
                       type="button"
                       onClick={() => onClipSelected(clip.start_ms)}
-                      className="shrink-0 rounded border border-foreground px-2 py-1 text-[11px] font-bold hover:bg-muted"
+                      className="shrink-0 rounded-neu bg-surface px-2.5 py-1 text-xs font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                     >
                       Preview
                     </button>
@@ -1282,18 +1286,18 @@ export function AIStep({
                   <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                     {clip.transcript_excerpt}
                   </p>
-                  <p className="mt-2 text-[11px] text-muted-foreground">
+                  <p className="mt-2 text-xs text-muted-foreground">
                     {clip.rationale[0]}
                   </p>
                   <div className="mt-3 flex items-center justify-between gap-2">
-                    <span className="text-[10px] font-bold uppercase text-muted-foreground">
+                    <span className="text-xs font-semibold text-muted-foreground">
                       {clip.signals.matched_keywords.slice(0, 3).join(" · ") ||
                         "Transcript continuity"}
                     </span>
                     <button
                       type="button"
                       onClick={() => applyRecommendedClip(clip)}
-                      className="rounded bg-foreground px-2 py-1 text-[11px] font-bold text-background hover:opacity-85"
+                      className="rounded-neu bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-glow active:shadow-neu-pressed"
                     >
                       Use in AI edit
                     </button>
@@ -1305,7 +1309,7 @@ export function AIStep({
       </section>
 
       {/* Settings card */}
-      <div className="card rounded-xl p-5 space-y-4">
+      <div className="space-y-4 rounded-neu-xl bg-surface p-5 shadow-neu-raised">
         <div className="space-y-2">
           <Label>Edit Style</Label>
           <Select
@@ -1342,7 +1346,7 @@ export function AIStep({
             value={densityMap[density]}
             onChange={(val) => setDensity(reverseDensityMap(val))}
           />
-          <p className="text-[10px] text-muted-foreground text-right italic font-medium">
+          <p className="text-xs text-muted-foreground text-right italic font-medium">
             {density === "none"
               ? "No extra media"
               : density === "low"
@@ -1360,7 +1364,7 @@ export function AIStep({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="e.g. Focus on the product demo, keep the tone humorous..."
-            className="min-h-36 font-mono text-[13px]"
+            className="min-h-36 text-[13px]"
           />
         </div>
       </div>
@@ -1368,12 +1372,12 @@ export function AIStep({
       {/* Transcript status */}
       {!hasTranscript ? (
         <div
-          className="card rounded-lg space-y-3 p-4 border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+          className="space-y-3 rounded-neu-lg bg-surface p-4 shadow-neu-raised"
           role={transcript?.status === "failed" ? "alert" : "status"}
         >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-bold capitalize">
+              <p className="text-sm font-semibold capitalize">
                 {transcriptStatus.replace(/_/g, " ")}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -1399,7 +1403,7 @@ export function AIStep({
 
           {/* Progress bar */}
           <div
-            className="progress-bar h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
+            className="h-3 overflow-hidden rounded-full bg-muted shadow-neu-inset-sm"
             role="progressbar"
             aria-label="Transcription progress"
             aria-valuemin={0}
@@ -1407,14 +1411,14 @@ export function AIStep({
             aria-valuenow={Math.max(5, Math.min(transcriptProgress, 100))}
           >
             <div
-              className="progress-fill"
+              className="h-full rounded-full bg-primary"
               style={{
                 width: `${Math.max(5, Math.min(transcriptProgress, 100))}%`,
               }}
             />
           </div>
 
-          <div className="flex items-center justify-between text-[11px] font-bold font-mono text-muted-foreground">
+          <div className="flex items-center justify-between font-mono text-xs font-semibold tabular-nums text-muted-foreground">
             <span>
               {Math.max(5, Math.min(transcriptProgress, 100))}% complete
             </span>
@@ -1461,23 +1465,31 @@ export function AIStep({
       {/* Proposal review */}
       {proposal ? (
         <section
-          className="card rounded-xl space-y-4 border-2 border-foreground p-5 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]"
+          className="space-y-4 rounded-neu-xl bg-surface p-5 shadow-neu-raised-lg"
           aria-labelledby="proposal-review-title"
           data-testid="proposal-review-card"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 id="proposal-review-title" className="text-base font-black">
+              <h3
+                id="proposal-review-title"
+                className="text-base font-bold tracking-tight"
+              >
                 Review AI edit proposal
               </h3>
-              <p className="mt-1 text-xs font-bold uppercase text-primary">
+              <p className="mt-1 text-xs font-semibold text-primary">
                 Awaiting your approval
               </p>
             </div>
-            <span className="rounded border border-foreground px-2 py-1 text-[10px] font-black uppercase">
+            <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold tabular-nums text-foreground shadow-neu-inset-sm">
               Revision {proposal.revision}
             </span>
           </div>
+
+          <EditorialMemoryIndicator
+            workspaceId={workspaceId}
+            projectId={projectId}
+          />
 
           <p className="text-sm leading-relaxed text-foreground">
             {proposal.overall_rationale ||
@@ -1486,39 +1498,45 @@ export function AIStep({
 
           <dl className="grid grid-cols-2 gap-3 text-xs">
             <div>
-              <dt className="font-bold text-muted-foreground">Confidence</dt>
-              <dd className="font-mono font-black">
+              <dt className="font-semibold text-muted-foreground">
+                Confidence
+              </dt>
+              <dd className="font-mono font-semibold tabular-nums">
                 {formatConfidence(proposal.confidence)}
               </dd>
             </div>
             <div>
-              <dt className="font-bold text-muted-foreground">Provenance</dt>
-              <dd className="font-mono font-black">
+              <dt className="font-semibold text-muted-foreground">
+                Provenance
+              </dt>
+              <dd className="font-mono font-semibold tabular-nums">
                 {[proposal.provenance.provider, proposal.provenance.model]
                   .filter(Boolean)
                   .join(" / ") || "Not reported"}
               </dd>
             </div>
             <div>
-              <dt className="font-bold text-muted-foreground">
+              <dt className="font-semibold text-muted-foreground">
                 Model revision
               </dt>
-              <dd className="break-all font-mono font-black">
+              <dd className="break-all font-mono font-semibold tabular-nums">
                 {proposal.provenance.model_revision ||
                   proposal.provenance.prompt_version}
               </dd>
             </div>
             <div>
-              <dt className="font-bold text-muted-foreground">
+              <dt className="font-semibold text-muted-foreground">
                 Estimated cost
               </dt>
-              <dd className="font-mono font-black">
+              <dd className="font-mono font-semibold tabular-nums">
                 {formatUsd(proposal.cost?.estimated_cost_usd)}
               </dd>
             </div>
             <div>
-              <dt className="font-bold text-muted-foreground">Actual cost</dt>
-              <dd className="font-mono font-black">
+              <dt className="font-semibold text-muted-foreground">
+                Actual cost
+              </dt>
+              <dd className="font-mono font-semibold tabular-nums">
                 {formatUsd(proposal.cost?.actual_cost_usd)}
               </dd>
             </div>
@@ -1526,10 +1544,10 @@ export function AIStep({
 
           {proposalWarnings.length ? (
             <div
-              className="rounded border-2 border-warning bg-warning/10 p-3"
+              className="rounded-neu bg-warning/10 p-3 shadow-neu-inset-sm"
               aria-label="Proposal warnings"
             >
-              <p className="text-xs font-black uppercase text-warning">
+              <p className="text-xs font-semibold text-warning">
                 Review warnings
               </p>
               <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
@@ -1541,7 +1559,7 @@ export function AIStep({
           ) : null}
 
           <fieldset className="space-y-2">
-            <legend className="text-xs font-black uppercase">
+            <legend className="text-xs font-semibold text-muted-foreground">
               Proposed actions in order
             </legend>
             {orderedProposalActions.map((action, index) => {
@@ -1555,7 +1573,7 @@ export function AIStep({
               return (
                 <label
                   key={action.id}
-                  className="flex items-start gap-3 rounded border-2 border-foreground bg-surface p-3"
+                  className="flex items-start gap-3 rounded-neu-md bg-surface p-3 shadow-neu-raised-sm"
                 >
                   <input
                     type="checkbox"
@@ -1566,7 +1584,7 @@ export function AIStep({
                     aria-describedby={`${rationaleId}${blockReason ? ` ${dependencyId}` : ""}`}
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-xs font-black">
+                    <span className="block text-xs font-bold">
                       {index + 1}. {formatProposalTool(action.tool_name)}
                     </span>
                     <span
@@ -1575,11 +1593,11 @@ export function AIStep({
                     >
                       {action.rationale}
                     </span>
-                    <span className="mt-1 block text-[10px] font-bold uppercase text-muted-foreground">
+                    <span className="mt-1 block text-xs font-semibold text-muted-foreground">
                       Confidence {formatConfidence(action.confidence)}
                     </span>
                     {(action.risk_flags ?? []).length ? (
-                      <span className="mt-1 block text-[10px] font-bold text-warning">
+                      <span className="mt-1 block text-xs font-semibold text-warning">
                         Action risks:{" "}
                         {(action.risk_flags ?? []).map(formatFlag).join(", ")}
                       </span>
@@ -1587,7 +1605,7 @@ export function AIStep({
                     {blockReason ? (
                       <span
                         id={dependencyId}
-                        className="mt-1 block text-[10px] font-bold text-warning"
+                        className="mt-1 block text-xs font-semibold text-warning"
                       >
                         {blockReason}
                       </span>
@@ -1661,7 +1679,7 @@ export function AIStep({
         }
         aria-busy={loading}
         aria-describedby={message ? "ai-edit-message" : undefined}
-        className="w-full h-12 rounded-md bg-primary text-primary-foreground font-black text-sm border-2 border-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-12 w-full items-center justify-center gap-2 rounded-neu bg-primary text-sm font-semibold text-primary-foreground shadow-neu-glow transition-shadow duration-200 active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading ? (
           <Loader2
@@ -1681,10 +1699,10 @@ export function AIStep({
       </button>
 
       {/* Version history */}
-      <div className="card rounded-lg p-4 space-y-3 border-2 border-foreground bg-surface shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]">
+      <div className="space-y-3 rounded-neu-lg bg-surface p-4 shadow-neu-raised">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-black uppercase">Version History</p>
+            <p className="text-sm font-bold">Version History</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Save named timeline versions and restore earlier edits. AI
               proposals are reviewed before they become timeline versions.
@@ -1724,11 +1742,11 @@ export function AIStep({
             {snapshots.slice(0, 5).map((snapshot) => (
               <div
                 key={snapshot.id}
-                className="card rounded border-2 border-foreground flex items-center justify-between gap-3 px-3 py-2 bg-surface shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
+                className="flex items-center justify-between gap-3 rounded-neu-md bg-surface px-3 py-2 shadow-neu-raised-sm"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-black">{snapshot.name}</p>
-                  <p className="text-[10px] font-bold text-muted-foreground font-mono">
+                  <p className="truncate text-xs font-bold">{snapshot.name}</p>
+                  <p className="font-mono text-xs font-semibold tabular-nums text-muted-foreground">
                     Timeline v{snapshot.source_plan_version} ·{" "}
                     {snapshot.summary.cut_count} cuts
                   </p>
@@ -1738,7 +1756,7 @@ export function AIStep({
                   variant="ghost"
                   onClick={() => restoreSnapshot(snapshot.id)}
                   disabled={snapshotLoading}
-                  className="pixel-button text-xs h-8 px-3"
+                  className="h-8 px-3 text-xs"
                 >
                   Restore
                 </Button>
@@ -1746,7 +1764,7 @@ export function AIStep({
             ))}
           </div>
         ) : (
-          <p className="rounded border-2 border-dashed border-foreground p-3 text-xs font-bold text-muted-foreground text-center font-mono">
+          <p className="rounded-neu border border-dashed border-primary p-3 text-center text-xs font-medium text-muted-foreground shadow-neu-inset-sm">
             No saved snapshots yet.
           </p>
         )}
@@ -1759,8 +1777,8 @@ export function AIStep({
           role={isErrorMessage ? "alert" : "status"}
           className={
             isErrorMessage
-              ? "rounded border-2 border-danger bg-danger/10 p-4 text-sm text-danger shadow-[2px_2px_0px_#000]"
-              : "rounded border-2 border-foreground bg-muted p-3 text-sm font-bold text-foreground font-mono shadow-[2px_2px_0px_#000]"
+              ? "rounded-neu bg-danger/10 p-4 text-sm font-semibold text-danger shadow-neu-inset-sm"
+              : "rounded-neu bg-muted p-3 text-sm font-semibold text-foreground shadow-neu-inset-sm"
           }
         >
           {message}

@@ -82,7 +82,7 @@ function MobileWorkspace({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col lg:hidden">
-      <div className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-around gap-1 border-t-2 border-foreground bg-surface p-1 shadow-brutal">
+      <div className="fixed inset-x-0 bottom-0 z-40 mx-auto mb-2 flex w-[calc(100%-1rem)] max-w-md items-center justify-around gap-1 rounded-full bg-surface p-1.5 shadow-neu-raised-lg">
         <MobileTab
           label="Preview"
           icon={Eye}
@@ -105,11 +105,11 @@ function MobileWorkspace({
         />
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 pb-20">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 pb-24">
         {mode === "creator" ? (
           <section
             aria-label="Current creator task"
-            className="shrink-0 overflow-hidden rounded border border-foreground bg-surface"
+            className="shrink-0 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised"
           >
             <CurrentTaskCard
               task={activeTask}
@@ -119,15 +119,17 @@ function MobileWorkspace({
         ) : null}
         <section
           id="editor-preview"
+          tabIndex={-1}
           aria-labelledby="preview-heading"
-          className="h-[min(42dvh,380px)] min-h-[280px] shrink-0 overflow-hidden rounded border border-foreground bg-surface"
+          className="h-[min(42dvh,380px)] min-h-[280px] shrink-0 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         >
           {panels.centerPanel}
         </section>
         <section
           id="editor-timeline"
+          tabIndex={-1}
           aria-labelledby="timeline-heading"
-          className="min-h-[220px] flex-1 overflow-hidden rounded border border-foreground bg-surface"
+          className="min-h-[220px] flex-1 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         >
           {panels.bottomPanel}
         </section>
@@ -168,35 +170,37 @@ function CreatorWorkspace({
 
   return (
     <main
-      className="hidden min-h-0 max-w-full flex-1 gap-3 overflow-hidden p-3 lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[minmax(0,1fr)_210px]"
+      className="hidden min-h-0 max-w-full flex-1 gap-4 overflow-hidden p-3 lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[minmax(0,1fr)_210px]"
       aria-label="Creator editor workspace"
       data-editor-workspace="creator"
     >
       <section
         id="editor-preview"
+        tabIndex={-1}
         aria-labelledby="preview-heading"
-        className="overflow-hidden rounded border border-foreground bg-surface"
+        className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       >
         {panels.centerPanel}
       </section>
       <aside
-        className="flex min-h-0 flex-col gap-3"
+        className="flex min-h-0 flex-col gap-4"
         aria-label="Guided editor settings"
       >
-        <section className="shrink-0 overflow-hidden rounded border border-foreground bg-surface">
+        <section className="shrink-0 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised">
           <CurrentTaskCard
             task={activeTask}
             onSelect={creatorFlow.onTaskSelect}
           />
         </section>
-        <section className="min-h-0 flex-1 overflow-hidden rounded border border-foreground bg-surface">
+        <section className="min-h-0 flex-1 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised">
           {panels.rightPanel}
         </section>
       </aside>
       <section
         id="editor-timeline"
+        tabIndex={-1}
         aria-labelledby="timeline-heading"
-        className="col-span-2 overflow-hidden rounded border border-foreground bg-surface"
+        className="col-span-2 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       >
         {panels.bottomPanel}
       </section>
@@ -207,33 +211,35 @@ function CreatorWorkspace({
 function ProfessionalWorkspace({ panels }: { panels: EditorPanels }) {
   return (
     <main
-      className="hidden min-h-0 max-w-full flex-1 gap-3 overflow-hidden p-3 lg:grid lg:grid-cols-[240px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_220px]"
+      className="hidden min-h-0 max-w-full flex-1 gap-4 overflow-hidden p-3 lg:grid lg:grid-cols-[240px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_220px]"
       aria-label="Professional editor workspace"
       data-editor-workspace="professional"
     >
       <section
         aria-labelledby="media-heading"
-        className="overflow-hidden rounded border border-foreground bg-surface"
+        className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised"
       >
         {panels.leftPanel}
       </section>
       <section
         id="editor-preview"
+        tabIndex={-1}
         aria-labelledby="preview-heading"
-        className="overflow-hidden rounded border border-foreground bg-surface"
+        className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       >
         {panels.centerPanel}
       </section>
       <section
         aria-label="Editor settings"
-        className="overflow-hidden rounded border border-foreground bg-surface"
+        className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised"
       >
         {panels.rightPanel}
       </section>
       <section
         id="editor-timeline"
+        tabIndex={-1}
         aria-labelledby="timeline-heading"
-        className="col-span-3 overflow-hidden rounded border border-foreground bg-surface"
+        className="col-span-3 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       >
         {panels.bottomPanel}
       </section>
@@ -257,14 +263,14 @@ function MobileTab({
       type="button"
       aria-pressed={active}
       className={cn(
-        "flex min-h-12 flex-1 flex-col items-center justify-center gap-1 rounded border border-transparent py-1 text-xs font-semibold transition-colors",
+        "flex min-h-12 flex-1 flex-col items-center justify-center gap-1 rounded-full py-1 text-xs font-semibold transition-shadow duration-200",
         active
-          ? "border-foreground bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:bg-surface-elevated hover:text-foreground",
+          ? "bg-primary text-primary-foreground shadow-neu-glow"
+          : "text-muted-foreground hover:text-foreground",
       )}
       onClick={onClick}
     >
-      <Icon className="size-4" strokeWidth={2} />
+      <Icon className="size-4" strokeWidth={1.75} />
       {label}
     </button>
   );
@@ -286,7 +292,7 @@ function EditorSheet({
       <button
         type="button"
         aria-label={`Close ${label}`}
-        className="fixed inset-0 bottom-16 z-40 w-full bg-background/75 text-left"
+        className="fixed inset-0 bottom-16 z-40 w-full bg-foreground/20 text-left backdrop-blur-sm"
         onClick={onClose}
       />
       <div
@@ -294,17 +300,17 @@ function EditorSheet({
         role="dialog"
         aria-modal="true"
         aria-label={label}
-        className="fixed inset-x-0 bottom-16 top-28 z-50 flex flex-col overflow-hidden border-x-2 border-t-2 border-foreground bg-surface shadow-brutal-lg"
+        className="fixed inset-x-2 bottom-20 top-28 z-50 flex flex-col overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised-lg"
       >
-        <div className="flex shrink-0 items-center justify-between border-b border-foreground bg-surface-elevated p-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-hairline bg-surface-elevated p-3">
           <h2 className="text-base font-semibold">{label}</h2>
           <button
             type="button"
-            className="flex size-10 items-center justify-center rounded border border-foreground bg-surface hover:bg-muted"
+            className="neu-pressable flex size-10 items-center justify-center rounded-neu bg-surface text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised"
             onClick={onClose}
             aria-label="Close"
           >
-            <X className="size-4" strokeWidth={2} />
+            <X className="size-4" strokeWidth={1.75} />
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-3">{children}</div>

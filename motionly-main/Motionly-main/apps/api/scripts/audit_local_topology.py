@@ -122,6 +122,19 @@ def _parse_dependencies(
 ) -> list[dict[str, str]]:
     inline_value, child_lines = _field_block(service_block, "depends_on")
     if inline_value is None:
+        # A prettier-wrapped flow sequence puts the `[...]` list on the line(s)
+        # below `depends_on:` (Compose + prettier do this when the inline list
+        # is long). Treat a child block that is a single flow list the same as
+        # the inline-list form; otherwise it is the mapping (one `service:` per
+        # line) form.
+        joined = " ".join(line.strip() for line in child_lines if line.strip())
+        if joined.startswith("[") and joined.endswith("]"):
+            names = [name.strip().strip("\"'") for name in joined[1:-1].split(",")]
+            return [
+                {"service": name, "condition": "service_started"}
+                for name in names
+                if name
+            ]
         return _parse_dependency_mapping(child_lines)
     if inline_value.startswith("*"):
         alias = inline_value[1:].strip()

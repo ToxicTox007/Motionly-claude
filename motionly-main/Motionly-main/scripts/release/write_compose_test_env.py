@@ -186,17 +186,37 @@ def write_cpu_stage_inputs(stack_path: Path, env_file: Path, secrets_dir: Path) 
     postgres_password = secrets.token_hex(24)
     redis_password = secrets.token_hex(24)
     service_role_key = _jwt("service_role", jwt_secret)
+    # S3: workers authenticate as the restricted motionly_worker role (a JWT
+    # PostgREST switches to), never with the service-role key. Mounted only into
+    # worker services.
+    worker_key = _jwt("motionly_worker", jwt_secret)
     secret_values = {
         "postgres_password": postgres_password,
         "redis_password": redis_password,
         "temporal_db_password": secrets.token_hex(24),
         "supabase_service_role_key": service_role_key,
+        "supabase_worker_key": worker_key,
         "supabase_jwt_secret": jwt_secret,
         "admin_api_token": secrets.token_hex(24),
         "worker_api_token": secrets.token_hex(24),
         "metrics_bearer_token": secrets.token_hex(24),
         # The CDN simulator adds it; the ingress origin guard requires it.
         "edge_origin_verify": secrets.token_urlsafe(32),
+        # Mock payment gateway (Task 22, demo-billing profile): its own merchant
+        # API key and webhook signing secret, isolated from the rest of the stack.
+        "merchant_api_key": secrets.token_hex(24),
+        "mock_gateway_webhook_secret": secrets.token_hex(32),
+        # Persistence: the gateway's own PostgREST role JWT (role claim
+        # mock_gateway_role). PostgREST switches into that role (granted to the
+        # authenticator in migration 202610190803); it can touch ONLY the
+        # mock_gateway schema. Mounted only into payment-gateway, like the
+        # worker key above.
+        "mock_gateway_db_key": _jwt("mock_gateway_role", jwt_secret),
+        # Realtime (Task 25): DB_ENC_KEY is a 16-byte AES key; SECRET_KEY_BASE
+        # is the Phoenix endpoint secret.
+        "realtime_db_enc_key": secrets.token_hex(8),
+        "realtime_secret_key_base": secrets.token_hex(32),
+        "realtime_metrics_jwt_secret": secrets.token_hex(32),
     }
     secrets_dir.mkdir(mode=0o700, parents=True)
     for name, value in secret_values.items():
@@ -228,6 +248,8 @@ def write_cpu_stage_inputs(stack_path: Path, env_file: Path, secrets_dir: Path) 
         # One public origin; the CPU-stage ingress serves any host on it.
         "APP_DOMAIN": urlsplit(stack["public_origin"]).hostname,
         "PUBLIC_ORIGIN": stack["public_origin"],
+        # The CPU stage runs the mock payment gateway (demo-billing profile).
+        "BILLING_MODE": "demo",
     }
     env_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     _write_private(env_file, "".join(f"{name}={value}\n" for name, value in environment.items()))
@@ -244,11 +266,14 @@ def main() -> int:
 
     service_role_key = _jwt("service_role")
     anon_key = _jwt("anon")
+    # S3: restricted motionly_worker JWT, mounted only into worker services.
+    worker_key = _jwt("motionly_worker")
     secret_values = {
         "postgres_password": POSTGRES_PASSWORD,
         "redis_password": REDIS_PASSWORD,
         "temporal_db_password": "release-integration-temporal-db-password",
         "supabase_service_role_key": service_role_key,
+        "supabase_worker_key": worker_key,
         "supabase_jwt_secret": JWT_SECRET,
         "admin_api_token": "release-integration-admin-token",
         "worker_api_token": "release-integration-worker-token",
@@ -259,6 +284,9 @@ def main() -> int:
         "metrics_bearer_token": "release-integration-metrics-token",
         "edge_origin_verify": "release-integration-origin-verify-0123456789",
         "edge_origin_verify_previous": "",
+        "realtime_db_enc_key": "rltimeenckey0123",
+        "realtime_secret_key_base": "release-integration-realtime-secret-key-base-0123456789abcdef",
+        "realtime_metrics_jwt_secret": "release-integration-realtime-metrics-jwt-secret-0123456789",
     }
     args.secrets_dir.mkdir(mode=0o700, parents=True)
     for name, value in secret_values.items():
@@ -281,6 +309,7 @@ def main() -> int:
         "SUPABASE_SERVICE_ROLE_KEY": service_role_key,
         "APP_DOMAIN": "app.release.test",
         "PUBLIC_ORIGIN": "https://app.release.test",
+        "BILLING_MODE": "disabled",
     }
     args.env_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     args.env_file.write_text("".join(f"{name}={value}\n" for name, value in environment.items()), encoding="utf-8")

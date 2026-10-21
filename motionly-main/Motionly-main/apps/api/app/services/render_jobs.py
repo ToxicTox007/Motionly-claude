@@ -34,9 +34,14 @@ def complete_render_job(
     storage_root: str,
     supabase_url: str | None,
     service_role_key: str | None,
-    execute_ffmpeg: bool,
+    renderer: object | None = None,
     allow_fixture_media: bool = False,
 ) -> RenderJobRecord:
+    # Renders always execute a real CPU render. Tests that need a fast renderer
+    # inject one explicitly via `renderer`; no setting can select a stand-in
+    # (see apps/api/tests/test_fixture_leakage.py for the leakage assertion).
+    if renderer is None:
+        renderer = FFmpegCaptionRenderer()
     if job.status == RenderJobStatus.COMPLETE:
         return job
     if job.status == RenderJobStatus.CANCELED:
@@ -72,103 +77,56 @@ def complete_render_job(
     )
     artifact_uploaded = False
     ass_path = None
-    if execute_ffmpeg:
-        if job.manifest.get("include_captions", True):
-            ass_path = Path(storage_root).expanduser().resolve() / "tmp" / f"{job.id}.ass"
-            ass_path.parent.mkdir(parents=True, exist_ok=True)
-            ass_path.write_text(str(job.manifest["caption_ass"]), encoding="utf-8")
-        try:
-            preflight = _run_render_preflight(
-                job=job,
-                repository=repository,
-                export_bucket=export_bucket,
-                export_storage_path=export_storage_path,
-                storage_root=storage_root,
-                supabase_url=supabase_url,
-                service_role_key=service_role_key,
-                ass_path=ass_path,
-                allow_fixture_media=allow_fixture_media,
-            )
-            storage = preflight["storage"]
-            source_path = preflight["source_path"]
-            output_path = preflight["output_path"]
-            renderer = FFmpegCaptionRenderer()
-            broll_assets = preflight["broll_assets"]
-            rendered_broll_count = len(broll_assets)
-            audio_mix = preflight["audio_mix"]
-            effects_config = preflight["effects_config"]
-            matte_path = preflight["matte_path"]
-            job = repository.transition_job(
-                job=job,
-                status=RenderJobStatus.RENDERING,
-                progress_pct=70,
-                message=_rendering_message(job),
-                event_type="rendering_started",
-            )
-            _ensure_render_not_cancelled(job=job, repository=repository)
-            benchmark_ms, file_size_bytes = renderer.render(
-                source_path=source_path,
-                ass_path=ass_path,
-                output_path=output_path,
-                specs=job.specs,
-                broll_assets=broll_assets,
-                effects_config=effects_config,
-                manual_elements=_manual_elements_from_manifest(job.manifest),
-                framing=_framing_from_manifest(job.manifest),
-                keep_segments=job.keep_segments,
-                video_encoder=_video_encoder_from_manifest(job.manifest),
-                watermark=_watermark_from_manifest(job.manifest),
-                matte_path=matte_path,
-                cancel_check=lambda: _ensure_render_not_cancelled(
-                    job=job,
-                    repository=repository,
-                ),
-                **audio_mix,
-            )
-            _ensure_render_not_cancelled(job=job, repository=repository)
-            job = repository.transition_job(
-                job=job,
-                status=RenderJobStatus.UPLOADING,
-                progress_pct=90,
-                message="Uploading render output.",
-                event_type="upload_started",
-            )
-            storage.upload_file(
-                bucket=export_bucket,
-                path=export_storage_path,
-                source_path=output_path,
-                content_type="video/mp4",
-            )
-            artifact_uploaded = True
-        except ApiError as exc:
-            job.logs = [*job.logs, _render_failure_log(exc)]
-            if exc.code == "render_cancelled":
-                return _return_cancelled_render_job(
-                    job=job,
-                    repository=repository,
-                    message=exc.message,
-                )
-            return repository.transition_job(
-                job=job,
-                status=RenderJobStatus.FAILED,
-                progress_pct=job.progress_pct,
-                message=exc.message,
-                error_code=exc.code,
-                error_message=exc.message,
-                event_type=(
-                    "preflight_failed" if job.status == RenderJobStatus.PREPARING else "failed"
-                ),
-            )
-        finally:
-            if ass_path is not None:
-                ass_path.unlink(missing_ok=True)
-    else:
+    if job.manifest.get("include_captions", True):
+        ass_path = Path(storage_root).expanduser().resolve() / "tmp" / f"{job.id}.ass"
+        ass_path.parent.mkdir(parents=True, exist_ok=True)
+        ass_path.write_text(str(job.manifest["caption_ass"]), encoding="utf-8")
+    try:
+        preflight = _run_render_preflight(
+            job=job,
+            repository=repository,
+            export_bucket=export_bucket,
+            export_storage_path=export_storage_path,
+            storage_root=storage_root,
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+            ass_path=ass_path,
+            allow_fixture_media=allow_fixture_media,
+        )
+        storage = preflight["storage"]
+        source_path = preflight["source_path"]
+        output_path = preflight["output_path"]
+        broll_assets = preflight["broll_assets"]
+        rendered_broll_count = len(broll_assets)
+        audio_mix = preflight["audio_mix"]
+        effects_config = preflight["effects_config"]
+        matte_path = preflight["matte_path"]
         job = repository.transition_job(
             job=job,
             status=RenderJobStatus.RENDERING,
             progress_pct=70,
             message=_rendering_message(job),
             event_type="rendering_started",
+        )
+        _ensure_render_not_cancelled(job=job, repository=repository)
+        benchmark_ms, file_size_bytes = renderer.render(
+            source_path=source_path,
+            ass_path=ass_path,
+            output_path=output_path,
+            specs=job.specs,
+            broll_assets=broll_assets,
+            effects_config=effects_config,
+            manual_elements=_manual_elements_from_manifest(job.manifest),
+            framing=_framing_from_manifest(job.manifest),
+            keep_segments=job.keep_segments,
+            video_encoder=_video_encoder_from_manifest(job.manifest),
+            watermark=_watermark_from_manifest(job.manifest),
+            matte_path=matte_path,
+            cancel_check=lambda: _ensure_render_not_cancelled(
+                job=job,
+                repository=repository,
+            ),
+            **audio_mix,
         )
         _ensure_render_not_cancelled(job=job, repository=repository)
         job = repository.transition_job(
@@ -178,14 +136,35 @@ def complete_render_job(
             message="Uploading render output.",
             event_type="upload_started",
         )
-        file_size_bytes = _write_simulated_export(
-            export_bucket=export_bucket,
-            export_storage_path=export_storage_path,
-            storage_root=storage_root,
-            supabase_url=supabase_url,
-            service_role_key=service_role_key,
+        storage.upload_file(
+            bucket=export_bucket,
+            path=export_storage_path,
+            source_path=output_path,
+            content_type="video/mp4",
         )
         artifact_uploaded = True
+    except ApiError as exc:
+        job.logs = [*job.logs, _render_failure_log(exc)]
+        if exc.code == "render_cancelled":
+            return _return_cancelled_render_job(
+                job=job,
+                repository=repository,
+                message=exc.message,
+            )
+        return repository.transition_job(
+            job=job,
+            status=RenderJobStatus.FAILED,
+            progress_pct=job.progress_pct,
+            message=exc.message,
+            error_code=exc.code,
+            error_message=exc.message,
+            event_type=(
+                "preflight_failed" if job.status == RenderJobStatus.PREPARING else "failed"
+            ),
+        )
+    finally:
+        if ass_path is not None:
+            ass_path.unlink(missing_ok=True)
     try:
         _ensure_render_not_cancelled(job=job, repository=repository)
     except ApiError as exc:
@@ -223,7 +202,7 @@ def complete_render_job(
     job.benchmark_ms = benchmark_ms
     job.logs = [
         *job.logs,
-        "local ffmpeg render completed" if execute_ffmpeg else "local render completion simulated",
+        "local ffmpeg render completed",
         f"broll_render_assets={rendered_broll_count}",
         f"music_mix={_audio_mix_log(job.manifest)}",
         f"effects_config={_effects_log(job.manifest)}",
@@ -278,7 +257,7 @@ def complete_render_job_by_id(
     storage_root: str,
     supabase_url: str | None,
     service_role_key: str | None,
-    execute_ffmpeg: bool,
+    renderer: object | None = None,
     allow_fixture_media: bool = False,
 ) -> RenderJobRecord:
     job = repository.get_render_job(
@@ -294,7 +273,7 @@ def complete_render_job_by_id(
         storage_root=storage_root,
         supabase_url=supabase_url,
         service_role_key=service_role_key,
-        execute_ffmpeg=execute_ffmpeg,
+        renderer=renderer,
         allow_fixture_media=allow_fixture_media,
     )
 
@@ -499,6 +478,25 @@ def _validate_caption_payload(manifest: dict, *, ass_path: Path | None) -> None:
         )
 
 
+def _selection_is_test_track(selection: dict, track: object) -> bool:
+    """A catalog track carrying test rights evidence is a generated 'Test track'.
+
+    It is identified by an explicit is_test_track flag or the 'Test track: '
+    title prefix the importer stamps on generated tracks.
+    """
+    for candidate in (track, selection):
+        if isinstance(candidate, dict):
+            if candidate.get("is_test_track"):
+                return True
+            title = str(candidate.get("title") or "")
+            if title.startswith("Test track: "):
+                return True
+            metadata = candidate.get("raw_metadata")
+            if isinstance(metadata, dict) and metadata.get("is_test_track"):
+                return True
+    return False
+
+
 def _validate_music_rights(manifest: dict, *, allow_fixture_media: bool) -> None:
     render_props = manifest.get("render_props")
     if not isinstance(render_props, dict):
@@ -509,6 +507,15 @@ def _validate_music_rights(manifest: dict, *, allow_fixture_media: bool) -> None
     track = selection.get("track")
     if allow_fixture_media and isinstance(track, dict) and track.get("provider") == "fixture":
         return
+    # A generated "Test track" (test rights evidence) must never render outside a
+    # fixture-enabled stage. In production ALLOW_FIXTURE_PROVIDERS is false, so a
+    # catalog track carrying test evidence is refused here (Task 27 leakage gate).
+    if not allow_fixture_media and _selection_is_test_track(selection, track):
+        raise ApiError(
+            409,
+            "music_rights_test_track",
+            "Generated test tracks cannot be rendered in production.",
+        )
     rights = selection.get("rights")
     if (
         not isinstance(rights, dict)
@@ -606,70 +613,6 @@ def _rendering_message(job: RenderJobRecord) -> str:
     fit_mode = framing.get("fit_mode", "fill")
     caption_text = "captioned " if job.manifest.get("include_captions", True) else ""
     return f"Rendering {caption_text}{aspect} MP4 with {fit_mode} framing."
-
-
-def _write_simulated_export(
-    *,
-    export_bucket: str,
-    export_storage_path: str,
-    storage_root: str,
-    supabase_url: str | None,
-    service_role_key: str | None,
-) -> int:
-    storage = create_object_storage(
-        root=storage_root,
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
-    )
-    output_path = storage.object_path(bucket=export_bucket, path=export_storage_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if which("ffmpeg"):
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=black:s=180x320:d=0.5",
-                "-f",
-                "lavfi",
-                "-i",
-                "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-shortest",
-                "-r",
-                "30",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-movflags",
-                "+faststart",
-                str(output_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            raise ApiError(502, "simulated_render_failed", "Simulated export could not be created.")
-    else:
-        output_path.write_bytes(_SIMULATED_MP4_BYTES)
-    storage.upload_file(
-        bucket=export_bucket,
-        path=export_storage_path,
-        source_path=output_path,
-        content_type="video/mp4",
-    )
-    return output_path.stat().st_size
 
 
 def _render_failure_log(exc: ApiError) -> str:
@@ -1274,9 +1217,6 @@ def _run_fixture_ffmpeg(command: list[str], *, output_path: Path) -> None:
                 "stderr_tail": (result.stderr or "")[-800:],
             },
         )
-
-
-_SIMULATED_MP4_BYTES = b"motionly simulated mp4 export\n"
 
 
 # ---------------------------------------------------------------------------

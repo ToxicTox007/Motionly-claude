@@ -219,6 +219,88 @@ def test_run_matte_status_transitions_to_completed(matte_context, monkeypatch):
     assert completed.source_file_hash is not None
 
 
+def test_cpu_fallback_produces_labelled_fixture_matte_not_black(matte_context):
+    """The CPU-stage matte fallback is a visible, labelled test matte.
+
+    It must be fixture-matte:v1 with the registry label "Test matte" in its
+    provenance, must never carry the real MediaPipe model name, and must be a
+    visible ellipse (not an all-black clip that looks like a broken real matte).
+    """
+    import json
+    import subprocess
+
+    from app.services.matte_jobs import (
+        FIXTURE_MATTE_LABEL,
+        FIXTURE_MATTE_MODEL,
+        MATTE_MODEL_VERSION,
+    )
+
+    record, _job = enqueue_matte_for_upload(
+        repository=matte_context.repository,
+        matte_queue=matte_context.matte_queue,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        upload_id=matte_context.upload.id,
+    )
+    matte_context.upload.metadata.width = 160
+    matte_context.upload.metadata.height = 120
+    matte_context.upload.metadata.duration_ms = 500
+
+    completed = run_matte_for_upload(
+        repository=matte_context.repository,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        video_id=matte_context.upload.id,
+        matte_id=record.id,
+        media_work_dir=matte_context.media_root,
+        supabase_url=None,
+        service_role_key=None,
+        provider_models={},  # no cv2 -> fallback path
+    )
+
+    assert completed.matte is not None
+    assert completed.matte.model == FIXTURE_MATTE_MODEL
+    assert completed.matte.provenance == FIXTURE_MATTE_LABEL
+    assert FIXTURE_MATTE_LABEL == "Test matte"
+    # The real MediaPipe model name must never leak into a test matte.
+    assert MATTE_MODEL_VERSION not in (completed.matte.model or "")
+    assert MATTE_MODEL_VERSION not in (completed.matte.provenance or "")
+    assert "mediapipe" not in (completed.matte.model or "").lower()
+
+    # The rendered matte is visibly non-black (a centered ellipse). ffprobe the
+    # mean luma via signalstats and assert it carries real foreground pixels.
+    matte_file = (
+        LocalObjectStorage(root=matte_context.media_root).object_path(
+            bucket=matte_context.upload.storage_bucket,
+            path=completed.matte.path,
+        )
+    )
+    assert matte_file.exists()
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"movie={matte_file},signalstats",
+            "-show_entries",
+            "frame_tags=lavfi.signalstats.YAVG",
+            "-of",
+            "json",
+            "-read_intervals",
+            "%+#1",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    frames = json.loads(probe.stdout)["frames"]
+    yavg = float(frames[0]["tags"]["lavfi.signalstats.YAVG"])
+    assert yavg > 10, f"fixture matte looks all-black (YAVG={yavg})"
+
+
 def test_production_matte_routes_through_gateway_with_provenance_and_context(
     matte_context,
     monkeypatch,
@@ -673,3 +755,28 @@ def test_visual_analysis_keeps_small_frames_without_copying():
             raise AssertionError("small frames should not be resized")
 
     assert _resize_frame_for_analysis(cv2=FakeCv2, frame=small_frame) is small_frame
+
+
+def test_persistent_ml_subprocesses_keep_stdout_for_protocol_replies() -> None:
+    """stdout of a --serve subprocess carries only JSON replies to the worker;
+    diagnostics belong on stderr."""
+    import ast
+    from pathlib import Path
+
+    workers = Path(__file__).resolve().parents[1] / "app" / "workers"
+    offenders = []
+    for path in sorted(workers.glob("*_job.py")):
+        source = path.read_text(encoding="utf-8")
+        if "--serve" not in source:
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print"):
+                continue
+            to_stderr = any(
+                keyword.arg == "file" and ast.unparse(keyword.value) == "sys.stderr"
+                for keyword in node.keywords
+            )
+            json_reply = bool(node.args) and ast.unparse(node.args[0]).startswith("json.dumps(")
+            if not (to_stderr or json_reply):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert offenders == []

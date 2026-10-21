@@ -71,6 +71,7 @@ SECRET_FILE_NAMES = (
     "redis_password",
     "temporal_db_password",
     "supabase_service_role_key",
+    "supabase_worker_key",
     "supabase_jwt_secret",
     "admin_api_token",
     "worker_api_token",

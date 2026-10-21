@@ -3,6 +3,38 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.plans import BrollDensity
+
+
+class EditorialMemoryPreferences(BaseModel):
+    """Typed, structured preferences derived from a promoted editorial memory.
+
+    Every field is derived only from consented, promoted feedback deltas. The
+    ``memory_id``/``memory_version``/``policy_revision`` triple identifies the
+    promoted dataset so a plan can record per-field provenance.
+    """
+
+    memory_id: str = Field(min_length=1, max_length=120)
+    memory_version: str = Field(min_length=1, max_length=120)
+    policy_revision: int = Field(ge=0)
+    example_count: int = Field(ge=1)
+    caption_style: str | None = Field(default=None, max_length=40)
+    broll_density: BrollDensity | None = None
+    cut_style: str | None = Field(default=None, max_length=40)
+    music_mood: str | None = Field(default=None, max_length=160)
+    effects: list[str] = Field(default_factory=list, max_length=8)
+
+
+class EditorialMemoryIndicatorResponse(BaseModel):
+    """Surface for the "personalized from N edits" indicator and opt-out state."""
+
+    enabled: bool = False
+    personalized: bool = False
+    example_count: int = 0
+    memory_version: str | None = None
+    policy_revision: int = 0
+    opt_out_available: bool = False
+
 
 class EditorialLearningPolicyUpdateRequest(BaseModel):
     memory_enabled: bool

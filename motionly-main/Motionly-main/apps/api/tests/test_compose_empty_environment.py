@@ -107,16 +107,21 @@ def test_db_migrate_runs_after_auth_and_storage_create_their_schemas() -> None:
     assert migrate["image"] == services["postgres"]["image"]
     assert migrate["restart"] == "no"
     assert migrate["entrypoint"] == ["/bin/sh", "/opt/motionly-db/migrate.sh"]
+    # Auth, Storage and Realtime each create their own schema at startup; the
+    # migrations attach policies to those schemas (migration 202610191101 adds
+    # the private-channel RLS to realtime.messages), so db-migrate must wait for
+    # all three to be healthy before it runs.
     assert migrate["depends_on"] == {
         "postgres": HEALTHY,
         "supabase-auth": HEALTHY,
         "supabase-storage": HEALTHY,
+        "supabase-realtime": HEALTHY,
     }
     assert "../supabase/migrations:/opt/motionly-db/migrations:ro" in migrate["volumes"]
     assert "./db/migrate.sh:/opt/motionly-db/migrate.sh:ro" in migrate["volumes"]
     assert migrate["secrets"] == ["postgres_password"]
     assert migrate["networks"] == ["app"]
-    for service in ("supabase-auth", "supabase-storage"):
+    for service in ("supabase-auth", "supabase-storage", "supabase-realtime"):
         assert services[service]["healthcheck"]["test"], service
 
 

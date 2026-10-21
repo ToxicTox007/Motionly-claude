@@ -30,6 +30,20 @@ class ProjectUpdateRequest(BaseModel):
         return value.strip() if value is not None else value
 
 
+class ProjectLatestUpload(BaseModel):
+    """The project's active/latest upload, embedded in list responses.
+
+    Lets the dashboard and projects page render each project's upload state in
+    ONE API call instead of one extra /uploads/{id} request per project.
+    """
+
+    id: UUID
+    status: str
+    original_filename: str
+    duration_ms: int | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ProjectResponse(BaseModel):
     id: UUID
     workspace_id: UUID
@@ -37,6 +51,7 @@ class ProjectResponse(BaseModel):
     title: str
     status: ProjectStatus
     active_video_id: UUID | None = None
+    latest_upload: ProjectLatestUpload | None = None
     created_at: datetime
     updated_at: datetime
 

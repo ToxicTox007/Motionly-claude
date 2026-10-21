@@ -235,7 +235,6 @@ def test_health_dependencies_endpoint_with_audio_ml(monkeypatch) -> None:
                 supabase_service_role_key=None,
                 remotion_enabled=False,
                 worker_api_token=None,
-                render_execute_ffmpeg=False,
                 health_diagnostics_rate_limit_per_minute=10,
                 health_diagnostics_cache_ttl_seconds=0,
             )

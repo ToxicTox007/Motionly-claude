@@ -314,8 +314,6 @@ async def _probe_storage(settings) -> DependencyHealth:
 
 
 async def _probe_renderer(settings) -> DependencyHealth:
-    if not settings.render_execute_ffmpeg and not settings.remotion_enabled:
-        return DependencyHealth(status="ok", message="Render execution is simulated.")
     if settings.redis_url or settings.app_env != "production":
         return DependencyHealth(
             status="ok",

@@ -10,6 +10,10 @@ import { PixelIcon } from "@/components/pixel-icons";
 import { Loader2 } from "lucide-react";
 import { signup } from "../actions";
 import { PageTitle } from "@/components/page-title";
+import {
+  SIGNUP_ERROR_MESSAGES,
+  type SignupErrorReason,
+} from "@/lib/signup.mjs";
 
 function PasswordStrength({ password }: { password: string }) {
   if (!password) return null;
@@ -22,19 +26,13 @@ function PasswordStrength({ password }: { password: string }) {
           ? 2
           : 1;
   const labels = ["", "Weak", "Fair", "Strong", "Very strong"];
-  const colors = [
-    "",
-    "bg-red-500",
-    "bg-amber-500",
-    "bg-emerald-400",
-    "bg-emerald-500",
-  ];
+  const colors = ["", "bg-danger", "bg-warning", "bg-success", "bg-primary"];
   const textColors = [
     "",
-    "text-red-400",
-    "text-amber-400",
-    "text-emerald-400",
-    "text-emerald-400",
+    "text-danger",
+    "text-warning",
+    "text-success",
+    "text-primary",
   ];
   return (
     <div className="mt-2 space-y-1">
@@ -42,11 +40,11 @@ function PasswordStrength({ password }: { password: string }) {
         {[1, 2, 3, 4].map((i) => (
           <div
             key={i}
-            className={`h-1.5 flex-1 rounded-sm border border-foreground transition-all duration-300 ${i <= score ? colors[score] : "bg-muted"}`}
+            className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${i <= score ? colors[score] : "bg-muted shadow-neu-inset-sm"}`}
           />
         ))}
       </div>
-      <p className={`text-xs font-mono font-bold ${textColors[score]}`}>
+      <p className={`text-xs font-semibold ${textColors[score]}`}>
         {labels[score]}
       </p>
     </div>
@@ -59,7 +57,7 @@ function SubmitButton() {
     <button
       type="submit"
       disabled={pending}
-      className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded border-2 border-foreground bg-primary text-sm font-black uppercase text-primary-foreground shadow-brutal transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none disabled:shadow-none focus:outline-none"
+      className="mt-6 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-neu bg-primary text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed active:brightness-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm focus:outline-none"
     >
       {pending ? (
         <>
@@ -76,6 +74,9 @@ function SubmitButton() {
 function SignupFormContent() {
   const searchParams = useSearchParams();
   const errorParam = searchParams.get("error");
+  // Where to land after signing up (e.g. back to /invite). Defaults to the
+  // dashboard; the server re-validates it with safeNextPath.
+  const nextParam = searchParams.get("next") ?? "/dashboard";
 
   // Fields are uncontrolled and validated from their submitted values:
   // autofill and typing before hydration set values without input events.
@@ -112,12 +113,11 @@ function SignupFormContent() {
     }
   };
 
-  const errorMessage =
-    errorParam === "rate_limited"
-      ? "Email confirmation is temporarily rate limited. Wait a minute, then try again or log in if your account already exists."
-      : errorParam
-        ? "We could not create that account. Check the details and try again."
-        : null;
+  const errorMessage = errorParam
+    ? Object.hasOwn(SIGNUP_ERROR_MESSAGES, errorParam)
+      ? SIGNUP_ERROR_MESSAGES[errorParam as SignupErrorReason]
+      : SIGNUP_ERROR_MESSAGES.system_error
+    : null;
 
   return (
     <form
@@ -128,7 +128,7 @@ function SignupFormContent() {
     >
       {/* Logo */}
       <Link href="/" className="group mb-8 inline-flex items-center gap-2.5">
-        <div className="flex size-9 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal-sm">
+        <div className="flex size-9 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
           <Image
             src="/icon.svg"
             alt="Motionly"
@@ -138,15 +138,11 @@ function SignupFormContent() {
             priority
           />
         </div>
-        <span className="text-base font-black uppercase text-foreground">
-          Motionly
-        </span>
+        <span className="text-base font-bold text-foreground">Motionly</span>
       </Link>
 
-      <p className="text-xs font-black uppercase tracking-wider text-muted-foreground font-mono">
-        Create account
-      </p>
-      <h1 className="mt-2 text-3xl font-black uppercase tracking-tight text-foreground">
+      <p className="text-xs font-semibold text-primary">Create account</p>
+      <h1 className="mt-2 text-3xl font-bold tracking-tight text-foreground">
         Start your workspace
       </h1>
 
@@ -156,11 +152,13 @@ function SignupFormContent() {
         </Alert>
       )}
 
+      <input type="hidden" name="next" value={nextParam} />
+
       {/* Name */}
       <div className="mt-6 space-y-1.5">
         <label
           htmlFor="name"
-          className="block text-xs font-black uppercase tracking-wider text-foreground"
+          className="block text-xs font-semibold text-foreground"
         >
           Full name
         </label>
@@ -188,7 +186,7 @@ function SignupFormContent() {
       <div className="mt-4 space-y-1.5">
         <label
           htmlFor="email"
-          className="block text-xs font-black uppercase tracking-wider text-foreground"
+          className="block text-xs font-semibold text-foreground"
         >
           Email
         </label>
@@ -216,7 +214,7 @@ function SignupFormContent() {
       <div className="mt-4 space-y-1.5">
         <label
           htmlFor="password"
-          className="block text-xs font-black uppercase tracking-wider text-foreground"
+          className="block text-xs font-semibold text-foreground"
         >
           Password
         </label>
@@ -244,7 +242,7 @@ function SignupFormContent() {
         ) : (
           <p
             id="password-hint"
-            className="text-xs font-mono text-muted-foreground"
+            className="text-xs font-medium text-muted-foreground"
           >
             At least 8 characters.
           </p>
@@ -254,11 +252,11 @@ function SignupFormContent() {
 
       <SubmitButton />
 
-      <p className="mt-5 text-center text-sm text-muted-foreground font-mono">
+      <p className="mt-5 text-center text-sm text-muted-foreground">
         Already have an account?{" "}
         <Link
-          href="/login"
-          className="inline-flex min-h-10 items-center font-bold text-foreground hover:underline"
+          href={`/login?next=${encodeURIComponent(nextParam)}`}
+          className="inline-flex min-h-10 items-center font-semibold text-primary hover:underline"
         >
           Log in
         </Link>
@@ -269,12 +267,15 @@ function SignupFormContent() {
 
 export default function SignupPage() {
   return (
-    <main className="min-h-screen grid lg:grid-cols-2">
+    <main className="grid min-h-screen bg-background lg:grid-cols-2">
       <PageTitle title="Sign up" />
-      {/* Left decorative panel */}
-      <div className="relative hidden flex-col items-center justify-center overflow-hidden border-r-4 border-foreground bg-surface lg:flex">
-        <div className="relative text-center px-12">
-          <div className="mb-6 inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal">
+      {/* Left showcase panel (decorative) */}
+      <div
+        aria-hidden="true"
+        className="relative m-4 hidden flex-col items-center justify-center overflow-hidden rounded-neu-2xl bg-surface p-12 shadow-neu-raised-lg lg:flex"
+      >
+        <div className="relative text-center">
+          <div className="mb-6 inline-flex size-16 items-center justify-center rounded-neu-md bg-primary text-primary-foreground shadow-neu-glow">
             <Image
               src="/icon.svg"
               alt=""
@@ -283,14 +284,14 @@ export default function SignupPage() {
               className="size-12"
             />
           </div>
-          <h2 className="text-3xl font-black uppercase tracking-tight text-foreground">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground">
             Your reel pipeline awaits.
           </h2>
-          <p className="mt-3 text-muted-foreground max-w-xs font-mono text-xs">
+          <p className="mx-auto mt-3 max-w-xs text-sm font-medium text-muted-foreground">
             Create your workspace and start transforming footage with AI in
             minutes.
           </p>
-          <div className="mt-10 space-y-3 max-w-[280px] mx-auto text-left">
+          <div className="mx-auto mt-10 max-w-[280px] space-y-3 text-left">
             {[
               "AI-populated timelines",
               "Word-perfect auto-captions",
@@ -299,12 +300,11 @@ export default function SignupPage() {
             ].map((feature) => (
               <div
                 key={feature}
-                className="flex items-center gap-2.5 text-sm font-bold text-foreground font-mono"
+                className="flex items-center gap-2.5 rounded-neu-md bg-surface px-3 py-2 text-sm font-semibold text-foreground shadow-neu-raised-sm"
               >
-                <PixelIcon
-                  name="success"
-                  className="size-4 shrink-0 text-primary"
-                />
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-neu-sm bg-surface text-primary shadow-neu-inset-sm">
+                  <PixelIcon name="success" className="size-3.5" />
+                </span>
                 {feature}
               </div>
             ))}
@@ -313,10 +313,10 @@ export default function SignupPage() {
       </div>
 
       {/* Right: form */}
-      <div className="flex items-center justify-center px-6 py-16 sm:px-8 bg-background">
+      <div className="flex items-center justify-center bg-background px-6 py-16 sm:px-8">
         <Suspense
           fallback={
-            <div className="flex size-16 items-center justify-center rounded border-2 border-foreground bg-surface shadow-[3px_3px_0px_#000]">
+            <div className="flex size-16 items-center justify-center rounded-neu-md bg-surface shadow-neu-raised">
               <Loader2 className="size-6 animate-spin text-primary" />
             </div>
           }

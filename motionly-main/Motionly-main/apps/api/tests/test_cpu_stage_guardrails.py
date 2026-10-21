@@ -427,3 +427,13 @@ def test_verify_stages_remove_containers_with_their_anonymous_volumes() -> None:
     assert removals
     for command in removals:
         assert re.search(r"(^|\s)(-v|--volumes|-fv|-vf)(\s|$)", command), command
+
+
+def test_verify_steps_run_the_pinned_pnpm_even_when_another_is_installed() -> None:
+    """turbo runs `pnpm run <script>` per package; a different global pnpm
+    refuses this project (ERR_PNPM_BAD_PM_VERSION), so every step gets a shim
+    for the pinned version first on PATH."""
+    script = (ROOT / "scripts" / "verify" / "verify.mjs").read_text("utf-8")
+    assert 'const shimDir = join(verifyDir, ".bin");' in script
+    assert "exec corepack pnpm@${pinnedPnpm}" in script
+    assert "PATH: `${pinnedPnpm ? `${shimDir}:` : \"\"}" in script

@@ -182,16 +182,16 @@ export function BrollTab({
   }
 
   return (
-    <div className="space-y-3 sm:space-y-4">
+    <div className="space-y-4">
       <h2 className="sr-only">B-Roll</h2>
-      <div className="card rounded-lg border-2 border-foreground p-4 sm:p-5 space-y-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] bg-surface">
+      <div className="rounded-neu-lg bg-surface p-5 space-y-4 shadow-neu-raised sm:p-6">
         <PanelSection title="Basic" defaultOpen>
           <Slider
             label="B-Roll Density"
             value={densityMap[density]}
             onChange={(val) => setDensity(reverseDensityMap(val))}
           />
-          <p className="text-[10px] font-bold text-muted-foreground mt-1 font-mono">
+          <p className="text-xs font-medium text-muted-foreground mt-1">
             Density is saved when you generate B-roll slots.
           </p>
         </PanelSection>
@@ -199,17 +199,17 @@ export function BrollTab({
         <PanelSection title="Selected Assets" defaultOpen>
           <div className="mb-3 flex items-center justify-between">
             <Label className="mb-0">Selected Assets</Label>
-            <span className="text-[10px] font-black uppercase text-foreground bg-surface border-2 border-foreground px-2.5 py-0.5 rounded shadow-[1px_1px_0px_#000] font-mono select-none">
+            <span className="inline-flex items-center rounded-full bg-surface px-3 py-0.5 text-xs font-semibold text-foreground shadow-neu-raised-sm select-none">
               {initialSlots.length} Slots
             </span>
           </div>
           <div className="space-y-3">
             {initialSlots.length === 0 ? (
-              <div className="rounded border-2 border-dashed border-foreground bg-muted/20 p-4 text-sm text-foreground font-mono">
-                <p className="font-bold text-foreground">
+              <div className="rounded-neu-lg bg-surface p-4 text-sm text-foreground shadow-neu-inset">
+                <p className="font-semibold text-foreground">
                   No B-roll slots yet.
                 </p>
-                <ol className="mt-2.5 list-decimal space-y-1.5 pl-4 text-xs">
+                <ol className="mt-2.5 list-decimal space-y-1.5 pl-4 text-xs font-medium text-muted-foreground">
                   <li>Generate an AI edit.</li>
                   <li>Create B-roll slots from the timeline.</li>
                   <li>Select or swap assets for each slot.</li>
@@ -255,15 +255,15 @@ export function BrollTab({
         disabled={loading || !activePlanId}
         aria-busy={loading}
         aria-describedby={message ? "broll-message" : undefined}
-        className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
+        className="w-full inline-flex items-center justify-center gap-2 h-11 rounded-neu bg-primary text-primary-foreground text-sm font-semibold shadow-neu-glow transition-shadow duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {loading ? (
           <Loader2
             className="size-4 animate-spin text-primary-foreground"
-            strokeWidth={2}
+            strokeWidth={1.75}
           />
         ) : (
-          <Sparkles className="size-4" strokeWidth={2} />
+          <Sparkles className="size-4" strokeWidth={1.75} />
         )}
         <span>
           {loading
@@ -283,7 +283,7 @@ export function BrollTab({
               : "status"
           }
           aria-live="polite"
-          className="rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+          className="rounded-neu-md bg-surface p-3.5 text-xs font-semibold text-foreground shadow-neu-inset-sm"
         >
           {message}
         </p>
@@ -311,7 +311,7 @@ function SlotRow({
   return (
     <div
       className={cn(
-        "border-2 border-foreground bg-surface p-3 rounded transition-all duration-[100ms] relative overflow-hidden shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]",
+        "rounded-neu-md bg-surface p-3 shadow-neu-raised-sm relative overflow-hidden",
         disabled && "opacity-60",
       )}
     >
@@ -322,10 +322,10 @@ function SlotRow({
         />
         <div className="min-w-0 flex-1 flex flex-col justify-between">
           <div>
-            <p className="truncate text-xs font-black text-foreground uppercase font-mono">
+            <p className="truncate text-xs font-semibold text-foreground">
               {slot.keywords?.[0] ?? slot.intent ?? "B-roll"}
             </p>
-            <p className="mt-1 line-clamp-1 text-[10px] text-muted-foreground leading-relaxed font-mono">
+            <p className="mt-1 line-clamp-1 text-[10px] font-medium text-muted-foreground leading-relaxed">
               {slot.intent}
             </p>
           </div>
@@ -339,7 +339,7 @@ function SlotRow({
                   ? "No alternatives available"
                   : "Choose B-roll alternative"
               }
-              className="min-h-8 border-2 border-foreground rounded px-3 py-1 text-xs font-bold bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-8 items-center rounded-full px-3 py-1 text-xs font-semibold bg-surface text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50"
             >
               {canChange ? "Change" : "No alternatives available"}
             </button>
@@ -351,7 +351,7 @@ function SlotRow({
                   (!slot.selected_asset_id && slot.candidates.length === 0)
                 }
                 aria-label={`Restore B-roll asset for ${slot.intent}`}
-                className="min-h-8 border-2 border-foreground rounded px-3 py-1 text-xs font-bold bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-8 items-center rounded-full px-3 py-1 text-xs font-semibold bg-surface text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Restore
               </button>
@@ -360,7 +360,7 @@ function SlotRow({
                 onClick={onDisable}
                 disabled={saving}
                 aria-label={`Disable B-roll asset for ${slot.intent}`}
-                className="min-h-8 border-2 border-danger rounded px-3 py-1 text-xs font-bold bg-surface text-danger hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-8 items-center rounded-full px-3 py-1 text-xs font-semibold bg-surface text-danger shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Disable
               </button>
@@ -370,7 +370,7 @@ function SlotRow({
         {saving ? (
           <Loader2
             className="size-4 animate-spin text-primary shrink-0 self-center"
-            strokeWidth={2}
+            strokeWidth={1.75}
           />
         ) : null}
       </div>
@@ -398,18 +398,18 @@ function AssetPicker({
   onSelect: (asset: StockVideoAssetSummary) => void;
 }) {
   return (
-    <div className="card rounded-lg border-4 border-foreground p-4 sm:p-5 shadow-[6px_6px_0px_#000] bg-surface relative z-10 space-y-4">
-      <div className="flex items-center justify-between gap-3 border-b-2 border-foreground pb-2.5">
-        <Label className="mb-0 text-xs font-black uppercase text-foreground">
+    <div className="rounded-neu-xl bg-surface p-5 shadow-neu-raised-lg relative z-10 space-y-4 sm:p-6">
+      <div className="flex items-center justify-between gap-3 border-b border-hairline pb-2.5">
+        <Label className="mb-0 text-sm font-semibold text-foreground">
           Choose Alternative
         </Label>
         <button
           onClick={onClose}
           aria-label="Close asset picker"
-          className="flex size-8 items-center justify-center rounded border-2 border-foreground text-foreground bg-surface hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] transition-all"
+          className="flex size-8 items-center justify-center rounded-neu text-foreground bg-surface shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
           title="Close asset picker"
         >
-          <X className="size-4" strokeWidth={2} />
+          <X className="size-4" strokeWidth={1.75} />
         </button>
       </div>
       <div className="flex gap-2">
@@ -418,13 +418,13 @@ function AssetPicker({
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value)}
           placeholder={slot.keywords.join(" ") || slot.intent}
-          className="h-10 w-full px-3 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+          className="h-10 w-full rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
         />
         <button
           onClick={onSearch}
           disabled={searching}
           aria-busy={searching}
-          className="inline-flex items-center justify-center h-10 text-xs px-4 font-black border-2 border-foreground bg-primary text-primary-foreground rounded hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all"
+          className="inline-flex items-center justify-center h-10 text-xs px-4 font-semibold rounded-neu bg-primary text-primary-foreground shadow-neu-glow transition-shadow duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
         >
           {searching ? "Searching" : "Search"}
         </button>
@@ -440,21 +440,21 @@ function AssetPicker({
               aria-pressed={selected}
               aria-label={`${selected ? "Selected" : "Select"} B-roll asset ${asset.title}`}
               className={cn(
-                "group overflow-hidden border-2 border-foreground bg-muted text-left transition-all duration-[100ms] hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] rounded disabled:cursor-not-allowed",
+                "group overflow-hidden rounded-neu-md bg-surface text-left transition-shadow duration-200 disabled:cursor-not-allowed",
                 selected
-                  ? "border-primary/50 ring-2 ring-primary"
-                  : "border-border",
+                  ? "shadow-neu-glow ring-2 ring-primary"
+                  : "shadow-neu-raised-sm hover:shadow-neu-raised active:shadow-neu-pressed",
               )}
             >
               <div className="relative aspect-video">
                 <AssetPreview asset={asset} />
                 {selected ? (
-                  <span className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
-                    <Check className="size-3" strokeWidth={2} />
+                  <span className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-neu-raised-sm">
+                    <Check className="size-3" strokeWidth={1.75} />
                   </span>
                 ) : null}
               </div>
-              <p className="truncate px-2 py-1.5 text-[10px] font-black text-foreground bg-surface/80 font-mono">
+              <p className="truncate px-2 py-1.5 text-[10px] font-semibold text-foreground bg-surface">
                 {asset.title}
               </p>
             </button>
@@ -473,7 +473,7 @@ function AssetThumb({
   disabled?: boolean;
 }) {
   return (
-    <div className="flex aspect-video w-24 shrink-0 items-center justify-center overflow-hidden border-2 border-foreground bg-muted rounded shadow-[1px_1px_0px_#000]">
+    <div className="flex aspect-video w-24 shrink-0 items-center justify-center overflow-hidden rounded-neu bg-ink shadow-neu-inset-sm">
       {asset?.thumbnail_url ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -482,7 +482,7 @@ function AssetThumb({
           className={cn("h-full w-full object-cover", disabled && "grayscale")}
         />
       ) : (
-        <Film className="size-4 text-muted-foreground" strokeWidth={1.5} />
+        <Film className="size-4 text-white/70" strokeWidth={1.5} />
       )}
     </div>
   );
@@ -494,7 +494,7 @@ function AssetPreview({ asset }: { asset: StockVideoAssetSummary }) {
     !asset.preview_video_url.startsWith("fixture://") &&
     !asset.preview_video_url.startsWith("supabase://");
   return (
-    <div className="flex h-full w-full items-center justify-center overflow-hidden bg-muted">
+    <div className="flex h-full w-full items-center justify-center overflow-hidden bg-ink">
       {playable ? (
         <video
           src={asset.preview_video_url ?? undefined}

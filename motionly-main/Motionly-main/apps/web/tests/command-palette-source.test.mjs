@@ -1,0 +1,59 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const source = await readFile(
+  new URL("../components/command-palette.tsx", import.meta.url),
+  "utf8",
+);
+
+test("does not use Command.Dialog (Radix Dialog logs console errors)", () => {
+  assert.doesNotMatch(source, /Command\.Dialog/);
+});
+
+test("builds its own accessible dialog", () => {
+  assert.match(source, /role="dialog"/);
+  assert.match(source, /aria-modal="true"/);
+  assert.match(source, /aria-label="Command palette"/);
+});
+
+test("uses the shared focus trap", () => {
+  assert.match(source, /useFocusTrap\(/);
+});
+
+test("installs a single capturing, propagation-stopping global shortcut", () => {
+  assert.match(source, /capture:\s*true/);
+  assert.match(source, /stopPropagation/);
+  assert.match(source, /isPaletteShortcut/);
+});
+
+test("imports the pure shortcut predicate from the registry module", () => {
+  assert.match(source, /from "@\/lib\/command-registry\.mjs"/);
+  assert.match(source, /isPaletteShortcut/);
+});
+
+test("trigger advertises its keyboard shortcut", () => {
+  assert.match(source, /aria-keyshortcuts="Control\+K Meta\+K"/);
+  assert.match(source, /aria-label="Search commands"/);
+});
+
+test("close control and empty state use the agreed copy", () => {
+  assert.match(source, /aria-label="Close command palette"/);
+  assert.match(source, /No matching commands/);
+});
+
+test("is light-only (no dark: classes)", () => {
+  assert.doesNotMatch(source, /\bdark:/);
+});
+
+test("keeps the required public exports", () => {
+  for (const name of [
+    "CommandPaletteProvider",
+    "RegisterCommands",
+    "useRegisterCommands",
+    "useCommandPalette",
+    "CommandPaletteTrigger",
+  ]) {
+    assert.match(source, new RegExp(`export function ${name}\\b`));
+  }
+});

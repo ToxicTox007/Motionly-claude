@@ -92,7 +92,6 @@ class Settings(BaseSettings):
         default=90, alias="WORKER_HEARTBEAT_MAX_AGE_SECONDS"
     )
     metrics_bearer_token: str | None = Field(default=None, alias="METRICS_BEARER_TOKEN")
-    render_execute_ffmpeg: bool = Field(default=True, alias="RENDER_EXECUTE_FFMPEG")
     ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
     # gpu: GPU-dependent capabilities run on the GPU-stage workers.
     # test_fixture: CPU-stage only; CPU workers serve them with labelled
@@ -229,6 +228,32 @@ class Settings(BaseSettings):
         alias="GPU_LONG_JOB_TIMEOUT_SECONDS",
     )
     rate_limit_per_minute: int = Field(default=120, alias="RATE_LIMIT_PER_MINUTE")
+    # POST /public/exports/resolve: attempts per viewer address, and by everyone
+    # together, per hour. Every attempt counts, refused ones included, so the
+    # limit also bounds share-token probing.
+    export_share_resolve_rate_limit_per_hour: int = Field(
+        default=120, ge=1, alias="EXPORT_SHARE_RESOLVE_RATE_LIMIT_PER_HOUR"
+    )
+    export_share_resolve_global_rate_limit_per_hour: int = Field(
+        default=6000, ge=1, alias="EXPORT_SHARE_RESOLVE_GLOBAL_RATE_LIMIT_PER_HOUR"
+    )
+    # POST /auth/signup: attempts per viewer address, and by everyone together,
+    # per hour. Every attempt counts, refused ones included.
+    signup_rate_limit_per_hour: int = Field(default=5, ge=1, alias="SIGNUP_RATE_LIMIT_PER_HOUR")
+    signup_global_rate_limit_per_hour: int = Field(
+        default=100, ge=1, alias="SIGNUP_GLOBAL_RATE_LIMIT_PER_HOUR"
+    )
+    # POST /auth/password-reset-requests: attempts per viewer, and by everyone
+    # together, per hour. Every attempt counts, including those for emails with
+    # no account, so the limit also bounds enumeration.
+    password_reset_request_rate_limit_per_hour: int = Field(
+        default=5, ge=1, alias="PASSWORD_RESET_REQUEST_RATE_LIMIT_PER_HOUR"
+    )
+    password_reset_request_global_rate_limit_per_hour: int = Field(
+        default=100, ge=1, alias="PASSWORD_RESET_REQUEST_GLOBAL_RATE_LIMIT_PER_HOUR"
+    )
+    # The browser-facing origin reset links point at (``<origin>/auth/confirm``).
+    public_origin: AnyHttpUrl | None = Field(default=None, alias="PUBLIC_ORIGIN")
     admin_api_token: str | None = Field(default=None, alias="ADMIN_API_TOKEN")
     worker_api_token: str | None = Field(default=None, alias="WORKER_API_TOKEN")
     worker_api_base_url: str | None = Field(default=None, alias="WORKER_API_BASE_URL")
@@ -347,18 +372,26 @@ class Settings(BaseSettings):
     stock_video_provider: str = Field(default="pexels_pixabay", alias="STOCK_VIDEO_PROVIDER")
     pexels_api_key: str | None = Field(default=None, alias="PEXELS_API_KEY")
     pixabay_api_key: str | None = Field(default=None, alias="PIXABAY_API_KEY")
-    stripe_secret_key: str | None = Field(default=None, alias="STRIPE_SECRET_KEY")
-    stripe_webhook_secret: str | None = Field(default=None, alias="STRIPE_WEBHOOK_SECRET")
-    stripe_price_creator: str | None = Field(default=None, alias="STRIPE_PRICE_CREATOR")
-    stripe_price_pro: str | None = Field(default=None, alias="STRIPE_PRICE_PRO")
-    stripe_price_agency: str | None = Field(default=None, alias="STRIPE_PRICE_AGENCY")
+    # Payment gateway (demo mock gateway). Billing talks server-to-server to the
+    # gateway with a merchant API key, and verifies webhooks with the shared
+    # signing secret. INR prices come from app/config/plans.json, not settings.
+    mock_gateway_base_url: str | None = Field(default=None, alias="MOCK_GATEWAY_BASE_URL")
+    mock_gateway_public_base_url: str | None = Field(
+        default=None, alias="MOCK_GATEWAY_PUBLIC_BASE_URL"
+    )
+    merchant_api_key: str | None = Field(default=None, alias="MERCHANT_API_KEY")
+    mock_gateway_webhook_secret: str | None = Field(
+        default=None, alias="MOCK_GATEWAY_WEBHOOK_SECRET"
+    )
     billing_enabled: bool = Field(default=False, alias="BILLING_ENABLED")
+    # Deployment-level billing posture. "disabled" charges nothing and hides the
+    # billing UI; "demo" exposes the billing surface backed by a no-charge code
+    # path. Production must state it explicitly (see app.core.production). This is
+    # distinct from the per-workspace BillingMode (managed/personal) in
+    # app.schemas.billing.
+    billing_mode: str = Field(default="", alias="BILLING_MODE")
     billing_success_url: AnyHttpUrl | None = Field(default=None, alias="BILLING_SUCCESS_URL")
     billing_cancel_url: AnyHttpUrl | None = Field(default=None, alias="BILLING_CANCEL_URL")
-    billing_portal_return_url: AnyHttpUrl | None = Field(
-        default=None,
-        alias="BILLING_PORTAL_RETURN_URL",
-    )
     otel_exporter_otlp_endpoint: str | None = Field(
         default=None, alias="OTEL_EXPORTER_OTLP_ENDPOINT"
     )
@@ -573,6 +606,8 @@ def get_settings() -> Settings:
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
         "RUNWAY_API_KEY",
+        "MERCHANT_API_KEY",
+        "MOCK_GATEWAY_WEBHOOK_SECRET",
     ):
         secret_file = os.getenv(f"{name}_FILE")
         if secret_file and not os.getenv(name):

@@ -26,27 +26,49 @@ export async function startCheckout(formData: FormData) {
     );
   }
 
+  // Off to the gateway's checkout page; on return the billing page polls
+  // /billing/status until the signed webhook lands.
   redirect(body.checkout_url);
 }
 
-export async function openCustomerPortal() {
+export async function cancelSubscription() {
   const context = await getWorkspaceApiContext();
 
   if (!context) {
     redirect(`/login?next=${encodeURIComponent("/billing")}`);
   }
 
-  const response = await fetch(`${env.apiBaseUrl}/billing/customer-portal`, {
+  const response = await fetch(`${env.apiBaseUrl}/billing/cancel`, {
+    method: "POST",
+    headers: context.headers,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    redirect(
+      `/billing?error=${encodeURIComponent(body?.error?.code ?? "cancel_failed")}`,
+    );
+  }
+  redirect("/billing?notice=cancel_scheduled");
+}
+
+export async function retryRenewal() {
+  const context = await getWorkspaceApiContext();
+
+  if (!context) {
+    redirect(`/login?next=${encodeURIComponent("/billing")}`);
+  }
+
+  const response = await fetch(`${env.apiBaseUrl}/billing/retry`, {
     method: "POST",
     headers: context.headers,
     cache: "no-store",
   });
   const body = await response.json();
-  if (!response.ok || !body.portal_url) {
+  if (!response.ok || !body.checkout_url) {
     redirect(
-      `/billing?error=${encodeURIComponent(body?.error?.code ?? "portal_failed")}`,
+      `/billing?error=${encodeURIComponent(body?.error?.code ?? "retry_failed")}`,
     );
   }
-
-  redirect(body.portal_url);
+  redirect(body.checkout_url);
 }

@@ -25,6 +25,14 @@ logger = logging.getLogger(__name__)
 MATTE_MODEL_VERSION = "mediapipe-selfie-segmentation:v1:model_selection=1"
 MATTE_PENDING_SOURCE_HASH = "pending-source-hash"
 
+# fixture-matte:v1 — the CPU-stage test matte. It is a visible, deterministic
+# stand-in for the GPU segmentation matte: a centered white ellipse on black.
+# It is labelled with the registry label ("Test matte") in its provenance and
+# never carries the real MediaPipe model name. Production requires the real
+# matte model (the gateway route) and never reaches this path.
+FIXTURE_MATTE_MODEL = "fixture-matte:v1"
+FIXTURE_MATTE_LABEL = "Test matte"
+
 
 def matte_segmentation_settings(
     background_removal: BackgroundRemovalSettings | dict[str, object] | None = None,
@@ -251,7 +259,8 @@ def run_matte_for_upload(
         )
         with tempfile.TemporaryDirectory(prefix="motionly-matte-worker-") as temp_dir:
             local_matte = Path(temp_dir) / "matte.mp4"
-            matte_provenance = record.model_version
+            matte_model = record.model_version
+            matte_provenance: str | None = None
             if model_gateway is not None and matte_gateway_route is not None:
                 segmented = model_gateway.invoke(
                     MatteSegmentationRequest(
@@ -274,7 +283,7 @@ def run_matte_for_upload(
                     "height": segmented.output.height,
                     "frame_count": segmented.output.frame_count,
                 }
-                matte_provenance = (
+                matte_model = (
                     f"{segmented.metadata.route_id}@{segmented.metadata.model_revision}"
                 )
             elif production:
@@ -301,7 +310,13 @@ def run_matte_for_upload(
                         "-f",
                         "lavfi",
                         "-i",
-                        f"color=c=black:s={width}x={height}:r={fps}:d={duration_sec}",
+                        f"color=c=black:s={width}x{height}:r={fps}:d={duration_sec}",
+                        "-vf",
+                        (
+                            "geq=lum='if(lte("
+                            "pow((X-W/2)/(W*0.3)\\,2)+pow((Y-H/2)/(H*0.38)\\,2)\\,1)"
+                            ",255,0)':cb=128:cr=128"
+                        ),
                         "-c:v",
                         "libx264",
                         "-pix_fmt",
@@ -310,6 +325,8 @@ def run_matte_for_upload(
                     ],
                     check=True,
                 )
+                matte_model = FIXTURE_MATTE_MODEL
+                matte_provenance = FIXTURE_MATTE_LABEL
                 stats = {
                     "fps": fps,
                     "width": width,
@@ -333,7 +350,8 @@ def run_matte_for_upload(
         matte = SegmentationMatte(
             bucket=upload.storage_bucket,
             path=matte_path,
-            model=matte_provenance,
+            model=matte_model,
+            provenance=matte_provenance,
             fps=float(stats["fps"]),
             width=int(stats["width"]),
             height=int(stats["height"]),

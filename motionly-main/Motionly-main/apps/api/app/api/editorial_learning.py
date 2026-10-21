@@ -15,6 +15,7 @@ from app.schemas.editorial_learning import (
     EditorialLearningRevocationRequest,
     EditorialLearningRollbackRequest,
     EditorialLearningStatusResponse,
+    EditorialMemoryIndicatorResponse,
 )
 
 router = APIRouter(tags=["editorial learning"])
@@ -61,6 +62,49 @@ async def get_policy(request: Request, actor: ActorDep) -> EditorialLearningPoli
         _repository(request)
         .get_policy_or_default(workspace_id=actor.workspace_id, user_id=actor.user_id)
         .response()
+    )
+
+
+@router.get(
+    "/editorial-learning/projects/{project_id}/memory",
+    response_model=EditorialMemoryIndicatorResponse,
+)
+async def get_memory_indicator(
+    project_id: UUID,
+    request: Request,
+    actor: ActorDep,
+) -> EditorialMemoryIndicatorResponse:
+    """Surface the per-user, per-project "personalized from N edits" indicator.
+
+    Only a promoted, consented, non-revoked deployment is reported as active.
+    Withdrawing consent removes the effect, so this returns ``personalized`` =
+    False even if a dataset was once promoted.
+    """
+
+    settings = request.app.state.settings
+    enabled = bool(getattr(settings, "editorial_learning_enabled", False))
+    repository = getattr(request.app.state, "editorial_learning_repository", None)
+    if not enabled or repository is None:
+        return EditorialMemoryIndicatorResponse(
+            enabled=enabled, opt_out_available=enabled
+        )
+    try:
+        preferences = repository.resolve_active_preferences(
+            workspace_id=actor.workspace_id,
+            project_id=project_id,
+            user_id=actor.user_id,
+        )
+    except Exception:
+        preferences = None
+    if preferences is None:
+        return EditorialMemoryIndicatorResponse(enabled=True, opt_out_available=True)
+    return EditorialMemoryIndicatorResponse(
+        enabled=True,
+        personalized=True,
+        example_count=preferences.example_count,
+        memory_version=preferences.memory_version,
+        policy_revision=preferences.policy_revision,
+        opt_out_available=True,
     )
 
 

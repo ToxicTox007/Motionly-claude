@@ -12,6 +12,9 @@
 
 const DEPLOYMENTS = ["production", "cpu-stage", "test", "development", "local"];
 const AUTH_BYPASS_DEPLOYMENTS = new Set(["development", "local"]);
+// Deployment billing posture. Live/Stripe billing is being removed, so the only
+// values are a fully disabled surface or an explicitly labelled no-charge demo.
+const BILLING_MODES = new Set(["disabled", "demo"]);
 const PLACEHOLDER_ANON_KEYS = new Set([
   "replace-with-supabase-anon-key",
   "build-placeholder",
@@ -42,6 +45,26 @@ export function parseBooleanFlag(name, raw) {
   if (raw === "true") return true;
   if (raw === "false") return false;
   throw new Error(`${name} must be "true" or "false".`);
+}
+
+/**
+ * The deployment billing posture. Production must state it explicitly; the
+ * only values are "disabled" (no billing surface) and "demo" (a no-charge
+ * surface). Non-production derives it from BILLING_ENABLED when unset.
+ */
+export function parseBillingMode(deployment, raw, billingEnabled) {
+  if (raw === undefined) {
+    if (deployment === "production") {
+      throw new Error(
+        'BILLING_MODE is required in production; set it to "disabled" or "demo".',
+      );
+    }
+    return billingEnabled ? "demo" : "disabled";
+  }
+  if (!BILLING_MODES.has(raw)) {
+    throw new Error('BILLING_MODE must be "disabled" or "demo".');
+  }
+  return raw;
 }
 
 function httpUrl(name, raw) {
@@ -106,6 +129,11 @@ export function parseServerConfig(environment) {
     "BILLING_ENABLED",
     value(environment, "BILLING_ENABLED"),
   );
+  const billingMode = parseBillingMode(
+    deployment,
+    value(environment, "BILLING_MODE"),
+    billingEnabled,
+  );
   const skipAuthMiddleware = parseBooleanFlag(
     "SKIP_AUTH_MIDDLEWARE",
     value(environment, "SKIP_AUTH_MIDDLEWARE"),
@@ -137,6 +165,7 @@ export function parseServerConfig(environment) {
     supabaseUrl,
     supabaseAnonKey,
     billingEnabled,
+    billingMode,
     skipAuthMiddleware,
   };
 }

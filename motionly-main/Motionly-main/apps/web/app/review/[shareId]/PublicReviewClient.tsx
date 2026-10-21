@@ -151,7 +151,7 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
 
   if (!review) {
     return (
-      <p className="border border-border bg-surface p-4 text-sm font-semibold">
+      <p className="rounded-neu-md bg-surface p-4 text-sm font-semibold text-foreground shadow-neu-raised">
         {message}
       </p>
     );
@@ -159,18 +159,20 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
 
   return (
     <main className="mx-auto w-full max-w-3xl space-y-5 p-4 sm:p-8">
-      <header className="border-2 border-foreground bg-surface p-5 shadow-brutal">
+      <header className="rounded-neu-lg bg-surface p-5 shadow-neu-raised">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-black uppercase tracking-widest text-primary">
+            <p className="text-xs font-semibold text-primary">
               Motionly client review
             </p>
-            <h1 className="mt-1 text-2xl font-black">Revision review</h1>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight text-foreground">
+              Revision review
+            </h1>
             <p className="mt-2 text-sm text-muted-foreground">
               This link expires {new Date(review.expires_at).toLocaleString()}.
             </p>
           </div>
-          <span className="border-2 border-foreground bg-muted px-3 py-1 text-xs font-black uppercase">
+          <span className="inline-flex items-center rounded-full bg-muted px-3 py-1 text-xs font-semibold text-foreground shadow-neu-inset-sm">
             {review.status}
           </span>
         </div>
@@ -179,7 +181,7 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
       {review.media_url ? (
         <video
           ref={videoRef}
-          className="w-full border-2 border-foreground bg-black"
+          className="w-full rounded-neu-lg bg-ink shadow-neu-raised"
           controls
           playsInline
           src={review.media_url}
@@ -187,19 +189,19 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
           onTimeUpdate={capturePlaybackTime}
         />
       ) : (
-        <p className="border border-border bg-muted p-3 text-sm text-muted-foreground">
+        <p className="rounded-neu-md bg-surface p-4 text-sm font-medium text-muted-foreground shadow-neu-inset">
           The source preview is no longer available, but this review’s comments
           and decision remain visible.
         </p>
       )}
 
       {review.status === "open" && review.can_decide ? (
-        <section className="flex flex-wrap gap-2 border-2 border-foreground bg-surface p-4">
+        <section className="flex flex-wrap gap-3 rounded-neu-lg bg-surface p-4 shadow-neu-raised">
           <button
             type="button"
             disabled={pending}
             onClick={() => void decide("approved")}
-            className="inline-flex min-h-10 items-center gap-2 border-2 border-foreground bg-primary px-4 py-2 text-sm font-black text-primary-foreground"
+            className="inline-flex min-h-11 items-center gap-2 rounded-neu bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-50"
           >
             <Check className="size-4" /> Approve revision
           </button>
@@ -207,26 +209,28 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
             type="button"
             disabled={pending}
             onClick={() => void decide("rejected")}
-            className="inline-flex min-h-10 items-center gap-2 border-2 border-foreground bg-danger px-4 py-2 text-sm font-black text-danger-foreground"
+            className="inline-flex min-h-11 items-center gap-2 rounded-neu bg-danger px-4 py-2 text-sm font-semibold text-danger-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-50"
           >
             <ThumbsDown className="size-4" /> Request changes
           </button>
         </section>
       ) : null}
 
-      <section className="space-y-3 border-2 border-foreground bg-surface p-4 shadow-brutal">
-        <h2 className="text-sm font-black uppercase tracking-wide">Feedback</h2>
+      <section className="space-y-3 rounded-neu-lg bg-surface p-4 shadow-neu-raised">
+        <h2 className="text-sm font-semibold text-foreground">Feedback</h2>
         {review.comments.length ? (
           review.comments.map((item) => (
             <article
               key={item.id}
-              className="border border-border bg-muted/40 p-3"
+              className="rounded-neu-md bg-surface p-3 shadow-neu-raised-sm"
             >
-              <p className="text-[10px] font-black uppercase text-primary">
+              <p className="text-xs font-semibold text-primary">
                 {timecode(item.timecode_ms)}
               </p>
-              <p className="mt-1 text-sm font-semibold">{item.body}</p>
-              <p className="mt-1 text-[10px] text-muted-foreground">
+              <p className="mt-1 text-sm font-medium text-foreground">
+                {item.body}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
                 {item.author_name || "Reviewer"} ·{" "}
                 {new Date(item.created_at).toLocaleString()}
               </p>
@@ -240,21 +244,21 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
       </section>
 
       {review.status === "open" && review.can_comment ? (
-        <section className="space-y-3 border-2 border-foreground bg-surface p-4 shadow-brutal">
-          <h2 className="text-sm font-black uppercase tracking-wide">
+        <section className="space-y-3 rounded-neu-lg bg-surface p-4 shadow-neu-raised">
+          <h2 className="text-sm font-semibold text-foreground">
             Add feedback
           </h2>
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Your name (optional)"
-            className="min-h-10 w-full border-2 border-foreground bg-surface-elevated px-3 text-sm font-semibold"
+            className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
           />
           <textarea
             value={comment}
             onChange={(event) => setComment(event.target.value)}
             placeholder="Describe a change or leave approval feedback…"
-            className="min-h-28 w-full border-2 border-foreground bg-surface-elevated p-3 text-sm font-semibold"
+            className="min-h-28 w-full rounded-neu border border-control bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
           />
           {review.media_url ? (
             <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
@@ -269,7 +273,7 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
               <button
                 type="button"
                 onClick={capturePlaybackTime}
-                className="border border-foreground px-2 py-1 font-black"
+                className="rounded-neu bg-surface px-3 py-1.5 font-semibold text-foreground shadow-neu-raised-sm transition-all duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
               >
                 Use current time
               </button>
@@ -284,14 +288,14 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
             type="button"
             disabled={pending || !comment.trim()}
             onClick={() => void submitComment()}
-            className="inline-flex min-h-10 items-center gap-2 border-2 border-foreground bg-primary px-4 py-2 text-sm font-black text-primary-foreground disabled:opacity-60"
+            className="inline-flex min-h-11 items-center gap-2 rounded-neu bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-60 disabled:shadow-neu-raised-sm"
           >
             <Send className="size-4" /> Send feedback
           </button>
         </section>
       ) : null}
       {message ? (
-        <p className="border border-border bg-muted p-3 text-sm font-semibold">
+        <p className="rounded-neu-md bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset">
           {message}
         </p>
       ) : null}

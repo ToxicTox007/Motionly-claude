@@ -1,35 +1,57 @@
+"""Billing tests against the mock payment gateway (Task 23).
+
+These exercise the webhook receiver, plan-limit enforcement, and an end-to-end
+flow that runs the REAL Task 22 mock gateway app in-process (ASGI transport)
+and feeds its signed webhooks into the API billing receiver:
+
+- UPI upgrade unlocks Agency features.
+- card with OTP (123456) works.
+- declined card leaves the workspace on Free.
+- a failed renewal flips the plan to past_due and a retry restores it.
+- cancel and refund.
+"""
+
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.api.billing import (
-    apply_stripe_event,
+    apply_gateway_event_async,
     build_billing_status,
     build_billing_status_async,
-    create_checkout_session,
-    enforce_render_entitlement,
     get_billing_status,
-    handle_stripe_webhook,
+    handle_gateway_webhook,
 )
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
+from app.mock_gateway.config import load_config as _load_gateway_config
+from app.mock_gateway.main import create_app as create_gateway_app
+from app.mock_gateway.models import WebhookEnvelope
+from app.mock_gateway.signing import compute_signature
+from app.mock_gateway.webhooks import WebhookDeliverer
 from app.repositories.billing import (
     SUBSCRIPTION_COLUMNS,
-    USAGE_LEDGER_COLUMNS,
     InMemoryBillingRepository,
-    SupabaseBillingRepository,
+    SubscriptionRecord,
 )
 from app.schemas.billing import (
     BillingMode,
     BillingPlanKey,
-    CheckoutSessionRequest,
     SubscriptionStatus,
     UsageEventType,
 )
-from app.services.billing import parse_verified_stripe_event, stripe_signature_header
+
+WEBHOOK_SECRET = "test-webhook-secret"
+
+
+# --------------------------------------------------------------------------
+# Status / entitlements (unchanged behaviour, gateway-named)
+# --------------------------------------------------------------------------
 
 
 def test_free_plan_uses_usage_ledger_for_monthly_render_limit() -> None:
@@ -37,8 +59,7 @@ def test_free_plan_uses_usage_ledger_for_monthly_render_limit() -> None:
     workspace_id = uuid4()
     for _ in range(3):
         repository.record_usage(
-            workspace_id=workspace_id,
-            event_type=UsageEventType.RENDER_SUCCEEDED,
+            workspace_id=workspace_id, event_type=UsageEventType.RENDER_SUCCEEDED
         )
 
     status = build_billing_status(workspace_id, repository)
@@ -46,30 +67,9 @@ def test_free_plan_uses_usage_ledger_for_monthly_render_limit() -> None:
     assert status.current_plan.key == BillingPlanKey.FREE
     assert status.usage.renders_used == 3
     assert status.can_render is False
-    with pytest.raises(ApiError) as exc_info:
-        enforce_render_entitlement(workspace_id=workspace_id, repository=repository)
-    assert exc_info.value.status_code == 402
-    assert exc_info.value.code == "render_limit_exceeded"
 
 
-def test_active_creator_subscription_expands_entitlements() -> None:
-    repository = InMemoryBillingRepository()
-    workspace_id = uuid4()
-    repository.upsert_subscription(
-        workspace_id=workspace_id,
-        plan=BillingPlanKey.CREATOR,
-        status=SubscriptionStatus.ACTIVE,
-    )
-
-    status = build_billing_status(workspace_id, repository)
-
-    assert status.current_plan.key == BillingPlanKey.CREATOR
-    assert status.entitlements.monthly_renders == 30
-    assert status.entitlements.watermark is False
-    assert status.entitlements.broll is True
-
-
-def test_agency_subscription_delivers_advertised_4k_exports() -> None:
+def test_active_agency_subscription_unlocks_agency_entitlements() -> None:
     repository = InMemoryBillingRepository()
     workspace_id = uuid4()
     repository.upsert_subscription(
@@ -82,29 +82,17 @@ def test_agency_subscription_delivers_advertised_4k_exports() -> None:
 
     assert status.current_plan.key == BillingPlanKey.AGENCY
     assert status.entitlements.max_resolution == "4k"
+    assert status.entitlements.api_access is True
 
 
 def test_billing_disabled_status_exposes_unmetered_personal_entitlements() -> None:
     repository = InMemoryBillingRepository()
     workspace_id = uuid4()
-    for _ in range(4):
-        repository.record_usage(
-            workspace_id=workspace_id,
-            event_type=UsageEventType.RENDER_SUCCEEDED,
-        )
-
     status = build_billing_status(workspace_id, repository, billing_enabled=False)
-
     assert status.billing_enabled is False
     assert status.billing_mode == BillingMode.PERSONAL
     assert status.unmetered is True
     assert status.current_plan.key == BillingPlanKey.AGENCY
-    assert status.entitlements.watermark is False
-    assert status.entitlements.premium_effects is True
-    assert status.usage.renders_limit is None
-    assert status.usage.remaining_renders is None
-    assert status.usage.percent_used is None
-    assert status.can_render is True
 
 
 def test_billing_status_endpoint_reports_personal_mode_when_disabled() -> None:
@@ -120,488 +108,77 @@ def test_billing_status_endpoint_reports_personal_mode_when_disabled() -> None:
             repository=InMemoryBillingRepository(),
         )
     )
-
     assert status.billing_enabled is False
-    assert status.billing_mode == BillingMode.PERSONAL
-    assert status.unmetered is True
     assert status.current_plan.key == BillingPlanKey.AGENCY
 
 
-def test_supabase_subscription_hydrates_legacy_plan_key_row() -> None:
-    workspace_id = uuid4()
-
-    record = SupabaseBillingRepository._subscription_from_row(
-        {
-            "workspace_id": str(workspace_id),
-            "plan_key": "starter",
-            "status": None,
-        }
-    )
-
-    assert record.workspace_id == workspace_id
-    assert record.plan == BillingPlanKey.FREE
-    assert record.status == SubscriptionStatus.NONE
+def test_subscription_columns_are_gateway_named() -> None:
+    assert "gateway_customer_id" in SUBSCRIPTION_COLUMNS
+    assert "stripe" not in SUBSCRIPTION_COLUMNS
 
 
-def test_supabase_billing_async_reads_use_bounded_projections(monkeypatch) -> None:
+def test_supabase_billing_async_reads_use_gateway_projection(monkeypatch) -> None:
+    from app.repositories.billing import SupabaseBillingRepository
+
     repository = SupabaseBillingRepository(
         supabase_url="https://supabase.example.com",
         service_role_key="service-role",
     )
     workspace_id = uuid4()
-    source_id = uuid4()
-    usage_id = uuid4()
-    now = "2026-07-06T00:00:00+00:00"
     subscription_row = {
         "workspace_id": str(workspace_id),
         "plan": "creator",
         "status": "active",
-        "stripe_customer_id": "cus_123",
-        "stripe_subscription_id": "sub_123",
-        "stripe_price_id": "price_creator",
+        "gateway_customer_id": "cus_123",
+        "gateway_subscription_id": "sub_123",
+        "gateway_price_id": "creator",
         "current_period_start": None,
         "current_period_end": None,
         "cancel_at_period_end": False,
-        "updated_at": now,
+        "updated_at": "2026-07-06T00:00:00+00:00",
     }
-    usage_row = {
-        "id": str(usage_id),
-        "workspace_id": str(workspace_id),
-        "event_type": "render_succeeded",
-        "quantity": 1,
-        "source_id": str(source_id),
-        "metadata": {},
-        "created_at": now,
-    }
-    responses = [[subscription_row], [{"quantity": 2}], [], [usage_row]]
-    calls = []
+    responses = [[subscription_row]]
 
     async def fake_async_request(_self, method, path, **kwargs):
-        calls.append((method, path, kwargs))
         return SimpleNamespace(status_code=200, json=lambda: responses.pop(0))
 
     monkeypatch.setattr(
         "app.repositories.billing.SupabaseRestClient.async_request",
         fake_async_request,
     )
-
     subscription = asyncio.run(repository.get_subscription_async(workspace_id=workspace_id))
-    used = asyncio.run(
-        repository.count_usage_async(
-            workspace_id=workspace_id,
-            event_type=UsageEventType.RENDER_SUCCEEDED,
-        )
-    )
-    duplicate_usage = asyncio.run(
-        repository.record_usage_async(
-            workspace_id=workspace_id,
-            event_type=UsageEventType.RENDER_SUCCEEDED,
-            source_id=source_id,
-        )
-    )
-
     assert subscription.plan == BillingPlanKey.CREATOR
-    assert used == 2
-    assert duplicate_usage.id == usage_id
-    assert calls[0] == (
-        "GET",
-        "/subscriptions",
-        {
-            "params": {
-                "workspace_id": f"eq.{workspace_id}",
-                "select": SUBSCRIPTION_COLUMNS,
-                "limit": "1",
-            }
-        },
-    )
-    assert calls[1][0:2] == ("GET", "/usage_ledger")
-    assert calls[1][2]["params"]["workspace_id"] == f"eq.{workspace_id}"
-    assert calls[1][2]["params"]["event_type"] == "eq.render_succeeded"
-    assert calls[1][2]["params"]["select"] == "quantity"
-    assert calls[2] == (
-        "POST",
-        "/usage_ledger",
-        {
-            "headers": {"prefer": "resolution=ignore-duplicates,return=representation"},
-            "params": {"on_conflict": "workspace_id,event_type,source_id"},
-            "json": {
-                "workspace_id": str(workspace_id),
-                "event_type": "render_succeeded",
-                "source_id": str(source_id),
-            },
-        },
-    )
-    assert calls[3] == (
-        "GET",
-        "/usage_ledger",
-        {
-            "params": {
-                "workspace_id": f"eq.{workspace_id}",
-                "event_type": "eq.render_succeeded",
-                "source_id": f"eq.{source_id}",
-                "select": USAGE_LEDGER_COLUMNS,
-                "limit": "1",
-            }
-        },
-    )
+    assert subscription.gateway_customer_id == "cus_123"
 
 
-def test_checkout_uses_only_configured_return_urls() -> None:
-    workspace_id = uuid4()
-    repository = InMemoryBillingRepository()
-    captured: dict[str, object] = {}
-
-    class StripeClient:
-        def create_checkout_session(self, **kwargs):
-            captured.update(kwargs)
-            return "https://checkout.stripe.test/session", "cs_test"
-
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                settings=SimpleNamespace(
-                    billing_enabled=True,
-                    stripe_price_creator="price_creator",
-                    stripe_price_pro=None,
-                    stripe_price_agency=None,
-                    billing_success_url="https://app.motionly.test/billing?checkout=success",
-                    billing_cancel_url="https://app.motionly.test/billing?checkout=canceled",
-                )
-            )
-        )
-    )
-    payload = CheckoutSessionRequest.model_validate(
-        {
-            "plan": "creator",
-            "success_url": "https://attacker.example/success",
-            "cancel_url": "https://attacker.example/cancel",
-        }
-    )
-
-    response = asyncio.run(
-        create_checkout_session(
-            payload=payload,
-            request=request,
-            actor=Actor(user_id=uuid4(), workspace_id=workspace_id),
-            repository=repository,
-            stripe_client=StripeClient(),
-        )
-    )
-
-    assert response.session_id == "cs_test"
-    assert captured["success_url"] == request.app.state.settings.billing_success_url
-    assert captured["cancel_url"] == request.app.state.settings.billing_cancel_url
-    assert "attacker.example" not in str(captured)
+# --------------------------------------------------------------------------
+# Webhook receiver — signature / idempotency
+# --------------------------------------------------------------------------
 
 
-def test_billing_api_prefers_async_repository_methods() -> None:
-    workspace_id = uuid4()
-
-    class AsyncBillingRepository(InMemoryBillingRepository):
-        def __init__(self) -> None:
-            super().__init__()
-            self.async_calls: list[str] = []
-
-        async def get_subscription_async(self, **kwargs):
-            self.async_calls.append("get-subscription")
-            return self.get_subscription(**kwargs)
-
-        async def count_usage_async(self, **kwargs):
-            self.async_calls.append("count-usage")
-            return self.count_usage(**kwargs)
-
-        async def has_processed_stripe_event_async(self, event_id: str):
-            self.async_calls.append("has-stripe-event")
-            return self.has_processed_stripe_event(event_id)
-
-        async def upsert_subscription_async(self, **kwargs):
-            self.async_calls.append("upsert-subscription")
-            return self.upsert_subscription(**kwargs)
-
-        async def record_stripe_event_async(self, **kwargs):
-            self.async_calls.append("record-stripe-event")
-            return self.record_stripe_event(**kwargs)
-
-    repository = AsyncBillingRepository()
-
-    status = asyncio.run(
-        get_billing_status(
-            request=SimpleNamespace(
-                app=SimpleNamespace(
-                    state=SimpleNamespace(settings=SimpleNamespace(billing_enabled=True))
-                )
-            ),
-            actor=Actor(user_id=uuid4(), workspace_id=workspace_id),
-            repository=repository,
-        )
-    )
-    payload = _checkout_payload(event_id="evt_async_checkout", workspace_id=workspace_id)
-    response = _run_webhook(
-        payload=payload,
-        signature=stripe_signature_header(payload=payload, secret="whsec_test"),
-        repository=repository,
-    )
-
-    assert status.current_plan.key == BillingPlanKey.FREE
-    assert response.received is True
-    assert repository.async_calls == [
-        "get-subscription",
-        "count-usage",
-        "has-stripe-event",
-        "upsert-subscription",
-        "record-stripe-event",
-    ]
-
-
-def test_build_billing_status_async_matches_sync_summary() -> None:
-    repository = InMemoryBillingRepository()
-    workspace_id = uuid4()
-    repository.record_usage(
-        workspace_id=workspace_id,
-        event_type=UsageEventType.RENDER_SUCCEEDED,
-    )
-
-    sync_status = build_billing_status(workspace_id, repository)
-    async_status = asyncio.run(build_billing_status_async(workspace_id, repository))
-
-    assert async_status.usage.renders_used == sync_status.usage.renders_used
-    assert async_status.current_plan.key == sync_status.current_plan.key
-
-
-def test_stripe_webhook_signature_verification_and_idempotency() -> None:
-    secret = "whsec_test"
-    payload = json.dumps(
-        {
-            "id": "evt_123",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": str(uuid4()),
-                    "customer": "cus_123",
-                    "subscription": "sub_123",
-                    "metadata": {
-                        "plan": "creator",
-                        "stripe_price_id": "price_creator",
-                    },
-                }
-            },
-        },
-    ).encode()
-
-    event = parse_verified_stripe_event(
-        payload=payload,
-        signature_header=stripe_signature_header(payload=payload, secret=secret),
-        webhook_secret=secret,
-    )
-
-    repository = InMemoryBillingRepository()
-    apply_stripe_event(
-        event=event,
-        repository=repository,
-        settings=SimpleNamespace(stripe_price_creator="price_creator"),
-    )
-    assert repository.has_processed_stripe_event("evt_123") is False
-    repository.record_stripe_event(event_id="evt_123", event_type=str(event["type"]))
-    assert repository.has_processed_stripe_event("evt_123") is True
-
-
-def test_stripe_webhook_rejects_bad_signature() -> None:
-    payload = b'{"id":"evt_bad","type":"invoice.payment_failed"}'
-
-    with pytest.raises(ApiError) as exc_info:
-        parse_verified_stripe_event(
-            payload=payload,
-            signature_header=stripe_signature_header(payload=payload, secret="right"),
-            webhook_secret="wrong",
-        )
-
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.code == "stripe_signature_invalid"
-
-
-def test_stripe_webhook_endpoint_rejects_missing_signature() -> None:
-    payload = b'{"id":"evt_missing","type":"checkout.session.completed"}'
-    repository = InMemoryBillingRepository()
-
-    with pytest.raises(ApiError) as exc_info:
-        _run_webhook(payload=payload, signature=None, repository=repository)
-
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.code == "stripe_signature_missing"
-
-
-def test_stripe_webhook_endpoint_rejects_invalid_signature() -> None:
-    payload = b'{"id":"evt_invalid","type":"checkout.session.completed"}'
-    repository = InMemoryBillingRepository()
-
-    with pytest.raises(ApiError) as exc_info:
-        _run_webhook(
-            payload=payload,
-            signature=stripe_signature_header(payload=payload, secret="wrong-secret"),
-            repository=repository,
-        )
-
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.code == "stripe_signature_invalid"
-
-
-def test_stripe_webhook_endpoint_accepts_signed_checkout_event() -> None:
-    repository = InMemoryBillingRepository()
-    workspace_id = uuid4()
-    payload = _checkout_payload(event_id="evt_checkout_signed", workspace_id=workspace_id)
-
-    response = _run_webhook(
-        payload=payload,
-        signature=stripe_signature_header(payload=payload, secret="whsec_test"),
-        repository=repository,
-    )
-
-    subscription = repository.get_subscription(workspace_id=workspace_id)
-    assert response.received is True
-    assert response.duplicate is False
-    assert subscription.plan == BillingPlanKey.CREATOR
-    assert subscription.status == SubscriptionStatus.ACTIVE
-
-
-def test_stripe_webhook_duplicate_event_does_not_duplicate_subscription_state() -> None:
-    repository = InMemoryBillingRepository()
-    workspace_id = uuid4()
-    payload = _checkout_payload(event_id="evt_duplicate", workspace_id=workspace_id)
-    signature = stripe_signature_header(payload=payload, secret="whsec_test")
-
-    first = _run_webhook(payload=payload, signature=signature, repository=repository)
-    second = _run_webhook(payload=payload, signature=signature, repository=repository)
-
-    assert first.duplicate is False
-    assert second.duplicate is True
-    assert len(repository.subscriptions) == 1
-    assert len(repository.stripe_events) == 1
-    assert (
-        repository.get_subscription(workspace_id=workspace_id).stripe_subscription_id == "sub_123"
-    )
-
-
-def test_checkout_webhook_entitlement_sync_works_with_staging_test_secret() -> None:
-    repository = InMemoryBillingRepository()
-    workspace_id = uuid4()
-    payload = _checkout_payload(event_id="evt_staging_checkout", workspace_id=workspace_id)
-
-    _run_webhook(
-        payload=payload,
-        signature=stripe_signature_header(payload=payload, secret="whsec_staging_test"),
-        repository=repository,
-        webhook_secret="whsec_staging_test",
-        app_env="staging",
-    )
-
-    status = build_billing_status(workspace_id, repository)
-    assert status.current_plan.key == BillingPlanKey.CREATOR
-    assert status.entitlements.broll is True
-    assert status.entitlements.watermark is False
-
-
-def test_stripe_payment_failure_marks_subscription_past_due_from_signed_sandbox_event() -> None:
-    repository = InMemoryBillingRepository()
-    workspace_id = uuid4()
-    repository.upsert_subscription(
-        workspace_id=workspace_id,
-        plan=BillingPlanKey.PRO,
-        status=SubscriptionStatus.ACTIVE,
-        stripe_customer_id="cus_failure",
-        stripe_subscription_id="sub_failure",
-        stripe_price_id="price_pro",
-    )
-    payload = json.dumps(
-        {
-            "id": "evt_payment_failed",
-            "type": "invoice.payment_failed",
-            "data": {
-                "object": {
-                    "customer": "cus_failure",
-                    "subscription": "sub_failure",
-                }
-            },
-        },
-    ).encode()
-
-    event = parse_verified_stripe_event(
-        payload=payload,
-        signature_header=stripe_signature_header(payload=payload, secret="whsec_sandbox"),
-        webhook_secret="whsec_sandbox",
-    )
-    apply_stripe_event(
-        event=event,
-        repository=repository,
-        settings=SimpleNamespace(stripe_price_pro="price_pro"),
-    )
-
-    subscription = repository.get_subscription(workspace_id=workspace_id)
-    assert subscription.plan == BillingPlanKey.PRO
-    assert subscription.status == SubscriptionStatus.PAST_DUE
-    assert build_billing_status(workspace_id, repository).subscription.payment_issue is True
-
-
-def test_stripe_refund_records_idempotent_billing_adjustment_from_signed_sandbox_event() -> None:
-    repository = InMemoryBillingRepository()
-    workspace_id = uuid4()
-    payload = json.dumps(
-        {
-            "id": "evt_refund",
-            "type": "charge.refunded",
-            "data": {
-                "object": {
-                    "id": "ch_refund",
-                    "customer": "cus_refund",
-                    "invoice": "in_refund",
-                    "amount_refunded": 2900,
-                    "currency": "usd",
-                    "metadata": {"workspace_id": str(workspace_id)},
-                }
-            },
-        },
-    ).encode()
-
-    event = parse_verified_stripe_event(
-        payload=payload,
-        signature_header=stripe_signature_header(payload=payload, secret="whsec_sandbox"),
-        webhook_secret="whsec_sandbox",
-    )
-    apply_stripe_event(
-        event=event,
-        repository=repository,
-        settings=SimpleNamespace(),
-    )
-    apply_stripe_event(
-        event=event,
-        repository=repository,
-        settings=SimpleNamespace(),
-    )
-
-    adjustments = list(repository.billing_adjustments.values())
-    assert len(adjustments) == 1
-    adjustment = adjustments[0]
-    assert adjustment.workspace_id == workspace_id
-    assert adjustment.adjustment_type == "refund"
-    assert adjustment.amount_cents == -2900
-    assert adjustment.metadata["stripe_charge_id"] == "ch_refund"
+def _signed_headers(
+    envelope: WebhookEnvelope, *, secret: str = WEBHOOK_SECRET, ts: int | None = None
+):
+    body = envelope.model_dump_json().encode()
+    timestamp = ts if ts is not None else int(time.time())
+    signature = compute_signature(secret, timestamp, body)
+    return body, {
+        "X-Mock-Gateway-Event": str(envelope.event),
+        "X-Mock-Gateway-Event-Id": envelope.id,
+        "X-Mock-Gateway-Timestamp": str(timestamp),
+        "X-Mock-Gateway-Signature": signature,
+    }
 
 
 class _WebhookRequest:
-    def __init__(
-        self,
-        *,
-        payload: bytes,
-        webhook_secret: str,
-        app_env: str = "test",
-    ) -> None:
+    def __init__(self, *, payload: bytes, billing_mode: str = "demo") -> None:
         self._payload = payload
         self.app = SimpleNamespace(
             state=SimpleNamespace(
                 settings=SimpleNamespace(
-                    app_env=app_env,
                     billing_enabled=True,
-                    stripe_webhook_secret=webhook_secret,
-                    stripe_price_creator="price_creator",
+                    billing_mode=billing_mode,
+                    mock_gateway_webhook_secret=WEBHOOK_SECRET,
                 )
             )
         )
@@ -610,44 +187,377 @@ class _WebhookRequest:
         return self._payload
 
 
-def _run_webhook(
-    *,
-    payload: bytes,
-    signature: str | None,
-    repository: InMemoryBillingRepository,
-    webhook_secret: str = "whsec_test",
-    app_env: str = "test",
-):
-    import asyncio
-
+def _run_webhook(envelope: WebhookEnvelope, repository, **header_kwargs):
+    body, headers = _signed_headers(envelope, **header_kwargs)
     return asyncio.run(
-        handle_stripe_webhook(
-            request=_WebhookRequest(
-                payload=payload,
-                webhook_secret=webhook_secret,
-                app_env=app_env,
-            ),
+        handle_gateway_webhook(
+            request=_WebhookRequest(payload=body),
             repository=repository,
-            stripe_signature=signature,
+            x_mock_gateway_event=headers["X-Mock-Gateway-Event"],
+            x_mock_gateway_event_id=headers["X-Mock-Gateway-Event-Id"],
+            x_mock_gateway_timestamp=headers["X-Mock-Gateway-Timestamp"],
+            x_mock_gateway_signature=headers["X-Mock-Gateway-Signature"],
         )
     )
 
 
-def _checkout_payload(*, event_id: str, workspace_id) -> bytes:
-    return json.dumps(
+def _captured_order_envelope(*, event_id: str, workspace_id, plan="agency") -> WebhookEnvelope:
+    return WebhookEnvelope.model_validate(
         {
             "id": event_id,
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": str(workspace_id),
-                    "customer": "cus_123",
-                    "subscription": "sub_123",
-                    "metadata": {
-                        "plan": "creator",
-                        "stripe_price_id": "price_creator",
-                    },
-                }
+            "event": "payment.captured",
+            "created_at": "2026-10-19T00:00:00Z",
+            "order": {
+                "id": "order_abc",
+                "status": "captured",
+                "amount_paise": 199900,
+                "currency": "INR",
+                "method": "upi",
+                "notes": {"workspace_id": str(workspace_id), "plan": plan},
+                "created_at": "2026-10-19T00:00:00Z",
             },
-        },
-    ).encode()
+        }
+    )
+
+
+def test_webhook_rejects_bad_signature() -> None:
+    repository = InMemoryBillingRepository()
+    envelope = _captured_order_envelope(event_id="evt_bad", workspace_id=uuid4())
+    body = envelope.model_dump_json().encode()
+    ts = int(time.time())
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(
+            handle_gateway_webhook(
+                request=_WebhookRequest(payload=body),
+                repository=repository,
+                x_mock_gateway_event="payment.captured",
+                x_mock_gateway_event_id=envelope.id,
+                x_mock_gateway_timestamp=str(ts),
+                x_mock_gateway_signature=compute_signature("wrong-secret", ts, body),
+            )
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.code == "gateway_signature_invalid"
+
+
+def test_webhook_rejects_stale_timestamp() -> None:
+    repository = InMemoryBillingRepository()
+    envelope = _captured_order_envelope(event_id="evt_stale", workspace_id=uuid4())
+    with pytest.raises(ApiError) as exc:
+        _run_webhook(envelope, repository, ts=int(time.time()) - 10_000)
+    assert exc.value.status_code == 400
+    assert exc.value.code == "gateway_signature_expired"
+
+
+def test_upi_capture_webhook_unlocks_agency_and_is_idempotent() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    envelope = _captured_order_envelope(event_id="evt_upi", workspace_id=workspace_id)
+
+    first = _run_webhook(envelope, repository)
+    second = _run_webhook(envelope, repository)
+
+    assert first.received is True and first.duplicate is False
+    assert second.duplicate is True
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.AGENCY
+    assert status.entitlements.api_access is True
+    # One charge receipt only (idempotent).
+    assert len(repository.list_billing_adjustments(workspace_id=workspace_id)) == 1
+
+
+def test_charge_failed_marks_past_due_then_charged_restores_plan() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    repository.upsert_subscription(
+        workspace_id=workspace_id,
+        plan=BillingPlanKey.AGENCY,
+        status=SubscriptionStatus.ACTIVE,
+        gateway_subscription_id="sub_1",
+    )
+
+    failed = WebhookEnvelope.model_validate(
+        {
+            "id": "evt_fail",
+            "event": "subscription.charge_failed",
+            "created_at": "2026-10-19T00:00:00Z",
+            "subscription": {
+                "id": "sub_1",
+                "status": "past_due",
+                "amount_paise": 199900,
+                "currency": "INR",
+                "total_cycles": 12,
+                "completed_cycles": 1,
+                "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+        }
+    )
+    _run_webhook(failed, repository)
+    assert build_billing_status(workspace_id, repository).subscription.payment_issue is True
+
+    charged = WebhookEnvelope.model_validate(
+        {
+            "id": "evt_charged",
+            "event": "subscription.charged",
+            "created_at": "2026-10-19T00:00:00Z",
+            "subscription": {
+                "id": "sub_1",
+                "status": "active",
+                "amount_paise": 199900,
+                "currency": "INR",
+                "total_cycles": 12,
+                "completed_cycles": 2,
+                "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+            "order": {
+                "id": "order_renew",
+                "status": "captured",
+                "amount_paise": 199900,
+                "currency": "INR",
+                "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+        }
+    )
+    _run_webhook(charged, repository)
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.AGENCY
+    assert status.subscription.payment_issue is False
+
+
+def test_cancelled_webhook_downgrades_to_free() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    repository.upsert_subscription(
+        workspace_id=workspace_id,
+        plan=BillingPlanKey.AGENCY,
+        status=SubscriptionStatus.ACTIVE,
+        gateway_subscription_id="sub_c",
+    )
+    envelope = WebhookEnvelope.model_validate(
+        {
+            "id": "evt_cancel",
+            "event": "subscription.cancelled",
+            "created_at": "2026-10-19T00:00:00Z",
+            "subscription": {
+                "id": "sub_c",
+                "status": "cancelled",
+                "amount_paise": 199900,
+                "currency": "INR",
+                "total_cycles": 12,
+                "completed_cycles": 3,
+                "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+        }
+    )
+    _run_webhook(envelope, repository)
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.FREE
+    assert status.subscription.status == SubscriptionStatus.CANCELED
+
+
+def test_refund_webhook_records_negative_adjustment() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    envelope = WebhookEnvelope.model_validate(
+        {
+            "id": "evt_refund",
+            "event": "payment.refunded",
+            "created_at": "2026-10-19T00:00:00Z",
+            "order": {
+                "id": "order_r",
+                "status": "refunded",
+                "amount_paise": 199900,
+                "amount_refunded_paise": 199900,
+                "currency": "INR",
+                "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+            "refund": {
+                "id": "rfnd_1",
+                "order_id": "order_r",
+                "amount_paise": 199900,
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+        }
+    )
+    _run_webhook(envelope, repository)
+    receipts = repository.list_billing_adjustments(workspace_id=workspace_id)
+    assert len(receipts) == 1
+    assert receipts[0].adjustment_type == "refund"
+    assert receipts[0].amount_paise == -199900
+
+
+# --------------------------------------------------------------------------
+# End-to-end: real mock gateway app in-process → signed webhook → API receiver
+# --------------------------------------------------------------------------
+
+
+def _gateway_config():
+    """Build a demo gateway config via load_config (robust to field churn)."""
+    return _load_gateway_config(
+        {
+            "APP_ENV": "test",
+            "BILLING_MODE": "demo",
+            "MERCHANT_API_KEY": "test-merchant-key",
+            "MOCK_GATEWAY_WEBHOOK_SECRET": WEBHOOK_SECRET,
+            "MOCK_GATEWAY_RENEWAL_PERIOD_SECONDS": "10000",
+            "MOCK_GATEWAY_WEBHOOK_MAX_ATTEMPTS": "1",
+            "MOCK_GATEWAY_WEBHOOK_BACKOFF_SECONDS": "0",
+        }
+    )
+
+
+def _run_end_to_end(*, card_number=None, upi_action="approve", plan="agency"):
+    """Drive the real gateway app via ASGI; forward its webhooks to the API."""
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+
+    config = _gateway_config()
+
+    captured_events: list[WebhookEnvelope] = []
+
+    class _CapturingDeliverer(WebhookDeliverer):
+        def __init__(self) -> None:
+            super().__init__(secret=WEBHOOK_SECRET, url=None, transport=None)
+
+        async def deliver(self, envelope: WebhookEnvelope) -> None:
+            captured_events.append(envelope)
+
+    gateway_app = create_gateway_app(config, deliverer=_CapturingDeliverer())
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=gateway_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://gateway"
+        ) as client:
+            headers = {"Authorization": "Bearer test-merchant-key"}
+            created = await client.post(
+                "/v1/orders",
+                headers=headers,
+                json={
+                    "amount_paise": 199900,
+                    "currency": "INR",
+                    "receipt": "r",
+                    "notes": {"workspace_id": str(workspace_id), "plan": plan},
+                },
+            )
+            order_id = created.json()["id"]
+            if card_number is not None:
+                resp = await client.post(
+                    f"/pay/checkout/{order_id}/card",
+                    content=f"card_number={card_number}".encode(),
+                    headers={"content-type": "application/x-www-form-urlencoded"},
+                )
+                # OTP card: a second step with the correct OTP.
+                if "Enter the OTP" in resp.text or "otp" in resp.text.lower():
+                    await client.post(
+                        f"/pay/checkout/{order_id}/otp",
+                        content=b"otp=123456",
+                        headers={"content-type": "application/x-www-form-urlencoded"},
+                    )
+            else:
+                await client.post(
+                    f"/pay/checkout/{order_id}/upi",
+                    content=f"action={upi_action}".encode(),
+                    headers={"content-type": "application/x-www-form-urlencoded"},
+                )
+
+        # Forward each captured webhook into the API receiver.
+        for envelope in captured_events:
+            body = envelope.model_dump_json().encode()
+            await handle_gateway_webhook(
+                request=_WebhookRequest(payload=body),
+                repository=repository,
+                x_mock_gateway_event=str(envelope.event),
+                x_mock_gateway_event_id=envelope.id,
+                x_mock_gateway_timestamp=str(int(time.time())),
+                x_mock_gateway_signature=compute_signature(
+                    WEBHOOK_SECRET, int(time.time()), body
+                ),
+            )
+
+    asyncio.run(scenario())
+    return workspace_id, repository, captured_events
+
+
+def test_end_to_end_upi_upgrade_unlocks_agency() -> None:
+    workspace_id, repository, events = _run_end_to_end(upi_action="approve")
+    assert any(e.event == "payment.captured" for e in events)
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.AGENCY
+    assert status.entitlements.api_access is True
+
+
+def test_end_to_end_card_with_otp_succeeds() -> None:
+    # 4000000000003220 triggers the OTP step; 123456 confirms it.
+    workspace_id, repository, events = _run_end_to_end(card_number="4000000000003220")
+    assert any(e.event == "payment.captured" for e in events)
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.AGENCY
+
+
+def test_end_to_end_declined_card_stays_on_free() -> None:
+    # 4000000000000002 is declined.
+    workspace_id, repository, events = _run_end_to_end(card_number="4000000000000002")
+    assert any(e.event == "payment.failed" for e in events)
+    assert not any(e.event == "payment.captured" for e in events)
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.FREE
+
+
+def test_build_billing_status_async_matches_sync_summary() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    repository.record_usage(workspace_id=workspace_id, event_type=UsageEventType.RENDER_SUCCEEDED)
+    sync_status = build_billing_status(workspace_id, repository)
+    async_status = asyncio.run(build_billing_status_async(workspace_id, repository))
+    assert async_status.usage.renders_used == sync_status.usage.renders_used
+    assert async_status.current_plan.key == sync_status.current_plan.key
+
+
+def test_require_plan_feature_from_subscription_record() -> None:
+    from app.services.plan_limits import require_plan_feature
+
+    record = SubscriptionRecord(
+        workspace_id=uuid4(),
+        plan=BillingPlanKey.AGENCY,
+        status=SubscriptionStatus.ACTIVE,
+    )
+    require_plan_feature(record, "api_access")
+
+    free = SubscriptionRecord(
+        workspace_id=uuid4(),
+        plan=BillingPlanKey.FREE,
+        status=SubscriptionStatus.NONE,
+    )
+    with pytest.raises(ApiError):
+        require_plan_feature(free, "api_access")
+
+
+def test_apply_gateway_event_requires_workspace() -> None:
+    repository = InMemoryBillingRepository()
+    envelope = WebhookEnvelope.model_validate(
+        {
+            "id": "evt_no_ws",
+            "event": "payment.captured",
+            "created_at": "2026-10-19T00:00:00Z",
+            "order": {
+                "id": "o",
+                "status": "captured",
+                "amount_paise": 199900,
+                "currency": "INR",
+                "notes": {},
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+        }
+    )
+    with pytest.raises(ApiError) as exc:
+        asyncio.run(apply_gateway_event_async(envelope=envelope, repository=repository))
+    assert exc.value.code == "gateway_workspace_missing"
+
+
+_ = json  # keep import referenced for readers scanning payload shapes

@@ -56,6 +56,49 @@ def test_storage_signer_falls_back_to_local_urls_without_supabase() -> None:
     )
 
 
+def test_local_signed_download_appends_download_filename() -> None:
+    signer = StorageSigner(base_url="http://api.local")
+
+    download = signer.create_signed_download(
+        bucket="exports",
+        path="workspaces/one/exports/video.mp4",
+        expires_in_seconds=300,
+        download="My Reel-v2.mp4",
+    )
+
+    # The download option carries the Content-Disposition attachment filename and
+    # is URL-encoded so it is safe to place in a query string.
+    assert download.url.endswith("video.mp4?download=My+Reel-v2.mp4")
+
+
+def test_supabase_signed_download_appends_download_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    signer = StorageSigner(
+        base_url="http://api.local",
+        supabase_url="http://kong.internal",
+        service_role_key="service-role",
+        public_supabase_url="https://public.example.com",
+    )
+
+    def fake_post(url, headers, json, timeout):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"signedURL": "/object/sign/exports/video.mp4?token=abc"},
+        )
+
+    monkeypatch.setattr("app.services.storage.httpx.post", fake_post)
+
+    download = signer.create_signed_download(
+        bucket="exports",
+        path="workspaces/one/exports/video.mp4",
+        expires_in_seconds=300,
+        download="Launch Reel-v1.mp4",
+    )
+
+    # Links use the public origin and append the download option after the existing query.
+    assert download.url.startswith("https://public.example.com/storage/v1/object/sign/")
+    assert download.url.endswith("&download=Launch+Reel-v1.mp4")
+
+
 def test_local_storage_route_writes_and_reads_development_object(tmp_path: Path) -> None:
     request = _local_request(tmp_path, body=b"video-bytes")
 
@@ -85,7 +128,12 @@ def _local_request(
     app_env: str = "development",
     supabase_url: str | None = None,
     supabase_service_role_key: str | None = None,
+    signing_secret: str | None = None,
 ):
+    state_kwargs = {}
+    if signing_secret is not None:
+        state_kwargs["storage_signer"] = SimpleNamespace(signing_secret=signing_secret)
+
     class Request:
         app = SimpleNamespace(
             state=SimpleNamespace(
@@ -93,9 +141,11 @@ def _local_request(
                     app_env=app_env,
                     supabase_url=supabase_url,
                     supabase_service_role_key=supabase_service_role_key,
+                    supabase_jwt_secret=signing_secret,
                     media_work_dir=str(tmp_path),
                     upload_max_file_size_bytes=536_870_912,
                 ),
+                **state_kwargs,
             ),
         )
 
@@ -103,6 +153,124 @@ def _local_request(
             yield body
 
     return Request()
+
+
+def test_signed_local_upload_and_download_links_carry_expiry_and_signature() -> None:
+    signer = StorageSigner(base_url="http://api.local", signing_secret="link-secret")
+
+    upload = signer.create_signed_upload(
+        bucket="raw-uploads",
+        path="workspaces/one/raw/video.mp4",
+        mime_type="video/mp4",
+        expires_in_seconds=900,
+    )
+    download = signer.create_signed_download(
+        bucket="exports",
+        path="workspaces/one/exports/video.mp4",
+        expires_in_seconds=300,
+    )
+
+    assert upload.url.startswith(
+        "http://api.local/_local/storage/raw-uploads/workspaces/one/raw/video.mp4?exp="
+    )
+    assert "&sig=" in upload.url
+    assert "exp=" in download.url and "&sig=" in download.url
+
+
+def test_local_storage_route_requires_a_valid_signature(tmp_path: Path) -> None:
+    from app.services.local_storage_signing import sign_local_object_query
+
+    secret = "link-secret"
+    query = sign_local_object_query(
+        secret=secret,
+        method="PUT",
+        bucket="raw-uploads",
+        path="workspaces/one/raw/video.mp4",
+        expires_in_seconds=900,
+    )
+    exp, sig = (part.split("=", 1)[1] for part in query.split("&"))
+
+    write_request = _local_request(tmp_path, body=b"video-bytes", signing_secret=secret)
+    response = asyncio.run(
+        put_local_object(
+            "raw-uploads", "workspaces/one/raw/video.mp4", write_request, exp=exp, sig=sig
+        )
+    )
+    assert response.status_code == 204
+
+    read_query = sign_local_object_query(
+        secret=secret,
+        method="GET",
+        bucket="raw-uploads",
+        path="workspaces/one/raw/video.mp4",
+        expires_in_seconds=300,
+    )
+    read_exp, read_sig = (part.split("=", 1)[1] for part in read_query.split("&"))
+    read_request = _local_request(tmp_path, signing_secret=secret)
+    file_response = asyncio.run(
+        get_local_object(
+            "raw-uploads", "workspaces/one/raw/video.mp4", read_request, exp=read_exp, sig=read_sig
+        )
+    )
+    assert Path(file_response.path).read_bytes() == b"video-bytes"
+
+
+def test_local_storage_route_rejects_unsigned_tampered_and_expired_links(tmp_path: Path) -> None:
+    from app.services.local_storage_signing import (
+        compute_local_object_signature,
+        sign_local_object_query,
+    )
+
+    secret = "link-secret"
+
+    # Unsigned.
+    unsigned = _local_request(tmp_path, signing_secret=secret)
+    with pytest.raises(ApiError) as unsigned_error:
+        asyncio.run(get_local_object("raw-uploads", "a/b.mp4", unsigned, exp=None, sig=None))
+    assert unsigned_error.value.status_code == 403
+    assert unsigned_error.value.code == "local_storage_link_invalid"
+
+    # Tampered signature.
+    query = sign_local_object_query(
+        secret=secret, method="GET", bucket="raw-uploads", path="a/b.mp4", expires_in_seconds=300
+    )
+    exp, sig = (part.split("=", 1)[1] for part in query.split("&"))
+    tampered = _local_request(tmp_path, signing_secret=secret)
+    with pytest.raises(ApiError) as tampered_error:
+        asyncio.run(
+            get_local_object("raw-uploads", "a/b.mp4", tampered, exp=exp, sig=sig[:-1] + "0")
+        )
+    assert tampered_error.value.status_code == 403
+
+    # A signature for a different object path must not open this one.
+    other = sign_local_object_query(
+        secret=secret,
+        method="GET",
+        bucket="raw-uploads",
+        path="a/other.mp4",
+        expires_in_seconds=300,
+    )
+    other_exp, other_sig = (part.split("=", 1)[1] for part in other.split("&"))
+    crossed = _local_request(tmp_path, signing_secret=secret)
+    with pytest.raises(ApiError) as crossed_error:
+        asyncio.run(
+            get_local_object("raw-uploads", "a/b.mp4", crossed, exp=other_exp, sig=other_sig)
+        )
+    assert crossed_error.value.status_code == 403
+
+    # Expired.
+    expired_exp = 1
+    expired_sig = compute_local_object_signature(
+        secret=secret, method="GET", bucket="raw-uploads", path="a/b.mp4", expires_at=expired_exp
+    )
+    expired = _local_request(tmp_path, signing_secret=secret)
+    with pytest.raises(ApiError) as expired_error:
+        asyncio.run(
+            get_local_object(
+                "raw-uploads", "a/b.mp4", expired, exp=str(expired_exp), sig=expired_sig
+            )
+        )
+    assert expired_error.value.status_code == 403
 
 
 def test_supabase_storage_downloads_missing_object(monkeypatch, tmp_path: Path) -> None:

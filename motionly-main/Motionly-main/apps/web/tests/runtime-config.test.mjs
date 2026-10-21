@@ -21,6 +21,7 @@ const PRODUCTION_ENV = Object.freeze({
   API_INTERNAL_URL: "http://api:8000",
   SUPABASE_URL: "http://supabase-gateway:8000",
   SUPABASE_ANON_KEY: "anon-key-value",
+  BILLING_MODE: "disabled",
 });
 
 function directives(policy) {
@@ -66,6 +67,7 @@ test("the server reads its configuration from runtime variables", async () => {
     supabaseUrl: "http://supabase-gateway:8000",
     supabaseAnonKey: "anon-key-value",
     billingEnabled: false,
+    billingMode: "disabled",
     skipAuthMiddleware: false,
   });
   // Build-time NEXT_PUBLIC_* variables are not configuration any more.
@@ -180,6 +182,50 @@ test("production refuses the auth bypass and non-HTTPS, local, or path-bearing o
   assert.throws(
     () => parseServerConfig({ ...PRODUCTION_ENV, APP_ENV: "staging" }),
     /APP_ENV must be one of/,
+  );
+});
+
+test("the web runtime config states the billing mode explicitly (B17)", async () => {
+  const { parseServerConfig } = await runtimeConfig();
+
+  // Production must state BILLING_MODE; there is no default.
+  const { BILLING_MODE: _omit, ...withoutMode } = PRODUCTION_ENV;
+  assert.throws(
+    () => parseServerConfig(withoutMode),
+    /BILLING_MODE is required in production/,
+  );
+
+  // Only the two supported values are accepted (no stripe/live mode).
+  for (const mode of ["stripe", "live", "enabled", "yes"]) {
+    assert.throws(
+      () => parseServerConfig({ ...PRODUCTION_ENV, BILLING_MODE: mode }),
+      /BILLING_MODE must be "disabled" or "demo"/,
+      mode,
+    );
+  }
+
+  assert.equal(
+    parseServerConfig({ ...PRODUCTION_ENV, BILLING_MODE: "disabled" })
+      .billingMode,
+    "disabled",
+  );
+  assert.equal(
+    parseServerConfig({
+      ...PRODUCTION_ENV,
+      BILLING_MODE: "demo",
+      BILLING_ENABLED: "true",
+    }).billingMode,
+    "demo",
+  );
+
+  // Non-production derives the mode from BILLING_ENABLED when it is unset.
+  assert.equal(
+    parseServerConfig({
+      ...PRODUCTION_ENV,
+      APP_ENV: "cpu-stage",
+      BILLING_MODE: undefined,
+    }).billingMode,
+    "disabled",
   );
 });
 
@@ -445,13 +491,12 @@ test("flags are read through the runtime config, and resolveProxiedUrl is gone",
   }
 });
 
-test("redirects and emailed links use the configured public origin", () => {
+test("redirects use the configured public origin", () => {
   // Behind the edge, Next.js builds request.url from its own listen address
   // (http://localhost:3000), and the Origin/X-Forwarded-* headers come from the
   // viewer. Absolute URLs must come from PUBLIC_ORIGIN instead.
   const files = [
     "proxy.ts",
-    "app/auth/callback/route.ts",
     "app/app-api/workspaces/select/route.ts",
     "app/(auth)/actions.ts",
   ];
@@ -467,16 +512,8 @@ test("redirects and emailed links use the configured public origin", () => {
   assert.match(read("proxy.ts"), /new URL\("\/login", config\.publicOrigin\)/);
   assert.match(read("lib/public-url.ts"), /new URL\(path, env\.appUrl\)/);
   assert.match(
-    read("app/auth/callback/route.ts"),
-    /publicUrl\("\/dashboard"\)/,
-  );
-  assert.match(
     read("app/app-api/workspaces/select/route.ts"),
     /publicUrl\("\/dashboard"\)/,
-  );
-  assert.match(
-    read("app/(auth)/actions.ts"),
-    /publicUrl\("\/auth\/callback"\)/,
   );
 });
 
@@ -503,6 +540,7 @@ const CONFIG_VARIABLES = [
   "SUPABASE_URL",
   "SUPABASE_ANON_KEY",
   "BILLING_ENABLED",
+  "BILLING_MODE",
   "SKIP_AUTH_MIDDLEWARE",
 ];
 

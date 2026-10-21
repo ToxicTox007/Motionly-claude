@@ -358,6 +358,7 @@ export async function safeFetchMedia(
     signal,
     headers,
     trustedInternal = false,
+    internalOrigin = defaultInternalOrigin(),
     requestImpl,
   } = {},
 ) {
@@ -376,7 +377,7 @@ export async function safeFetchMedia(
   ) {
     const validation =
       trustedInternal && redirectCount === 0
-        ? await resolveTrustedInternalTarget(current, lookup)
+        ? await resolveTrustedInternalTarget(current, lookup, internalOrigin)
         : await assertSafeOutboundMediaUrl(current, {
             lookup,
             requireDns: true,
@@ -403,7 +404,7 @@ export async function safeFetchMedia(
   throw new MediaUrlPolicyError("Media redirect limit exceeded.");
 }
 
-async function resolveTrustedInternalTarget(value, lookup) {
+async function resolveTrustedInternalTarget(value, lookup, internalOrigin) {
   let parsed;
   try {
     parsed = new URL(value);
@@ -417,6 +418,14 @@ async function resolveTrustedInternalTarget(value, lookup) {
     throw new MediaUrlPolicyError(
       "Credential-bearing media URLs are not allowed.",
     );
+  }
+  // A trusted internal fetch is only permitted when the URL's origin exactly
+  // matches the configured internal SUPABASE_URL origin. Without a configured
+  // origin, or for any other origin, we never relax the public-address guard:
+  // fall back to the strict check so arbitrary private addresses are rejected.
+  const allowed = normalizeOrigin(internalOrigin);
+  if (!allowed || normalizeOrigin(parsed.origin) !== allowed) {
+    return assertSafeOutboundMediaUrl(value, { lookup, requireDns: true });
   }
   const hostname = parsed.hostname
     .replace(/^\[|\]$/g, "")
@@ -435,6 +444,23 @@ async function resolveTrustedInternalTarget(value, lookup) {
     throw new MediaUrlPolicyError("Media URL host could not be resolved.");
   }
   return { addresses: records.map(normalizeLookupRecord) };
+}
+
+function defaultInternalOrigin() {
+  return normalizeOrigin(process.env.SUPABASE_URL);
+}
+
+function normalizeOrigin(value) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = new URL(value);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) {
+      return null;
+    }
+    return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 function normalizeLookupRecord(record) {

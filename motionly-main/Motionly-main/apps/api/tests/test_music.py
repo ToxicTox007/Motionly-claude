@@ -23,12 +23,92 @@ from app.repositories.music import (
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.captions import LanguageHint
-from app.schemas.music import MusicRegion, MusicRegionsUpdateRequest, MusicSelectRequest
+from app.schemas.music import (
+    MusicProviderKey,
+    MusicRegion,
+    MusicRegionsUpdateRequest,
+    MusicSelectRequest,
+)
 from app.schemas.plans import BrollDensity, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
-from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
+from app.services.music import LicensedCatalogMusicProvider, MusicTrackCandidate
+from app.services.music_catalog_import import (
+    AudioAnalysis,
+    build_catalog_row,
+    load_license_allow_list,
+)
+from app.services.music_seed import generate_test_track_entries
 from app.services.queue import MusicQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
+
+
+class _SeedAnalyzer:
+    """Deterministic analysis per generated test track so tracks differ in rank."""
+
+    def analyze(self, audio_path: str) -> AudioAnalysis:
+        seed = sum(ord(ch) for ch in audio_path)
+        return AudioAnalysis(
+            duration_ms=60_000 + (seed % 20) * 1000,
+            tempo_bpm=float(80 + seed % 60),
+            beat_positions_ms=[0.0, 500.0, 1000.0, 1500.0],
+            energy=0.2 + (seed % 7) / 10.0,
+        )
+
+
+def _seeded_catalog_rows() -> list[dict[str, object]]:
+    """Build the catalog rows a non-production seed would persist.
+
+    Mirrors app.services.music_seed: generated 'Test track' entries, each a
+    verified, selectable, renderable catalog row with audio in the private
+    music-catalog bucket. Used to drive the real LicensedCatalogMusicProvider in
+    unit tests instead of the deleted FixtureMusicProvider.
+    """
+    allow_list = load_license_allow_list()
+    analyzer = _SeedAnalyzer()
+    rows: list[dict[str, object]] = []
+    for entry in generate_test_track_entries():
+        row = build_catalog_row(
+            entry, allow_list=allow_list, analysis=analyzer.analyze(entry.audio_path)
+        )
+        rows.append(row)
+    return rows
+
+
+class SeededTestCatalogProvider:
+    """A LicensedCatalogMusicProvider backed by the generated test-track seed.
+
+    Serves the SAME verified catalog rows the non-production seed persists, with
+    the real provider's row->candidate conversion and ranking, so these tests
+    exercise the production catalog provider path end to end.
+    """
+
+    provider_key = MusicProviderKey.LICENSED_CATALOG
+
+    def __init__(self) -> None:
+        self._provider = LicensedCatalogMusicProvider(
+            supabase_url="https://supabase.internal",
+            service_role_key="service-role",
+        )
+        self._rows = _seeded_catalog_rows()
+
+    def _candidates(self) -> list[MusicTrackCandidate]:
+        return [
+            candidate
+            for row in self._rows
+            if (candidate := self._provider._candidate_from_row(row)) is not None
+        ]
+
+    def search(self, *, mood: str, max_results: int = 5) -> list[MusicTrackCandidate]:
+        from app.services.music_search import rank_tracks
+
+        return rank_tracks(self._candidates(), mood=mood)[:max_results]
+
+    def get_track(self, *, provider_track_id: str) -> MusicTrackCandidate | None:
+        return next(
+            (c for c in self._candidates() if c.provider_track_id == provider_track_id),
+            None,
+        )
+
 
 
 def make_music_repository() -> tuple[InMemoryMusicRepository, UUID, UUID, UUID]:
@@ -86,7 +166,7 @@ def run_select_music(
     payload: MusicSelectRequest,
     actor: Actor,
     repository: InMemoryMusicRepository,
-    providers: list[FixtureMusicProvider],
+    providers: list[SeededTestCatalogProvider],
 ) -> object:
     from app.schemas.music import MusicSelectResponse
     from app.services.queue import QueueRegistry
@@ -138,12 +218,15 @@ def test_select_music_creates_selection() -> None:
         payload=MusicSelectRequest(),
         actor=Actor(user_id=user_id, workspace_id=workspace_id),
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
 
     assert response.status == "ready"
     assert response.selection.music_track is not None
-    assert response.selection.music_track.title == "Ambient Luxury Bed"
+    # The seeded catalog serves generated "Test track" beds (FixtureMusicProvider
+    # is gone); a track is selected for the plan's default mood.
+    assert response.selection.music_track.title.startswith("Test track: ")
+    assert response.selection.music_track.provider == MusicProviderKey.LICENSED_CATALOG
     assert response.selection.music_volume == 0.25
     assert response.selection.sfx_intensity == 0.25
     assert len(response.selection.regions) == 1
@@ -390,14 +473,14 @@ def test_music_api_prefers_async_repository_methods() -> None:
         payload=MusicSelectRequest(),
         actor=actor,
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
     cached = run_select_music(
         project_id=project_id,
         payload=MusicSelectRequest(),
         actor=actor,
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
     asyncio.run(
         get_music_selection(
@@ -420,15 +503,21 @@ def test_music_api_prefers_async_repository_methods() -> None:
             actor=actor,
             repository=repository,
             plan_repository=repository.plan_repository,
-            providers=[FixtureMusicProvider()],
+            providers=[SeededTestCatalogProvider()],
             mood="clean confident",
         )
     )
 
-    # Fixture tracks intentionally have no catalog evidence, so their selections
-    # must never be trusted as reusable production cache entries.
+    # Seeded catalog tracks need the user's rights acknowledgement to become a
+    # verified, reusable cache entry; a default (unacknowledged) selection is
+    # never served from cache.
     assert cached.cached is False
-    assert repository.async_calls == [
+    # The flow: two selects (each find-cache then run the job), get-selection,
+    # update-regions, then list-tracks. list_music_tracks upserts one row per
+    # ranked candidate the catalog returns (the real provider ranks the whole
+    # seeded catalog, capped at max_results=8), so the trailing upserts match the
+    # number of listed tracks.
+    fixed_prefix = [
         "find-cache",
         "find-cache",
         "latest-selection",
@@ -436,8 +525,11 @@ def test_music_api_prefers_async_repository_methods() -> None:
         "latest-selection",
         "update-regions",
         "response-for-selection",
-        "upsert-track",
     ]
+    assert repository.async_calls[: len(fixed_prefix)] == fixed_prefix
+    trailing = repository.async_calls[len(fixed_prefix) :]
+    assert trailing == ["upsert-track"] * len(trailing)
+    assert 1 <= len(trailing) <= 8
 
 
 def test_update_music_regions_splits_and_deletes_region() -> None:
@@ -449,7 +541,7 @@ def test_update_music_regions_splits_and_deletes_region() -> None:
         payload=MusicSelectRequest(),
         actor=actor,
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
     original = selected.selection.regions[0]
 
@@ -493,14 +585,17 @@ def test_list_music_tracks_returns_clickable_options() -> None:
             actor=Actor(user_id=user_id, workspace_id=workspace_id),
             repository=repository,
             plan_repository=repository.plan_repository,
-            providers=[FixtureMusicProvider()],
+            providers=[SeededTestCatalogProvider()],
             mood="clean confident",
         )
     )
 
     assert response.mood == "clean confident"
     assert response.tracks
-    assert response.tracks[0].title == "Clean Confident Groove"
+    # The top-ranked track for a "clean confident" mood carries a matching mood
+    # tag from the seeded generated catalog.
+    assert response.tracks[0].title.startswith("Test track: ")
+    assert {"clean", "confident", "minimal"} & set(response.tracks[0].mood_tags)
     assert response.tracks[0].beat_map
 
 
@@ -512,7 +607,7 @@ def test_select_music_can_persist_no_music() -> None:
         payload=MusicSelectRequest(include_music=False),
         actor=Actor(user_id=user_id, workspace_id=workspace_id),
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
 
     assert response.selection.music_track is None
@@ -530,14 +625,14 @@ def test_change_music_chooses_alternative_track() -> None:
         payload=MusicSelectRequest(mood="clean confident"),
         actor=actor,
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
     changed = run_select_music(
         project_id=project_id,
         payload=MusicSelectRequest(mood="clean confident", force=True),
         actor=actor,
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
 
     assert first.selection.music_track is not None
@@ -557,14 +652,14 @@ def test_select_music_reuses_cached_selection() -> None:
         payload=MusicSelectRequest(),
         actor=actor,
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
     second = run_select_music(
         project_id=project_id,
         payload=MusicSelectRequest(),
         actor=actor,
         repository=repository,
-        providers=[FixtureMusicProvider()],
+        providers=[SeededTestCatalogProvider()],
     )
 
     # Fixture tracks intentionally have no catalog evidence, so their selections
@@ -582,7 +677,7 @@ def test_select_music_rejects_cross_workspace_access() -> None:
             payload=MusicSelectRequest(),
             actor=Actor(user_id=user_id, workspace_id=uuid4()),
             repository=repository,
-            providers=[FixtureMusicProvider()],
+            providers=[SeededTestCatalogProvider()],
         )
 
     assert exc_info.value.status_code in {403, 404}
@@ -634,3 +729,87 @@ def test_licensed_catalog_provider_returns_real_audio_metadata(monkeypatch) -> N
     assert tracks[0].provider == "licensed_catalog"
     assert tracks[0].raw_metadata["audio_bucket"] == "licensed-music"
     assert tracks[0].raw_metadata["audio_path"] == "clean/catalog-clean-1.m4a"
+
+
+def test_preview_music_track_mints_signed_link() -> None:
+    from app.api.music import preview_music_track
+    from app.services.storage import StorageSigner
+
+    repository, project_id, workspace_id, user_id = make_music_repository()
+    track = repository.upsert_track(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        provider="licensed_catalog",
+        provider_track_id="catalog-preview-1",
+        title="Preview Bed",
+        license="CC0-1.0",
+        duration_ms=60_000,
+        mood_tags=["calm"],
+        bpm=80,
+        energy=0.3,
+        vocals=False,
+        loopable=True,
+        beat_map=[0.0, 750.0],
+        raw_metadata={
+            "audio_bucket": "music-catalog",
+            "audio_path": "calm/catalog-preview-1.m4a",
+        },
+    )
+    signer = StorageSigner(
+        supabase_url="https://supabase.internal",
+        public_supabase_url="https://supabase.public",
+        signing_secret="preview-secret",
+    )
+
+    response = asyncio.run(
+        preview_music_track(
+            project_id=project_id,
+            track_id=track.id,
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            storage_signer=signer,
+        )
+    )
+
+    assert response.track_id == track.id
+    assert response.provider_track_id == "catalog-preview-1"
+    assert response.preview_url
+    assert response.expires_in_seconds == 300
+
+
+def test_preview_music_track_without_audio_path_is_404() -> None:
+    from app.api.music import preview_music_track
+    from app.services.storage import StorageSigner
+
+    repository, project_id, workspace_id, user_id = make_music_repository()
+    track = repository.upsert_track(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        provider="licensed_catalog",
+        provider_track_id="catalog-no-audio",
+        title="No Audio",
+        license="CC0-1.0",
+        duration_ms=60_000,
+        mood_tags=["calm"],
+        bpm=80,
+        energy=0.3,
+        vocals=False,
+        loopable=True,
+        beat_map=[],
+        raw_metadata={},
+    )
+    signer = StorageSigner(signing_secret="preview-secret")
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            preview_music_track(
+                project_id=project_id,
+                track_id=track.id,
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                storage_signer=signer,
+            )
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.code == "music_preview_unavailable"

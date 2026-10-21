@@ -114,17 +114,23 @@ test("workflow identifiers propagate through queue records and shipped bridges s
     new URL("./queue-bridge.mjs", import.meta.url),
     "utf8",
   );
-  const shippedCommon = await readFile(
-    new URL("../../api/worker-bridge/queue-common.mjs", import.meta.url),
-    "utf8",
-  );
-  const shippedBridge = await readFile(
-    new URL("../../api/worker-bridge/queue-bridge.mjs", import.meta.url),
-    "utf8",
-  );
-  assert.equal(shippedCommon, workerCommon);
-  assert.equal(shippedBridge, workerBridge);
+  // Single source of truth: apps/worker/src is the only on-disk copy. The API
+  // control-plane bridge is produced from it by the Dockerfiles at build time
+  // (Task 32 removed the apps/api/worker-bridge/*.mjs duplicates), so the two
+  // can never drift. Assert the image build copies exactly this source.
+  for (const dockerfile of ["../../../Dockerfile", "../../api/Dockerfile"]) {
+    const text = await readFile(new URL(dockerfile, import.meta.url), "utf8");
+    assert.match(
+      text,
+      /COPY apps\/worker\/src\/queue-common\.mjs \.\/apps\/api\/worker-bridge\/queue-common\.mjs/,
+    );
+    assert.match(
+      text,
+      /COPY apps\/worker\/src\/queue-bridge\.mjs \.\/apps\/api\/worker-bridge\/queue-bridge\.mjs/,
+    );
+  }
   assert.match(workerBridge, /jobId: payload\.id/);
+  assert.ok(workerCommon.length > 0);
 });
 
 test("queue payloads reject credentials, signed URLs, and binary media", () => {

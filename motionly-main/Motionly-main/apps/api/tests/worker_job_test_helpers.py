@@ -3,12 +3,12 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from app.api.dependencies import Actor
-from app.api.internal_jobs import run_queue_job
 from app.api.plans import create_plan
 from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.ai_proposals import ProposalDecisionRequest, ProposalDecisionType
 from app.schemas.plans import PlanCreateRequest
 from app.services.edit_planner import FixtureEditPlannerProvider
+from app.services.job_engine import run_queue_job
 from app.services.queue import PlanQueue, QueueRegistry
 
 

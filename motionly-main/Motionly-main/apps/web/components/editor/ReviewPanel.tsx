@@ -319,7 +319,7 @@ export function ReviewPanel({
 
   if (loading) {
     return (
-      <p className="p-3 text-xs font-bold text-muted-foreground">
+      <p className="p-3 text-xs font-semibold text-muted-foreground">
         Loading client review…
       </p>
     );
@@ -327,10 +327,10 @@ export function ReviewPanel({
 
   return (
     <div className="space-y-4" aria-label="Client review">
-      <div className="border border-border bg-primary/5 p-3">
+      <div className="rounded-neu-lg bg-surface p-4 shadow-neu-raised">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <h3 className="text-sm font-black uppercase tracking-wide">
+            <h3 className="text-sm font-bold tracking-tight text-foreground">
               Client review
             </h3>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -338,7 +338,7 @@ export function ReviewPanel({
             </p>
           </div>
           {review ? (
-            <span className="border border-border bg-surface px-2 py-1 text-[10px] font-black uppercase">
+            <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold text-foreground shadow-neu-inset-sm">
               {review.status}
             </span>
           ) : null}
@@ -346,7 +346,7 @@ export function ReviewPanel({
         {!review || !pinnedToCurrentPlan ? (
           <div className="mt-3 space-y-2">
             {review && !pinnedToCurrentPlan ? (
-              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+              <p className="text-xs font-semibold text-warning">
                 The current edit changed after this review. Start a new review
                 to collect feedback on it.
               </p>
@@ -406,13 +406,13 @@ export function ReviewPanel({
               </Button>
             </div>
           ) : (
-            <p className="border border-border bg-surface p-2 text-xs font-semibold">
+            <p className="rounded-neu bg-surface p-2 text-xs font-semibold text-foreground shadow-neu-raised-sm">
               {review.status === "approved" ? "Approved" : "Rejected"} review —
               open a new review for further feedback.
             </p>
           )}
 
-          <div className="space-y-2 border border-border bg-surface p-3">
+          <div className="space-y-2 rounded-neu-lg bg-surface p-3 shadow-neu-raised">
             <Label htmlFor="review-comment">
               Comment at {timecode(playheadMs)}
             </Label>
@@ -443,7 +443,7 @@ export function ReviewPanel({
           </div>
 
           <div className="space-y-2">
-            <h4 className="text-xs font-black uppercase tracking-wide">
+            <h4 className="text-xs font-semibold text-muted-foreground">
               Feedback ({review.comments.length})
             </h4>
             {review.comments.length ? (
@@ -451,13 +451,15 @@ export function ReviewPanel({
                 <button
                   key={item.id}
                   type="button"
-                  className="w-full border border-border bg-surface p-3 text-left hover:bg-primary/5"
+                  className="w-full rounded-neu-md bg-surface p-3 text-left shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                   onClick={() =>
                     item.timecode_ms != null && onSeek(item.timecode_ms)
                   }
                 >
-                  <div className="flex items-center justify-between gap-2 text-[10px] font-black uppercase text-primary">
-                    <span>{timecode(item.timecode_ms)}</span>
+                  <div className="flex items-center justify-between gap-2 text-xs font-semibold text-primary">
+                    <span className="tabular-nums">
+                      {timecode(item.timecode_ms)}
+                    </span>
                     {item.assignee_user_ids.length ? (
                       <span>{item.assignee_user_ids.length} assigned</span>
                     ) : null}
@@ -465,7 +467,7 @@ export function ReviewPanel({
                   <p className="mt-1 text-sm font-semibold text-foreground">
                     {item.body}
                   </p>
-                  <p className="mt-1 text-[10px] text-muted-foreground">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     {item.author_name || "Workspace reviewer"} ·{" "}
                     {new Date(item.created_at).toLocaleString()}
                   </p>
@@ -478,7 +480,7 @@ export function ReviewPanel({
         </>
       ) : null}
       {message ? (
-        <p className="border border-border bg-muted p-2 text-xs font-semibold">
+        <p className="rounded-neu bg-surface p-2 text-xs font-semibold text-foreground shadow-neu-inset-sm">
           {message}
         </p>
       ) : null}

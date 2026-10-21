@@ -26,8 +26,7 @@
       "enabled_by": {
         "ML_EXECUTION_MODE": "test_fixture"
       },
-      "production": "rejected",
-      "open_defect": "Task 15: the matte fallback labels a black video as a matte."
+      "production": "rejected"
     },
     {
       "id": "transcription",
@@ -108,31 +107,17 @@
       "production": "rejected"
     },
     {
-      "id": "music",
+      "id": "music-test-track",
       "kind": "fixture",
-      "label": "Test music",
-      "symbol": "FixtureMusicProvider",
-      "path": "apps/api/app/services/music.py",
-      "stands_in_for": "The licensed music catalog",
-      "identified_by": "provider fixture",
+      "label": "Test track",
+      "symbol": "synthesize_test_track",
+      "path": "apps/api/app/services/music_audio.py",
+      "stands_in_for": "A rights-cleared licensed catalog track (ffmpeg-synthesised, test rights evidence)",
+      "identified_by": "is_test_track=true, title prefixed 'Test track: '",
       "enabled_by": {
         "ALLOW_FIXTURE_PROVIDERS": "true"
       },
       "production": "rejected"
-    },
-    {
-      "id": "simulated-export",
-      "kind": "fixture",
-      "label": "Test export",
-      "symbol": "_write_simulated_export",
-      "path": "apps/api/app/services/render_jobs.py",
-      "stands_in_for": "An FFmpeg render (writes a short black clip)",
-      "identified_by": "0.5 s black 180x320 clip",
-      "enabled_by": {
-        "RENDER_EXECUTE_FFMPEG": "false"
-      },
-      "production": "rejected",
-      "open_defect": "Task 15: replaced by real CPU renders and deleted."
     },
     {
       "id": "fixture-media-in-renders",
@@ -196,6 +181,42 @@
       "stands_in_for": "GitHub keyless signing of the release manifest",
       "identified_by": "MOTIONLY_COSIGN_PUBLIC_KEY, accepted only when MOTIONLY_ENVIRONMENT=rehearsal",
       "production": "never_deployed"
+    },
+    {
+      "id": "mock-gateway-in-memory-store",
+      "kind": "test_infrastructure",
+      "label": "In-memory mock-gateway store (test double, not the DB)",
+      "symbol": "InMemoryGatewayStore",
+      "path": "apps/api/app/mock_gateway/store.py",
+      "stands_in_for": "The PostgREST-backed mock_gateway persistence (PostgrestGatewayStore)",
+      "identified_by": "selected only when no PostgREST URL + gateway JWT are configured; production load_config requires the database, so this is reachable only in tests",
+      "production": "never_deployed"
+    },
+    {
+      "id": "mock-payment-gateway",
+      "kind": "demo",
+      "label": "Mock payment gateway (demo billing \u2014 no money moves)",
+      "symbol": "create_app",
+      "path": "apps/api/app/mock_gateway/main.py",
+      "stands_in_for": "A real UPI + card payment gateway (prices in INR)",
+      "identified_by": "separate payment-gateway service, /pay/* routes, mock_gateway schema, 'Demo payment \u2014 no money is charged' label, X-Mock-Gateway-Signature webhooks",
+      "enabled_by": {
+        "BILLING_MODE": "demo"
+      },
+      "production": "demo_mode_only"
+    },
+    {
+      "id": "collaboration-notifier",
+      "kind": "fixture",
+      "label": "Recording collaboration notifier",
+      "symbol": "FakeCollaborationNotifier",
+      "path": "apps/api/app/services/collaboration.py",
+      "stands_in_for": "Supabase Realtime REST broadcast of live-collaboration change messages",
+      "identified_by": "notifier_from_settings returns it only when SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are unset; it records messages in memory instead of POSTing to Realtime",
+      "enabled_by": {
+        "SUPABASE_URL": "unset"
+      },
+      "production": "unreachable"
     }
   ]
 }

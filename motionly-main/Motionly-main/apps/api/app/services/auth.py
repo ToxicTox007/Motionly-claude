@@ -2,34 +2,24 @@ import base64
 import hashlib
 import hmac
 import json
-import os
-import threading
 import time
 from dataclasses import dataclass
-from time import monotonic
 from typing import Any
 from uuid import UUID
 
 import httpx
 
 from app.api.errors import ApiError
+from app.services import membership_cache
+
+# The three workspace_role enum values, most-privileged first.
+WORKSPACE_ROLES: tuple[str, ...] = ("owner", "admin", "member")
 
 
 @dataclass(frozen=True)
 class VerifiedToken:
     user_id: UUID
     claims: dict[str, object]
-
-
-_membership_cache: dict[tuple[str, UUID, UUID], float] = {}
-_membership_cache_lock = threading.Lock()
-
-
-def _membership_cache_ttl_seconds() -> float:
-    try:
-        return max(0.0, float(os.getenv("AUTH_MEMBERSHIP_CACHE_TTL_SECONDS", "30")))
-    except ValueError:
-        return 30.0
 
 
 def verify_supabase_jwt(
@@ -121,27 +111,25 @@ def require_workspace_membership(
     user_id: UUID,
     workspace_id: UUID,
     metrics_registry: Any | None = None,
-) -> None:
-    cache_key = (supabase_url.rstrip("/"), user_id, workspace_id)
-    ttl_seconds = _membership_cache_ttl_seconds()
-    if ttl_seconds > 0:
-        now = monotonic()
-        with _membership_cache_lock:
-            expires_at = _membership_cache.get(cache_key)
-            if expires_at and expires_at > now:
-                if metrics_registry is not None:
-                    metrics_registry.observe(
-                        "auth_membership_cache_count",
-                        1,
-                        result="hit",
-                    )
-                return
+) -> str:
+    """Verify active workspace membership and return the caller's role.
+
+    Returns the ``workspace_role`` (``owner`` / ``admin`` / ``member``). Raises
+    403 ``workspace_access_denied`` for a non-member. The resolved role is
+    cached (Redis, or in-memory when ``REDIS_URL`` is unset) for a short TTL;
+    ``membership_cache.invalidate_membership`` clears it when membership changes.
+    """
+    cached = membership_cache.cached_role(user_id, workspace_id)
+    if cached is not None:
         if metrics_registry is not None:
-            metrics_registry.observe(
-                "auth_membership_cache_count",
-                1,
-                result="miss",
+            metrics_registry.observe("auth_membership_cache_count", 1, result="hit")
+        if cached == membership_cache._NEGATIVE:
+            raise ApiError(
+                403, "workspace_access_denied", "You do not have access to this workspace."
             )
+        return cached
+    if metrics_registry is not None:
+        metrics_registry.observe("auth_membership_cache_count", 1, result="miss")
 
     response = httpx.get(
         f"{supabase_url.rstrip('/')}/rest/v1/workspace_members",
@@ -153,7 +141,7 @@ def require_workspace_membership(
             "workspace_id": f"eq.{workspace_id}",
             "user_id": f"eq.{user_id}",
             "status": "eq.active",
-            "select": "workspace_id",
+            "select": "role",
             "limit": "1",
         },
         timeout=10,
@@ -164,16 +152,21 @@ def require_workspace_membership(
             "auth_membership_check_failed",
             "Workspace access could not be verified.",
         )
-    if not response.json():
+    rows = response.json()
+    if not rows:
+        membership_cache.store_negative(user_id, workspace_id)
         raise ApiError(403, "workspace_access_denied", "You do not have access to this workspace.")
-    if ttl_seconds > 0:
-        with _membership_cache_lock:
-            _membership_cache[cache_key] = monotonic() + ttl_seconds
+    role = rows[0].get("role")
+    if role not in WORKSPACE_ROLES:
+        # A row with no / unexpected role still proves active membership; treat
+        # it as the least-privileged role rather than failing closed on access.
+        role = "member"
+    membership_cache.store_role(user_id, workspace_id, role)
+    return role
 
 
 def clear_membership_cache_for_test() -> None:
-    with _membership_cache_lock:
-        _membership_cache.clear()
+    membership_cache.clear_membership_cache_for_test()
 
 
 def _decode_json(value: str) -> dict[str, object]:

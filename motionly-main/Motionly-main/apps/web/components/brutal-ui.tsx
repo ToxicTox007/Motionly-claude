@@ -7,28 +7,16 @@ import type {
 } from "react";
 import { useId } from "react";
 import { cn } from "@/lib/utils";
-import { Button, IconButton } from "@/components/button";
+import { IconButton } from "@/components/button";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 
 type AlertTone = "info" | "success" | "warning" | "danger";
-
-export function Panel({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        "rounded border-2 border-foreground bg-surface shadow-brutal",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLElement>) {
   return (
     <article
       className={cn(
-        "rounded border-2 border-foreground bg-surface shadow-brutal transition-all duration-[100ms]",
+        "rounded-neu-lg bg-surface shadow-neu-raised transition-shadow duration-[140ms]",
         className,
       )}
       {...props}
@@ -43,7 +31,7 @@ export function Input({
   return (
     <input
       className={cn(
-        "min-h-11 w-full rounded border-2 border-foreground bg-surface-elevated px-3 py-2 text-sm font-bold text-foreground transition focus:bg-surface focus:outline-none focus:shadow-brutal-sm disabled:cursor-not-allowed disabled:opacity-60",
+        "min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60",
         className,
       )}
       {...props}
@@ -58,7 +46,7 @@ export function Textarea({
   return (
     <textarea
       className={cn(
-        "min-h-32 w-full rounded border-2 border-foreground bg-surface-elevated px-3 py-2 text-sm font-bold text-foreground transition focus:bg-surface focus:outline-none focus:shadow-brutal-sm disabled:cursor-not-allowed disabled:opacity-60",
+        "min-h-32 w-full rounded-neu border border-control bg-surface px-4 py-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60",
         className,
       )}
       {...props}
@@ -74,7 +62,7 @@ export function Select({
   return (
     <select
       className={cn(
-        "min-h-11 w-full rounded border-2 border-foreground bg-surface-elevated px-3 py-2 text-sm font-bold text-foreground transition focus:bg-surface focus:outline-none focus:shadow-brutal-sm disabled:cursor-not-allowed disabled:opacity-60",
+        "min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60",
         className,
       )}
       {...props}
@@ -94,11 +82,11 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded border-2 border-foreground px-2 py-0.5 font-mono text-[10px] font-black uppercase",
-        variant === "neutral" && "bg-muted text-foreground",
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold shadow-neu-raised-sm",
+        variant === "neutral" && "bg-surface text-foreground",
         variant === "primary" && "bg-primary text-primary-foreground",
         variant === "accent" && "bg-accent text-accent-foreground",
-        variant === "success" && "bg-success text-white",
+        variant === "success" && "bg-success text-ink",
         variant === "warning" && "bg-warning text-ink",
         variant === "danger" && "bg-danger text-danger-foreground",
         className,
@@ -128,27 +116,28 @@ export function Alert({
     <div
       role={tone === "danger" || tone === "warning" ? "alert" : "status"}
       className={cn(
-        "flex gap-3 rounded border-2 border-foreground border-l-[10px] bg-surface p-4 shadow-brutal-sm text-sm",
-        tone === "info" && "border-l-info",
-        tone === "success" && "border-l-success",
-        tone === "warning" && "border-l-warning",
-        tone === "danger" && "border-l-danger",
+        "flex gap-3 rounded-neu-md bg-surface p-4 text-sm shadow-neu-raised",
         className,
       )}
     >
-      <PixelIcon
-        name={icon[tone]}
+      <span
         className={cn(
-          "mt-0.5 size-5",
+          "flex size-9 shrink-0 items-center justify-center rounded-neu-sm shadow-neu-inset-sm",
           tone === "info" && "text-info",
           tone === "success" && "text-success",
           tone === "warning" && "text-warning",
           tone === "danger" && "text-danger",
         )}
-      />
+      >
+        <PixelIcon name={icon[tone]} className="size-5" />
+      </span>
       <div className="min-w-0">
-        {title ? <p className="font-black text-foreground">{title}</p> : null}
-        <div className={cn("font-bold text-muted-foreground", title && "mt-1")}>
+        {title ? (
+          <p className="font-semibold text-foreground">{title}</p>
+        ) : null}
+        <div
+          className={cn("font-medium text-muted-foreground", title && "mt-1")}
+        >
           {children}
         </div>
       </div>
@@ -181,7 +170,7 @@ export function Modal({
       <button
         type="button"
         aria-label="Close modal overlay"
-        className="fixed inset-0 z-40 cursor-default bg-background/75 text-left"
+        className="fixed inset-0 z-40 cursor-default bg-background/60 text-left backdrop-blur-sm"
         onClick={onClose}
       />
       <div
@@ -191,20 +180,17 @@ export function Modal({
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
-        className="fixed left-1/2 top-1/2 z-50 w-[min(34rem,calc(100vw-1.5rem))] -translate-x-1/2 -translate-y-1/2 rounded border-4 border-foreground bg-surface p-5 shadow-brutal-lg"
+        className="fixed left-1/2 top-1/2 z-50 w-[min(34rem,calc(100vw-1.5rem))] -translate-x-1/2 -translate-y-1/2 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg"
       >
-        <div className="flex items-start justify-between gap-4 border-b-2 border-foreground pb-3">
+        <div className="flex items-start justify-between gap-4 pb-3">
           <div className="min-w-0">
-            <h2
-              id={titleId}
-              className="text-lg font-black uppercase text-foreground"
-            >
+            <h2 id={titleId} className="text-lg font-bold text-foreground">
               {title}
             </h2>
             {description ? (
               <p
                 id={descriptionId}
-                className="mt-1 text-sm font-bold text-muted-foreground"
+                className="mt-1 text-sm font-medium text-muted-foreground"
               >
                 {description}
               </p>
@@ -221,93 +207,12 @@ export function Modal({
         </div>
         {children ? <div className="py-4">{children}</div> : null}
         {footer ? (
-          <div className="flex flex-wrap justify-end gap-3 border-t-2 border-foreground pt-4">
+          <div className="mt-2 flex flex-wrap justify-end gap-3 pt-4">
             {footer}
           </div>
         ) : null}
       </div>
     </>
-  );
-}
-
-export function Tabs({
-  tabs,
-  value,
-  onChange,
-  className,
-}: {
-  tabs: Array<{ value: string; label: string }>;
-  value: string;
-  onChange: (value: string) => void;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "inline-flex rounded border-2 border-foreground bg-surface p-1 shadow-brutal-sm",
-        className,
-      )}
-      role="tablist"
-    >
-      {tabs.map((tab) => (
-        <button
-          key={tab.value}
-          type="button"
-          role="tab"
-          aria-selected={value === tab.value}
-          className={cn(
-            "min-h-10 rounded px-3 text-xs font-black uppercase",
-            value === tab.value
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-surface-elevated hover:text-foreground",
-          )}
-          onClick={() => onChange(tab.value)}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-export function Progress({
-  value,
-  label,
-  className,
-}: {
-  value: number;
-  /** Accessible name, e.g. "Upload progress". */
-  label: string;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "h-4 overflow-hidden rounded border-2 border-foreground bg-muted",
-        className,
-      )}
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.max(0, Math.min(100, value))}
-    >
-      <div
-        className="h-full border-r-2 border-foreground bg-primary"
-        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
-      />
-    </div>
-  );
-}
-
-export function Skeleton({ className }: { className?: string }) {
-  return (
-    <div
-      className={cn(
-        "animate-pulse rounded border-2 border-foreground bg-muted",
-        className,
-      )}
-    />
   );
 }
 
@@ -323,11 +228,11 @@ export function Tooltip({
   return (
     <span className={cn("group relative inline-flex", className)}>
       {children}
-      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded border-2 border-foreground bg-surface px-2 py-1 text-[10px] font-black uppercase text-foreground shadow-brutal-sm group-hover:block group-focus-within:block">
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-neu-sm bg-surface px-2.5 py-1 text-[11px] font-semibold text-foreground shadow-neu-raised-sm group-hover:block group-focus-within:block">
         {label}
       </span>
     </span>
   );
 }
 
-export { Button, IconButton };
+export { IconButton };

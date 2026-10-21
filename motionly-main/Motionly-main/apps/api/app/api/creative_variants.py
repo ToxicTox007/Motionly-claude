@@ -5,8 +5,11 @@ from fastapi import APIRouter, Depends, Request, status
 
 from app.api.dependencies import Actor, get_actor, get_plan_repository
 from app.api.errors import ApiError
+from app.api.plans import _update_plan_with_revision
 from app.repositories.plans import InMemoryPlanRepository
 from app.schemas.creative_variants import (
+    CreativeVariantApplyRequest,
+    CreativeVariantApplyResponse,
     CreativeVariantReviewStatus,
     CreativeVariantSelectionRequest,
     CreativeVariantSetCreateRequest,
@@ -14,8 +17,10 @@ from app.schemas.creative_variants import (
     CreativeVariantSetPayload,
     CreativeVariantSetResponse,
 )
+from app.schemas.renders import RenderCreateRequest
 from app.schemas.scale import ScaleResourceStatus
-from app.services.creative_variants import build_creative_variants
+from app.services.creative_variants import apply_creative_variant, build_creative_variants
+from app.services.edit_planner import summarize_plan
 
 router = APIRouter(
     prefix="/projects/{project_id}/creative-variants",
@@ -24,6 +29,35 @@ router = APIRouter(
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
 PlanRepositoryDep = Annotated[InMemoryPlanRepository, Depends(get_plan_repository)]
+
+
+async def _render_applied_plan(
+    *,
+    project_id: UUID,
+    plan_id: UUID,
+    request: Request,
+    actor: Actor,
+    plan_repository: InMemoryPlanRepository,
+):
+    """Queue a render of the applied plan through the existing render route.
+
+    This is a module-level seam (not an inline call) so tests can inject a
+    fast-completing render target the Task-15 way by monkeypatching this symbol,
+    without touching the production render route's own internals.
+    """
+    from app.api.renders import _create_render_target
+
+    return await _create_render_target(
+        project_id=project_id,
+        payload=RenderCreateRequest(edit_plan_id=plan_id),
+        request=request,
+        actor=actor,
+        repository=request.app.state.render_repository,
+        billing_repository=request.app.state.billing_repository,
+        plan_repository=plan_repository,
+        render_queue=request.app.state.render_queue,
+        broll_repository=getattr(request.app.state, "broll_repository", None),
+    )
 
 
 async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
@@ -63,9 +97,13 @@ def _variant_set_response(record) -> CreativeVariantSetResponse:
         selected_variant_id=payload.selected_variant_id,
         review_status=payload.review_status,
         review_only=payload.review_only,
+        applied_variant_id=payload.applied_variant_id,
+        applied_plan_id=payload.applied_plan_id,
+        applied_plan_revision=payload.applied_plan_revision,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
 
 
 @router.get("", response_model=CreativeVariantSetListResponse)
@@ -206,3 +244,130 @@ async def select_creative_variant(
         revision=record.revision + 1,
     )
     return _variant_set_response(updated)
+
+
+@router.post("/{variant_set_id}/apply", response_model=CreativeVariantApplyResponse)
+async def apply_creative_variant_direction(
+    project_id: UUID,
+    variant_set_id: UUID,
+    payload: CreativeVariantApplyRequest,
+    actor: ActorDep,
+    request: Request,
+    plan_repository: PlanRepositoryDep,
+) -> CreativeVariantApplyResponse:
+    """Apply a chosen variant to the active plan, creating a new plan version.
+
+    The variant's primary dimension is turned into concrete plan changes and
+    written through the standard revision-enforced path (``expected_revision``
+    on the plan → ``_update_plan_with_revision``), so a stale plan revision
+    raises the standard ``collaboration_revision_conflict`` 409. Optionally
+    queues a render of the new plan version through the existing render route.
+    """
+    await _ensure_project(
+        request.app.state.project_repository,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    record = await _repository_call(
+        request.app.state.scale_repository,
+        "get_async",
+        "get",
+        resource_id=variant_set_id,
+        workspace_id=actor.workspace_id,
+    )
+    if record.kind != "creative_variant_set" or record.project_id != project_id:
+        raise ApiError(404, "creative_variant_set_not_found", "Creative variant set was not found.")
+    if record.revision != payload.expected_revision:
+        raise ApiError(
+            409,
+            "creative_variant_set_revision_conflict",
+            "This variant set changed. Reload before applying a direction.",
+            details={"current_revision": record.revision},
+        )
+    persisted_payload = CreativeVariantSetPayload.model_validate(record.payload)
+    variant = next(
+        (item for item in persisted_payload.variants if item.id == payload.variant_id),
+        None,
+    )
+    if variant is None:
+        raise ApiError(
+            422,
+            "creative_variant_not_found",
+            "Choose a variant from this creative test set.",
+        )
+
+    active_plan = await _repository_call(
+        plan_repository,
+        "active_plan_async",
+        "active_plan",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+    )
+    applied = apply_creative_variant(
+        plan=active_plan.plan,
+        variant=variant,
+        broll_density=active_plan.broll_density,
+    )
+    summary = summarize_plan(
+        applied.plan,
+        style_classification=active_plan.summary.style_classification,
+    )
+    # Standard revision-enforced write: a stale plan revision raises
+    # RevisionConflictError, surfaced as the standard 409 by the global handler.
+    updated_plan = await _update_plan_with_revision(
+        plan_repository,
+        plan_id=active_plan.id,
+        expected_revision=payload.expected_plan_revision,
+        new_plan=applied.plan,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        summary=summary,
+        target_duration_s=applied.plan.target_duration_s,
+        change_type="creative_variant_apply",
+        request=request,
+    )
+    # Persist the applied B-roll density on the plan record (only B-roll changes
+    # it; other dimensions pass the plan's current density straight through).
+    updated_plan.broll_density = applied.broll_density
+
+    updated_payload = persisted_payload.model_copy(
+        update={
+            "selected_variant_id": variant.id,
+            "review_status": CreativeVariantReviewStatus.APPLIED,
+            "review_only": False,
+            "applied_variant_id": variant.id,
+            "applied_plan_id": updated_plan.id,
+            "applied_plan_revision": updated_plan.revision,
+        }
+    )
+    updated_set = await _repository_call(
+        request.app.state.scale_repository,
+        "update_if_revision_async",
+        "update_if_revision",
+        record=record,
+        expected_revision=payload.expected_revision,
+        payload=updated_payload.model_dump(mode="json"),
+        revision=record.revision + 1,
+    )
+
+    render_enqueued = False
+    render_job_id: UUID | None = None
+    if payload.render:
+        render_response = await _render_applied_plan(
+            project_id=project_id,
+            plan_id=updated_plan.id,
+            request=request,
+            actor=actor,
+            plan_repository=plan_repository,
+        )
+        render_enqueued = True
+        render_job_id = render_response.job_id
+
+    return CreativeVariantApplyResponse(
+        variant_set=_variant_set_response(updated_set),
+        plan=updated_plan.to_response(),
+        plan_revision=updated_plan.revision,
+        applied_dimension=applied.dimension,
+        render_enqueued=render_enqueued,
+        render_job_id=render_job_id,
+    )

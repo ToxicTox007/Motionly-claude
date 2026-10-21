@@ -4,6 +4,8 @@
 #
 #   /api/*       FastAPI      (prefix stripped: /api/projects -> /projects)
 #   /supabase/*  Kong gateway (prefix stripped: /supabase/auth/v1 -> /auth/v1)
+#   /pay/*       Mock payment gateway (Task 22; demo-billing profile only;
+#                prefix kept: the gateway serves its pages under /pay/*)
 #   everything   Next.js
 #
 # Every proxied request:
@@ -21,6 +23,17 @@ handle_path /api/* {
 
 handle_path /supabase/* {
 	reverse_proxy supabase-gateway:8000 {
+		header_up -X-Motionly-Origin-Verify
+		header_up X-Forwarded-Proto https
+	}
+}
+
+# Mock payment gateway (Task 22). The prefix is kept (the gateway serves its
+# pages and API under /pay/*), so this uses `handle`, not `handle_path`. The
+# payment-gateway upstream only exists when the demo-billing Compose profile is
+# enabled (the CPU-stage overlay); in profiles without it, nothing listens here.
+handle /pay/* {
+	reverse_proxy payment-gateway:8010 {
 		header_up -X-Motionly-Origin-Verify
 		header_up X-Forwarded-Proto https
 	}

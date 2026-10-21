@@ -2,7 +2,7 @@ import { Button, ButtonLink } from "@/components/button";
 import { Alert, Badge, Card } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { startCheckout } from "@/app/(app)/billing/actions";
-import { fallbackBillingStatus } from "@/lib/billing";
+import { getPublicPlans } from "@/lib/plans";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 import { PageTitle } from "@/components/page-title";
@@ -14,13 +14,16 @@ export default async function PricingPage({
 }) {
   await searchParams;
 
+  // B33: plans come from the API (single source of truth). If the API is down
+  // we show an error state rather than fabricating prices.
+  const plansResult = await getPublicPlans();
+  const plans = plansResult.ok ? plansResult.plans : [];
+
   // Identify featured plan: most expensive non-free plan
-  const paidPlans = fallbackBillingStatus.plans.filter(
-    (p) => p.price_cents > 0,
-  );
+  const paidPlans = plans.filter((p) => p.price_paise > 0);
   const featuredKey =
     paidPlans.length > 0
-      ? paidPlans.reduce((a, b) => (b.price_cents > a.price_cents ? b : a)).key
+      ? paidPlans.reduce((a, b) => (b.price_paise > a.price_paise ? b : a)).key
       : null;
 
   return (
@@ -28,16 +31,25 @@ export default async function PricingPage({
       <PageTitle title="Pricing" />
       <div className="mb-10 text-center">
         <Badge variant="primary">Pricing</Badge>
-        <h1 className="mt-4 text-5xl font-black uppercase sm:text-6xl">
+        <h1 className="mt-4 text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
           Plans for reel production.
         </h1>
-        <p className="mx-auto mt-4 max-w-2xl text-base font-bold text-muted-foreground">
+        <p className="mx-auto mt-4 max-w-2xl text-base font-medium text-muted-foreground">
           Start watermarked, upgrade when B-roll, higher limits, priority
           queueing, or team workflows become part of your reel pipeline.
         </p>
       </div>
 
-      {!env.billingEnabled ? (
+      {!plansResult.ok ? (
+        <Alert
+          tone="danger"
+          title="Plans are temporarily unavailable"
+          className="mb-8"
+        >
+          We couldn&apos;t load the current plans and prices. Please refresh in
+          a moment — we won&apos;t show prices we can&apos;t confirm.
+        </Alert>
+      ) : !env.billingEnabled ? (
         <Alert
           tone="warning"
           title="Billing checkout is offline"
@@ -49,15 +61,14 @@ export default async function PricingPage({
       ) : null}
 
       <div className="grid items-start gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        {fallbackBillingStatus.plans.map((plan) => {
+        {plans.map((plan) => {
           const isFeatured = plan.key === featuredKey;
           return (
             <Card
               key={plan.key}
               className={cn(
-                "relative flex min-h-[28rem] flex-col p-5",
-                isFeatured &&
-                  "bg-primary text-primary-foreground shadow-brutal-lg",
+                "relative flex min-h-[28rem] flex-col p-6",
+                isFeatured && "shadow-neu-glow ring-2 ring-primary/40",
               )}
             >
               {isFeatured ? (
@@ -66,28 +77,27 @@ export default async function PricingPage({
                 </Badge>
               ) : null}
 
-              <h2 className="text-xl font-black uppercase">{plan.name}</h2>
-              <p className="mt-3 text-5xl font-black">
-                {formatPrice(plan.price_cents)}
+              <h2 className="text-xl font-bold tracking-tight text-foreground">
+                {plan.name}
+              </h2>
+              <p className="mt-3 text-4xl font-extrabold tabular-nums text-foreground">
+                {formatPrice(plan.price_paise)}
               </p>
-              <p
-                className={cn(
-                  "text-sm font-bold",
-                  isFeatured ? "text-ink" : "text-muted-foreground",
-                )}
-              >
+              <p className="text-sm font-medium text-muted-foreground">
                 per month
               </p>
 
-              <div className="my-5 h-1 bg-foreground" />
+              <div className="my-5 h-px bg-hairline" />
 
-              <ul className="space-y-3 text-sm flex-1">
+              <ul className="flex-1 space-y-3 text-sm">
                 {plan.features.map((feature) => (
-                  <li key={feature} className="flex gap-2 font-bold">
-                    <PixelIcon
-                      name="success"
-                      className="mt-0.5 size-4 shrink-0"
-                    />
+                  <li
+                    key={feature}
+                    className="flex gap-2.5 font-medium text-foreground"
+                  >
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded-neu-sm bg-surface text-primary shadow-neu-inset-sm">
+                      <PixelIcon name="success" className="size-3" />
+                    </span>
                     <span>{feature}</span>
                   </li>
                 ))}
@@ -123,7 +133,7 @@ export default async function PricingPage({
   );
 }
 
-function formatPrice(cents: number) {
-  if (cents === 0) return "$0";
-  return `$${Math.round(cents / 100)}`;
+function formatPrice(paise: number) {
+  if (!paise) return "₹0";
+  return `₹${Math.round(paise / 100)}`;
 }

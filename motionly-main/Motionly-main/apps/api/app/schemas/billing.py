@@ -53,21 +53,27 @@ class PlanEntitlements(BaseModel):
 class PlanDefinition(BaseModel):
     key: BillingPlanKey
     name: str
-    price_cents: int
-    currency: str = "usd"
+    # Price in INR paise (₹1 = 100 paise). Single source: app/config/plans.json.
+    price_paise: int
+    currency: str = "INR"
     interval: BillingInterval = BillingInterval.MONTH
-    stripe_price_env: str | None = None
     entitlements: PlanEntitlements
     features: list[str]
+
+
+class PublicPlansResponse(BaseModel):
+    """Unauthenticated catalogue of billing plans for the public pricing page."""
+
+    plans: list[PlanDefinition]
 
 
 class SubscriptionSummary(BaseModel):
     workspace_id: UUID
     plan: BillingPlanKey
     status: SubscriptionStatus
-    stripe_customer_id: str | None = None
-    stripe_subscription_id: str | None = None
-    stripe_price_id: str | None = None
+    gateway_customer_id: str | None = None
+    gateway_subscription_id: str | None = None
+    gateway_price_id: str | None = None
     current_period_start: datetime | None = None
     current_period_end: datetime | None = None
     cancel_at_period_end: bool = False
@@ -104,15 +110,53 @@ class CheckoutSessionRequest(BaseModel):
 class CheckoutSessionResponse(BaseModel):
     checkout_url: str
     session_id: str
+    demo_notice: str | None = None
 
 
-class CustomerPortalResponse(BaseModel):
-    portal_url: str
+class CancelSubscriptionResponse(BaseModel):
+    subscription: "SubscriptionSummary"
+    demo_notice: str | None = None
 
 
-class StripeWebhookResponse(BaseModel):
+class RetryRenewalResponse(BaseModel):
+    subscription: "SubscriptionSummary"
+    demo_notice: str | None = None
+    checkout_url: str | None = None
+    session_id: str | None = None
+
+
+class GatewayWebhookResponse(BaseModel):
     received: bool
     duplicate: bool = False
+    note: str = "Demo payment — no money is charged"
+
+
+class PaymentReceipt(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    kind: str  # "charge" | "refund"
+    plan: BillingPlanKey | None = None
+    amount_paise: int
+    currency: str = "INR"
+    gateway_event_id: str | None = None
+    gateway_order_id: str | None = None
+    reason: str | None = None
+    created_at: datetime
+    demo_notice: str = "Demo payment — no money is charged"
+
+
+class PaymentHistoryResponse(BaseModel):
+    receipts: list[PaymentReceipt]
+
+
+class RefundRequest(BaseModel):
+    workspace_id: UUID
+    amount_paise: int | None = None
+    reason: str | None = None
+
+
+class RefundResponse(BaseModel):
+    receipt: PaymentReceipt
 
 
 class UsageLedgerEntryResponse(BaseModel):

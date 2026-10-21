@@ -17,7 +17,6 @@ if ! git rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null; then
 fi
 
 canonical_dir="supabase/migrations"
-archived_dir="infra/migrations_legacy"
 deprecated_dir="infra/migrations"
 repairs_file="scripts/migration-repairs.sha256"
 
@@ -48,13 +47,6 @@ done <<<"$canonical_changes"
 if [[ -n "$violations" ]]; then
   echo "Applied migrations are immutable; add a forward-fix migration instead:" >&2
   printf '%s' "$violations" >&2
-  exit 1
-fi
-
-legacy_additions="$(changes "$archived_dir" | awk '$1 == "A" && $2 ~ /\.sql$/ { print }')"
-if [[ -n "$legacy_additions" ]]; then
-  echo "New migrations must go in $canonical_dir, not the archived legacy tree:" >&2
-  echo "$legacy_additions" >&2
   exit 1
 fi
 

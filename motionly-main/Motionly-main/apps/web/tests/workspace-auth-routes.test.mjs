@@ -28,15 +28,3 @@ test("workspace selection uses POST-safe redirects and surfaces recoverable erro
   );
   assert.match(dashboard, /error=\{workspaceError\}/);
 });
-
-test("auth callback redirects failed exchanges to login and only succeeds after exchange", async () => {
-  const callback = await source("app/auth/callback/route.ts");
-
-  assert.match(callback, /callback_missing/);
-  assert.match(callback, /callback_failed/);
-  assert.match(callback, /exchangeCodeForSession\(code\)/);
-  assert.match(
-    callback,
-    /NextResponse\.redirect\(publicUrl\("\/dashboard"\), 303\)/,
-  );
-});

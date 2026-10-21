@@ -34,7 +34,6 @@ import {
   queuedWaitBandLabel,
   renderStatusLabel,
 } from "@/lib/product-flow-status";
-import { createClient } from "@/lib/supabase/browser";
 import type { PreviewExportState } from "./preview/VideoPreview";
 import { useToast } from "../toast";
 import { StaleIndicator } from "./StaleIndicator";
@@ -490,88 +489,6 @@ export function ExportStep({
 
   useEffect(() => {
     if (!activeStreamJobId) return;
-    const supabase = createClient();
-    const channel = supabase
-      .channel(`render-job-${activeStreamJobId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "render_jobs",
-          filter: `id=eq.${activeStreamJobId}`,
-        },
-        (payload) => {
-          const row = payload.new as {
-            id?: string;
-            status?: RenderJobSummary["status"] | "processing";
-            progress_pct?: number;
-            error_code?: string | null;
-            error_message?: string | null;
-            artifact_path?: string | null;
-            updated_at?: string;
-          };
-          if (!row.id) return;
-          const status = row.status === "processing" ? "preparing" : row.status;
-          setJobs((current) =>
-            current.map((job) =>
-              job.id === row.id
-                ? {
-                    ...job,
-                    status: status ?? job.status,
-                    progress_pct: row.progress_pct ?? job.progress_pct,
-                    error_code: row.error_code ?? job.error_code,
-                    error_message: row.error_message ?? job.error_message,
-                    artifact_path: row.artifact_path ?? job.artifact_path,
-                    updated_at: row.updated_at ?? job.updated_at,
-                  }
-                : job,
-            ),
-          );
-          if (status === "complete") {
-            void refreshExports();
-            setStreamingJobId(null);
-            setMessage("Export is ready to download.");
-            if (shouldToast("short_action_feedback")) {
-              toast({
-                title: "Export Ready",
-                description: "Your video has compiled successfully.",
-                variant: "success",
-              });
-            }
-          } else if (status === "failed" || status === "canceled") {
-            setStreamingJobId(null);
-            setMessage(
-              status === "failed"
-                ? (row.error_message ?? "Render failed.")
-                : "Render canceled.",
-            );
-            if (shouldToast("short_action_feedback")) {
-              toast({
-                title:
-                  status === "failed" ? "Render Failed" : "Render Canceled",
-                description:
-                  status === "failed"
-                    ? "Server-side compilation failed. Reducing effects or retrying may help."
-                    : "The render was canceled.",
-                variant: status === "failed" ? "error" : "info",
-              });
-            }
-          } else if (status) {
-            setMessage(`${statusLabel(status)} (${row.progress_pct ?? 0}%)`);
-          }
-        },
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-    // refreshExports reads the latest auth/project props and is also used by polling.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeStreamJobId]);
-
-  useEffect(() => {
-    if (!activeStreamJobId) return;
     const renderJobId = activeStreamJobId;
     let canceled = false;
     streamAbortRef.current?.abort();
@@ -818,24 +735,25 @@ export function ExportStep({
   return (
     <div
       id="editor-export"
-      className="space-y-4"
+      tabIndex={-1}
+      className="space-y-4 rounded-neu-lg focus-visible:outline-none"
       aria-labelledby="export-heading"
     >
-      <div className="space-y-2 border-b-2 border-foreground pb-4">
+      <div className="space-y-2 border-b border-hairline pb-4">
         <h2
           id="export-heading"
-          className="text-2xl font-black uppercase tracking-tight"
+          className="text-2xl font-bold tracking-tight text-foreground"
         >
           Repurpose
         </h2>
-        <p className="text-xs text-muted-foreground leading-relaxed font-mono">
+        <p className="text-xs font-medium text-muted-foreground leading-relaxed">
           Turn one source into tailored, platform-ready outputs without
           rebuilding your edit.
         </p>
       </div>
 
       {brandKits.length ? (
-        <div className="border-2 border-primary bg-primary/5 p-3 rounded shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+        <div className="rounded-neu-lg bg-surface p-3 shadow-neu-raised">
           <Label className="mb-1 block">Brand Kit export defaults</Label>
           <Select
             id="brand-kit-export"
@@ -856,14 +774,14 @@ export function ExportStep({
               ...brandKits.map((kit) => ({ value: kit.id, label: kit.name })),
             ]}
           />
-          <p className="mt-1 text-[10px] font-mono text-muted-foreground">
+          <p className="mt-1 text-[10px] font-medium text-muted-foreground">
             Applies the selected kit’s creator template, platform, frame,
             captions, and permitted quality.
           </p>
         </div>
       ) : null}
 
-      <div className="card rounded-md border-2 border-foreground p-4 sm:p-5 space-y-4 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] bg-surface">
+      <div className="space-y-4 rounded-neu-lg bg-surface p-4 shadow-neu-raised sm:p-5">
         <ExportStepSection step="1" title="Format" status="completed">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -923,10 +841,10 @@ export function ExportStep({
                       key={opt.value}
                       type="button"
                       onClick={() => setOutputAspect(opt.value)}
-                      className={`flex items-center justify-center min-h-[40px] px-3 py-1.5 rounded-md border-2 text-xs font-bold transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
+                      className={`flex items-center justify-center min-h-[40px] px-3 py-1.5 rounded-neu text-xs font-semibold transition-shadow duration-200 ${
                         active
-                          ? "bg-primary border-foreground text-primary-foreground"
-                          : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
+                          ? "bg-primary text-primary-foreground shadow-neu-glow"
+                          : "bg-surface text-foreground shadow-neu-raised-sm hover:shadow-neu-raised"
                       }`}
                     >
                       {opt.label}
@@ -934,7 +852,7 @@ export function ExportStep({
                   );
                 })}
               </div>
-              <p className="text-[10px] font-mono text-muted-foreground mt-1">
+              <p className="text-[10px] font-medium text-muted-foreground mt-1">
                 Source: {sourceAspectLabel}
               </p>
             </div>
@@ -949,10 +867,10 @@ export function ExportStep({
                       key={opt.value}
                       type="button"
                       onClick={() => setFitMode(opt.value)}
-                      className={`flex items-center justify-center min-h-[40px] px-3 py-1.5 rounded-md border-2 text-xs font-bold transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
+                      className={`flex items-center justify-center min-h-[40px] px-3 py-1.5 rounded-neu text-xs font-semibold transition-shadow duration-200 ${
                         active
-                          ? "bg-primary border-foreground text-primary-foreground"
-                          : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
+                          ? "bg-primary text-primary-foreground shadow-neu-glow"
+                          : "bg-surface text-foreground shadow-neu-raised-sm hover:shadow-neu-raised"
                       }`}
                     >
                       {opt.label}
@@ -964,7 +882,7 @@ export function ExportStep({
           </div>
 
           {fitMode === "custom" ? (
-            <div className="mt-3 space-y-3 border-t-2 border-foreground/20 pt-3">
+            <div className="mt-3 space-y-3 border-t border-hairline pt-3">
               <Slider label="Crop X" value={cropX} onChange={setCropX} />
               <Slider label="Crop Y" value={cropY} onChange={setCropY} />
               <Slider
@@ -977,14 +895,14 @@ export function ExportStep({
               <button
                 type="button"
                 aria-label="Reset crop to centered original size"
-                className="w-full inline-flex items-center justify-center gap-2 h-11 rounded-md border-2 border-foreground bg-surface text-foreground font-bold hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] text-xs uppercase"
+                className="w-full inline-flex items-center justify-center gap-2 h-11 rounded-neu bg-surface text-foreground font-semibold text-xs shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                 onClick={() => {
                   setCropX(50);
                   setCropY(50);
                   setCropZoom(100);
                 }}
               >
-                <RotateCcw className="size-3.5" />
+                <RotateCcw className="size-3.5" aria-hidden="true" />
                 Reset Crop
               </button>
             </div>
@@ -1002,10 +920,10 @@ export function ExportStep({
                     key={opt.value}
                     type="button"
                     onClick={() => setResolution(opt.value)}
-                    className={`flex items-center justify-center px-4 py-1.5 rounded-full border-2 text-xs font-black font-mono transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none ${
+                    className={`flex items-center justify-center px-4 py-1.5 rounded-full text-xs font-semibold tabular-nums transition-shadow duration-200 ${
                       active
-                        ? "bg-primary border-foreground text-primary-foreground"
-                        : "bg-surface border-foreground/30 hover:border-foreground text-foreground"
+                        ? "bg-primary text-primary-foreground shadow-neu-glow"
+                        : "bg-surface text-foreground shadow-neu-raised-sm hover:shadow-neu-raised"
                     }`}
                   >
                     {opt.label}
@@ -1017,7 +935,7 @@ export function ExportStep({
         </ExportStepSection>
       </div>
 
-      <div className="rounded-md border-2 border-foreground bg-surface px-4 py-3">
+      <div className="rounded-neu-lg bg-surface px-4 py-3 shadow-neu-inset">
         <Label className="mb-1">Caption language</Label>
         <Select
           id="localized-publish-package"
@@ -1037,13 +955,13 @@ export function ExportStep({
             })),
           ]}
         />
-        <p className="mt-1 text-[10px] font-mono text-muted-foreground">
+        <p className="mt-1 text-[10px] font-medium text-muted-foreground">
           Approved packages use their reviewed captions and localized text
           overlays.
         </p>
       </div>
 
-      <label className="flex min-h-12 items-center justify-between gap-4 rounded-md border-2 border-foreground bg-surface px-4 py-3 text-sm font-bold">
+      <label className="flex min-h-12 items-center justify-between gap-4 rounded-neu-lg bg-surface px-4 py-3 text-sm font-semibold text-foreground shadow-neu-raised-sm">
         <span>
           <span className="block">Burn captions into export</span>
           <span className="block text-xs font-medium text-muted-foreground">
@@ -1070,7 +988,7 @@ export function ExportStep({
               ? "export-missing-captions"
               : undefined
         }
-        className="w-full inline-flex items-center justify-center gap-2 h-14 rounded-md bg-primary text-primary-foreground border-2 border-foreground hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none font-black uppercase text-sm"
+        className="w-full inline-flex items-center justify-center gap-2 h-14 rounded-neu bg-primary text-primary-foreground shadow-neu-glow transition-shadow duration-200 active:shadow-neu-pressed disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-neu-raised-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background font-semibold text-sm"
       >
         {loading || isRendering ? (
           <Loader2 className="size-5 animate-spin" />
@@ -1092,7 +1010,7 @@ export function ExportStep({
             !captionSourceAvailable)
         }
         aria-busy={loading || Boolean(isRendering)}
-        className="w-full inline-flex items-center justify-center gap-2 h-12 mt-2 rounded-md bg-surface text-foreground border-2 border-foreground hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none focus:outline-none font-black uppercase text-xs"
+        className="w-full inline-flex items-center justify-center gap-2 h-12 mt-2 rounded-neu bg-surface text-foreground shadow-neu-raised transition-shadow duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-neu-raised-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background font-semibold text-xs"
       >
         {loading || isRendering ? (
           <Loader2 className="size-4 animate-spin" />
@@ -1119,7 +1037,7 @@ export function ExportStep({
 
       {latestJob ? (
         <div
-          className="space-y-3 border-2 border-foreground bg-surface rounded-md p-4 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff]"
+          className="space-y-3 rounded-neu-lg bg-surface p-4 shadow-neu-raised"
           aria-live="polite"
         >
           <div className="flex items-center justify-between gap-3">
@@ -1129,14 +1047,14 @@ export function ExportStep({
                 loading={loading || Boolean(isRendering)}
               />
               <div className="min-w-0">
-                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground font-mono">
+                <p className="text-xs font-semibold tracking-wide text-muted-foreground">
                   Render job
                 </p>
-                <p className="truncate text-sm font-black">
+                <p className="truncate text-sm font-bold text-foreground">
                   {uiStateLabel(renderUiState)}
                 </p>
                 {latestJob.specs ? (
-                  <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 font-mono text-xs text-muted-foreground">
+                  <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-xs font-medium text-muted-foreground tabular-nums">
                     <span>
                       {latestJob.specs.width}x{latestJob.specs.height}
                     </span>
@@ -1151,15 +1069,15 @@ export function ExportStep({
             {renderUiState === "queued" ||
             renderUiState === "rendering" ||
             renderUiState === "completed" ? (
-              <span className="text-right text-sm font-black text-primary font-mono">
+              <span className="text-right text-sm font-bold text-primary tabular-nums">
                 {progress}%
                 {etaLabel ? (
-                  <span className="block text-[10px] font-bold text-muted-foreground font-mono">
+                  <span className="block text-[10px] font-semibold text-muted-foreground tabular-nums">
                     ETA {etaLabel}
                   </span>
                 ) : null}
                 {waitBandLabel ? (
-                  <span className="block text-[10px] font-bold text-muted-foreground font-mono">
+                  <span className="block text-[10px] font-semibold text-muted-foreground">
                     {waitBandLabel}
                   </span>
                 ) : null}
@@ -1170,7 +1088,7 @@ export function ExportStep({
           renderUiState === "rendering" ||
           renderUiState === "completed" ? (
             <div
-              className="progress-bar mt-2 h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
+              className="mt-2 h-3 bg-muted rounded-full overflow-hidden shadow-neu-inset-sm"
               role="progressbar"
               aria-label={`Render progress: ${uiStateLabel(renderUiState)}`}
               aria-valuemin={0}
@@ -1187,17 +1105,17 @@ export function ExportStep({
           {renderUiState === "failed" && latestJob.error_message ? (
             <div
               role="alert"
-              className="flex flex-col gap-2 rounded-md border-2 border-foreground bg-danger/10 p-4 text-xs font-bold text-danger"
+              className="flex flex-col gap-2 rounded-neu-lg bg-surface p-4 text-xs font-semibold text-danger shadow-neu-raised ring-1 ring-danger/30"
             >
               <div className="flex gap-2 items-center">
                 <AlertTriangle className="size-4 shrink-0" strokeWidth={2} />
-                <span className="font-black">
+                <span className="font-bold">
                   Render Failed: {latestJob.error_message}
                 </span>
               </div>
-              <div className="pl-6 font-semibold text-muted-foreground leading-relaxed">
+              <div className="pl-6 font-medium text-muted-foreground leading-relaxed">
                 What you can do next:
-                <ul className="list-disc pl-4 mt-1 space-y-0.5 font-mono">
+                <ul className="list-disc pl-4 mt-1 space-y-0.5">
                   <li>Verify that no timeline clips are missing or empty.</li>
                   <li>Reduce caption formatting or B-roll complexity.</li>
                   <li>
@@ -1213,7 +1131,7 @@ export function ExportStep({
               <button
                 type="button"
                 aria-label="Cancel render"
-                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-black uppercase rounded-md border-2 border-foreground bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50"
+                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-semibold rounded-neu bg-surface text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:opacity-50"
                 onClick={() => cancelRender(latestJob.id)}
                 disabled={loading}
               >
@@ -1225,7 +1143,7 @@ export function ExportStep({
               <button
                 type="button"
                 aria-label="Retry failed render"
-                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-black uppercase rounded-md border-2 border-foreground bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50"
+                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-semibold rounded-neu bg-surface text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:opacity-50"
                 onClick={() => retryRender(retryableJob.id)}
                 disabled={loading}
               >
@@ -1237,7 +1155,7 @@ export function ExportStep({
               <button
                 type="button"
                 aria-label="Start render again"
-                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-black uppercase rounded-md border-2 border-foreground bg-surface text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-50"
+                className="min-h-10 flex-1 inline-flex items-center justify-center gap-2 text-xs font-semibold rounded-neu bg-surface text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:opacity-50"
                 onClick={startRender}
                 disabled={loading || (includeCaptions && !captionTrackId)}
               >
@@ -1250,21 +1168,21 @@ export function ExportStep({
       ) : null}
 
       {latestExport && (
-        <div className="space-y-4 border-t-2 border-foreground pt-6">
+        <div className="space-y-4 border-t border-hairline pt-6">
           <Label>Latest Export</Label>
-          <div className="flex items-center justify-between border-2 border-foreground bg-surface p-4 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff]">
+          <div className="flex items-center justify-between rounded-neu-lg bg-surface p-4 shadow-neu-raised">
             <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-md border-2 border-foreground bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <div className="flex size-10 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
                 <CheckCircle2 className="size-5" strokeWidth={2} />
               </div>
               <div>
-                <p className="text-xs font-black uppercase tracking-widest text-muted-foreground font-mono">
+                <p className="text-xs font-semibold tracking-wide text-muted-foreground tabular-nums">
                   v{latestExport.version}
                 </p>
-                <p className="text-sm font-black text-foreground">
+                <p className="text-sm font-bold text-foreground">
                   Ready to download
                 </p>
-                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 font-mono text-xs text-muted-foreground">
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 text-xs font-medium text-muted-foreground tabular-nums">
                   <span>
                     {latestExport.width}x{latestExport.height}
                   </span>
@@ -1293,7 +1211,7 @@ export function ExportStep({
             <button
               type="button"
               aria-label="Download latest export"
-              className="inline-flex min-h-11 items-center justify-center gap-2 px-4 text-xs font-black uppercase border-2 border-foreground bg-surface text-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none"
+              className="inline-flex min-h-11 items-center justify-center gap-2 px-4 text-xs font-semibold bg-surface text-foreground rounded-neu shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:opacity-60 disabled:cursor-not-allowed"
               onClick={() => downloadExport(latestExport.id)}
               disabled={loading}
             >
@@ -1307,10 +1225,10 @@ export function ExportStep({
         <p
           id="export-missing-captions"
           role="alert"
-          className="rounded-md border-2 border-foreground bg-amber-500/10 p-3.5 text-xs font-bold text-amber-700 dark:text-amber-300 flex items-start gap-2.5 mt-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]"
+          className="rounded-neu-lg bg-surface p-3.5 text-xs font-semibold text-warning flex items-start gap-2.5 mt-4 shadow-neu-raised ring-1 ring-warning/30"
         >
           <AlertTriangle
-            className="size-4 shrink-0 mt-0.5 text-amber-700 dark:text-amber-300"
+            className="size-4 shrink-0 mt-0.5 text-warning"
             strokeWidth={2}
           />
           <span>
@@ -1329,7 +1247,7 @@ export function ExportStep({
               : "status"
           }
           aria-live="polite"
-          className="rounded-md border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-muted-foreground mt-4 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] font-mono"
+          className="rounded-neu bg-surface p-3.5 text-xs font-semibold text-muted-foreground mt-4 shadow-neu-inset-sm"
         >
           {message}
         </p>
@@ -1350,26 +1268,26 @@ function ExportStepSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-2 border-foreground bg-surface rounded-md overflow-hidden shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-      <div className="flex min-h-[44px] items-center gap-3 border-b-2 border-foreground px-3.5 bg-secondary/10">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold border-2 border-foreground select-none font-mono">
+    <section className="rounded-neu-lg bg-surface overflow-hidden shadow-neu-raised-sm">
+      <div className="flex min-h-[44px] items-center gap-3 border-b border-hairline px-3.5 bg-surface-elevated">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-semibold select-none tabular-nums shadow-neu-glow">
           {step}
         </span>
-        <h3 className="flex-1 text-sm font-black uppercase tracking-tight text-foreground">
+        <h3 className="flex-1 text-sm font-bold tracking-tight text-foreground">
           {title}
         </h3>
         {status === "completed" && (
-          <span className="rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground bg-green-500 text-white shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+          <span className="rounded-full px-2 py-0.5 font-semibold text-[10px] bg-success text-ink shadow-neu-raised-sm">
             Completed
           </span>
         )}
         {status === "active" && (
-          <span className="rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground bg-primary text-primary-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+          <span className="rounded-full px-2 py-0.5 font-semibold text-[10px] bg-primary text-primary-foreground shadow-neu-glow">
             Active
           </span>
         )}
         {status === "idle" && (
-          <span className="rounded px-2 py-0.5 font-bold font-mono text-[10px] uppercase border-2 border-foreground bg-muted text-muted-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+          <span className="rounded-full px-2 py-0.5 font-semibold text-[10px] bg-muted text-muted-foreground shadow-neu-inset-sm">
             Idle
           </span>
         )}
@@ -1405,7 +1323,7 @@ function RenderStatusIcon({
   if (state === "failed") {
     return (
       <AlertTriangle
-        className="size-5 shrink-0 text-red-600"
+        className="size-5 shrink-0 text-danger"
         aria-hidden="true"
       />
     );

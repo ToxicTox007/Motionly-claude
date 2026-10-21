@@ -6,14 +6,13 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.internal_jobs import _execute_job, run_queue_job
-from app.api.internal_renders import fail_render_job, update_render_progress
 from app.api.renders import create_render
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.plans import InMemoryPlanRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.renders import RenderCreateRequest, RenderJobStatus
 from app.schemas.uploads import UploadStatus, VideoMetadata
+from app.services.job_engine import _execute_job, run_queue_job
 from app.services.local_storage import LocalObjectStorage
 from app.services.operations import MetricsRegistry
 from app.services.queue import EnqueuedJob, PreprocessQueue, QueueRegistry, RenderQueue
@@ -144,7 +143,7 @@ def test_preprocess_fanout_is_owned_by_exactly_one_orchestrator(
     calls = {"transcription": 0, "visual": 0}
 
     monkeypatch.setattr(
-        "app.api.internal_jobs.complete_upload_preprocessing_by_id",
+        "app.services.job_engine.complete_upload_preprocessing_by_id",
         lambda **_kwargs: upload,
     )
 
@@ -159,13 +158,16 @@ def test_preprocess_fanout_is_owned_by_exactly_one_orchestrator(
             job=SimpleNamespace(id="visual-job"),
         )
 
-    monkeypatch.setattr("app.api.internal_jobs.queue_transcription_for_upload", queue_transcription)
     monkeypatch.setattr(
-        "app.api.internal_jobs.visual_provider_identity",
+        "app.services.job_engine.queue_transcription_for_upload",
+        queue_transcription,
+    )
+    monkeypatch.setattr(
+        "app.services.job_engine.visual_provider_identity",
         lambda _settings: ("p", "m"),
     )
-    monkeypatch.setattr("app.api.internal_jobs.build_visual_cache_key", lambda **_kwargs: "v1")
-    monkeypatch.setattr("app.api.internal_jobs.queue_visual_analysis_for_upload", queue_visual)
+    monkeypatch.setattr("app.services.job_engine.build_visual_cache_key", lambda **_kwargs: "v1")
+    monkeypatch.setattr("app.services.job_engine.queue_visual_analysis_for_upload", queue_visual)
 
     state = SimpleNamespace(
         settings=SimpleNamespace(
@@ -211,7 +213,7 @@ def test_domain_worker_reconstructs_identifier_only_workflow_context(monkeypatch
         assert request.app is not None
         return {"status": "ready"}
 
-    monkeypatch.setattr("app.api.internal_jobs._execute_job", execute_job)
+    monkeypatch.setattr("app.services.job_engine._execute_job", execute_job)
     identifiers = {
         "workflow_run_id": str(uuid4()),
         "workflow_step_id": str(uuid4()),
@@ -248,7 +250,7 @@ def test_domain_worker_reconstructs_identifier_only_workflow_context(monkeypatch
     assert job.next_run_state == identifiers["next_run_state"]
 
 
-def test_worker_runs_render_job_to_export() -> None:
+def test_worker_runs_render_job_to_export(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     repository, project_id, workspace_id, user_id = make_render_repository()
     registry = QueueRegistry()
     metrics_registry = MetricsRegistry()
@@ -257,12 +259,34 @@ def test_worker_runs_render_job_to_export() -> None:
         export_storage_bucket="exports",
         export_signed_url_ttl_seconds=300,
         should_complete_renders_synchronously=False,
-        render_execute_ffmpeg=False,
-        media_work_dir=".motionly/test-storage",
+        media_work_dir=str(tmp_path),
         billing_enabled=False,
         supabase_url=None,
         supabase_service_role_key=None,
+        app_env="test",
+        allow_fixture_providers=True,
     )
+    # The internal render path always runs the real FFmpeg renderer; patch only
+    # the encode step so the test stays fast. No setting can select a stand-in.
+    from app.services.ffmpeg_render import FFmpegCaptionRenderer
+
+    def fake_render(self, *, output_path, **_kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"mp4")
+        return 7, output_path.stat().st_size
+
+    monkeypatch.setattr(FFmpegCaptionRenderer, "render", fake_render)
+    monkeypatch.setattr(
+        "app.services.render_jobs.which", lambda _name: "/usr/bin/ffmpeg"
+    )
+    monkeypatch.setattr(
+        "app.services.render_jobs.subprocess.run",
+        lambda *_a, **_k: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+    # Seed the manifest source object on local test storage.
+    source_target = tmp_path / "raw-uploads" / "video.mp4"
+    source_target.parent.mkdir(parents=True, exist_ok=True)
+    source_target.write_bytes(b"motionly test source\n")
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
@@ -303,107 +327,8 @@ def test_worker_runs_render_job_to_export() -> None:
     assert job.status == RenderJobStatus.COMPLETE
     assert repository.list_exports(project_id=project_id, workspace_id=workspace_id)
     summary = metrics_registry.summary()
-    assert summary["render"]["p95_latency_ms"] == 0
-    assert summary["export"]["p95_latency_ms"] == 0
-
-
-def test_worker_progress_callback_updates_render_job() -> None:
-    repository, project_id, workspace_id, _user_id = make_render_repository()
-    render = repository.create_render_job(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        uploaded_video_id=repository.get_active_upload(
-            project_id=project_id,
-            workspace_id=workspace_id,
-        ).id,
-        caption_track_id=repository.latest_caption_track(
-            project_id=project_id,
-            workspace_id=workspace_id,
-        ).id,
-        status=RenderJobStatus.QUEUED,
-        planner_version="test",
-        manifest={},
-        keep_segments=[],
-        progress_pct=5,
-    )
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                settings=SimpleNamespace(worker_api_token="worker-secret"),
-                render_repository=repository,
-            ),
-        ),
-    )
-
-    response = asyncio.run(
-        update_render_progress(
-            render_job_id=render.id,
-            payload=SimpleNamespace(
-                workspace_id=workspace_id,
-                project_id=project_id,
-                status=RenderJobStatus.RENDERING,
-                progress_pct=45,
-                message="Rendering premium video composition.",
-                event_type="remotion_rendering",
-                metadata={"phase": "render"},
-            ),
-            request=request,
-            x_motionly_worker_token="worker-secret",
-        )
-    )
-
-    assert response.status == RenderJobStatus.RENDERING
-    assert response.progress_pct == 45
-    assert repository.events_for_job(render.id)[-1].event_type == "remotion_rendering"
-
-
-def test_worker_failure_callback_marks_terminal_failure() -> None:
-    repository, project_id, workspace_id, _user_id = make_render_repository()
-    render = repository.create_render_job(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        uploaded_video_id=repository.get_active_upload(
-            project_id=project_id,
-            workspace_id=workspace_id,
-        ).id,
-        caption_track_id=repository.latest_caption_track(
-            project_id=project_id,
-            workspace_id=workspace_id,
-        ).id,
-        status=RenderJobStatus.RENDERING,
-        planner_version="test",
-        manifest={},
-        keep_segments=[],
-        progress_pct=45,
-    )
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                settings=SimpleNamespace(worker_api_token="worker-secret"),
-                render_repository=repository,
-            ),
-        ),
-    )
-
-    response = asyncio.run(
-        fail_render_job(
-            render_job_id=render.id,
-            payload=SimpleNamespace(
-                workspace_id=workspace_id,
-                project_id=project_id,
-                error_code="render_worker_failed",
-                error_message="render-cli.ts exited with code 1",
-                retrying=False,
-                metadata={"attempts": 3},
-            ),
-            request=request,
-            x_motionly_worker_token="worker-secret",
-        )
-    )
-
-    assert response.status == RenderJobStatus.FAILED
-    assert render.error_code == "render_worker_failed"
-    assert "render-cli.ts exited with code 1" in render.logs[-1]
+    assert summary["render"]["p95_latency_ms"] == 7
+    assert summary["export"]["p95_latency_ms"] == 7
 
 
 def test_remotion_completion_records_render_and_export_metrics() -> None:

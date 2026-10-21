@@ -52,9 +52,13 @@ import {
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
+import { createRebuildCoalescer } from "@/lib/coalesce-rebuild.mjs";
 import { useRevisionTracking } from "@/hooks/useRevisionTracking";
 import { useWorkflowStatus } from "@/hooks/useWorkflowStatus";
-import type { ConflictState } from "@/hooks/useRevisionTracking";
+import type {
+  ConflictState,
+  ConflictHandlers,
+} from "@/hooks/useRevisionTracking";
 import { ConflictDialog } from "./editor/ConflictDialog";
 import {
   PRODUCT_FLOW_STAGES,
@@ -199,6 +203,10 @@ const AIStep = dynamic(
 );
 const ExportStep = dynamic(
   () => import("./editor/export-step").then((mod) => mod.ExportStep),
+  { loading: () => <InspectorLoading /> },
+);
+const ExportsPanel = dynamic(
+  () => import("./editor/ExportsPanel").then((mod) => mod.ExportsPanel),
   { loading: () => <InspectorLoading /> },
 );
 const PublishingLibraryPanel = dynamic(
@@ -363,6 +371,7 @@ export function EditorClient(props: EditorClientProps) {
             bucket: mattePreview?.bucket ?? null,
             path: mattePreview?.path ?? null,
             cacheKey: mattePreview?.cache_key ?? null,
+            provenance: mattePreview?.provenance ?? null,
             source: mattePreview?.source ?? "approximate_preview",
           }
         : {
@@ -455,11 +464,29 @@ export function EditorClient(props: EditorClientProps) {
     [setInspectorTab],
   );
 
-  const revisionTracking = useRevisionTracking(projectId, localActivePlanId);
+  const fetchLatestRevision = useCallback(async (): Promise<number | null> => {
+    if (!localActivePlanId) return null;
+    const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+      `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}`,
+      {
+        workspaceId,
+        friendlyError: "Could not read the latest plan revision.",
+      },
+    );
+    return (payload.plan as any)?.revision ?? null;
+  }, [localActivePlanId, projectId, workspaceId]);
+
+  const revisionTracking = useRevisionTracking(
+    projectId,
+    localActivePlanId,
+    fetchLatestRevision,
+  );
   const {
     updateRevision,
     handleConflict,
     clearConflict,
+    discardConflict,
+    forceSave,
     conflictState,
     getExpectedRevision,
   } = revisionTracking;
@@ -481,6 +508,7 @@ export function EditorClient(props: EditorClientProps) {
 
   const synchronizeCanonicalTimeline = useCallback(async () => {
     if (!localActivePlanId) return;
+    const expectedRev = getExpectedRevision();
     try {
       const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
         `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}/compile-timeline`,
@@ -488,14 +516,65 @@ export function EditorClient(props: EditorClientProps) {
           method: "POST",
           workspaceId,
           friendlyError: "The timeline could not be synchronized.",
-          body: {},
+          body: {
+            ...(expectedRev != null ? { expected_revision: expectedRev } : {}),
+          },
         },
       );
       handlePlanUpdated(payload.plan);
     } catch (error) {
-      console.error(error);
+      // A rebuild conflict must surface in the dialog, never be swallowed.
+      const handled = handleConflict(error, "timeline_rebuild", {
+        retry: async (latestRevision) => {
+          const payload = await editorApiRequest<{
+            plan: EditPlanRecordSummary;
+          }>(
+            `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}/compile-timeline`,
+            {
+              method: "POST",
+              workspaceId,
+              friendlyError: "The timeline could not be synchronized.",
+              body: { expected_revision: latestRevision },
+            },
+          );
+          handlePlanUpdated(payload.plan);
+        },
+        localSummary: [
+          {
+            field: "Timeline",
+            detail: "Recompile the canonical timeline from your layer edits",
+          },
+        ],
+      });
+      if (!handled) console.error(error);
     }
-  }, [handlePlanUpdated, localActivePlanId, projectId, workspaceId]);
+  }, [
+    getExpectedRevision,
+    handleConflict,
+    handlePlanUpdated,
+    localActivePlanId,
+    projectId,
+    workspaceId,
+  ]);
+
+  // Coalesce bursts of rebuilds (e.g. a caption + b-roll + music change landing
+  // together) into a single compile-timeline request.
+  const rebuildTimelineRef = useRef(synchronizeCanonicalTimeline);
+  useEffect(() => {
+    rebuildTimelineRef.current = synchronizeCanonicalTimeline;
+  }, [synchronizeCanonicalTimeline]);
+  const coalescerRef = useRef<ReturnType<typeof createRebuildCoalescer> | null>(
+    null,
+  );
+  const requestTimelineRebuild = useCallback(() => {
+    if (!coalescerRef.current) {
+      coalescerRef.current = createRebuildCoalescer(
+        () => rebuildTimelineRef.current(),
+        { delayMs: 300 },
+      );
+    }
+    coalescerRef.current();
+  }, []);
 
   const handleCaptionTrackUpdated = useCallback(
     (track: CaptionTrackSummary) => {
@@ -504,9 +583,9 @@ export function EditorClient(props: EditorClientProps) {
         track,
         ...prev.filter((item) => item.id !== track.id),
       ]);
-      void synchronizeCanonicalTimeline();
+      requestTimelineRebuild();
     },
-    [synchronizeCanonicalTimeline],
+    [requestTimelineRebuild],
   );
 
   const handleBrollSlotUpdated = useCallback(
@@ -516,62 +595,83 @@ export function EditorClient(props: EditorClientProps) {
           .map((item) => (item.id === slot.id ? slot : item))
           .sort((a, b) => a.start_ms - b.start_ms),
       );
-      void synchronizeCanonicalTimeline();
+      requestTimelineRebuild();
     },
-    [synchronizeCanonicalTimeline],
+    [requestTimelineRebuild],
   );
 
   const handleBrollSlotsUpdated = useCallback(
     (slots: BrollSlotSummary[]) => {
       setLocalBrollSlots([...slots].sort((a, b) => a.start_ms - b.start_ms));
-      void synchronizeCanonicalTimeline();
+      requestTimelineRebuild();
     },
-    [synchronizeCanonicalTimeline],
+    [requestTimelineRebuild],
   );
 
   const handleMusicSelectionUpdated = useCallback(
     (selection: MusicSelectionSummary) => {
       setLocalMusicSelection(selection);
-      void synchronizeCanonicalTimeline();
+      requestTimelineRebuild();
     },
-    [synchronizeCanonicalTimeline],
+    [requestTimelineRebuild],
   );
 
   const handleEffectsConfigUpdated = useCallback(
     (config: EffectsConfigSummary) => {
       setLocalEffectsConfig(config);
-      void synchronizeCanonicalTimeline();
+      requestTimelineRebuild();
     },
-    [synchronizeCanonicalTimeline],
+    [requestTimelineRebuild],
   );
 
   const executeHistoryAction = useCallback(
     async (action: DurableHistoryAction) => {
-      const expectedRev =
-        action.resultKind === "plan" ? getExpectedRevision() : undefined;
-      const payload = await editorApiRequest<Record<string, any>>(
-        `${env.apiBaseUrl}${action.path}`,
-        {
-          method: "PATCH",
-          workspaceId,
-          friendlyError:
-            "The saved editor history action could not be applied.",
-          body: {
-            ...action.body,
-            ...(expectedRev != null ? { expected_revision: expectedRev } : {}),
+      const sendHistoryAction = async (revision?: number) => {
+        const expectedRev =
+          revision ??
+          (action.resultKind === "plan" ? getExpectedRevision() : undefined);
+        const payload = await editorApiRequest<Record<string, any>>(
+          `${env.apiBaseUrl}${action.path}`,
+          {
+            method: "PATCH",
+            workspaceId,
+            friendlyError:
+              "The saved editor history action could not be applied.",
+            body: {
+              ...action.body,
+              ...(expectedRev != null
+                ? { expected_revision: expectedRev }
+                : {}),
+            },
           },
-        },
-      );
-      if (action.resultKind === "plan" && payload.plan)
-        handlePlanUpdated(payload.plan);
-      if (action.resultKind === "caption" && payload.track)
-        handleCaptionTrackUpdated(payload.track);
-      if (action.resultKind === "broll" && payload.slot)
-        handleBrollSlotUpdated(payload.slot);
-      if (action.resultKind === "music")
-        handleMusicSelectionUpdated(
-          payload as unknown as MusicSelectionSummary,
         );
+        if (action.resultKind === "plan" && payload.plan)
+          handlePlanUpdated(payload.plan);
+        if (action.resultKind === "caption" && payload.track)
+          handleCaptionTrackUpdated(payload.track);
+        if (action.resultKind === "broll" && payload.slot)
+          handleBrollSlotUpdated(payload.slot);
+        if (action.resultKind === "music")
+          handleMusicSelectionUpdated(
+            payload as unknown as MusicSelectionSummary,
+          );
+      };
+
+      try {
+        await sendHistoryAction();
+      } catch (error) {
+        const handled = handleConflict(error, "history_action", {
+          retry: async (latestRevision) => {
+            await sendHistoryAction(latestRevision);
+          },
+          localSummary: [
+            { field: action.successLabel, detail: "Undo/redo of a plan edit" },
+          ],
+        });
+        // Not a conflict — propagate so the history UI can report it.
+        if (!handled) throw error;
+        return action.successLabel;
+      }
       router.refresh();
       return action.successLabel;
     },
@@ -579,6 +679,7 @@ export function EditorClient(props: EditorClientProps) {
       getExpectedRevision,
       handleBrollSlotUpdated,
       handleCaptionTrackUpdated,
+      handleConflict,
       handleMusicSelectionUpdated,
       handlePlanUpdated,
       router,
@@ -704,8 +805,8 @@ export function EditorClient(props: EditorClientProps) {
         saveProjectTitle={saveProjectTitle}
         conflictState={conflictState}
         onConflictReload={refetchActivePlan}
-        onConflictForceSave={clearConflict}
-        onConflictDismiss={clearConflict}
+        onConflictForceSave={forceSave}
+        onConflictDismiss={discardConflict}
         getExpectedRevision={getExpectedRevision}
         onConflictDetected={handleConflict}
         planRevision={revisionTracking.planRevision}
@@ -786,10 +887,14 @@ interface EditorClientEditorProps extends EditorClientProps {
   saveProjectTitle: (nextTitle: string) => Promise<void>;
   conflictState: ConflictState | null;
   onConflictReload: () => Promise<void>;
-  onConflictForceSave: () => void;
+  onConflictForceSave: () => Promise<void>;
   onConflictDismiss: () => void;
   getExpectedRevision: () => number | undefined;
-  onConflictDetected: (error: unknown, source: string) => boolean;
+  onConflictDetected: (
+    error: unknown,
+    source: string,
+    handlers?: ConflictHandlers,
+  ) => boolean;
   planRevision: number | null;
   pendingReviewProposal: PendingReviewProposal | null;
   setPendingReviewProposal: React.Dispatch<
@@ -1211,7 +1316,36 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         });
         setDropMessage(`${label} saved.`);
       } catch (error) {
-        if (onConflictDetected(error, "manual_elements")) return;
+        const conflicted = onConflictDetected(error, "manual_elements", {
+          // Re-send the SAME change against the latest revision when the user
+          // chooses Force Save.
+          retry: async () => {
+            await persistManualElements(next);
+          },
+          // Roll the canvas back to the pre-edit elements if the user discards.
+          rollback: () => {
+            if (activePlan) {
+              handlePlanUpdated({
+                ...activePlan,
+                plan: activePlan.plan.timeline
+                  ? {
+                      ...activePlan.plan,
+                      manual_elements: before,
+                    }
+                  : { ...activePlan.plan, manual_elements: before },
+              });
+            }
+          },
+          localSummary: [
+            {
+              field: label,
+              detail: `${next.length} on-screen element${
+                next.length === 1 ? "" : "s"
+              } placed/updated`,
+            },
+          ],
+        });
+        if (conflicted) return;
         setDropMessage((error as Error).message);
         toast({
           title: "Action Failed",
@@ -1224,6 +1358,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     },
     [
       activePlan,
+      handlePlanUpdated,
       manualElements,
       onConflictDetected,
       persistManualElements,
@@ -1743,10 +1878,13 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           activeTaskKey: activeCreatorTask?.key ?? creatorTasks[0].key,
           progressPct: creatorProgressPct,
           workflowStatusLabel: canonicalWorkflow
-            ? `Workflow: ${workflowStateLabel}`
+            ? canonicalWorkflow.delayed
+              ? `Workflow: ${workflowStateLabel} — Delayed — retrying`
+              : `Workflow: ${workflowStateLabel}`
             : "Workflow: discovering latest run",
           workflowStatusDetail:
             workflowStatus.error ??
+            canonicalWorkflow?.status_detail ??
             canonicalWorkflow?.draft_render?.error_message ??
             jobLabel,
           onTaskSelect: (task) =>
@@ -1904,7 +2042,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       </EditorLayout>
       <DragOverlay dropAnimation={{ duration: 160, easing: "ease-out" }}>
         {activePaletteElement ? (
-          <div className="w-32 border-2 border-primary bg-background/95 p-2 text-xs font-black shadow-xl">
+          <div className="w-32 rounded-neu-md bg-surface p-2 text-xs font-semibold text-foreground shadow-neu-raised-lg">
             {activePaletteElement.preview || activePaletteElement.name}
             <span className="mt-1 block truncate text-[10px]">
               {activePaletteElement.name}
@@ -1924,7 +2062,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         <ConflictDialog
           conflict={conflictState}
           onReload={onConflictReload}
-          onForceSave={async () => onConflictForceSave()}
+          onForceSave={onConflictForceSave}
           onDismiss={onConflictDismiss}
         />
       )}
@@ -2085,10 +2223,10 @@ function InspectorPanel({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[hsl(var(--surface))]">
+    <div className="flex h-full min-h-0 flex-col bg-surface">
       {/* Tab strip */}
       <div
-        className="pixel-grid-fine flex shrink-0 snap-x gap-1.5 overflow-x-auto overscroll-x-contain border-b border-border bg-muted px-1.5 py-2 sm:gap-2 sm:px-2"
+        className="flex shrink-0 snap-x gap-1.5 overflow-x-auto overscroll-x-contain rounded-full bg-surface px-1.5 py-2 shadow-neu-inset-sm sm:gap-2 sm:px-2"
         role="tablist"
         aria-label="Editor tools"
       >
@@ -2110,12 +2248,12 @@ function InspectorPanel({
                 disabled={disabled}
                 title={disabled ? "Generate an AI edit first" : label}
                 className={cn(
-                  "pixel-button flex min-h-11 min-w-[4.6rem] shrink-0 snap-start items-center justify-center gap-1.5 whitespace-nowrap px-2 py-2 text-xs font-bold transition sm:min-w-20 sm:px-3 sm:text-sm",
+                  "flex min-h-11 min-w-[4.6rem] shrink-0 snap-start items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 py-2 text-xs font-semibold transition-shadow duration-200 sm:min-w-20 sm:px-4 sm:text-sm",
                   selected
-                    ? "bg-primary text-primary-foreground shadow-[3px_3px_0_hsl(var(--shadow-color)/0.18)]"
+                    ? "bg-primary text-primary-foreground shadow-neu-glow"
                     : disabled
-                      ? "cursor-not-allowed bg-background text-muted-foreground opacity-45"
-                      : "bg-surface text-foreground hover:bg-primary/10",
+                      ? "cursor-not-allowed text-muted-foreground opacity-45"
+                      : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 <Icon className="size-4 shrink-0" />
@@ -2229,6 +2367,15 @@ function InspectorPanel({
             planRevision={planRevision}
           />
         )}
+        {tab === "export" && exports.length > 0 && (
+          <div className="mt-6">
+            <ExportsPanel
+              projectId={projectId}
+              workspaceId={workspaceId}
+              exports={exports}
+            />
+          </div>
+        )}
         {tab === "history" && (
           <VersionHistoryPanel
             projectId={projectId}
@@ -2321,18 +2468,18 @@ function SelectedElementInsight({
     musicSelection,
   });
   return (
-    <div className="mb-3 border border-primary/20 bg-primary/5 p-3">
+    <div className="mb-3 rounded-neu-md bg-surface p-3 shadow-neu-raised-sm ring-1 ring-primary/20">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-black uppercase tracking-wide text-primary">
+        <p className="text-xs font-semibold text-primary">
           Selected {clip.trackKind}
         </p>
         {insight.confidence !== null ? (
-          <span className="border border-border bg-surface px-2 py-1 text-[10px] font-black text-foreground">
+          <span className="rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-semibold text-foreground shadow-neu-inset-sm">
             {Math.round(insight.confidence * 100)}% confidence
           </span>
         ) : null}
       </div>
-      <p className="mt-2 text-xs font-bold text-foreground">
+      <p className="mt-2 text-xs font-semibold text-foreground">
         AI reason: {insight.reason}
       </p>
       {insight.detail ? (
@@ -2562,11 +2709,11 @@ function UploadScreen({
 }) {
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
-      <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
+      <header className="flex min-h-12 flex-wrap items-center gap-3 border-b border-hairline bg-surface px-4 py-2">
         <div className="flex items-center gap-3">
           <Link
             href="/dashboard"
-            className="pixel-button flex items-center gap-1 bg-surface px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
+            className="neu-pressable flex items-center gap-1 rounded-neu bg-surface px-3 py-1.5 text-sm text-muted-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:text-foreground hover:shadow-neu-raised"
           >
             <ChevronLeft className="size-4" />
             Dashboard
@@ -2580,7 +2727,7 @@ function UploadScreen({
       <div className="flex flex-1 items-start justify-center px-4 py-10 sm:px-6 lg:py-16">
         <div className="w-full max-w-5xl">
           <div className="mb-8 text-center">
-            <div className="pixel-button mx-auto mb-4 flex size-14 items-center justify-center bg-primary/10">
+            <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-neu bg-surface text-primary shadow-neu-inset-sm">
               <Film className="size-7 text-primary" />
             </div>
             <h1 className="text-2xl font-bold">Upload your footage</h1>
@@ -2627,11 +2774,11 @@ function ProcessingScreen({
 
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
-      <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
+      <header className="flex min-h-12 flex-wrap items-center gap-3 border-b border-hairline bg-surface px-4 py-2">
         <div className="flex items-center gap-3">
           <Link
             href="/dashboard"
-            className="pixel-button flex items-center gap-1 bg-surface px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
+            className="neu-pressable flex items-center gap-1 rounded-neu bg-surface px-3 py-1.5 text-sm text-muted-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:text-foreground hover:shadow-neu-raised"
           >
             <ChevronLeft className="size-4" />
             Dashboard
@@ -2643,12 +2790,12 @@ function ProcessingScreen({
         </div>
       </header>
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-8 text-center max-w-lg mx-auto w-full">
-        <div className="pixel-panel flex size-16 items-center justify-center shadow-soft">
+        <div className="flex size-16 items-center justify-center rounded-neu-lg bg-surface shadow-neu-raised">
           <Loader2 className="size-8 animate-spin text-primary" />
         </div>
 
         <div className="space-y-1">
-          <h2 className="text-lg font-black uppercase tracking-wide">
+          <h2 className="text-lg font-bold tracking-tight text-foreground">
             Processing Video
           </h2>
           <p className="text-xs text-muted-foreground">
@@ -2656,11 +2803,11 @@ function ProcessingScreen({
           </p>
         </div>
 
-        <div className="w-full border border-border bg-surface p-5 text-left shadow-soft space-y-4">
-          <h3 className="text-xs font-black uppercase tracking-wider text-primary border-b border-border pb-2">
+        <div className="w-full space-y-4 rounded-neu-lg bg-surface p-5 text-left shadow-neu-raised">
+          <h3 className="border-b border-hairline pb-2 text-xs font-semibold text-primary">
             Processing Stages
           </h3>
-          <div className="space-y-2.5 font-bold" aria-live="polite">
+          <div className="space-y-2.5 font-semibold" aria-live="polite">
             {PRODUCT_FLOW_STAGES.map((stage, idx) => {
               const isCompleted = idx < activeIdx;
               const isActive = idx === activeIdx;
@@ -2668,19 +2815,19 @@ function ProcessingScreen({
                 <div
                   key={stage.key}
                   className={cn(
-                    "flex items-start gap-3 p-2 border transition duration-80ms steps(4, end)",
+                    "flex items-start gap-3 rounded-neu-md p-2 transition-shadow duration-200",
                     isActive
-                      ? "border-primary bg-primary/5"
-                      : "border-transparent opacity-60",
+                      ? "bg-surface shadow-neu-raised-sm ring-1 ring-primary/30"
+                      : "opacity-60",
                   )}
                 >
-                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center border border-border bg-background text-[10px] font-black">
+                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-foreground shadow-neu-inset-sm">
                     {isCompleted ? "✓" : isActive ? "▶" : idx + 1}
                   </div>
                   <div className="min-w-0">
                     <p
                       className={cn(
-                        "text-xs font-black uppercase tracking-wide",
+                        "text-xs font-semibold",
                         isActive ? "text-primary" : "text-foreground",
                       )}
                     >
@@ -2697,7 +2844,7 @@ function ProcessingScreen({
             })}
           </div>
 
-          <div className="border-t border-border pt-3 mt-2 text-2xs text-muted-foreground flex flex-col gap-0.5 leading-relaxed font-bold">
+          <div className="mt-2 flex flex-col gap-0.5 border-t border-hairline pt-3 text-2xs font-semibold leading-relaxed text-muted-foreground">
             <p className="text-foreground">
               ⏱ Usually takes around 45 seconds.
             </p>
@@ -2705,15 +2852,15 @@ function ProcessingScreen({
           </div>
         </div>
 
-        <div className="pixel-progress h-2.5 w-full max-w-xs border border-border bg-background">
+        <div className="h-2.5 w-full max-w-xs overflow-hidden rounded-full bg-muted shadow-neu-inset-sm">
           <div
-            className="pixel-progress-fill h-full bg-primary transition-all duration-300"
+            className="h-full rounded-full bg-primary shadow-neu-glow transition-all duration-300"
             style={{
               width: `${Math.round(((activeIdx + 0.5) / PRODUCT_FLOW_STAGES.length) * 100)}%`,
             }}
           />
         </div>
-        <p className="text-2xs text-muted-foreground font-bold uppercase tracking-wider">
+        <p className="text-2xs font-semibold text-muted-foreground">
           This page will refresh automatically
         </p>
       </div>

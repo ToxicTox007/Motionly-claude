@@ -925,6 +925,7 @@ export async function downloadToFile(
     maxBytes = Number(env("MEDIA_DOWNLOAD_MAX_BYTES", "536870912")),
     timeoutMs = Number(env("MEDIA_DOWNLOAD_TIMEOUT_MS", "120000")),
     trustedInternal = false,
+    internalOrigin,
   } = {},
 ) {
   const controller = new AbortController();
@@ -933,6 +934,7 @@ export async function downloadToFile(
     const response = await safeFetchMedia(url, {
       signal: controller.signal,
       trustedInternal,
+      ...(internalOrigin !== undefined ? { internalOrigin } : {}),
     });
     if (!response.ok) {
       throw new Error(`Failed to download media (HTTP ${response.status})`);

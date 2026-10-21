@@ -3,13 +3,16 @@ import Image from "next/image";
 import Link from "next/link";
 import {
   Activity,
+  Check,
   ChevronLeft,
   Download,
   Keyboard,
+  Loader2,
   Redo2,
   RotateCcw,
   Sparkles,
   Square,
+  TriangleAlert,
   Undo2,
 } from "lucide-react";
 import { ThemeMenu } from "@/components/theme-menu";
@@ -41,10 +44,10 @@ export function EditorToolbar({
   commandBar,
 }: EditorToolbarProps) {
   return (
-    <header className="sticky top-0 z-40 flex min-h-[64px] max-w-full flex-wrap items-center gap-2 border-b-2 border-foreground bg-surface px-3 py-2">
+    <header className="sticky top-0 z-40 m-2 flex min-h-[64px] max-w-full flex-wrap items-center gap-2 rounded-neu-xl bg-surface px-3 py-2 shadow-neu-raised sm:mx-3">
       <Link
         href="/dashboard"
-        className="flex min-h-10 items-center gap-1.5 rounded border-2 border-foreground bg-surface px-3 py-1 text-sm font-semibold transition-all duration-100 hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-sm"
+        className="neu-pressable flex min-h-10 items-center gap-1.5 rounded-neu bg-surface px-3 py-1 text-sm font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised"
         title="Back to dashboard"
         aria-label="Back to dashboard"
       >
@@ -67,7 +70,7 @@ export function EditorToolbar({
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        className="min-h-10 min-w-0 flex-1 truncate rounded border-2 border-foreground bg-surface px-3 py-1 text-sm font-semibold text-foreground transition-all placeholder:text-muted-foreground focus:outline-none focus:shadow-brutal-sm sm:max-w-[280px] lg:max-w-[260px]"
+        className="min-h-10 min-w-0 flex-1 truncate rounded-neu border border-control bg-surface px-3 py-1 text-sm font-semibold text-foreground transition-shadow duration-200 placeholder:text-muted-foreground focus:shadow-neu-inset-sm focus:outline-none focus:ring-2 focus:ring-focus sm:max-w-[280px] lg:max-w-[260px]"
         placeholder="Untitled project"
       />
 
@@ -76,7 +79,7 @@ export function EditorToolbar({
       </div>
 
       <div
-        className="order-last flex min-h-11 w-full items-center rounded border-2 border-foreground bg-muted p-1 sm:order-none sm:w-auto"
+        className="order-last flex min-h-11 w-full items-center gap-1 rounded-full bg-surface p-1 shadow-neu-inset-sm sm:order-none sm:w-auto"
         role="group"
         aria-label="Editor mode"
         data-editor-mode-toggle
@@ -98,7 +101,7 @@ export function EditorToolbar({
       <div className="hidden flex-1 xl:block" />
 
       {mode === "professional" ? (
-        <div className="hidden items-center gap-1 rounded border-2 border-foreground bg-muted p-1 lg:flex">
+        <div className="hidden items-center gap-1 rounded-full bg-surface p-1 shadow-neu-inset-sm lg:flex">
           <IconCommandButton
             label="Undo"
             shortcut="Ctrl/⌘ Z"
@@ -117,7 +120,7 @@ export function EditorToolbar({
       ) : null}
 
       <div
-        className="flex min-h-10 items-center gap-1 rounded border-2 border-foreground bg-muted p-1"
+        className="flex min-h-10 items-center gap-1 rounded-full bg-surface p-1 shadow-neu-inset-sm"
         aria-busy={commandBar.isPending}
       >
         <IconCommandButton
@@ -134,7 +137,7 @@ export function EditorToolbar({
         />
         <span
           className={cn(
-            "ml-1 hidden min-h-8 max-w-48 items-center gap-1.5 truncate rounded bg-surface px-2 text-xs font-semibold sm:inline-flex",
+            "ml-1 hidden min-h-8 max-w-48 items-center gap-1.5 truncate rounded-full bg-surface px-2.5 text-xs font-semibold shadow-neu-raised-sm sm:inline-flex",
             commandBar.error ? "text-danger" : "text-muted-foreground",
           )}
           role="status"
@@ -161,18 +164,18 @@ export function EditorToolbar({
           type="button"
           onClick={onAiEdit}
           aria-label="Open AI Edit settings"
-          className="hidden min-h-10 items-center gap-1.5 rounded border-2 border-foreground bg-accent px-3 text-sm font-semibold text-accent-foreground transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-sm focus:outline-none lg:inline-flex"
+          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 hover:shadow-neu-raised-lg focus:outline-none active:shadow-neu-pressed lg:inline-flex"
         >
-          <Sparkles className="size-4" strokeWidth={2} />
+          <Sparkles className="size-4" strokeWidth={1.75} />
           AI Edit
         </button>
         <button
           type="button"
           onClick={onExport}
           aria-label="Open export settings"
-          className="hidden min-h-10 items-center gap-1.5 border-2 border-foreground bg-primary px-4 text-sm font-semibold text-primary-foreground transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-sm focus:outline-none lg:inline-flex"
+          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus:outline-none active:shadow-neu-pressed lg:inline-flex"
         >
-          <Download className="size-4" strokeWidth={2} />
+          <Download className="size-4" strokeWidth={1.75} />
           Export
         </button>
       </div>
@@ -199,10 +202,10 @@ function ModeButton({
       aria-pressed={selected}
       onClick={onClick}
       className={cn(
-        "min-h-9 flex-1 rounded px-3 text-sm font-semibold transition-colors sm:flex-none",
+        "min-h-9 flex-1 rounded-full px-4 text-sm font-semibold transition-shadow duration-200 sm:flex-none",
         selected
-          ? "bg-primary text-primary-foreground shadow-brutal-sm"
-          : "text-muted-foreground hover:bg-surface hover:text-foreground",
+          ? "bg-primary text-primary-foreground shadow-neu-glow"
+          : "text-muted-foreground hover:text-foreground",
       )}
     >
       {children}
@@ -213,11 +216,11 @@ function ModeButton({
 function ShortcutGuide() {
   return (
     <details className="group relative hidden lg:block">
-      <summary className="flex min-h-10 cursor-pointer list-none items-center gap-1.5 rounded border-2 border-foreground bg-surface px-3 text-sm font-semibold hover:bg-surface-elevated [&::-webkit-details-marker]:hidden">
-        <Keyboard className="size-4" strokeWidth={2} />
+      <summary className="neu-pressable flex min-h-10 cursor-pointer list-none items-center gap-1.5 rounded-neu bg-surface px-3 text-sm font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised [&::-webkit-details-marker]:hidden">
+        <Keyboard className="size-4" strokeWidth={1.75} />
         Shortcuts
       </summary>
-      <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-72 rounded border-2 border-foreground bg-surface p-3 shadow-brutal">
+      <div className="absolute right-0 top-[calc(100%+0.5rem)] z-50 w-72 rounded-neu-lg bg-surface p-4 shadow-neu-raised-lg">
         <p className="mb-2 text-sm font-semibold">Precision controls</p>
         <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-sm">
           <dt>Play backward / pause / forward</dt>
@@ -248,7 +251,7 @@ function ShortcutGuide() {
 
 function ShortcutKeys({ keys }: { keys: string }) {
   return (
-    <kbd className="whitespace-nowrap rounded border border-foreground bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold">
+    <kbd className="whitespace-nowrap rounded-neu-sm bg-muted px-1.5 py-0.5 font-mono text-xs font-semibold text-foreground shadow-neu-inset-sm">
       {keys}
     </kbd>
   );
@@ -274,9 +277,9 @@ function IconCommandButton({
       aria-label={shortcut ? `${label}, ${shortcut}` : label}
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex size-8 items-center justify-center rounded border-2 border-foreground bg-surface text-foreground transition hover:bg-surface-elevated disabled:cursor-not-allowed disabled:opacity-40"
+      className="neu-pressable inline-flex size-8 items-center justify-center rounded-neu bg-surface text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-neu-raised-sm"
     >
-      <Icon className="size-4" strokeWidth={2} />
+      <Icon className="size-4" strokeWidth={1.75} />
     </button>
   );
 }
@@ -288,18 +291,22 @@ function SaveBadge({ status }: { status: "saving" | "saved" | "error" }) {
       : status === "error"
         ? "Save failed"
         : "Saved";
+  const Icon =
+    status === "saving" ? Loader2 : status === "error" ? TriangleAlert : Check;
   return (
     <div
-      className="flex min-h-9 items-center gap-1.5 rounded border-2 border-foreground bg-surface px-2.5 text-xs font-semibold text-foreground shadow-brutal-sm"
+      className="flex min-h-9 items-center gap-1.5 rounded-full bg-surface px-3 text-xs font-semibold text-foreground shadow-neu-raised-sm"
       aria-live="polite"
       aria-atomic="true"
     >
-      <span
+      <Icon
+        aria-hidden="true"
+        strokeWidth={2}
         className={cn(
-          "size-2 rounded-full border border-foreground",
-          status === "saving" && "animate-pulse bg-primary",
-          status === "error" && "bg-danger",
-          status === "saved" && "bg-success",
+          "size-3.5 shrink-0",
+          status === "saving" && "animate-spin text-primary",
+          status === "error" && "text-danger",
+          status === "saved" && "text-success",
         )}
       />
       <span className={status === "error" ? "text-danger" : undefined}>

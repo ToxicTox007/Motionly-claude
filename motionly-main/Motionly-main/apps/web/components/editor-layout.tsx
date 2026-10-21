@@ -7,9 +7,8 @@ import type {
   EditorCommandBar,
   EditorPanels,
 } from "./editor/layout/types";
+import { useEditorCommands } from "./editor/layout/useEditorCommands";
 import { useEditorMode } from "./editor/layout/useEditorMode";
-
-export type { CreatorTask } from "./editor/layout/types";
 
 interface EditorLayoutProps {
   title: string;
@@ -35,6 +34,7 @@ export function EditorLayout({
   children,
 }: EditorLayoutProps) {
   const { mode, setMode } = useEditorMode();
+  useEditorCommands({ mode, setMode, onExport, onAiEdit });
 
   return (
     <div

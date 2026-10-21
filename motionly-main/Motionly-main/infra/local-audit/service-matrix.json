@@ -349,6 +349,33 @@
       }
     },
     {
+      "name": "supabase-realtime",
+      "order": 115,
+      "phase": "supabase-control-plane",
+      "dependencies": [
+        {
+          "service": "postgres",
+          "condition": "service_healthy"
+        }
+      ],
+      "expected_ports": [],
+      "healthcheck": "required",
+      "worker_queues": [],
+      "feature_ownership": ["private workspace and project live channels"],
+      "startup_predicate": "The Realtime service reports healthy after application PostgreSQL is healthy and its own realtime schema is migrated.",
+      "verification": {
+        "owner": "supabase-control-plane",
+        "smoke_action": "Join a private workspace topic as an active member and confirm a non-member and a signed-out visitor are denied.",
+        "log_pattern": "Realtime",
+        "cleanup_responsibility": "Remove only isolated Supabase resources after fixture cleanup."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
       "name": "supabase-gateway",
       "order": 120,
       "phase": "supabase-control-plane",
@@ -363,6 +390,10 @@
         },
         {
           "service": "supabase-storage",
+          "condition": "service_started"
+        },
+        {
+          "service": "supabase-realtime",
           "condition": "service_started"
         }
       ],
@@ -398,6 +429,10 @@
         },
         {
           "service": "supabase-storage",
+          "condition": "service_healthy"
+        },
+        {
+          "service": "supabase-realtime",
           "condition": "service_healthy"
         }
       ],

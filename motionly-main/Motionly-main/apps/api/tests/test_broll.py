@@ -8,10 +8,11 @@ import httpx
 import pytest
 
 from app.api.broll import (
-    complete_user_broll_upload,
+    complete_user_broll_multipart_upload,
+    confirm_user_broll_multipart_part,
     delete_user_broll_library_asset,
     generate_broll,
-    init_user_broll_upload,
+    init_user_broll_multipart_upload,
     list_broll,
     list_user_broll_library,
     search_broll_candidates,
@@ -42,6 +43,8 @@ from app.schemas.broll import (
     UserBrollUploadInitRequest,
 )
 from app.schemas.captions import LanguageHint
+from app.schemas.media_uploads import MediaUploadCompleteRequest
+from app.schemas.multipart_uploads import PartCompleteRequest
 from app.schemas.plans import BrollDensity, BrollRequest, PlanCreateRequest
 from app.schemas.uploads import UploadStatus
 from app.schemas.visual import (
@@ -247,7 +250,7 @@ def test_user_broll_library_upload_list_and_delete() -> None:
     signer = StorageSigner(base_url="http://localhost:8000")
     content = b"b" * 4096
     initialized = asyncio.run(
-        init_user_broll_upload(
+        init_user_broll_multipart_upload(
             project_id=project_id,
             payload=UserBrollUploadInitRequest(
                 filename="office-cutaway.mp4",
@@ -261,27 +264,39 @@ def test_user_broll_library_upload_list_and_delete() -> None:
             request=request,
             actor=actor,
             repository=repository,
-            storage_signer=signer,
         )
     )
     assert initialized.asset.provider == "user_library"
-    assert ".mp4.parts/" in initialized.signed_upload_url
+    assert ".mp4.parts/" in initialized.session.pending_part_urls[0].upload_url
 
     write_broll_upload_part(
         request,
-        session_id=initialized.session_id,
+        session_id=initialized.session.session_id,
         workspace_id=workspace_id,
         project_id=project_id,
         content=content,
     )
-    completed = asyncio.run(
-        complete_user_broll_upload(
+    asyncio.run(
+        confirm_user_broll_multipart_part(
             project_id=project_id,
-            asset_id=initialized.asset.id,
+            session_id=initialized.session.session_id,
+            part_number=1,
+            payload=PartCompleteRequest(),
             request=request,
             actor=actor,
             repository=repository,
-            storage_signer=signer,
+        )
+    )
+    completed = asyncio.run(
+        complete_user_broll_multipart_upload(
+            project_id=project_id,
+            session_id=initialized.session.session_id,
+            payload=MediaUploadCompleteRequest(
+                sha256_hash=hashlib.sha256(content).hexdigest()
+            ),
+            request=request,
+            actor=actor,
+            repository=repository,
         )
     )
     assert completed.asset.media_state == "verified"
@@ -529,7 +544,7 @@ def test_broll_api_prefers_async_repository_methods() -> None:
     signer = StorageSigner(base_url="http://localhost:8000")
     content = b"b" * 4096
     initialized = asyncio.run(
-        init_user_broll_upload(
+        init_user_broll_multipart_upload(
             project_id=project_id,
             payload=UserBrollUploadInitRequest(
                 filename="office-cutaway.mp4",
@@ -543,24 +558,36 @@ def test_broll_api_prefers_async_repository_methods() -> None:
             request=request,
             actor=actor,
             repository=repository,
-            storage_signer=signer,
         )
     )
     write_broll_upload_part(
         request,
-        session_id=initialized.session_id,
+        session_id=initialized.session.session_id,
         workspace_id=workspace_id,
         project_id=project_id,
         content=content,
     )
     asyncio.run(
-        complete_user_broll_upload(
+        confirm_user_broll_multipart_part(
             project_id=project_id,
-            asset_id=initialized.asset.id,
+            session_id=initialized.session.session_id,
+            part_number=1,
+            payload=PartCompleteRequest(),
             request=request,
             actor=actor,
             repository=repository,
-            storage_signer=signer,
+        )
+    )
+    asyncio.run(
+        complete_user_broll_multipart_upload(
+            project_id=project_id,
+            session_id=initialized.session.session_id,
+            payload=MediaUploadCompleteRequest(
+                sha256_hash=hashlib.sha256(content).hexdigest()
+            ),
+            request=request,
+            actor=actor,
+            repository=repository,
         )
     )
     asyncio.run(
@@ -1484,7 +1511,6 @@ def _longest_consecutive_broll_run(requests: list[BrollRequest]) -> int:
 
 def test_broll_multipart_mutations_reject_foreign_sessions_before_side_effects() -> None:
     from app.api.broll import (
-        abort_user_broll_multipart_upload,
         confirm_user_broll_multipart_part,
     )
     from app.schemas.media_uploads import PartCompleteRequest
@@ -1534,17 +1560,6 @@ def test_broll_multipart_mutations_reject_foreign_sessions_before_side_effects()
             )
         )
     assert error.value.code == "media_upload_session_not_found"
-    with pytest.raises(ApiError) as error:
-        asyncio.run(
-            abort_user_broll_multipart_upload(
-                project_id=project_id,
-                session_id=style_session.id,
-                request=request,
-                actor=actor,
-                repository=repository,
-            )
-        )
-    assert error.value.code == "media_upload_session_not_found"
     untouched = asyncio.run(
         service.inspect(
             session_id=style_session.id,
@@ -1579,7 +1594,7 @@ def test_broll_init_compensates_when_owner_session_link_fails() -> None:
 
     with pytest.raises(RuntimeError, match="asset link write failed"):
         asyncio.run(
-            init_user_broll_upload(
+            init_user_broll_multipart_upload(
                 project_id=project_id,
                 payload=UserBrollUploadInitRequest(
                     filename="failed-link.mp4",
@@ -1592,7 +1607,6 @@ def test_broll_init_compensates_when_owner_session_link_fails() -> None:
                 request=request,
                 actor=actor,
                 repository=repository,
-                storage_signer=StorageSigner(base_url="http://localhost:8000"),
             )
         )
 

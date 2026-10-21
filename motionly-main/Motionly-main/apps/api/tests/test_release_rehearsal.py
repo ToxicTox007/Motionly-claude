@@ -58,7 +58,7 @@ def test_secret_files_map_to_the_parameter_names_the_agent_reads(rehearsal, tmp_
     )
     # The viewer's CA certificate stays with the rehearsal (it checks the edge).
     assert "edge-ca-cert" not in parameters
-    assert rehearsal.EXTRA_SECRETS == ("edge-tls-cert", "edge-tls-key")
+    assert {"edge-tls-cert", "edge-tls-key"} <= set(rehearsal.EXTRA_SECRETS)
 
 
 def test_the_overlay_uses_bundle_files_and_the_checkout_only_for_test_infrastructure(
@@ -198,3 +198,58 @@ def test_teardown_removes_the_images_pulled_from_the_rehearsal_registry(
         for i, c in enumerate(calls)
         if c[:2] == ["docker", "container"] or c[:2] == ["docker", "rm"]
     )
+
+
+def test_the_rehearsal_host_configuration_sets_every_value_the_agent_requires(
+    rehearsal, tmp_path: Path
+) -> None:
+    import re
+    from datetime import UTC, datetime
+
+    agent = (rehearsal.ROOT / "scripts" / "deploy" / "apply_release.sh").read_text("utf-8")
+    required = re.search(r"^for value in (MOTIONLY_[A-Z_ ]+); do$", agent, re.MULTILINE)
+    assert required, "apply_release.sh lists its required host values"
+    values = rehearsal.rehearsal_host_values(
+        tmp_path, tmp_path / "overlay.yml", tmp_path / "proof.json", datetime.now(UTC)
+    )
+    missing = [name for name in required.group(1).split() if not str(values.get(name, ""))]
+    assert missing == []
+    # The rehearsal activates the CPU stage, which runs the demo payment gateway.
+    assert values["MOTIONLY_BILLING_MODE"] == "demo"
+
+
+def test_every_secret_the_overlay_adds_reaches_the_rehearsal_release(rehearsal, tmp_path) -> None:
+    """The CPU-stage overlay (test infrastructure, outside the bundle) mounts
+    secrets production Compose does not define; the agent only fetches them as
+    rehearsal extras, so each one must be listed and encoded the way it reads them."""
+    import base64
+
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    Loader.add_multi_constructor(
+        "!",
+        lambda loader, _s, node: loader.construct_mapping(node)
+        if isinstance(node, yaml.MappingNode)
+        else loader.construct_sequence(node)
+        if isinstance(node, yaml.SequenceNode)
+        else loader.construct_scalar(node),
+    )
+    overlay_path = rehearsal.ROOT / "infra" / "docker-compose.cpu-stage.yml"
+    overlay = yaml.load(overlay_path.read_text("utf-8"), Loader=Loader)
+    production = yaml.safe_load(
+        (rehearsal.ROOT / "infra" / "docker-compose.gpu.yml").read_text("utf-8")
+    )
+    overlay_only = set(overlay["secrets"]) - set(production["secrets"])
+    assert {name.replace("_", "-") for name in overlay_only} == set(rehearsal.EXTRA_SECRETS)
+
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    for name in overlay_only:
+        (secrets / name).write_text(f"value-of-{name}\n")
+    parameters = rehearsal.parameters_from_inputs(secrets, {"SUPABASE_ANON_KEY": "anon"})
+    for name in overlay_only:
+        encoded = parameters[name.replace("_", "-")]
+        assert base64.b64decode(encoded).decode() == f"value-of-{name}\n", name

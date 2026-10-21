@@ -299,8 +299,8 @@ export function CaptionsTab({
   }
 
   return (
-    <div className="space-y-3 sm:space-y-4" aria-live="polite">
-      <div className="rounded-md border-2 border-foreground shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] p-4 sm:p-5 space-y-4 bg-surface">
+    <div className="space-y-4" aria-live="polite">
+      <div className="rounded-neu-lg bg-surface shadow-neu-raised p-5 space-y-4 sm:p-6">
         <PanelSection title="Basic" defaultOpen>
           <div className="grid gap-3">
             <div className="space-y-1.5">
@@ -313,7 +313,6 @@ export function CaptionsTab({
                 value={preset}
                 onChange={handlePresetChange}
                 options={presets}
-                className="border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] transition-all font-mono text-xs"
               />
             </div>
 
@@ -327,18 +326,17 @@ export function CaptionsTab({
                 value={outputLanguage}
                 onChange={setOutputLanguage}
                 options={outputLanguages}
-                className="border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] transition-all font-mono text-xs"
               />
             </div>
 
-            <label className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded-md border-2 border-foreground bg-surface px-3.5 text-xs font-bold font-mono text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] select-none">
+            <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-neu-md bg-surface px-4 py-3 text-sm font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed select-none">
               Hide filler words
               <input
                 type="checkbox"
                 aria-label="Hide filler words"
                 checked={hideFillerWords}
                 onChange={(event) => setHideFillerWords(event.target.checked)}
-                className="size-4.5 rounded border-2 border-foreground text-primary focus:ring-primary/30 accent-primary"
+                className="neu-check"
               />
             </label>
           </div>
@@ -463,7 +461,7 @@ export function CaptionsTab({
           />
           <p
             id="full-transcript-help"
-            className="mt-1.5 text-xs text-muted-foreground"
+            className="mt-1.5 text-xs font-medium text-muted-foreground"
           >
             Edit the full speech text, apply it to segments, then save text.
           </p>
@@ -472,7 +470,7 @@ export function CaptionsTab({
             variant="secondary"
             onClick={applyTranscriptText}
             disabled={!segments.length}
-            className="mt-3.5 h-11 w-full text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000]"
+            className="mt-3.5 h-11 w-full"
           >
             Apply Transcript To Segments
           </Button>
@@ -481,12 +479,12 @@ export function CaptionsTab({
         <PanelSection title="Segments" defaultOpen>
           <div className="mb-2.5 flex items-center justify-between">
             <Label className="mb-0">Segments</Label>
-            <span className="text-[10px] font-black uppercase text-foreground bg-surface border-2 border-foreground px-2.5 py-0.5 rounded shadow-[1px_1px_0px_#000] font-mono select-none">
+            <span className="inline-flex items-center rounded-full bg-surface px-3 py-0.5 text-xs font-semibold text-foreground shadow-neu-raised-sm select-none">
               {segments.length} editable
             </span>
           </div>
           {segments.length === 0 ? (
-            <p className="text-xs text-muted-foreground font-mono">
+            <p className="text-xs font-medium text-muted-foreground">
               No caption track yet.
             </p>
           ) : (
@@ -501,20 +499,20 @@ export function CaptionsTab({
                     }
                     aria-label={`Caption segment ${index + 1}, ${segment.text}, starts at ${segment.start_ms} milliseconds, ends at ${segment.end_ms} milliseconds`}
                     className={cn(
-                      "min-h-11 w-40 shrink-0 border-2 border-foreground px-3 py-2 text-left text-xs transition-all duration-[100ms] rounded",
+                      "min-h-11 w-40 shrink-0 rounded-neu-md px-3 py-2 text-left text-xs transition-shadow duration-200",
                       selectedSegmentIndex === index
-                        ? "bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
-                        : "bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] dark:hover:shadow-[1px_1px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
+                        ? "bg-primary text-primary-foreground shadow-neu-glow"
+                        : "bg-surface text-foreground shadow-neu-raised-sm hover:shadow-neu-raised active:shadow-neu-pressed",
                     )}
                   >
-                    <span className="block truncate font-bold">
+                    <span className="block truncate font-semibold">
                       {segment.text}
                     </span>
                     <span
                       className={cn(
-                        "text-[10px] mt-0.5 block font-mono",
+                        "text-xs mt-0.5 block font-medium tabular-nums",
                         selectedSegmentIndex === index
-                          ? "text-primary-foreground/80"
+                          ? "text-primary-foreground"
                           : "text-muted-foreground",
                       )}
                     >
@@ -525,7 +523,7 @@ export function CaptionsTab({
               </div>
 
               {selectedSegment ? (
-                <div className="space-y-3 border-2 border-foreground bg-surface p-4 rounded shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+                <div className="space-y-3 rounded-neu-md bg-surface p-4 shadow-neu-inset-sm">
                   <TextArea
                     aria-label="Selected caption segment text"
                     value={selectedSegment.text}
@@ -533,7 +531,7 @@ export function CaptionsTab({
                     className="min-h-16 px-3 py-2 text-sm focus:outline-none"
                   />
                   <div className="grid grid-cols-2 gap-3 text-xs">
-                    <label className="font-bold text-foreground">
+                    <label className="font-semibold text-foreground">
                       Start (ms)
                       <input
                         aria-label="Selected caption start time in milliseconds"
@@ -544,10 +542,10 @@ export function CaptionsTab({
                             start_ms: Number(event.target.value),
                           })
                         }
-                        className="mt-1.5 min-h-[40px] w-full px-3 font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+                        className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-3 font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
                       />
                     </label>
-                    <label className="font-bold text-foreground">
+                    <label className="font-semibold text-foreground">
                       End (ms)
                       <input
                         aria-label="Selected caption end time in milliseconds"
@@ -558,7 +556,7 @@ export function CaptionsTab({
                             end_ms: Number(event.target.value),
                           })
                         }
-                        className="mt-1.5 min-h-[40px] w-full px-3 font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+                        className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-3 font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
                       />
                     </label>
                   </div>
@@ -572,10 +570,10 @@ export function CaptionsTab({
                           onClick={() => updateHighlight(word)}
                           aria-pressed={selected}
                           className={cn(
-                            "min-h-[32px] shrink-0 whitespace-nowrap border-2 border-foreground px-3 py-1 text-xs font-bold font-mono rounded transition-all duration-[100ms]",
+                            "min-h-8 shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold transition-shadow duration-200",
                             selected
-                              ? "bg-primary text-primary-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
-                              : "bg-surface text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] dark:hover:shadow-[1px_1px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
+                              ? "bg-primary text-primary-foreground shadow-neu-glow"
+                              : "bg-surface text-muted-foreground shadow-neu-raised-sm hover:text-foreground hover:shadow-neu-raised active:shadow-neu-pressed",
                           )}
                         >
                           {word}
@@ -590,21 +588,21 @@ export function CaptionsTab({
         </PanelSection>
       </div>
 
-      <div className="sticky bottom-0 z-10 grid grid-cols-2 gap-2.5 bg-background/90 py-3.5 border-t-2 border-foreground backdrop-blur-md mt-4">
+      <div className="sticky bottom-0 z-10 grid grid-cols-2 gap-2.5 bg-background/90 py-3.5 backdrop-blur-md mt-4">
         <button
           onClick={updateCaptions}
           disabled={loading}
           aria-busy={loading}
           aria-describedby={message ? "caption-message" : undefined}
-          className="w-full inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
+          className="w-full inline-flex items-center justify-center gap-2 h-11 rounded-neu bg-primary text-primary-foreground text-sm font-semibold shadow-neu-glow transition-shadow duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? (
             <Loader2
               className="size-4 animate-spin text-primary-foreground"
-              strokeWidth={2}
+              strokeWidth={1.75}
             />
           ) : (
-            <RefreshCw className="size-4" strokeWidth={2} />
+            <RefreshCw className="size-4" strokeWidth={1.75} />
           )}
           <span>{activeTrack ? "Save Style" : "Generate"}</span>
         </button>
@@ -613,15 +611,15 @@ export function CaptionsTab({
           disabled={loading || !activeTrack}
           aria-busy={loading}
           aria-describedby={message ? "caption-message" : undefined}
-          className="h-11 px-2 text-xs font-black rounded border-2 border-foreground bg-primary text-primary-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms]"
+          className="inline-flex items-center justify-center h-11 px-2 text-sm font-semibold rounded-neu bg-primary text-primary-foreground shadow-neu-glow transition-shadow duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? (
             <Loader2
               className="mr-2 size-4 animate-spin text-primary-foreground"
-              strokeWidth={2}
+              strokeWidth={1.75}
             />
           ) : (
-            <Save className="mr-2 size-4" strokeWidth={2} />
+            <Save className="mr-2 size-4" strokeWidth={1.75} />
           )}
           <span>Save Text</span>
         </button>
@@ -630,7 +628,7 @@ export function CaptionsTab({
         <p
           id="caption-message"
           role={/failed|could not|try/i.test(message) ? "alert" : "status"}
-          className="rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+          className="rounded-neu-md bg-surface p-3.5 text-xs font-semibold text-foreground shadow-neu-inset-sm"
         >
           {message}
         </p>

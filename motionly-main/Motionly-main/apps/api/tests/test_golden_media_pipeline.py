@@ -67,7 +67,6 @@ def test_upload_to_export_ffmpeg_golden_media(tmp_path: Path) -> None:
         storage_root=str(tmp_path),
         supabase_url=None,
         service_role_key=None,
-        execute_ffmpeg=True,
     )
     output = tmp_path / "exports" / str(completed.artifact_path)
     probe = _probe(output)

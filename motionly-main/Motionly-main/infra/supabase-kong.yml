@@ -19,3 +19,22 @@ services:
       - name: storage-route
         paths: [/storage/v1]
         strip_path: true
+  # Realtime (Task 25). Kong reaches the container by its network alias
+  # realtime-dev.supabase-realtime (the self-hosted tenant name). The WebSocket
+  # route forwards /realtime/v1/* to the Phoenix socket; the REST route forwards
+  # /realtime/v1/api/* to the broadcast API. strip_path removes /realtime/v1 so
+  # the upstream sees /socket/... and /api/...
+  - name: realtime-ws
+    url: http://realtime-dev.supabase-realtime:4000/socket
+    protocol: ws
+    routes:
+      - name: realtime-ws-route
+        paths: [/realtime/v1]
+        strip_path: true
+  - name: realtime-rest
+    url: http://realtime-dev.supabase-realtime:4000/api
+    protocol: http
+    routes:
+      - name: realtime-rest-route
+        paths: [/realtime/v1/api]
+        strip_path: true

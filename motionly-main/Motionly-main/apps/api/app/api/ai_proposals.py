@@ -47,16 +47,6 @@ async def get_proposal(
     ).to_response()
 
 
-@router.get("/{proposal_id}/status", response_model=ProposalResponse)
-async def get_proposal_status(
-    project_id: UUID,
-    proposal_id: UUID,
-    actor: ActorDep,
-    repository: ProposalRepositoryDep,
-) -> ProposalResponse:
-    return await get_proposal(project_id, proposal_id, actor, repository)
-
-
 @router.post("/{proposal_id}/decisions", response_model=ProposalDecisionResponse)
 async def decide_proposal(
     project_id: UUID,

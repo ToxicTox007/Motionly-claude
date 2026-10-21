@@ -1,5 +1,5 @@
 begin;
-select plan(36);
+select plan(37);
 
 insert into auth.users (id, email, raw_user_meta_data)
 values
@@ -27,7 +27,7 @@ select ok(
       'project_music_selections', 'visual_presets', 'project_control_settings',
       'artifact_versions', 'video_manifests', 'segmentation_mattes',
       'phase5_resources', 'subscriptions',
-      'usage_ledger', 'stripe_webhook_events', 'billing_adjustments',
+      'usage_ledger', 'gateway_webhook_events', 'billing_adjustments',
       'ai_edit_feedback_events', 'worker_heartbeats', 'provider_slo_events',
       'cost_attribution_events', 'storage_deletion_queue', 'retention_runs',
       'launch_feedback'
@@ -55,14 +55,30 @@ select ok(
         'project_music_selections', 'visual_presets', 'project_control_settings',
         'artifact_versions', 'video_manifests', 'segmentation_mattes',
         'phase5_resources', 'subscriptions',
-        'usage_ledger', 'stripe_webhook_events', 'billing_adjustments',
+        'usage_ledger', 'gateway_webhook_events', 'billing_adjustments',
         'ai_edit_feedback_events', 'worker_heartbeats', 'provider_slo_events',
         'cost_attribution_events', 'storage_deletion_queue', 'retention_runs',
         'launch_feedback'
       ])
       and policy.polcmd <> 'r'
+      -- Browser roles (PUBLIC, anon, authenticated) never get a write policy.
+      -- The only write policies allowed are the restricted worker account's
+      -- (Task 18, 202610200301), which used to bypass RLS as service_role.
+      and (
+        policy.polroles = '{0}'
+        or exists (
+          select 1 from unnest(policy.polroles) as granted(role_oid)
+          where granted.role_oid <> 'motionly_worker'::regrole::oid
+        )
+      )
   ),
-  'protected tables retain no insert, update, delete, or all-command RLS policy'
+  'protected tables retain no insert, update, delete, or all-command RLS policy for any role but the restricted worker'
+);
+
+select ok(
+  not pg_has_role('anon', 'motionly_worker', 'MEMBER')
+    and not pg_has_role('authenticated', 'motionly_worker', 'MEMBER'),
+  'browser roles cannot assume the restricted worker role'
 );
 
 select ok(
@@ -76,7 +92,7 @@ select ok(
       'project_music_selections', 'visual_presets', 'project_control_settings',
       'artifact_versions', 'video_manifests', 'segmentation_mattes',
       'phase5_resources', 'subscriptions',
-      'usage_ledger', 'stripe_webhook_events', 'billing_adjustments',
+      'usage_ledger', 'gateway_webhook_events', 'billing_adjustments',
       'ai_edit_feedback_events', 'worker_heartbeats', 'provider_slo_events',
       'cost_attribution_events', 'storage_deletion_queue', 'retention_runs',
       'launch_feedback'

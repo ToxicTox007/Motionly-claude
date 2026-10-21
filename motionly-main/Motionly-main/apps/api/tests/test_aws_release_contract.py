@@ -117,6 +117,7 @@ def _host_env(tmp_path: Path, **overrides: str) -> Path:
         "MOTIONLY_REGISTRY_USERNAME": "motionly-bot",
         "MOTIONLY_COSIGN_IDENTITY_REGEXP": "^https://github.com/o/r/.github/workflows/supply-chain.yml@refs/tags/v.*$",
         "MOTIONLY_APP_DOMAIN": "d111111abcdef8.cloudfront.net",
+        "MOTIONLY_BILLING_MODE": "disabled",
         "MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE": "temporalio/admin-tools@sha256:" + "a" * 64,
         "MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE": str(tmp_path / "proof"),
         "MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL": "2026-10-08T00:00:00Z",
@@ -330,3 +331,21 @@ def test_the_host_installs_only_tools_the_release_agent_runs() -> None:
     assert "apply-release" in installed
     unused = [name for name in installed if name != "apply-release" and f"bin/{name}" not in agent]
     assert unused == []
+
+
+def test_the_release_agent_writes_every_secret_file_production_compose_mounts() -> None:
+    """A secret production Compose mounts but the agent never writes stops the
+    release at `compose up` (bind source path does not exist)."""
+    import re
+
+    import yaml
+
+    compose = yaml.safe_load((ROOT / "infra" / "docker-compose.gpu.yml").read_text("utf-8"))
+    mounted = {
+        Path(entry["file"]).name for entry in compose["secrets"].values() if "file" in entry
+    }
+    agent = (ROOT / "scripts" / "deploy" / "apply_release.sh").read_text("utf-8")
+    written = set(re.findall(r'"\$secrets_dir/([a-z0-9_]+)"', agent))
+    for loop in re.findall(r"for name in ([a-z0-9 -]+); do\n\s+fetch_base64_secret_to_file", agent):
+        written |= {name.replace("-", "_") for name in loop.split()}
+    assert sorted(mounted - written) == []

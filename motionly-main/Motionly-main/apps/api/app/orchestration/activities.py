@@ -7,6 +7,7 @@ from uuid import UUID
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from app.api.errors import ApiError
 from app.orchestration.contracts import (
     EnqueueStepRequest,
     EnqueueStepResult,
@@ -75,6 +76,35 @@ class BullMQActivities:
             return await asyncio.to_thread(self._enqueue, request)
         except ApplicationError:
             raise
+        except ApiError as error:
+            # Surface the real database/transport cause instead of masking it
+            # as "temporarily unavailable". A transport conflict will never
+            # resolve by retrying, so it is raised non-retryable with its real
+            # error code as the ApplicationError type.
+            #
+            # workflow_not_found means the run (and its project) was deleted out
+            # from under an in-flight workflow. Retrying would produce a
+            # WORKFLOW_NOT_FOUND storm, so it is terminal and quiet: the
+            # dispatcher is cancelling this Temporal workflow via the durable
+            # cancellation request written by the project-delete trigger. Log it
+            # at info, never error.
+            non_retryable_codes = {
+                "workflow_step_transport_conflict",
+                "workflow_not_found",
+            }
+            if error.code == "workflow_not_found":
+                activity.logger.info(
+                    "workflow_enqueue_skipped_deleted_run",
+                    extra={
+                        "workflow_run_id": request.workflow_run_id,
+                        "step_key": request.step_key,
+                    },
+                )
+            raise ApplicationError(
+                error.message,
+                type=error.code,
+                non_retryable=error.code in non_retryable_codes,
+            ) from None
         except Exception:
             raise ApplicationError(
                 "BullMQ identifier enqueue is temporarily unavailable.",

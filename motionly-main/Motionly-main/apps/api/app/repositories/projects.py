@@ -5,11 +5,21 @@ from uuid import UUID, uuid4
 import httpx
 
 from app.api.errors import ApiError
-from app.schemas.projects import ProjectResponse, ProjectStatus
+from app.schemas.projects import ProjectLatestUpload, ProjectResponse, ProjectStatus
 from app.services.supabase import SupabaseRestClient
 
 PROJECT_RESPONSE_COLUMNS = (
     "id,workspace_id,created_by,title,status,active_video_id,created_at,updated_at"
+)
+
+# PostgREST embed of the project's active upload via the
+# projects_active_video_id_fkey foreign key. This lets list_projects return each
+# project's latest upload in a single query (B29) instead of one request per
+# project on the web side.
+PROJECT_LIST_COLUMNS = (
+    "id,workspace_id,created_by,title,status,active_video_id,created_at,updated_at,"
+    "latest_upload:uploaded_videos!projects_active_video_id_fkey"
+    "(id,status,original_filename,metadata)"
 )
 
 
@@ -21,6 +31,7 @@ class ProjectApiRecord:
     title: str
     status: ProjectStatus = ProjectStatus.DRAFT
     active_video_id: UUID | None = None
+    latest_upload: ProjectLatestUpload | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -32,6 +43,7 @@ class ProjectApiRecord:
             title=self.title,
             status=self.status,
             active_video_id=self.active_video_id,
+            latest_upload=self.latest_upload,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -152,10 +164,7 @@ class SupabaseProjectRepository:
             "/projects",
             params={
                 "workspace_id": f"eq.{workspace_id}",
-                "select": (
-                    "id,workspace_id,created_by,title,status,"
-                    "active_video_id,created_at,updated_at"
-                ),
+                "select": PROJECT_LIST_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": str(limit),
             },
@@ -174,7 +183,7 @@ class SupabaseProjectRepository:
             "/projects",
             params={
                 "workspace_id": f"eq.{workspace_id}",
-                "select": PROJECT_RESPONSE_COLUMNS,
+                "select": PROJECT_LIST_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": str(limit),
             },
@@ -313,8 +322,29 @@ class SupabaseProjectRepository:
             active_video_id=(
                 UUID(str(row["active_video_id"])) if row.get("active_video_id") else None
             ),
+            latest_upload=self._latest_upload_from_embed(row.get("latest_upload")),
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),
+        )
+
+    @staticmethod
+    def _latest_upload_from_embed(embed: object) -> ProjectLatestUpload | None:
+        # PostgREST returns a to-one embed as an object (or null); tolerate a
+        # single-element list too in case the relationship is treated as to-many.
+        if isinstance(embed, list):
+            embed = embed[0] if embed else None
+        if not isinstance(embed, dict) or not embed.get("id"):
+            return None
+        metadata = embed.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        duration = metadata.get("duration_ms")
+        warnings = metadata.get("warnings")
+        return ProjectLatestUpload(
+            id=UUID(str(embed["id"])),
+            status=str(embed.get("status", "")),
+            original_filename=str(embed.get("original_filename", "")),
+            duration_ms=int(duration) if isinstance(duration, (int, float)) else None,
+            warnings=list(warnings) if isinstance(warnings, list) else [],
         )
 
     def _raise_for_supabase(self, response: httpx.Response) -> None:

@@ -20,8 +20,8 @@ test("RevisionConflictError instantiation from 409 response with properties acce
   assert.match(source, /currentRevision: number/);
   // Constructor sets status 409
   assert.match(source, /status: 409/);
-  // Constructor sets code to revision_conflict
-  assert.match(source, /code: "revision_conflict"/);
+  // Constructor sets code to the normalized collaboration conflict code
+  assert.match(source, /code: "collaboration_revision_conflict"/);
   // Name set correctly
   assert.match(source, /this\.name = "RevisionConflictError"/);
   // Assigns properties from constructor args
@@ -234,7 +234,9 @@ test("client-api detects 409 response and throws RevisionConflictError", async (
 
   // Checks response status for 409
   assert.match(source, /response\.status === 409/);
-  // Also checks error field matches revision_conflict
+  // Detects the normalized standard-envelope conflict code
+  assert.match(source, /"collaboration_revision_conflict"/);
+  // Still accepts the legacy flat string for backward compatibility
   assert.match(source, /error === "revision_conflict"/);
   // Throws RevisionConflictError with parsed fields
   assert.match(source, /throw new RevisionConflictError\(\{/);

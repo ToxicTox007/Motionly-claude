@@ -47,9 +47,13 @@ host_config="${MOTIONLY_HOST_CONFIG:-/etc/motionly/host.env}"
 # shellcheck disable=SC1090
 source "$host_config"
 
-for value in MOTIONLY_RELEASE_ROOT MOTIONLY_AGENT_ROOT MOTIONLY_ENVIRONMENT MOTIONLY_AWS_REGION MOTIONLY_RELEASE_BUCKET MOTIONLY_COMPUTE_PROFILE MOTIONLY_REGISTRY MOTIONLY_COSIGN_IDENTITY_REGEXP MOTIONLY_APP_DOMAIN MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL; do
+for value in MOTIONLY_RELEASE_ROOT MOTIONLY_AGENT_ROOT MOTIONLY_ENVIRONMENT MOTIONLY_AWS_REGION MOTIONLY_RELEASE_BUCKET MOTIONLY_COMPUTE_PROFILE MOTIONLY_REGISTRY MOTIONLY_COSIGN_IDENTITY_REGEXP MOTIONLY_APP_DOMAIN MOTIONLY_BILLING_MODE MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL; do
   [[ -n "${!value:-}" ]] || refuse "$value is required in $host_config"
 done
+case "$MOTIONLY_BILLING_MODE" in
+  disabled | demo) ;;
+  *) refuse "MOTIONLY_BILLING_MODE must be disabled or demo" ;;
+esac
 case "$MOTIONLY_ENVIRONMENT" in
   production | staging | rehearsal) ;;
   *) refuse "MOTIONLY_ENVIRONMENT must be production, staging or rehearsal" ;;
@@ -262,8 +266,14 @@ write_release_inputs() {
   fetch_secret_to_file redis-password "$secrets_dir/redis_password"
   fetch_secret_to_file temporal-db-password "$secrets_dir/temporal_db_password"
   fetch_secret_to_file supabase-service-role-key "$secrets_dir/supabase_service_role_key"
+  # Task 18: the restricted motionly_worker JWT, mounted only into workers.
+  fetch_secret_to_file supabase-worker-key "$secrets_dir/supabase_worker_key"
   fetch_secret_to_file supabase-jwt-secret "$secrets_dir/supabase_jwt_secret"
   fetch_secret_to_file supabase-anon-key "$secrets_dir/supabase_anon_key"
+  # Realtime (Task 25): a 16-byte row-encryption key and a Phoenix secret base.
+  fetch_secret_to_file realtime-db-enc-key "$secrets_dir/realtime_db_enc_key"
+  fetch_secret_to_file realtime-secret-key-base "$secrets_dir/realtime_secret_key_base"
+  fetch_secret_to_file realtime-metrics-jwt-secret "$secrets_dir/realtime_metrics_jwt_secret"
   fetch_secret_to_file admin-api-token "$secrets_dir/admin_api_token"
   fetch_secret_to_file worker-api-token "$secrets_dir/worker_api_token"
   fetch_secret_to_file metrics-bearer-token "$secrets_dir/metrics_bearer_token"
@@ -299,12 +309,12 @@ PY
 
   # Compose interpolation receives only non-secret release topology and image
   # metadata, plus the values upstream images can read only from environment.
-  python3 - "$manifest" "$env_file" "$secrets_dir" "${MOTIONLY_APP_DOMAIN:?}" "${MOTIONLY_AZURE_OPENAI_ENDPOINT:-}" "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" <<'PY'
+  python3 - "$manifest" "$env_file" "$secrets_dir" "${MOTIONLY_APP_DOMAIN:?}" "${MOTIONLY_AZURE_OPENAI_ENDPOINT:-}" "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" "${MOTIONLY_BILLING_MODE:?}" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
-manifest_path, env_path, secrets_dir, app_domain, azure_endpoint, temporal_admin_tools_image, bootstrap_admin_until = sys.argv[1:]
+manifest_path, env_path, secrets_dir, app_domain, azure_endpoint, temporal_admin_tools_image, bootstrap_admin_until, billing_mode = sys.argv[1:]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 secret_root = Path(secrets_dir)
 def secret(name: str) -> str:
@@ -324,6 +334,7 @@ environment = {
     # One public origin (the CloudFront domain): /api and /supabase on it.
     "APP_DOMAIN": app_domain,
     "PUBLIC_ORIGIN": f"https://{app_domain}",
+    "BILLING_MODE": billing_mode,
 }
 if azure_endpoint:
     environment["AZURE_OPENAI_ENDPOINT"] = azure_endpoint

@@ -252,6 +252,7 @@ class ExportDownloadUrlResponse(BaseModel):
     signed_download_url: str
     expires_in_seconds: int
     format: Literal["mp4"] = "mp4"
+    download_filename: str | None = None
 
 
 class ExportRestoreResponse(BaseModel):

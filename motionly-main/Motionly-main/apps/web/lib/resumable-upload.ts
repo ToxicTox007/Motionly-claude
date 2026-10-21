@@ -318,3 +318,222 @@ function isPositiveInteger(value: unknown): value is number {
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
+
+/**
+ * Transport seam for {@link runResumableUpload}. Every media type (source video,
+ * B-roll library clips, style references) implements this against its own
+ * resumable multipart endpoints, so the orchestration below is identical and the
+ * server stays the sole authority for confirmed parts and verified bytes.
+ */
+export type ResumableUploadTransport = {
+  /** POST .../multipart/init — returns the first authoritative pending window. */
+  initUpload(signal: AbortSignal): Promise<MultipartUploadInitResponse>;
+  /** PUT one part blob to its signed storage URL, reporting XHR progress. */
+  putBlob(
+    url: string,
+    blob: Blob,
+    headers: Record<string, string>,
+    signal: AbortSignal,
+    onProgress: (loadedBytes: number, totalBytes: number) => void,
+  ): Promise<PutBlobResult>;
+  /** POST .../multipart/{id}/parts/{n}/complete — server verifies the stored part. */
+  confirmPart(
+    sessionId: string,
+    partNumber: number,
+    etag: string | null,
+    signal: AbortSignal,
+  ): Promise<MultipartPartCompleteResponse>;
+  /** GET .../multipart/{id} — refresh server-confirmed progress and pending URLs. */
+  refreshSession?(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<MultipartUploadSessionResponse>;
+  /** POST .../multipart/{id}/complete — assemble, verify checksum/size, finalize. */
+  completeUpload(
+    sessionId: string,
+    sha256: string | null,
+    signal: AbortSignal,
+  ): Promise<MultipartUploadCompleteResponse>;
+};
+
+export type RunResumableUploadOptions = {
+  file: Pick<File, "size" | "slice">;
+  transport: ResumableUploadTransport;
+  signal: AbortSignal;
+  onProgress: (progress: AuthoritativeUploadProgress) => void;
+  /** Optional precomputed hex digest the server re-verifies after assembly. */
+  sha256?: string | null;
+};
+
+const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  "aborted",
+  "expired",
+  "failed",
+]);
+
+/**
+ * The one resumable, server-verified upload loop shared by all media types:
+ * init → upload parts → confirm each part → complete (verified checksum/size).
+ * Progress is always derived from server-confirmed bytes plus the in-flight XHR;
+ * a locally cached part count is never trusted. A single expired signed URL is
+ * refreshed and retried at most once per part.
+ */
+export async function runResumableUpload(
+  options: RunResumableUploadOptions,
+): Promise<MultipartUploadCompleteResponse> {
+  const { file, transport, signal, onProgress, sha256 = null } = options;
+  signal.throwIfAborted();
+
+  const initialized = await transport.initUpload(signal);
+  const sessionId = initialized.session_id;
+  const totalParts = initialized.total_parts;
+  const partSizeBytes = initialized.part_size_bytes;
+  let completedParts = 0;
+  let serverUploadedBytes = 0;
+  let partUrls: MultipartPartUrl[] = initialized.part_urls;
+  onProgress(authoritativeProgress(serverUploadedBytes, file.size));
+
+  while (completedParts < totalParts) {
+    signal.throwIfAborted();
+    if (!partUrls.length) {
+      if (!transport.refreshSession) {
+        throw new Error(
+          "The server did not return the next pending upload part.",
+        );
+      }
+      const refreshed = await transport.refreshSession(sessionId, signal);
+      if (TERMINAL_SESSION_STATUSES.has(refreshed.status)) {
+        throw new Error(`Upload session is ${refreshed.status}.`);
+      }
+      completedParts = refreshed.completed_parts;
+      serverUploadedBytes = refreshed.uploaded_bytes;
+      partUrls = refreshed.pending_part_urls;
+      onProgress(authoritativeProgress(serverUploadedBytes, file.size));
+      if (completedParts >= totalParts) break;
+      if (!partUrls.length) {
+        throw new Error(
+          "The server did not return the next pending upload part.",
+        );
+      }
+    }
+
+    for (const initialPartUrl of partUrls) {
+      signal.throwIfAborted();
+      const range = partByteRange(
+        initialPartUrl.part_number,
+        partSizeBytes,
+        file.size,
+      );
+      const partBlob = file.slice(range.start, range.end) as Blob;
+      let partUrl = initialPartUrl;
+
+      const uploadPart = () =>
+        transport.putBlob(
+          partUrl.upload_url,
+          partBlob,
+          partUrl.upload_headers,
+          signal,
+          (loadedBytes) =>
+            onProgress(
+              authoritativeProgress(
+                serverUploadedBytes,
+                file.size,
+                loadedBytes,
+              ),
+            ),
+        );
+
+      let uploadedPart: PutBlobResult;
+      try {
+        uploadedPart = await uploadPart();
+      } catch (error) {
+        if (
+          error instanceof SignedUploadError &&
+          (error.status === 401 || error.status === 403) &&
+          transport.refreshSession
+        ) {
+          const refreshed = await transport.refreshSession(sessionId, signal);
+          const replacement = refreshed.pending_part_urls.find(
+            (candidate) => candidate.part_number === partUrl.part_number,
+          );
+          if (!replacement) {
+            throw new Error(
+              "The server did not refresh the expired upload URL.",
+            );
+          }
+          partUrl = replacement;
+          // A signed URL is refreshed and retried at most once per part.
+          uploadedPart = await uploadPart();
+        } else {
+          throw error;
+        }
+      }
+
+      const confirmed = await transport.confirmPart(
+        sessionId,
+        partUrl.part_number,
+        uploadedPart.etag,
+        signal,
+      );
+      completedParts = confirmed.completed_parts;
+      serverUploadedBytes = confirmed.uploaded_bytes;
+      onProgress(authoritativeProgress(serverUploadedBytes, file.size));
+    }
+
+    // The server returns a bounded pending window; re-fetch its next
+    // authoritative window rather than deriving completion from local state.
+    partUrls = [];
+  }
+
+  onProgress(authoritativeProgress(file.size, file.size));
+  return transport.completeUpload(sessionId, sha256, signal);
+}
+
+/**
+ * Generic media (B-roll, style references) expose a single
+ * MediaUploadSessionResponse shape with `pending_part_urls`. These adapters map
+ * that shape onto the init/refresh responses {@link runResumableUpload} expects,
+ * so one orchestration loop serves every media type.
+ */
+export type GenericMediaSession = {
+  session_id: string;
+  status: string;
+  total_parts: number;
+  part_size_bytes: number;
+  completed_parts: number;
+  uploaded_bytes: number;
+  pending_part_urls: MultipartPartUrl[];
+  expires_at: string;
+};
+
+export function genericInitToHelper(
+  session: GenericMediaSession,
+): MultipartUploadInitResponse {
+  return {
+    video_id: session.session_id,
+    session_id: session.session_id,
+    status: session.status as MultipartSessionStatus,
+    total_parts: session.total_parts,
+    part_size_bytes: session.part_size_bytes,
+    part_urls: session.pending_part_urls,
+    expires_at: session.expires_at,
+    warnings: [],
+  };
+}
+
+export function genericRefreshToHelper(
+  session: GenericMediaSession,
+): MultipartUploadSessionResponse {
+  return {
+    session_id: session.session_id,
+    video_id: session.session_id,
+    status: session.status as MultipartSessionStatus,
+    total_parts: session.total_parts,
+    completed_parts: session.completed_parts,
+    uploaded_bytes: session.uploaded_bytes,
+    file_size_bytes: 0,
+    part_size_bytes: session.part_size_bytes,
+    pending_part_urls: session.pending_part_urls,
+    expires_at: session.expires_at,
+  };
+}

@@ -33,6 +33,7 @@ test("segmentation downloads stream chunks to disk", async () => {
         maxBytes: 1024 * 1024,
         timeoutMs: 5_000,
         trustedInternal: true,
+        internalOrigin: new URL(url).origin,
       });
     });
     const result = await readFile(destination);
@@ -54,6 +55,7 @@ test("segmentation downloads enforce byte limits and remove partial files", asyn
           maxBytes: 1024,
           timeoutMs: 5_000,
           trustedInternal: true,
+          internalOrigin: new URL(url).origin,
         }),
       ),
       /exceeds the 1024-byte limit/,

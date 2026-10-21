@@ -80,14 +80,22 @@ class RetentionService:
             "queued_storage_objects": 0,
         }
         if self.rest_url and self.settings.supabase_service_role_key:
+            # Each cleanup step runs independently (B19): a failure in one is
+            # logged and isolated so it cannot stop the steps that follow.
             # Expiry releases reservations, closes active upload rows, and queues
             # every temporary part. Drain those part objects without the normal
             # long retention delay.
-            counts["expired_upload_sessions"] = self._expire_upload_sessions()
-            counts["expired_generic_media_upload_sessions"] = (
-                self._expire_generic_media_upload_sessions()
+            counts["expired_upload_sessions"] = self._run_step(
+                "expire_upload_sessions", self._expire_upload_sessions
             )
-            counts["expired_storage_reservations"] = self._expire_storage_quota_reservations()
+            counts["expired_generic_media_upload_sessions"] = self._run_step(
+                "expire_generic_media_upload_sessions",
+                self._expire_generic_media_upload_sessions,
+            )
+            counts["expired_storage_reservations"] = self._run_step(
+                "expire_storage_quota_reservations",
+                self._expire_storage_quota_reservations,
+            )
             for source_table in (
                 "upload_session_parts",
                 "upload_sessions",
@@ -97,35 +105,70 @@ class RetentionService:
                 "legacy_upload_expiry",
                 "legacy_upload_cancellation",
             ):
-                counts["queued_storage_objects"] += self._drain_storage_deletion_queue(
-                    source_table=source_table,
-                    minimum_age_days=None,
-                    minimum_age_seconds=SIGNED_UPLOAD_CLEANUP_GRACE_SECONDS,
+                counts["queued_storage_objects"] += self._run_step(
+                    f"drain_storage_deletion_queue:{source_table}",
+                    lambda source_table=source_table: self._drain_storage_deletion_queue(
+                        source_table=source_table,
+                        minimum_age_days=None,
+                        minimum_age_seconds=SIGNED_UPLOAD_CLEANUP_GRACE_SECONDS,
+                    ),
                 )
 
             # Drain other deleted objects queued more than 30 days ago.
-            counts["queued_storage_objects"] += self._drain_storage_deletion_queue()
+            counts["queued_storage_objects"] += self._run_step(
+                "drain_storage_deletion_queue:aged", self._drain_storage_deletion_queue
+            )
 
             # Delete exports older than retention_export_days (90 days)
-            counts["exports"] = self._delete_media_rows(
-                table="exports",
-                older_than_days=self.settings.retention_export_days,
+            counts["exports"] = self._run_step(
+                "delete_exports",
+                lambda: self._delete_media_rows(
+                    table="exports",
+                    older_than_days=self.settings.retention_export_days,
+                ),
             )
             # Redact/expire raw provider payloads in transcripts older than 30 days
             cutoff_30 = self._cutoff(30)
-            self._request(
-                "PATCH",
-                "transcripts",
-                params={"created_at": f"lt.{cutoff_30}"},
-                json={"raw_payload": {}},
+            self._run_step(
+                "redact_transcripts",
+                lambda: self._request(
+                    "PATCH",
+                    "transcripts",
+                    params={"created_at": f"lt.{cutoff_30}"},
+                    json={"raw_payload": {}},
+                ),
             )
 
-            counts["queued_storage_objects"] += self._drain_storage_deletion_queue()
+            counts["queued_storage_objects"] += self._run_step(
+                "drain_storage_deletion_queue:final", self._drain_storage_deletion_queue
+            )
 
-        evicted = self._evict_local_cache()
-        counts["local_cache_files"] = evicted["removed_files"]
-        counts["local_cache_bytes"] = evicted["removed_bytes"]
+        counts["local_cache_files"], counts["local_cache_bytes"] = self._run_step(
+            "evict_local_cache",
+            self._evict_local_cache_counts,
+            default=(0, 0),
+        )
         return counts
+
+    def _evict_local_cache_counts(self) -> tuple[int, int]:
+        evicted = self._evict_local_cache()
+        return evicted["removed_files"], evicted["removed_bytes"]
+
+    def _run_step(self, name, step, *, default=0):
+        """Run one cleanup step in isolation (B19).
+
+        A failure in one step is logged and swallowed so it cannot prevent the
+        remaining steps from running. The step's own typed/HTTP errors are
+        contained here; the scheduled run still records overall success.
+        """
+        try:
+            return step()
+        except Exception as exc:  # noqa: BLE001 - steps are independent by design
+            logger.warning(
+                "retention_step_failed",
+                extra={"step": name, "error": type(exc).__name__},
+            )
+            return default
 
     def _expire_upload_sessions(self) -> int:
         return self._rpc_count("motionly_expire_upload_sessions")

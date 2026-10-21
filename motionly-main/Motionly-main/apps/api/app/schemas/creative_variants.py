@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.captions import CaptionPresetKey
-from app.schemas.plans import BrollDensity
+from app.schemas.plans import BrollDensity, EditPlanResponse
 from app.schemas.request_body import JsonStringBodyMixin
 from app.schemas.scale import ScaleResourceStatus
 
@@ -21,6 +21,7 @@ class CreativeVariantDimension(StrEnum):
 class CreativeVariantReviewStatus(StrEnum):
     NEEDS_REVIEW = "needs_review"
     SELECTED = "selected"
+    APPLIED = "applied"
 
 
 class CreativeHookVariant(BaseModel):
@@ -98,6 +99,26 @@ class CreativeVariantSelectionRequest(JsonStringBodyMixin, BaseModel):
         return cls._coerce_json_string_body(data)
 
 
+class CreativeVariantApplyRequest(JsonStringBodyMixin, BaseModel):
+    """Apply a chosen variant to the active plan, creating a new plan version.
+
+    ``expected_revision`` guards the *variant set* (so a concurrently edited set
+    cannot be applied); ``expected_plan_revision`` guards the *active plan* and
+    is enforced via the standard revision-conflict path. ``render`` optionally
+    queues a render of the new plan version straight away.
+    """
+
+    variant_id: str = Field(pattern=r"^variant-[a-z_]+-[1-6]$")
+    expected_revision: int = Field(ge=1)
+    expected_plan_revision: int = Field(ge=1)
+    render: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_json_string_body(cls, data: object) -> object:
+        return cls._coerce_json_string_body(data)
+
+
 class CreativeVariantSetPayload(BaseModel):
     schema_version: int = 1
     source_plan_id: UUID
@@ -107,6 +128,9 @@ class CreativeVariantSetPayload(BaseModel):
     selected_variant_id: str | None = None
     review_status: CreativeVariantReviewStatus = CreativeVariantReviewStatus.NEEDS_REVIEW
     review_only: bool = True
+    applied_variant_id: str | None = None
+    applied_plan_id: UUID | None = None
+    applied_plan_revision: int | None = Field(default=None, ge=1)
 
 
 class CreativeVariantSetResponse(BaseModel):
@@ -123,8 +147,22 @@ class CreativeVariantSetResponse(BaseModel):
     selected_variant_id: str | None = None
     review_status: CreativeVariantReviewStatus
     review_only: bool = True
+    applied_variant_id: str | None = None
+    applied_plan_id: UUID | None = None
+    applied_plan_revision: int | None = Field(default=None, ge=1)
     created_at: datetime
     updated_at: datetime
+
+
+class CreativeVariantApplyResponse(BaseModel):
+    """The variant set after applying plus the new plan version it produced."""
+
+    variant_set: CreativeVariantSetResponse
+    plan: EditPlanResponse
+    plan_revision: int = Field(ge=1)
+    applied_dimension: CreativeVariantDimension
+    render_enqueued: bool = False
+    render_job_id: UUID | None = None
 
 
 class CreativeVariantSetListResponse(BaseModel):

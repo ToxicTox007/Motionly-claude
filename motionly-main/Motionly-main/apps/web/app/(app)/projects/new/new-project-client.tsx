@@ -56,12 +56,14 @@ export function NewProjectClient() {
   return (
     <div className="mx-auto max-w-2xl py-8 sm:py-12">
       <div className="mb-8 space-y-4 text-center">
-        <div className="inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary text-primary-foreground shadow-brutal">
+        <div className="inline-flex size-16 items-center justify-center rounded-neu-md bg-primary text-primary-foreground shadow-neu-glow">
           <PixelIcon name="new" className="size-8" />
         </div>
         <Badge variant="primary">Step 1 / Launch terminal</Badge>
-        <h2 className="text-4xl font-black uppercase">Name the reel</h2>
-        <p className="text-base font-bold text-muted-foreground">
+        <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+          Name the reel
+        </h2>
+        <p className="text-base font-medium text-muted-foreground">
           Create the project record, then continue directly to upload.
         </p>
       </div>
@@ -69,16 +71,16 @@ export function NewProjectClient() {
       <form
         action={createProject}
         onSubmit={handleSubmit}
-        className="pixel-panel-strong space-y-8 p-6 sm:p-8"
+        className="space-y-8 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg sm:p-8"
       >
-        <div className="grid gap-2 border-2 border-foreground bg-background p-3 font-mono text-xs font-black uppercase sm:grid-cols-3">
+        <div className="grid gap-2 rounded-neu-md bg-surface p-3 text-xs font-semibold shadow-neu-inset-sm sm:grid-cols-3">
           <span className="text-primary">01 Name</span>
           <span className="text-muted-foreground">02 Upload</span>
           <span className="text-muted-foreground">03 AI edit</span>
         </div>
         <div className="space-y-3">
           <label
-            className="text-sm font-bold uppercase tracking-widest text-muted-foreground"
+            className="text-sm font-semibold text-muted-foreground"
             htmlFor="title"
           >
             Project Name
@@ -92,10 +94,13 @@ export function NewProjectClient() {
             placeholder="Founder story cutdown"
             onChange={handleTitleChange}
             aria-describedby={error ? "title-error" : undefined}
-            className="pixel-input h-14 w-full px-5 text-lg font-medium transition-all hover:border-primary/40 focus:outline-none"
+            className="min-h-14 w-full rounded-neu border border-control bg-surface px-5 text-lg font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
           />
           {error ? (
-            <p id="title-error" className="mt-1 text-xs font-bold text-danger">
+            <p
+              id="title-error"
+              className="mt-1 text-xs font-semibold text-danger"
+            >
               {error}
             </p>
           ) : null}
@@ -104,7 +109,7 @@ export function NewProjectClient() {
         <SubmitButton />
       </form>
 
-      <p className="mt-8 text-center font-mono text-sm font-bold text-muted-foreground">
+      <p className="mt-8 text-center text-sm font-medium text-muted-foreground">
         The next screen keeps upload validation and accepted file rules
         unchanged.
       </p>

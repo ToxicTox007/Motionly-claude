@@ -20,17 +20,21 @@ export default function ProjectError({
     <main className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
       <section
         role="alert"
-        className="w-full max-w-lg rounded border-4 border-foreground bg-surface p-6 shadow-brutal-lg"
+        className="w-full max-w-lg rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg"
       >
         <div className="flex items-start gap-4">
-          <div className="flex size-11 shrink-0 items-center justify-center rounded border-2 border-foreground bg-warning text-ink">
-            <AlertTriangle className="size-5" aria-hidden="true" />
+          <div className="flex size-11 shrink-0 items-center justify-center rounded-neu text-warning shadow-neu-inset-sm">
+            <AlertTriangle
+              className="size-5"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
           </div>
           <div className="min-w-0">
-            <h1 className="text-xl font-black uppercase">
+            <h1 className="text-xl font-bold tracking-tight text-foreground">
               Project data is unavailable
             </h1>
-            <p className="mt-2 text-sm font-bold text-muted-foreground">
+            <p className="mt-2 text-sm font-medium text-muted-foreground">
               Motionly could not load the authoritative project state. Your
               saved timeline has not been replaced or cleared.
             </p>
@@ -39,7 +43,7 @@ export default function ProjectError({
         <div className="mt-6 flex flex-wrap justify-end gap-3">
           <Link
             href="/projects"
-            className="inline-flex min-h-11 items-center justify-center rounded border-2 border-foreground bg-surface px-4 text-sm font-black uppercase"
+            className="inline-flex min-h-11 items-center justify-center rounded-neu bg-surface px-4 text-sm font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
           >
             Back to projects
           </Link>

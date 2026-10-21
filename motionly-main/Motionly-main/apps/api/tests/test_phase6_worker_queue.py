@@ -7,9 +7,9 @@ from pydantic import ValidationError
 from app.api.broll import generate_broll
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.internal_jobs import run_queue_job
 from app.core.config import get_settings
 from app.schemas.broll import BrollGenerateRequest
+from app.services.job_engine import run_queue_job
 from app.services.queue import BrollQueue, QueueRegistry, StockAssetEnrichmentQueue
 from app.services.queue_guard import require_worker_queue
 from app.services.stock_video import FixtureStockVideoProvider

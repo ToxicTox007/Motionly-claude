@@ -173,25 +173,28 @@ export function EditorialLearningSettings({
 
   return (
     <section
-      className="card rounded-xl p-6 space-y-5 max-w-4xl"
+      className="max-w-4xl space-y-5 rounded-neu-lg bg-surface p-6 shadow-neu-raised"
       aria-labelledby="editorial-learning-heading"
     >
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
             <BrainCircuit className="size-5 text-primary" aria-hidden="true" />
-            <h3 id="editorial-learning-heading" className="text-lg font-black">
+            <h3
+              id="editorial-learning-heading"
+              className="text-lg font-bold text-foreground"
+            >
               Editorial learning
             </h3>
           </div>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+          <p className="mt-2 max-w-2xl text-sm font-medium text-muted-foreground">
             Choose whether Motionly can retain normalized edit preferences for
             your workspace. Source video, transcript text, prompts, URLs, and
             raw editor content are not used by this setting.
           </p>
         </div>
         <span
-          className={`badge shrink-0 ${status?.enabled ? "badge-primary" : "badge-secondary"}`}
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold shadow-neu-raised-sm ${status?.enabled ? "bg-primary text-primary-foreground" : "bg-surface text-foreground"}`}
         >
           {status
             ? status.enabled
@@ -202,7 +205,7 @@ export function EditorialLearningSettings({
       </div>
 
       {status?.enabled === false ? (
-        <div className="rounded-lg border border-border bg-muted p-4 text-sm text-muted-foreground">
+        <div className="rounded-neu-md bg-surface p-4 text-sm font-medium text-muted-foreground shadow-neu-inset-sm">
           Editorial learning is disabled for this deployment. No new learning
           preferences can be enabled here.
         </div>
@@ -211,7 +214,7 @@ export function EditorialLearningSettings({
       {status?.enabled ? (
         <form className="space-y-5" onSubmit={savePolicy}>
           <div className="grid gap-3 md:grid-cols-2">
-            <label className="rounded-lg border border-border bg-muted p-4">
+            <label className="rounded-neu-md bg-surface p-4 shadow-neu-inset-sm">
               <span className="flex items-start gap-3">
                 <input
                   checked={memoryEnabled}
@@ -221,17 +224,17 @@ export function EditorialLearningSettings({
                   type="checkbox"
                 />
                 <span>
-                  <span className="block text-sm font-bold">
+                  <span className="block text-sm font-semibold text-foreground">
                     Remember structured preferences
                   </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
+                  <span className="mt-1 block text-xs font-medium text-muted-foreground">
                     Allow a reviewed, promoted dataset to influence future plan
                     suggestions for your projects.
                   </span>
                 </span>
               </span>
             </label>
-            <label className="rounded-lg border border-border bg-muted p-4">
+            <label className="rounded-neu-md bg-surface p-4 shadow-neu-inset-sm">
               <span className="flex items-start gap-3">
                 <input
                   checked={trainingEnabled}
@@ -241,10 +244,10 @@ export function EditorialLearningSettings({
                   type="checkbox"
                 />
                 <span>
-                  <span className="block text-sm font-bold">
+                  <span className="block text-sm font-semibold text-foreground">
                     Create training datasets
                   </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
+                  <span className="mt-1 block text-xs font-medium text-muted-foreground">
                     Permit normalized kept, changed, or rejected edit signals to
                     be frozen for an explicit training run.
                   </span>
@@ -255,11 +258,11 @@ export function EditorialLearningSettings({
 
           <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
             <label>
-              <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <span className="mb-1.5 block text-xs font-semibold text-muted-foreground">
                 Retention period
               </span>
               <select
-                className="pixel-input h-11 w-full px-3"
+                className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
                 disabled={busy}
                 onChange={(event) =>
                   setRetentionDays(Number(event.target.value))
@@ -273,14 +276,14 @@ export function EditorialLearningSettings({
                 ))}
               </select>
             </label>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs font-medium text-muted-foreground">
               Training requires at least{" "}
               <strong>{status.minimum_examples}</strong> consented edit signals
               per project.
             </p>
           </div>
 
-          <label className="flex items-start gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4 text-sm">
+          <label className="flex items-start gap-3 rounded-neu-md bg-surface p-4 text-sm shadow-neu-inset-sm ring-1 ring-primary/30">
             <input
               checked={acknowledged}
               className="mt-1 size-4"
@@ -289,10 +292,10 @@ export function EditorialLearningSettings({
               type="checkbox"
             />
             <span>
-              <span className="font-bold">
+              <span className="font-semibold text-foreground">
                 I acknowledge policy {status.policy_version}.
               </span>
-              <span className="mt-1 block text-xs text-muted-foreground">
+              <span className="mt-1 block text-xs font-medium text-muted-foreground">
                 Consent is scoped to this workspace and account. It is off by
                 default and can be withdrawn below.
               </span>
@@ -317,12 +320,12 @@ export function EditorialLearningSettings({
 
       {status?.enabled &&
       (policy?.memory_enabled || policy?.training_enabled) ? (
-        <div className="rounded-lg border border-danger/50 bg-danger/5 p-4 space-y-3">
-          <div className="flex items-center gap-2 text-sm font-bold">
+        <div className="space-y-3 rounded-neu-lg bg-surface p-4 shadow-neu-raised ring-1 ring-danger/30">
+          <div className="flex items-center gap-2 text-sm font-semibold text-danger">
             <ShieldCheck className="size-4" aria-hidden="true" /> Withdraw all
             editorial-learning consent
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             This immediately makes your eligible deltas and frozen datasets
             unavailable for learning and withdraws active preference use for
             this workspace account.

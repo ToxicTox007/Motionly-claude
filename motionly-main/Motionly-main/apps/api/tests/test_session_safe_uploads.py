@@ -715,6 +715,5 @@ def test_schema_validation_storage_signer_caps_and_route_registration(
         "/projects/{project_id}/uploads/multipart/{session_id}/complete",
         "/projects/{project_id}/uploads/multipart/{session_id}/abort",
         "/projects/{project_id}/media/refresh-urls",
-        "/projects/{project_id}/media/quota",
         "/internal/media/sign-urls",
     }.issubset(paths)

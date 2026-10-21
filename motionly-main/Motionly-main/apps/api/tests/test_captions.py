@@ -18,6 +18,7 @@ from app.api.errors import ApiError
 from app.repositories.captions import (
     CAPTION_SEGMENT_COLUMNS,
     CAPTION_TRACK_COLUMNS,
+    CAPTION_TRACK_LIST_COLUMNS,
     TRANSCRIPT_COLUMNS,
     TRANSCRIPT_WORD_COLUMNS,
     InMemoryCaptionRepository,
@@ -489,27 +490,30 @@ async def test_supabase_caption_async_reads_use_bounded_projections(
         "hide_filler_words": False,
         "created_at": now,
         "updated_at": now,
+        "caption_segments": [
+            {
+                "id": str(segment_id),
+                "caption_track_id": str(track_id),
+                "segment_index": 0,
+                "start_ms": 0,
+                "end_ms": 250,
+                "text": "ship",
+                "line_count": 1,
+                "words": [
+                    {
+                        "id": str(word_id),
+                        "index": 0,
+                        "text": "ship",
+                        "start_ms": 0,
+                        "end_ms": 250,
+                        "confidence": 0.9,
+                    }
+                ],
+                "highlight_words": [],
+            }
+        ],
     }
-    segment_word = {
-        "id": str(word_id),
-        "index": 0,
-        "text": "ship",
-        "start_ms": 0,
-        "end_ms": 250,
-        "confidence": 0.9,
-    }
-    segment_row = {
-        "id": str(segment_id),
-        "caption_track_id": str(track_id),
-        "segment_index": 0,
-        "start_ms": 0,
-        "end_ms": 250,
-        "text": "ship",
-        "line_count": 1,
-        "words": [segment_word],
-        "highlight_words": [],
-    }
-    responses = [[transcript_row], [word_row], [track_row], [segment_row]]
+    responses = [[transcript_row], [word_row], [track_row]]
     calls = []
 
     async def fake_async_request(_self, method, path, **kwargs):
@@ -553,18 +557,12 @@ async def test_supabase_caption_async_reads_use_bounded_projections(
     assert calls[2][2]["params"] == {
         "workspace_id": f"eq.{workspace_id}",
         "project_id": f"eq.{project_id}",
-        "select": CAPTION_TRACK_COLUMNS,
+        "select": CAPTION_TRACK_LIST_COLUMNS,
         "order": "updated_at.desc",
         "limit": "25",
     }
-    assert calls[3][2]["params"] == {
-        "caption_track_id": f"eq.{track_id}",
-        "project_id": f"eq.{project_id}",
-        "workspace_id": f"eq.{workspace_id}",
-        "select": CAPTION_SEGMENT_COLUMNS,
-        "order": "segment_index.asc",
-        "limit": "1000",
-    }
+    # B28: tracks and their segments load in ONE embedded query (no calls[3]).
+    assert len(calls) == 3
 
 
 def test_caption_api_prefers_async_repository_methods() -> None:

@@ -5,6 +5,7 @@ import { getWorkspaceApiContext, WORKSPACE_COOKIE_NAME } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { DashboardClient } from "@/components/DashboardClient";
 import { WorkspacePicker } from "@/components/workspace-picker";
+import { storageGauge } from "@/lib/storage-gauge.mjs";
 
 export default async function DashboardPage({
   searchParams,
@@ -37,6 +38,7 @@ export default async function DashboardPage({
         }>;
       }>
     | [] = [];
+  let storage: ReturnType<typeof storageGauge> = storageGauge(null);
 
   if (env.skipAuthMiddleware) {
     // Local bypass: use defaults and avoid Supabase calls
@@ -112,42 +114,57 @@ export default async function DashboardPage({
                 title: string;
                 updated_at: string;
                 active_video_id?: string | null;
+                latest_upload?: {
+                  id: string;
+                  status: string;
+                  original_filename: string;
+                  duration_ms?: number | null;
+                  warnings?: string[];
+                } | null;
               }>;
             })
           : {};
-        const projectRows = (payload.projects ?? []).slice(0, 12);
-        projects = (await Promise.all(
-          projectRows.map(async (project) => {
-            const uploadResponse = project.active_video_id
-              ? await fetch(
-                  `${env.apiBaseUrl}/projects/${project.id}/uploads/${project.active_video_id}`,
-                  { headers: context.headers, cache: "no-store" },
-                )
-              : null;
-            const upload = uploadResponse?.ok
-              ? ((await uploadResponse.json()) as {
-                  status: string;
-                  original_filename: string;
-                  metadata?: {
-                    duration_ms?: number | null;
-                    warnings?: string[];
-                  } | null;
+        // B29: GET /projects embeds each project's latest upload, so the
+        // dashboard renders upload state in ONE API call instead of one extra
+        // /uploads/{id} request per project.
+        projects = (payload.projects ?? []).slice(0, 12).map((project) => {
+          const upload = project.latest_upload ?? null;
+          return {
+            id: project.id,
+            title: project.title,
+            updated_at: project.updated_at,
+            uploaded_videos: upload
+              ? [
+                  {
+                    status: upload.status,
+                    original_filename: upload.original_filename,
+                    duration_ms: upload.duration_ms ?? null,
+                    metadata: { warnings: upload.warnings ?? [] },
+                  },
+                ]
+              : [],
+          };
+        }) as typeof projects;
+
+        // B23: the storage gauge shows the real workspace quota from the API.
+        // A failed/absent quota degrades to "not metered" instead of a fake bar.
+        try {
+          const quotaResponse = await fetch(`${env.apiBaseUrl}/storage/quota`, {
+            headers: context.headers,
+            cache: "no-store",
+          });
+          storage = storageGauge(
+            quotaResponse.ok
+              ? ((await quotaResponse.json()) as {
+                  used_bytes?: number;
+                  max_bytes?: number;
+                  percentage?: number;
                 })
-              : null;
-            return {
-              ...project,
-              uploaded_videos: upload
-                ? [
-                    {
-                      ...upload,
-                      duration_ms: upload.metadata?.duration_ms ?? null,
-                      metadata: upload.metadata ?? null,
-                    },
-                  ]
-                : [],
-            };
-          }),
-        )) as typeof projects;
+              : null,
+          );
+        } catch {
+          storage = storageGauge(null);
+        }
       }
     }
   }
@@ -157,6 +174,7 @@ export default async function DashboardPage({
       <DashboardClient
         initialProjects={projects}
         workspaceName={workspaceName}
+        storage={storage}
       />
     </AppShell>
   );

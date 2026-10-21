@@ -15,14 +15,12 @@ from app.services.billing import monthly_period
 from app.services.supabase import SupabaseRestClient
 
 SUBSCRIPTION_COLUMNS = (
-    "workspace_id,plan,status,stripe_customer_id,stripe_subscription_id,stripe_price_id,"
+    "workspace_id,plan,status,gateway_customer_id,gateway_subscription_id,gateway_price_id,"
     "current_period_start,current_period_end,cancel_at_period_end,updated_at"
 )
-USAGE_LEDGER_COLUMNS = (
-    "id,workspace_id,event_type,quantity,source_id,metadata,created_at"
-)
+USAGE_LEDGER_COLUMNS = "id,workspace_id,event_type,quantity,source_id,metadata,created_at"
 BILLING_ADJUSTMENT_COLUMNS = (
-    "id,workspace_id,stripe_event_id,adjustment_type,amount_cents,currency,reason,"
+    "id,workspace_id,gateway_event_id,adjustment_type,amount_paise,currency,reason,"
     "metadata,created_at"
 )
 
@@ -32,9 +30,9 @@ class SubscriptionRecord:
     workspace_id: UUID
     plan: BillingPlanKey
     status: SubscriptionStatus
-    stripe_customer_id: str | None = None
-    stripe_subscription_id: str | None = None
-    stripe_price_id: str | None = None
+    gateway_customer_id: str | None = None
+    gateway_subscription_id: str | None = None
+    gateway_price_id: str | None = None
     current_period_start: datetime | None = None
     current_period_end: datetime | None = None
     cancel_at_period_end: bool = False
@@ -64,7 +62,7 @@ class UsageLedgerEntry:
 
 
 @dataclass
-class StripeWebhookEventRecord:
+class GatewayWebhookEventRecord:
     id: str
     event_type: str
     processed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -72,12 +70,19 @@ class StripeWebhookEventRecord:
 
 @dataclass
 class BillingAdjustmentRecord:
+    """A money-movement record: a charge (positive) or refund (negative).
+
+    ``amount_paise`` is in INR paise. ``gateway_event_id`` is the webhook event
+    that produced it (unique → idempotent). ``adjustment_type`` is one of
+    ``charge`` / ``refund`` / ``credit`` / ``chargeback``.
+    """
+
     id: UUID
     workspace_id: UUID
-    stripe_event_id: str
+    gateway_event_id: str
     adjustment_type: str
-    amount_cents: int
-    currency: str = "usd"
+    amount_paise: int
+    currency: str = "inr"
     reason: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -87,7 +92,7 @@ class InMemoryBillingRepository:
     def __init__(self) -> None:
         self.subscriptions: dict[UUID, SubscriptionRecord] = {}
         self.usage_ledger: dict[UUID, UsageLedgerEntry] = {}
-        self.stripe_events: dict[str, StripeWebhookEventRecord] = {}
+        self.gateway_events: dict[str, GatewayWebhookEventRecord] = {}
         self.billing_adjustments: dict[str, BillingAdjustmentRecord] = {}
 
     def get_subscription(self, *, workspace_id: UUID) -> SubscriptionRecord:
@@ -103,9 +108,9 @@ class InMemoryBillingRepository:
         workspace_id: UUID,
         plan: BillingPlanKey,
         status: SubscriptionStatus,
-        stripe_customer_id: str | None = None,
-        stripe_subscription_id: str | None = None,
-        stripe_price_id: str | None = None,
+        gateway_customer_id: str | None = None,
+        gateway_subscription_id: str | None = None,
+        gateway_price_id: str | None = None,
         current_period_start: datetime | None = None,
         current_period_end: datetime | None = None,
         cancel_at_period_end: bool = False,
@@ -115,9 +120,9 @@ class InMemoryBillingRepository:
             workspace_id=workspace_id,
             plan=plan,
             status=status,
-            stripe_customer_id=stripe_customer_id or existing.stripe_customer_id,
-            stripe_subscription_id=stripe_subscription_id or existing.stripe_subscription_id,
-            stripe_price_id=stripe_price_id or existing.stripe_price_id,
+            gateway_customer_id=gateway_customer_id or existing.gateway_customer_id,
+            gateway_subscription_id=gateway_subscription_id or existing.gateway_subscription_id,
+            gateway_price_id=gateway_price_id or existing.gateway_price_id,
             current_period_start=current_period_start or existing.current_period_start,
             current_period_end=current_period_end or existing.current_period_end,
             cancel_at_period_end=cancel_at_period_end,
@@ -177,29 +182,31 @@ class InMemoryBillingRepository:
         self.usage_ledger[entry.id] = entry
         return entry
 
-    def has_processed_stripe_event(self, event_id: str) -> bool:
-        return event_id in self.stripe_events
+    def has_processed_gateway_event(self, event_id: str) -> bool:
+        return event_id in self.gateway_events
 
-    def record_stripe_event(self, *, event_id: str, event_type: str) -> StripeWebhookEventRecord:
-        if event_id in self.stripe_events:
-            return self.stripe_events[event_id]
-        event = StripeWebhookEventRecord(id=event_id, event_type=event_type)
-        self.stripe_events[event.id] = event
+    def record_gateway_event(
+        self, *, event_id: str, event_type: str
+    ) -> GatewayWebhookEventRecord:
+        if event_id in self.gateway_events:
+            return self.gateway_events[event_id]
+        event = GatewayWebhookEventRecord(id=event_id, event_type=event_type)
+        self.gateway_events[event.id] = event
         return event
 
-    def workspace_for_stripe_subscription(
+    def workspace_for_gateway_subscription(
         self,
         *,
-        stripe_subscription_id: str | None = None,
-        stripe_customer_id: str | None = None,
+        gateway_subscription_id: str | None = None,
+        gateway_customer_id: str | None = None,
     ) -> UUID | None:
         for subscription in self.subscriptions.values():
             if (
-                stripe_subscription_id
-                and subscription.stripe_subscription_id == stripe_subscription_id
+                gateway_subscription_id
+                and subscription.gateway_subscription_id == gateway_subscription_id
             ):
                 return subscription.workspace_id
-            if stripe_customer_id and subscription.stripe_customer_id == stripe_customer_id:
+            if gateway_customer_id and subscription.gateway_customer_id == gateway_customer_id:
                 return subscription.workspace_id
         return None
 
@@ -207,28 +214,36 @@ class InMemoryBillingRepository:
         self,
         *,
         workspace_id: UUID,
-        stripe_event_id: str,
+        gateway_event_id: str,
         adjustment_type: str,
-        amount_cents: int,
-        currency: str = "usd",
+        amount_paise: int,
+        currency: str = "inr",
         reason: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> BillingAdjustmentRecord:
-        existing = self.billing_adjustments.get(stripe_event_id)
+        existing = self.billing_adjustments.get(gateway_event_id)
         if existing:
             return existing
         adjustment = BillingAdjustmentRecord(
             id=uuid4(),
             workspace_id=workspace_id,
-            stripe_event_id=stripe_event_id,
+            gateway_event_id=gateway_event_id,
             adjustment_type=adjustment_type,
-            amount_cents=amount_cents,
+            amount_paise=amount_paise,
             currency=currency,
             reason=reason,
             metadata=metadata or {},
         )
-        self.billing_adjustments[stripe_event_id] = adjustment
+        self.billing_adjustments[gateway_event_id] = adjustment
         return adjustment
+
+    def list_billing_adjustments(self, *, workspace_id: UUID) -> list[BillingAdjustmentRecord]:
+        rows = [
+            adjustment
+            for adjustment in self.billing_adjustments.values()
+            if adjustment.workspace_id == workspace_id
+        ]
+        return sorted(rows, key=lambda row: row.created_at, reverse=True)
 
 
 class SupabaseBillingRepository(InMemoryBillingRepository):
@@ -401,103 +416,97 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             return self._usage_from_row(existing.json()[0])
         return self._usage_from_row(response.json()[0])
 
-    def has_processed_stripe_event(self, event_id: str) -> bool:
+    def has_processed_gateway_event(self, event_id: str) -> bool:
         response = self.client.request(
             "GET",
-            "/stripe_webhook_events",
+            "/gateway_webhook_events",
             params={"id": f"eq.{event_id}", "select": "id", "limit": "1"},
         )
         self._raise_for_supabase(response)
         return bool(response.json())
 
-    async def has_processed_stripe_event_async(self, event_id: str) -> bool:
+    async def has_processed_gateway_event_async(self, event_id: str) -> bool:
         response = await self.client.async_request(
             "GET",
-            "/stripe_webhook_events",
+            "/gateway_webhook_events",
             params={"id": f"eq.{event_id}", "select": "id", "limit": "1"},
         )
         self._raise_for_supabase(response)
         return bool(response.json())
 
-    def record_stripe_event(self, *, event_id: str, event_type: str) -> StripeWebhookEventRecord:
+    def record_gateway_event(
+        self, *, event_id: str, event_type: str
+    ) -> GatewayWebhookEventRecord:
         response = self.client.request(
             "POST",
-            "/stripe_webhook_events",
+            "/gateway_webhook_events",
             headers={"prefer": "resolution=ignore-duplicates,return=representation"},
             params={"on_conflict": "id"},
             json={"id": event_id, "event_type": event_type},
         )
         self._raise_for_supabase(response)
         if not response.json():
-            return StripeWebhookEventRecord(id=event_id, event_type=event_type)
-        return StripeWebhookEventRecord(
+            return GatewayWebhookEventRecord(id=event_id, event_type=event_type)
+        return GatewayWebhookEventRecord(
             id=response.json()[0]["id"],
             event_type=response.json()[0]["event_type"],
             processed_at=self._parse_datetime(response.json()[0]["processed_at"]),
         )
 
-    async def record_stripe_event_async(
+    async def record_gateway_event_async(
         self,
         *,
         event_id: str,
         event_type: str,
-    ) -> StripeWebhookEventRecord:
+    ) -> GatewayWebhookEventRecord:
         response = await self.client.async_request(
             "POST",
-            "/stripe_webhook_events",
+            "/gateway_webhook_events",
             headers={"prefer": "resolution=ignore-duplicates,return=representation"},
             params={"on_conflict": "id"},
             json={"id": event_id, "event_type": event_type},
         )
         self._raise_for_supabase(response)
         if not response.json():
-            return StripeWebhookEventRecord(id=event_id, event_type=event_type)
-        return StripeWebhookEventRecord(
+            return GatewayWebhookEventRecord(id=event_id, event_type=event_type)
+        return GatewayWebhookEventRecord(
             id=response.json()[0]["id"],
             event_type=response.json()[0]["event_type"],
             processed_at=self._parse_datetime(response.json()[0]["processed_at"]),
         )
 
-    def workspace_for_stripe_subscription(
+    def workspace_for_gateway_subscription(
         self,
         *,
-        stripe_subscription_id: str | None = None,
-        stripe_customer_id: str | None = None,
+        gateway_subscription_id: str | None = None,
+        gateway_customer_id: str | None = None,
     ) -> UUID | None:
         filters: dict[str, str] = {"select": "workspace_id", "limit": "1"}
-        if stripe_subscription_id:
-            filters["stripe_subscription_id"] = f"eq.{stripe_subscription_id}"
-        elif stripe_customer_id:
-            filters["stripe_customer_id"] = f"eq.{stripe_customer_id}"
+        if gateway_subscription_id:
+            filters["gateway_subscription_id"] = f"eq.{gateway_subscription_id}"
+        elif gateway_customer_id:
+            filters["gateway_customer_id"] = f"eq.{gateway_customer_id}"
         else:
             return None
-        response = self.client.request(
-            "GET",
-            "/subscriptions",
-            params=filters,
-        )
+        response = self.client.request("GET", "/subscriptions", params=filters)
         self._raise_for_supabase(response)
         rows = response.json()
         return UUID(str(rows[0]["workspace_id"])) if rows else None
 
-    async def workspace_for_stripe_subscription_async(
+    async def workspace_for_gateway_subscription_async(
         self,
         *,
-        stripe_subscription_id: str | None = None,
-        stripe_customer_id: str | None = None,
+        gateway_subscription_id: str | None = None,
+        gateway_customer_id: str | None = None,
     ) -> UUID | None:
         filters: dict[str, str] = {"select": "workspace_id", "limit": "1"}
-        if stripe_subscription_id:
-            filters["stripe_subscription_id"] = f"eq.{stripe_subscription_id}"
-        elif stripe_customer_id:
-            filters["stripe_customer_id"] = f"eq.{stripe_customer_id}"
+        if gateway_subscription_id:
+            filters["gateway_subscription_id"] = f"eq.{gateway_subscription_id}"
+        elif gateway_customer_id:
+            filters["gateway_customer_id"] = f"eq.{gateway_customer_id}"
         else:
             return None
-        response = await self.client.async_request(
-            "GET",
-            "/subscriptions",
-            params=filters,
-        )
+        response = await self.client.async_request("GET", "/subscriptions", params=filters)
         self._raise_for_supabase(response)
         rows = response.json()
         return UUID(str(rows[0]["workspace_id"])) if rows else None
@@ -507,7 +516,7 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             "POST",
             "/billing_adjustments",
             headers={"prefer": "resolution=ignore-duplicates,return=representation"},
-            params={"on_conflict": "stripe_event_id"},
+            params={"on_conflict": "gateway_event_id"},
             json=self._json_safe(values),
         )
         self._raise_for_supabase(response)
@@ -516,7 +525,7 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
                 "GET",
                 "/billing_adjustments",
                 params={
-                    "stripe_event_id": f"eq.{values['stripe_event_id']}",
+                    "gateway_event_id": f"eq.{values['gateway_event_id']}",
                     "select": BILLING_ADJUSTMENT_COLUMNS,
                     "limit": "1",
                 },
@@ -530,7 +539,7 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             "POST",
             "/billing_adjustments",
             headers={"prefer": "resolution=ignore-duplicates,return=representation"},
-            params={"on_conflict": "stripe_event_id"},
+            params={"on_conflict": "gateway_event_id"},
             json=self._json_safe(values),
         )
         self._raise_for_supabase(response)
@@ -539,7 +548,7 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
                 "GET",
                 "/billing_adjustments",
                 params={
-                    "stripe_event_id": f"eq.{values['stripe_event_id']}",
+                    "gateway_event_id": f"eq.{values['gateway_event_id']}",
                     "select": BILLING_ADJUSTMENT_COLUMNS,
                     "limit": "1",
                 },
@@ -547,6 +556,34 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             self._raise_for_supabase(existing)
             return self._adjustment_from_row(existing.json()[0])
         return self._adjustment_from_row(response.json()[0])
+
+    def list_billing_adjustments(self, *, workspace_id: UUID) -> list[BillingAdjustmentRecord]:
+        response = self.client.request(
+            "GET",
+            "/billing_adjustments",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "select": BILLING_ADJUSTMENT_COLUMNS,
+                "order": "created_at.desc",
+            },
+        )
+        self._raise_for_supabase(response)
+        return [self._adjustment_from_row(row) for row in response.json()]
+
+    async def list_billing_adjustments_async(
+        self, *, workspace_id: UUID
+    ) -> list[BillingAdjustmentRecord]:
+        response = await self.client.async_request(
+            "GET",
+            "/billing_adjustments",
+            params={
+                "workspace_id": f"eq.{workspace_id}",
+                "select": BILLING_ADJUSTMENT_COLUMNS,
+                "order": "created_at.desc",
+            },
+        )
+        self._raise_for_supabase(response)
+        return [self._adjustment_from_row(row) for row in response.json()]
 
     @staticmethod
     def _subscription_from_row(row: dict[str, object]) -> SubscriptionRecord:
@@ -558,10 +595,11 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             workspace_id=UUID(str(row["workspace_id"])),
             plan=plan,
             status=status,
-            stripe_customer_id=row.get("stripe_customer_id") and str(row["stripe_customer_id"]),
-            stripe_subscription_id=row.get("stripe_subscription_id")
-            and str(row["stripe_subscription_id"]),
-            stripe_price_id=row.get("stripe_price_id") and str(row["stripe_price_id"]),
+            gateway_customer_id=row.get("gateway_customer_id")
+            and str(row["gateway_customer_id"]),
+            gateway_subscription_id=row.get("gateway_subscription_id")
+            and str(row["gateway_subscription_id"]),
+            gateway_price_id=row.get("gateway_price_id") and str(row["gateway_price_id"]),
             current_period_start=SupabaseBillingRepository._parse_optional_datetime(
                 row.get("current_period_start")
             ),
@@ -590,10 +628,10 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
         return BillingAdjustmentRecord(
             id=UUID(str(row["id"])),
             workspace_id=UUID(str(row["workspace_id"])),
-            stripe_event_id=str(row["stripe_event_id"]),
+            gateway_event_id=str(row["gateway_event_id"]),
             adjustment_type=str(row["adjustment_type"]),
-            amount_cents=int(row["amount_cents"]),
-            currency=str(row.get("currency") or "usd"),
+            amount_paise=int(row["amount_paise"]),
+            currency=str(row.get("currency") or "inr"),
             reason=row.get("reason") and str(row["reason"]),
             metadata=dict(row.get("metadata") or {}),
             created_at=SupabaseBillingRepository._parse_datetime(str(row["created_at"])),

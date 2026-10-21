@@ -25,7 +25,7 @@ test("k6 performance harness covers required API workflows", async () => {
   }
   for (const route of [
     "/projects?limit=20",
-    "/uploads/init",
+    "/uploads/multipart/init",
     "/complete",
     "/plans",
     "/renders/",

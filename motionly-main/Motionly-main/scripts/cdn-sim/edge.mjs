@@ -51,6 +51,11 @@ const COMPRESSIBLE_TYPE =
 const COMPRESS_MIN_BYTES = 1000;
 const COMPRESS_MAX_BYTES = 10_000_000;
 const MAX_REQUEST_HEADER_BYTES = 32_768;
+// CloudFront closes a WebSocket tunnel after this much inactivity (default: its
+// documented 10-minute idle timeout). Any frame in either direction — including
+// Realtime's periodic heartbeats — resets the timer, so a heartbeating socket
+// never hits it. Overridable per edge (createEdge `websocketIdleMs`) so tests can
+// drive a short idle window instead of waiting ten minutes.
 const WEBSOCKET_IDLE_MS = 10 * 60 * 1000;
 const INVALID_METHOD_BODY =
   "This distribution is not configured to allow the HTTP request method that was used for this request. The distribution supports only cachable requests.";
@@ -374,6 +379,7 @@ export function createEdge({
   pop = "SIM1-P1",
   log = (line) => process.stdout.write(`${line}\n`),
   cache = new EdgeCache(),
+  websocketIdleMs = WEBSOCKET_IDLE_MS,
 }) {
   validateContract(contract);
   for (const header of contract.origin.custom_headers ?? []) {
@@ -782,7 +788,7 @@ export function createEdge({
       upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
       if (head?.length) upstream.write(head);
       for (const side of [socket, upstream])
-        side.setTimeout(WEBSOCKET_IDLE_MS, () => side.destroy());
+        side.setTimeout(websocketIdleMs, () => side.destroy());
       socket.pipe(upstream);
       upstream.pipe(socket);
     });

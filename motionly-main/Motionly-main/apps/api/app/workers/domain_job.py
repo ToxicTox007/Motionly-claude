@@ -19,8 +19,8 @@ def main() -> None:
 
 
 def _execute(payload: dict[str, object]) -> dict[str, object]:
-    from app.api.internal_jobs import _execute_job
     from app.main import app
+    from app.services.job_engine import _execute_job
 
     job = EnqueuedJob(
         id=str(payload["job_id"]),

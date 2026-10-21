@@ -6,7 +6,17 @@ import { ChevronDown, ChevronRight, GripVertical, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
+import {
+  genericInitToHelper,
+  genericRefreshToHelper,
+  putBlobWithProgress,
+  runResumableUpload,
+  type GenericMediaSession,
+  type ResumableUploadTransport,
+} from "@/lib/resumable-upload";
 import type { StockVideoAssetSummary } from "@motionly/shared";
+
+type MediaUploadSession = GenericMediaSession;
 import {
   CATEGORY_LABELS,
   ELEMENT_CATALOG,
@@ -79,44 +89,82 @@ export function ElementPalette({
   async function uploadLibraryFile(file: File) {
     setLibraryBusy(true);
     setLibraryMessage("Preparing upload…");
+    const controller = new AbortController();
     try {
       const metadata = await probeVideoFile(file);
-      const initialized = await editorApiRequest<{
-        asset: StockVideoAssetSummary;
-        signed_upload_url: string;
-        upload_headers: Record<string, string>;
-      }>(`${env.apiBaseUrl}/projects/${projectId}/broll/library/init`, {
-        method: "POST",
-        workspaceId,
-        friendlyError: "B-roll upload could not be started.",
-        body: {
-          filename: file.name,
-          mime_type: file.type || "video/mp4",
-          file_size_bytes: file.size,
-          ...metadata,
+      // One resumable, server-verified path for every media type: init →
+      // parts → confirm → complete (verified checksum/size) via the shared
+      // helper against the B-roll resumable multipart endpoints.
+      let completedAsset: StockVideoAssetSummary | null = null;
+      const base = `${env.apiBaseUrl}/projects/${projectId}/broll/library/multipart`;
+      const transport: ResumableUploadTransport = {
+        async initUpload() {
+          const initialized = await editorApiRequest<{
+            asset: StockVideoAssetSummary;
+            session: MediaUploadSession;
+          }>(`${base}/init`, {
+            method: "POST",
+            workspaceId,
+            friendlyError: "B-roll upload could not be started.",
+            body: {
+              filename: file.name,
+              mime_type: file.type || "video/mp4",
+              file_size_bytes: file.size,
+              ...metadata,
+            },
+            signal: controller.signal,
+          });
+          return genericInitToHelper(initialized.session);
         },
-      });
-      setLibraryMessage("Uploading B-roll…");
-      const upload = await fetch(initialized.signed_upload_url, {
-        method: "PUT",
-        headers: initialized.upload_headers,
-        body: file,
-      });
-      if (!upload.ok) throw new Error("B-roll file upload failed.");
-      const completed = await editorApiRequest<{
-        asset: StockVideoAssetSummary;
-      }>(
-        `${env.apiBaseUrl}/projects/${projectId}/broll/library/${initialized.asset.id}/complete`,
-        {
-          method: "POST",
-          workspaceId,
-          friendlyError: "B-roll upload could not be finalized.",
-          body: {},
+        putBlob: (url, blob, headers, signal, onProgress) =>
+          putBlobWithProgress(url, blob, headers, signal, onProgress),
+        async refreshSession(sessionId) {
+          return genericRefreshToHelper(
+            await editorApiRequest<MediaUploadSession>(`${base}/${sessionId}`, {
+              workspaceId,
+              friendlyError: "B-roll upload could not be resumed.",
+              signal: controller.signal,
+            }),
+          );
         },
-      );
+        async confirmPart(sessionId, partNumber, etag) {
+          return editorApiRequest(
+            `${base}/${sessionId}/parts/${partNumber}/complete`,
+            {
+              method: "POST",
+              workspaceId,
+              friendlyError: "A B-roll upload part could not be confirmed.",
+              body: etag ? { etag } : {},
+              signal: controller.signal,
+            },
+          );
+        },
+        async completeUpload(sessionId) {
+          const completed = await editorApiRequest<{
+            asset: StockVideoAssetSummary;
+          }>(`${base}/${sessionId}/complete`, {
+            method: "POST",
+            workspaceId,
+            friendlyError: "B-roll upload could not be finalized.",
+            body: {},
+            signal: controller.signal,
+          });
+          completedAsset = completed.asset;
+          return { status: "completed" } as never;
+        },
+      };
+      await runResumableUpload({
+        file,
+        transport,
+        signal: controller.signal,
+        onProgress: (progress) =>
+          setLibraryMessage(`Uploading B-roll… ${progress.percent}%`),
+      });
+      if (!completedAsset) throw new Error("B-roll upload did not finalize.");
+      const asset: StockVideoAssetSummary = completedAsset;
       setLibrary((current) => [
-        completed.asset,
-        ...current.filter((item) => item.id !== completed.asset.id),
+        asset,
+        ...current.filter((item) => item.id !== asset.id),
       ]);
       setLibraryMessage("B-roll added to your library.");
     } catch (error) {
@@ -147,18 +195,18 @@ export function ElementPalette({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[hsl(var(--surface))]">
-      <div className="sticky top-0 z-10 space-y-2 border-b border-border bg-[hsl(var(--surface))] p-2">
-        <h2 id="media-heading" className="text-sm font-bold">
+    <div className="flex h-full min-h-0 flex-col bg-surface">
+      <div className="sticky top-0 z-10 space-y-2 border-b border-hairline bg-surface p-3">
+        <h2 id="media-heading" className="text-sm font-bold text-foreground">
           Elements
         </h2>
         <label className="relative block">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search elements…"
-            className="pixel-input min-h-10 w-full pl-8 pr-2 text-sm"
+            className="min-h-10 w-full rounded-neu border border-control bg-surface pl-9 pr-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
           />
         </label>
         <select
@@ -166,7 +214,7 @@ export function ElementPalette({
           onChange={(event) =>
             setFilter(event.target.value as PaletteCategory | "all")
           }
-          className="pixel-input min-h-10 w-full px-2 text-sm"
+          className="min-h-10 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
           aria-label="Filter element category"
         >
           <option value="all">All categories</option>
@@ -178,16 +226,16 @@ export function ElementPalette({
         </select>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <section className="border-b border-border/70 p-2">
+        <section className="border-b border-hairline p-3">
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+            <h3 className="text-xs font-semibold text-muted-foreground">
               My B-roll
             </h3>
             <button
               type="button"
               disabled={libraryBusy}
               onClick={() => fileRef.current?.click()}
-              className="pixel-button min-h-9 px-2 text-[10px] font-bold"
+              className="neu-pressable min-h-9 rounded-neu bg-surface px-3 text-xs font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised disabled:opacity-50 disabled:shadow-neu-raised-sm"
             >
               Upload
             </button>
@@ -213,13 +261,13 @@ export function ElementPalette({
               ))}
             </div>
           ) : (
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Upload reusable clips, then drag them to B-roll.
             </p>
           )}
           {libraryMessage ? (
             <p
-              className="mt-2 text-[10px] text-muted-foreground"
+              className="mt-2 text-xs text-muted-foreground"
               aria-live="polite"
             >
               {libraryMessage}
@@ -233,24 +281,24 @@ export function ElementPalette({
           if (!categoryItems.length) return null;
           const expanded = open[category] ?? true;
           return (
-            <section key={category} className="border-b border-border/70">
+            <section key={category} className="border-b border-hairline">
               <button
                 type="button"
                 onClick={() =>
                   setOpen((current) => ({ ...current, [category]: !expanded }))
                 }
-                className="flex min-h-11 w-full items-center gap-2 px-2 text-left text-[10px] font-black uppercase tracking-wider text-muted-foreground"
+                className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-xs font-semibold text-muted-foreground"
                 aria-expanded={expanded}
               >
                 {expanded ? (
-                  <ChevronDown className="size-3" />
+                  <ChevronDown className="size-3.5" strokeWidth={1.75} />
                 ) : (
-                  <ChevronRight className="size-3" />
+                  <ChevronRight className="size-3.5" strokeWidth={1.75} />
                 )}
                 {CATEGORY_LABELS[category]}
               </button>
               {expanded ? (
-                <div className="grid grid-cols-2 gap-1.5 px-2 pb-2">
+                <div className="grid grid-cols-2 gap-2 px-3 pb-3">
                   {categoryItems.map((entry) => (
                     <PaletteTile key={entry.id} entry={entry} />
                   ))}
@@ -299,7 +347,7 @@ function LibraryTile({
   return (
     <div
       className={cn(
-        "relative overflow-hidden border border-border bg-background",
+        "relative overflow-hidden rounded-neu-md bg-surface shadow-neu-raised-sm",
         isDragging && "opacity-40",
       )}
     >
@@ -310,7 +358,7 @@ function LibraryTile({
         {...listeners}
         className="block w-full touch-none text-left"
       >
-        <span className="block h-12 bg-black">
+        <span className="block h-12 bg-ink">
           {asset.preview_video_url ? (
             <video
               src={asset.preview_video_url}
@@ -320,14 +368,14 @@ function LibraryTile({
             />
           ) : null}
         </span>
-        <span className="block truncate p-1 text-[9px] font-bold">
+        <span className="block truncate p-1.5 text-xs font-semibold text-foreground">
           {asset.title}
         </span>
       </button>
       <button
         type="button"
         onClick={onDelete}
-        className="absolute right-0 top-0 bg-black/70 px-1 text-xs text-white"
+        className="absolute right-0 top-0 bg-ink/70 px-1 text-xs text-white"
         aria-label={`Delete ${asset.title}`}
       >
         ×
@@ -379,7 +427,7 @@ function PaletteTile({ entry }: { entry: PaletteElement }) {
       {...attributes}
       {...listeners}
       className={cn(
-        "group relative min-h-16 touch-none overflow-hidden border border-border bg-background p-1.5 text-left transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+        "group relative min-h-16 touch-none overflow-hidden rounded-neu-md bg-surface p-2 text-left shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus active:shadow-neu-pressed",
         isDragging && "opacity-35",
       )}
       style={{
@@ -390,12 +438,14 @@ function PaletteTile({ entry }: { entry: PaletteElement }) {
       title={`Drag ${entry.name} to ${entry.accepts.join(", ")}`}
     >
       <span
-        className="mb-1 flex h-8 items-center justify-center border border-border/60 bg-muted/50 text-[10px] font-black"
+        className="mb-1 flex h-8 items-center justify-center rounded-neu-sm bg-muted text-xs font-semibold text-foreground shadow-neu-inset-sm"
         style={{ background }}
       >
         {entry.preview || entry.name.slice(0, 2)}
       </span>
-      <span className="block truncate text-[9px] font-bold">{entry.name}</span>
+      <span className="block truncate text-xs font-semibold text-foreground">
+        {entry.name}
+      </span>
       <GripVertical className="absolute right-0.5 top-0.5 size-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
     </button>
   );

@@ -11,7 +11,11 @@ Create or retrieve these file names before starting `infra/docker-compose.gpu.ym
 - `postgres_password`
 - `redis_password`
 - `supabase_service_role_key`
+- `supabase_worker_key`: a Supabase JWT whose `role` claim is `motionly_worker` — the restricted database role (migration `202610190501_task18_restricted_worker_role.sql`) that PostgREST switches into for worker requests. It is mounted ONLY into the media worker services (never the API or web) so a compromised worker image cannot reach the `auth` schema or storage buckets outside the four workers use. Workers read it as `SUPABASE_SERVICE_ROLE_KEY_FILE`; it is NOT the service-role key.
 - `supabase_jwt_secret`
+- `realtime_db_enc_key`: Supabase Realtime's 16-byte key for encrypting tenant settings it stores in Postgres
+- `realtime_secret_key_base`: Realtime's Phoenix endpoint secret
+- `realtime_metrics_jwt_secret`: signs the tokens Realtime's own `/metrics` endpoint accepts; the pinned release refuses to start without it
 - `admin_api_token`
 - `worker_api_token`
 - `groq_api_key`

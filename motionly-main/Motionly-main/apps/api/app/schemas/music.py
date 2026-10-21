@@ -133,3 +133,11 @@ class MusicRegionsUpdateRequest(JsonStringBodyMixin, BaseModel):
 class MusicTrackListResponse(BaseModel):
     tracks: list[MusicTrackResponse]
     mood: str
+
+
+class MusicTrackPreviewResponse(BaseModel):
+    track_id: UUID
+    provider_track_id: str
+    title: str
+    preview_url: str
+    expires_in_seconds: int = Field(ge=1)

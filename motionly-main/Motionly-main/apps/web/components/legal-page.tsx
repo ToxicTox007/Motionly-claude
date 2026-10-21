@@ -18,12 +18,12 @@ export function LegalPage({
   sections: LegalSection[];
 }) {
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen bg-background">
       <PageTitle title={title} />
-      <div className="container-content py-12 lg:py-16">
+      <div className="container-content max-w-3xl py-12 lg:py-16">
         <Link
           href="/"
-          className="mb-10 inline-flex min-h-10 items-center gap-2 rounded border-2 border-foreground bg-surface px-3 py-1.5 text-xs font-black uppercase text-foreground shadow-brutal-sm transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none"
+          className="mb-10 inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 py-2 text-sm font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
         >
           <PixelIcon name="play" className="size-3 rotate-180" />
           Back to Motionly
@@ -33,12 +33,12 @@ export function LegalPage({
           <Badge variant="primary" className="mb-4">
             Last updated {updated}
           </Badge>
-          <h1 className="text-4xl font-black uppercase text-foreground sm:text-5xl">
+          <h1 className="text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
             {title}
           </h1>
         </div>
 
-        <div className="overflow-hidden rounded border-2 border-foreground bg-surface shadow-brutal divide-y-2 divide-foreground">
+        <div className="divide-y divide-hairline overflow-hidden rounded-neu-lg bg-surface shadow-neu-raised">
           {sections.map((section) => {
             const id = section.title
               .toLowerCase()
@@ -50,10 +50,10 @@ export function LegalPage({
                 id={id}
                 className="px-6 py-7 sm:px-8"
               >
-                <h2 className="mb-3 text-lg font-black uppercase text-foreground">
+                <h2 className="mb-3 text-lg font-bold text-foreground">
                   {section.title}
                 </h2>
-                <p className="text-muted-foreground leading-[1.8] text-sm font-mono">
+                <p className="text-sm font-medium leading-[1.8] text-muted-foreground">
                   {section.body}
                 </p>
               </section>
@@ -61,10 +61,10 @@ export function LegalPage({
           })}
         </div>
 
-        <div className="mt-12 pt-8 border-t-2 border-foreground text-center">
+        <div className="mt-12 border-t border-hairline pt-8 text-center">
           <Link
             href="/"
-            className="inline-flex min-h-10 items-center gap-2 rounded border-2 border-foreground bg-surface px-3 py-1.5 text-xs font-black uppercase text-foreground shadow-brutal-sm transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none"
+            className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 py-2 text-sm font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
           >
             <PixelIcon name="play" className="size-3 rotate-180" />
             Return to Motionly

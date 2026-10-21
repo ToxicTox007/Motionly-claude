@@ -1,5 +1,6 @@
 import asyncio
 import subprocess
+from datetime import UTC, datetime, timedelta
 from shutil import which
 from types import SimpleNamespace
 from uuid import uuid4
@@ -95,6 +96,15 @@ async def create_render(**kwargs):
             render_job_id=response.job_id,
             workspace_id=kwargs["actor"].workspace_id,
         )
+        _seed_render_source(settings=settings, job=record)
+        # The FastTestRenderer replaces only the slow encode step; the preflight
+        # still runs its real validations and real fixture-media synthesis with
+        # the installed ffmpeg. The renderer is injected explicitly in test code
+        # and is never reachable from a setting. Real-render tests opt in to the
+        # production FFmpeg renderer with use_real_renderer=True.
+        injected_renderer = (
+            None if getattr(settings, "use_real_renderer", False) else FastTestRenderer()
+        )
         completed = complete_render_job(
             job=record,
             repository=repository,
@@ -106,7 +116,7 @@ async def create_render(**kwargs):
                 else None
             ),
             service_role_key=getattr(settings, "supabase_service_role_key", None),
-            execute_ffmpeg=settings.render_execute_ffmpeg,
+            renderer=injected_renderer,
             allow_fixture_media=True,
         )
         return response.model_copy(
@@ -116,6 +126,35 @@ async def create_render(**kwargs):
             }
         )
     return response
+
+
+class FastTestRenderer:
+    """An explicit in-test renderer injected into complete_render_job.
+
+    It lives only in test code and is never reachable from a setting, so the
+    fixture-leakage gate cannot find a configuration that selects it. It writes
+    a tiny valid MP4 so the completion contract (an uploadable artifact with a
+    size) is exercised without a full FFmpeg encode.
+    """
+
+    def render(self, *, output_path, **_kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"motionly test render\n")
+        return 42, output_path.stat().st_size
+
+
+def _seed_render_source(*, settings, job) -> None:
+    """Materialize the render manifest's source object on local test storage."""
+    source = job.manifest.get("source") if isinstance(job.manifest, dict) else None
+    if not isinstance(source, dict):
+        return
+    from pathlib import Path
+
+    storage_root = Path(settings.media_work_dir).expanduser()
+    target = storage_root / str(source["bucket"]) / str(source["path"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.write_bytes(b"motionly test source\n")
 
 
 class FakeStorageSigner:
@@ -298,7 +337,6 @@ def make_request(*, complete_locally: bool = True):
                     export_storage_bucket="exports",
                     export_signed_url_ttl_seconds=300,
                     should_complete_renders_synchronously=complete_locally,
-                    render_execute_ffmpeg=False,
                     media_work_dir=".motionly/test-storage",
                     billing_enabled=True,
                 ),
@@ -335,7 +373,7 @@ def make_real_render_request(tmp_path, *, music_repository=None, effects_reposit
                     export_storage_bucket="exports",
                     export_signed_url_ttl_seconds=300,
                     should_complete_renders_synchronously=True,
-                    render_execute_ffmpeg=True,
+                    use_real_renderer=True,
                     media_work_dir=str(tmp_path),
                     billing_enabled=False,
                     supabase_url=None,
@@ -1035,7 +1073,6 @@ def test_render_completion_fails_without_quality_downgrade_after_ffmpeg_failure(
         storage_root=str(tmp_path),
         supabase_url=None,
         service_role_key=None,
-        execute_ffmpeg=True,
     )
 
     assert job.status == RenderJobStatus.FAILED
@@ -1115,7 +1152,6 @@ def test_render_completion_passes_effects_config_to_ffmpeg(
         storage_root=str(tmp_path),
         supabase_url=None,
         service_role_key=None,
-        execute_ffmpeg=True,
     )
 
     assert seen_effects[0]["preset"] == "champagne_gold"
@@ -1151,7 +1187,6 @@ def test_render_preflight_fails_when_source_video_is_missing(tmp_path) -> None:
         storage_root=str(tmp_path),
         supabase_url=None,
         service_role_key=None,
-        execute_ffmpeg=True,
     )
 
     assert job.status == RenderJobStatus.FAILED
@@ -1205,7 +1240,6 @@ def test_render_preflight_catches_invalid_ass_before_render(
         storage_root=str(tmp_path),
         supabase_url=None,
         service_role_key=None,
-        execute_ffmpeg=True,
     )
 
     assert job.status == RenderJobStatus.FAILED
@@ -1286,6 +1320,63 @@ def test_create_export_is_idempotent_for_same_render_job() -> None:
 
     assert first.id == second.id
     assert len(repository.list_exports(project_id=project_id, workspace_id=workspace_id)) == 1
+
+
+def test_export_download_url_sets_attachment_filename_from_project_title() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+    render_job = repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=uuid4(),
+        caption_track_id=uuid4(),
+        status=RenderJobStatus.COMPLETE,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+    )
+    export = repository.create_export(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        render_job_id=render_job.id,
+        storage_bucket="exports",
+        storage_path="exports/render.mp4",
+        format="mp4",
+        width=1080,
+        height=1920,
+        fps=30,
+        settings_summary={},
+    )
+
+    captured: dict = {}
+
+    class CapturingSigner:
+        def create_signed_download(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(url="https://storage.example.com/export.mp4?token=t")
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(export_signed_url_ttl_seconds=60),
+                operations_repository=None,
+                render_repository=repository,
+            )
+        )
+    )
+    response = asyncio.run(
+        get_export_download_url(
+            export_id=export.id,
+            request=request,
+            actor=actor,
+            repository=repository,
+            storage_signer=CapturingSigner(),
+        )
+    )
+
+    # Default project title is "Untitled reel" -> sanitized "Untitled-reel".
+    assert response.download_filename == "Untitled-reel-v1.mp4"
+    assert captured["download"] == "Untitled-reel-v1.mp4"
 
 
 def test_render_and_export_lists_apply_limit() -> None:
@@ -2268,6 +2359,129 @@ def test_real_ffmpeg_export_includes_fixture_broll_music_sfx_and_effects(tmp_pat
     assert "effects_config=champagne_gold:motion=1:gradient=1" in response.job.logs
 
 
+@pytest.mark.skipif(which("ffmpeg") is None or which("ffprobe") is None, reason="FFmpeg required")
+def test_real_ffmpeg_export_audio_contains_the_chosen_music_track(tmp_path) -> None:
+    # Task 28: the render uses the user's chosen catalog track, and the export's
+    # audio actually CONTAINS music — ffprobe astats shows a non-silent audio
+    # stream (a silent/no-music render would have no measurable RMS level).
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    _write_source_video(tmp_path / "raw-uploads" / "video.mp4")
+
+    # Task 32: FixtureMusicProvider is gone. Non-production serves generated
+    # catalog "Test track" beds; the chosen track's audio lives in the private
+    # music-catalog bucket and the render reads it from there.
+    from app.services.music_audio import synthesize_test_track
+
+    audio_object_path = "test-tracks/test-track-ambient.wav"
+    local_audio = tmp_path / "music-catalog" / audio_object_path
+    local_audio.parent.mkdir(parents=True, exist_ok=True)
+    synthesize_test_track(frequency=330, duration_s=6, output_path=str(local_audio))
+
+    plan_repository = InMemoryPlanRepository(repository.caption_repository)
+    music_repository = InMemoryMusicRepository(plan_repository)
+    music_track = music_repository.upsert_track(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        provider=MusicProviderKey.LICENSED_CATALOG,
+        provider_track_id="test-track-ambient",
+        title="Test track: Generated ambient bed",
+        license="CC0-1.0",
+        duration_ms=6_000,
+        mood_tags=["ambient"],
+        bpm=80,
+        energy=0.35,
+        vocals=False,
+        loopable=True,
+        beat_map=[0.0, 750.0, 1500.0, 2250.0],
+        raw_metadata={
+            "audio_bucket": "music-catalog",
+            "audio_path": audio_object_path,
+        },
+    )
+    music_selection = music_repository.create_selection(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        edit_plan_id=uuid4(),
+        status=MusicSelectionStatus.READY,
+        music_track_id=music_track.id,
+        music_volume=0.6,
+        sfx_intensity=0.0,
+        rights_confirmed=True,
+        rights_snapshot={
+            "status": "verified",
+            "verified": True,
+            "valid_until": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+            "grant_id": "CC0-1.0:test-track-ambient",
+            "grant_version": "1.0",
+            "permitted_uses": ["editorial_export"],
+        },
+        cache_key="task28-chosen-track",
+    )
+
+    response = asyncio.run(
+        create_render(
+            project_id=project_id,
+            payload=RenderCreateRequest.model_validate(
+                {
+                    "include_captions": False,
+                    "include_broll": False,
+                    "duration_preset": "short",
+                    "export_options": {
+                        "platform": "tiktok",
+                        "resolution": "720p",
+                        "format": "mp4",
+                    },
+                }
+            ),
+            request=make_real_render_request(tmp_path, music_repository=music_repository),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=plan_repository,
+            render_queue=RenderQueue(),
+        )
+    )
+
+    assert response.status == RenderJobStatus.COMPLETE
+    manifest = response.job.manifest
+    assert manifest["audio"]["music_selected"] is True
+    assert manifest["music_selection_id"] == str(music_selection.id)
+    assert "music_mix=Test track: Generated ambient bed" in response.job.logs
+
+    export = repository.list_exports(project_id=project_id, workspace_id=workspace_id)[0]
+    output_path = tmp_path / export.storage_bucket / export.storage_path
+    assert output_path.exists()
+
+    # ffprobe astats: the first audio stream carries a measurable RMS level, so
+    # the chosen music track is really mixed into the export (not silence).
+    stats = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"amovie={output_path},astats=metadata=1:reset=0",
+            "-show_entries",
+            "frame_tags=lavfi.astats.Overall.RMS_level",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    levels = [
+        float(line)
+        for line in stats.stdout.splitlines()
+        if line and line.strip() not in {"-inf", "nan"}
+    ]
+    assert levels, "export audio reported no RMS level (no music present)"
+    # A fully silent stream reports -inf / very low; music sits well above -90 dB.
+    assert max(levels) > -90.0
+
+
 def _write_source_video(path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -2510,18 +2724,27 @@ def test_post_upload_cancellation_deletes_uncommitted_export(
         render_job_id=response.job_id,
         workspace_id=workspace_id,
     )
+    _seed_render_source(
+        settings=SimpleNamespace(media_work_dir=str(tmp_path)), job=queued_job
+    )
 
-    def write_then_cancel(**kwargs) -> int:
-        storage = LocalObjectStorage(root=kwargs["storage_root"])
-        storage.write_object(
-            bucket=kwargs["export_bucket"],
-            path=kwargs["export_storage_path"],
-            content=b"mp4",
-        )
+    class QuietRenderer:
+        def render(self, *, output_path, **_kwargs):
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"mp4")
+            return 3, 3
+
+    # Cancel the job only after the artifact has been uploaded, so the
+    # post-upload cancellation branch (which deletes the uncommitted export)
+    # runs.
+    original_upload = LocalObjectStorage.upload_file
+
+    def upload_then_cancel(self, **kwargs):
+        result = original_upload(self, **kwargs)
         repository.cancel_render_job_by_id(render_job_id=queued_job.id)
-        return 3
+        return result
 
-    monkeypatch.setattr("app.services.render_jobs._write_simulated_export", write_then_cancel)
+    monkeypatch.setattr(LocalObjectStorage, "upload_file", upload_then_cancel)
 
     result = complete_render_job(
         job=queued_job,
@@ -2530,7 +2753,7 @@ def test_post_upload_cancellation_deletes_uncommitted_export(
         storage_root=str(tmp_path),
         supabase_url=None,
         service_role_key=None,
-        execute_ffmpeg=False,
+        renderer=QuietRenderer(),
     )
 
     export_path = (
@@ -2541,3 +2764,80 @@ def test_post_upload_cancellation_deletes_uncommitted_export(
         bucket="exports", path=export_path
     ).exists()
     assert repository.list_exports(project_id=project_id, workspace_id=workspace_id) == []
+
+
+def test_render_event_stream_emits_keepalive_on_a_fake_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.api.renders as renders_module
+
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    job = repository.create_render_job(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        uploaded_video_id=repository.get_active_upload(
+            project_id=project_id, workspace_id=workspace_id
+        ).id,
+        caption_track_id=repository.latest_caption_track(
+            project_id=project_id, workspace_id=workspace_id
+        ).id,
+        status=RenderJobStatus.RENDERING,
+        planner_version="test",
+        manifest={},
+        keep_segments=[],
+        progress_pct=70,
+    )
+
+    # A fake clock the stream reads from; sleeping advances it by 2s per loop so
+    # the >=15s keep-alive threshold is crossed deterministically.
+    clock = {"now": 0.0}
+    monkeypatch.setattr(renders_module, "render_stream_now", lambda: clock["now"])
+
+    iterations = {"n": 0}
+
+    async def fake_sleep(seconds: float) -> None:
+        clock["now"] += seconds
+        iterations["n"] += 1
+        if iterations["n"] >= 10:
+            # End the stream by terminalizing the job after ~20s of no changes.
+            repository.transition_job(
+                job=repository.get_render_job_by_id(render_job_id=job.id),
+                status=RenderJobStatus.COMPLETE,
+                progress_pct=100,
+                message="done",
+                event_type="completed",
+            )
+
+    monkeypatch.setattr(renders_module, "render_stream_sleep", fake_sleep)
+
+    disconnected = {"value": False}
+    request = SimpleNamespace(is_disconnected=_async_return(disconnected))
+
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    async def collect() -> list[str]:
+        response = await renders_module.stream_render_events(
+            project_id=project_id,
+            render_job_id=job.id,
+            request=request,
+            actor=actor,
+            repository=repository,
+        )
+        chunks: list[str] = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(collect())
+    body = "".join(chunks)
+    # A keep-alive comment was emitted while the render was idle for >=15s.
+    assert ": keep-alive\n\n" in body
+    # Real render events are still delivered (initial state + terminal).
+    assert "event: render\n" in body
+
+
+def _async_return(flag: dict):
+    async def _is_disconnected() -> bool:
+        return bool(flag["value"])
+
+    return _is_disconnected

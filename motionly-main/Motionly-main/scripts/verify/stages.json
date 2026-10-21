@@ -106,8 +106,8 @@
       "status": "implemented",
       "steps": [
         {
-          "name": "start local supabase (postgres, auth, rest)",
-          "run": "node_modules/.bin/supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector"
+          "name": "start local supabase (postgres, auth, rest, realtime)",
+          "run": "node_modules/.bin/supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,storage-api,studio,supavisor,vector"
         },
         {
           "name": "build the database from empty (every migration, then seed)",
@@ -124,7 +124,7 @@
             "APP_ENV": "test",
             "RUN_SUPABASE_CONTRACTS": "1"
           },
-          "run": "../../scripts/verify/with-supabase-env.sh {python} -m pytest -q -p no:cacheprovider --junitxml={results}/junit/db-api.xml tests/integration/test_supabase_repository_contracts.py tests/integration/test_schema_matches_code.py"
+          "run": "../../scripts/verify/with-supabase-env.sh {python} -m pytest -q -p no:cacheprovider --junitxml={results}/junit/db-api.xml tests/integration/test_supabase_repository_contracts.py tests/integration/test_schema_matches_code.py tests/integration/test_invitation_seat_race.py"
         },
         {
           "name": "stop local supabase and delete its volumes",
@@ -363,15 +363,55 @@
     },
     {
       "name": "deadcode",
-      "status": "not_implemented",
-      "note": "Task 32: knip, vulture, route-caller check.",
-      "steps": []
+      "status": "implemented",
+      "note": "Task 32: no dead product surface. knip (unused TS files/exports/deps across the pnpm workspace), vulture (unused Python in apps/api, with a minimal reviewed framework whitelist), and a route-caller check (every live OpenAPI route is reached by a product caller or listed in scripts/verify/external-callers.json). GPU-only code is exempted by tests/gpu-stage-allowlist.json. Intentional Pixel*/plain export aliases are excluded from knip's duplicate check.",
+      "steps": [
+        {
+          "name": "knip (unused TypeScript files, exports and dependencies)",
+          "run": "node_modules/.bin/knip --no-progress --no-config-hints --exclude duplicates"
+        },
+        {
+          "name": "vulture (unused Python in apps/api, framework whitelist)",
+          "cwd": "apps/api",
+          "run": "{python} -m vulture app ../../scripts/verify/vulture_whitelist.py --min-confidence 80"
+        },
+        {
+          "name": "route-caller check (no uncalled, unlisted API routes)",
+          "run": "{python} scripts/verify/route_callers.py"
+        }
+      ]
     },
     {
       "name": "perf",
-      "status": "not_implemented",
-      "note": "Tasks 3/6/32: approved CPU-stage resource and performance budgets (Decision D2).",
-      "steps": []
+      "status": "implemented",
+      "note": "Tasks 3/6/32 (Decision D2): the k6 API-workflow smoke in strict mode (any non-2xx aborts it) against a fresh CPU stage, enforced against slo-contract.cpu-stage.json, then the approved resource and page-load budgets (tests/cpu-stage/resource-budget.json) against the stack and browser reports. Restarts, OOM kills and failed one-shots fail regardless of budgets; pending-baseline services are reported, never passed.",
+      "steps": [
+        {
+          "name": "build CPU-stage images from this checkout",
+          "run": "{python} scripts/verify/cpu_stage_stack.py build"
+        },
+        {
+          "name": "start the stack from empty volumes",
+          "run": "{python} scripts/verify/cpu_stage_stack.py up"
+        },
+        {
+          "name": "k6 API-workflow smoke (strict, any non-2xx fails) and the CPU-stage SLO contract",
+          "run": "{python} scripts/verify/perf_stage.py smoke"
+        },
+        {
+          "name": "no restarts, OOM kills or failed one-shots under load (writes resources.json)",
+          "run": "{python} scripts/verify/cpu_stage_stack.py verdict"
+        },
+        {
+          "name": "resources and page loads within the approved CPU-stage budgets",
+          "run": "{python} scripts/verify/perf_stage.py budget"
+        },
+        {
+          "name": "tear down the project and its secrets",
+          "always": true,
+          "run": "{python} scripts/verify/cpu_stage_stack.py down"
+        }
+      ]
     }
   ]
 }

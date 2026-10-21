@@ -95,9 +95,48 @@ SBOMS = (
     "temporal-server",
 )
 # Files the CPU-stage overlay mounts that are not instance secrets in production.
-EXTRA_SECRETS = ("edge-tls-cert", "edge-tls-key")
+# Secrets only the CPU-stage overlay mounts (test infrastructure, outside the
+# bundle): the simulator's TLS pair and the mock payment gateway's keys. The
+# agent fetches them as base64 rehearsal extras (MOTIONLY_REHEARSAL_EXTRA_SECRETS).
+EXTRA_SECRETS = (
+    "edge-tls-cert",
+    "edge-tls-key",
+    "merchant-api-key",
+    "mock-gateway-db-key",
+    "mock-gateway-webhook-secret",
+)
+
+
+def rehearsal_host_values(work: Path, overlay: Path, proof: Path, until: datetime) -> dict:
+    """The host configuration (/etc/motionly/host.env) the rehearsal agent reads.
+
+    It must name every value apply_release.sh requires
+    (tests/test_release_rehearsal.py)."""
+    return {
+        "MOTIONLY_RELEASE_ROOT": work / "releases",
+        "MOTIONLY_AGENT_ROOT": work / "agent",
+        "MOTIONLY_ENVIRONMENT": ENVIRONMENT,
+        "MOTIONLY_AWS_REGION": REGION,
+        "MOTIONLY_RELEASE_BUCKET": BUCKET,
+        "MOTIONLY_COMPUTE_PROFILE": "cpu",
+        "MOTIONLY_REGISTRY": REGISTRY,
+        "MOTIONLY_REGISTRY_USERNAME": "",
+        "MOTIONLY_APP_DOMAIN": PUBLIC_ORIGIN.removeprefix("https://"),
+        # The CPU-stage overlay runs the mock payment gateway (demo-billing).
+        "MOTIONLY_BILLING_MODE": "demo",
+        "MOTIONLY_COSIGN_IDENTITY_REGEXP": "^unused-in-rehearsal$",
+        "MOTIONLY_COSIGN_PUBLIC_KEY": work / "cosign.pub",
+        "MOTIONLY_COMPOSE_OVERLAY": overlay,
+        "MOTIONLY_REHEARSAL_EXTRA_SECRETS": '"' + " ".join(EXTRA_SECRETS) + '"',
+        "MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE": STACK["temporal_admin_tools_image"],
+        "MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE": proof,
+        "MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL": until.isoformat().replace("+00:00", "Z"),
+    }
 # Secret files whose values are multi-line and travel base64-encoded.
-_BASE64 = re.compile(r"^(temporal_.*_(cert|key)|edge_tls_(cert|key))$")
+_BASE64 = re.compile(
+    r"^(temporal_.*_(cert|key)|edge_tls_(cert|key)"
+    r"|merchant_api_key|mock_gateway_db_key|mock_gateway_webhook_secret)$"
+)
 _PARAMETER_NAMES = {
     "edge_origin_verify": "edge/origin-verify",
     "edge_origin_verify_previous": "edge/origin-verify-previous",
@@ -373,24 +412,7 @@ class Rehearsal:
         )
         self.host_env = self.work / "host.env"
         until = (datetime.now(UTC) + timedelta(hours=3)).replace(microsecond=0)
-        values = {
-            "MOTIONLY_RELEASE_ROOT": self.work / "releases",
-            "MOTIONLY_AGENT_ROOT": self.work / "agent",
-            "MOTIONLY_ENVIRONMENT": ENVIRONMENT,
-            "MOTIONLY_AWS_REGION": REGION,
-            "MOTIONLY_RELEASE_BUCKET": BUCKET,
-            "MOTIONLY_COMPUTE_PROFILE": "cpu",
-            "MOTIONLY_REGISTRY": REGISTRY,
-            "MOTIONLY_REGISTRY_USERNAME": "",
-            "MOTIONLY_APP_DOMAIN": PUBLIC_ORIGIN.removeprefix("https://"),
-            "MOTIONLY_COSIGN_IDENTITY_REGEXP": "^unused-in-rehearsal$",
-            "MOTIONLY_COSIGN_PUBLIC_KEY": self.work / "cosign.pub",
-            "MOTIONLY_COMPOSE_OVERLAY": overlay,
-            "MOTIONLY_REHEARSAL_EXTRA_SECRETS": '"' + " ".join(EXTRA_SECRETS) + '"',
-            "MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE": STACK["temporal_admin_tools_image"],
-            "MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE": proof,
-            "MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL": until.isoformat().replace("+00:00", "Z"),
-        }
+        values = rehearsal_host_values(self.work, overlay, proof, until)
         self.host_env.write_text("".join(f"{k}={v}\n" for k, v in values.items()), encoding="utf-8")
         self.host_env.chmod(0o600)
         self.overlay = overlay

@@ -82,26 +82,36 @@ export function projectReads() {
 }
 
 export function uploadFlow() {
-  group("upload init and complete", () => {
+  group("resumable upload init, part, and complete", () => {
+    // Task 17: every media type uploads through the resumable multipart path.
+    // The legacy one-shot upload init and complete endpoints are gone.
+    const target = projectId || "00000000-0000-4000-8000-000000000001";
     const init = http.post(
-      `${baseUrl}/uploads/init`,
+      `${baseUrl}/projects/${target}/uploads/multipart/init`,
       JSON.stringify({
-        project_id: projectId || "00000000-0000-4000-8000-000000000001",
         filename: `k6-${__VU}-${__ITER}.mp4`,
-        content_type: "video/mp4",
+        mime_type: "video/mp4",
         file_size_bytes: 1048576,
       }),
       requestOptions("uploads"),
     );
-    assertResponse(init, "upload init", [200, 201, 202]);
-    const completeTarget = uploadId || safeJson(init).upload_id;
-    if (completeTarget) {
-      const complete = http.post(
-        `${baseUrl}/uploads/${completeTarget}/complete`,
-        JSON.stringify({ object_version: `k6-${Date.now()}` }),
+    assertResponse(init, "upload multipart init", [200, 201]);
+    const session = safeJson(init);
+    const sessionId = uploadId || session.session_id;
+    const firstPart = (session.part_urls || [])[0];
+    if (sessionId && firstPart) {
+      const confirm = http.post(
+        `${baseUrl}/projects/${target}/uploads/multipart/${sessionId}/parts/${firstPart.part_number}/complete`,
+        JSON.stringify({}),
         requestOptions("uploads"),
       );
-      assertResponse(complete, "upload complete", [200, 202]);
+      assertResponse(confirm, "upload part confirm", [200]);
+      const complete = http.post(
+        `${baseUrl}/projects/${target}/uploads/multipart/${sessionId}/complete`,
+        JSON.stringify({}),
+        requestOptions("uploads"),
+      );
+      assertResponse(complete, "upload multipart complete", [200]);
     }
   });
   sleep(1);
@@ -175,6 +185,8 @@ export function handleSummary(data) {
   const metrics = data.metrics || {};
   const p95 = (surface) =>
     metrics[`http_req_duration{surface:${surface}}`]?.values?.["p(95)"] ?? null;
+  const count = (surface) =>
+    metrics[`http_reqs{surface:${surface}}`]?.values?.count ?? 0;
   const payload = {
     schema_version: 1,
     mode: strictSlo ? "strict" : "guarded",
@@ -182,7 +194,16 @@ export function handleSummary(data) {
     generated_at: new Date().toISOString(),
     http_requests: metrics.http_reqs?.values?.count ?? 0,
     http_error_rate: metrics.http_req_failed?.values?.rate ?? null,
+    status_5xx_rate:
+      metrics["http_req_failed{expected_response:false}"]?.values?.rate ?? null,
     checks_rate: metrics.checks?.values?.rate ?? null,
+    samples_by_surface: {
+      projects: count("projects"),
+      uploads: count("uploads"),
+      plans: count("plans"),
+      render_status: count("render_status"),
+      ops: count("ops"),
+    },
     p95_ms_by_surface: {
       projects: p95("projects"),
       uploads: p95("uploads"),

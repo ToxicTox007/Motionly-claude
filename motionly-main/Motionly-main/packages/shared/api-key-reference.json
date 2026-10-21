@@ -1,0 +1,66 @@
+{
+  "note": "Agency-plan API keys may call only the routes listed here. Every other endpoint returns 403 api_key_route_forbidden.",
+  "routes": [
+    {
+      "description": "",
+      "method": "GET",
+      "path": "/exports/{export_id}/download-url",
+      "summary": "Get Export Download Url"
+    },
+    {
+      "description": "",
+      "method": "GET",
+      "path": "/projects",
+      "summary": "List Projects"
+    },
+    {
+      "description": "",
+      "method": "POST",
+      "path": "/projects",
+      "summary": "Create Project"
+    },
+    {
+      "description": "",
+      "method": "POST",
+      "path": "/projects/{project_id}/renders",
+      "summary": "Create Render"
+    },
+    {
+      "description": "",
+      "method": "GET",
+      "path": "/projects/{project_id}/renders/{render_job_id}",
+      "summary": "Get Render"
+    },
+    {
+      "description": "",
+      "method": "POST",
+      "path": "/projects/{project_id}/uploads/multipart/init",
+      "summary": "Init Multipart Upload"
+    },
+    {
+      "description": "",
+      "method": "POST",
+      "path": "/projects/{project_id}/uploads/multipart/{session_id}/complete",
+      "summary": "Complete Multipart Upload"
+    },
+    {
+      "description": "",
+      "method": "POST",
+      "path": "/projects/{project_id}/uploads/multipart/{session_id}/parts/{part_number}/complete",
+      "summary": "Confirm Multipart Part"
+    },
+    {
+      "description": "",
+      "method": "GET",
+      "path": "/projects/{project_id}/workflows",
+      "summary": "List Workflows"
+    },
+    {
+      "description": "",
+      "method": "GET",
+      "path": "/projects/{project_id}/workflows/{workflow_run_id}",
+      "summary": "Get Workflow"
+    }
+  ],
+  "scheme": "Bearer mtly_<key>"
+}

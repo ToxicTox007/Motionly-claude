@@ -259,6 +259,10 @@ describe("contract", () => {
       selectBehavior(contract, "/supabase/auth/v1/token").path_pattern,
       "/supabase/*",
     );
+    assert.equal(
+      selectBehavior(contract, "/pay/checkout/order_1").path_pattern,
+      "/pay/*",
+    );
     assert.equal(selectBehavior(contract, "/dashboard").path_pattern, "*");
   });
 
@@ -705,8 +709,14 @@ describe("websockets", () => {
   test("Realtime WebSockets are tunnelled to the origin with the origin secret", async () => {
     const origin = await startOrigin(ok());
     closers.push(() => closeOrigin(origin));
+    // See openRealtimeTunnel: upgraded sockets must be destroyed explicitly.
+    const upgradedSockets = new Set();
+    closers.push(() => {
+      for (const socket of upgradedSockets) socket.destroy();
+    });
     let upgradeHeaders;
     origin.server.on("upgrade", (req, socket) => {
+      upgradedSockets.add(socket);
       upgradeHeaders = req.headers;
       const accept = crypto
         .createHash("sha1")
@@ -756,5 +766,105 @@ describe("websockets", () => {
     assert.equal(upgradeHeaders["x-motionly-origin-verify"], SECRET);
     assert.equal(upgradeHeaders["cloudfront-forwarded-proto"], "https");
     assert.equal(upgradeHeaders.upgrade, "websocket");
+  });
+
+  // A Realtime client sends a heartbeat on its channel well inside the idle
+  // timeout (Supabase heartbeats every ~30s, the browser spec uses the same
+  // channel). The edge resets the idle timer on any frame, so the tunnel must
+  // survive many idle windows as long as heartbeats keep arriving — and must be
+  // cut once they stop. Drive a short window instead of waiting ten minutes.
+  async function openRealtimeTunnel(idleMs) {
+    const origin = await startOrigin(ok());
+    closers.push(() => closeOrigin(origin));
+    // Upgraded sockets leave the HTTP server's bookkeeping, so
+    // closeAllConnections() does not reach them and server.close() would wait
+    // forever: destroy them first (closers run last-in, first-out).
+    const upgradedSockets = new Set();
+    closers.push(() => {
+      for (const socket of upgradedSockets) socket.destroy();
+    });
+    origin.server.on("upgrade", (req, socket) => {
+      upgradedSockets.add(socket);
+      const accept = crypto
+        .createHash("sha1")
+        .update(
+          `${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`,
+        )
+        .digest("base64");
+      socket.write(
+        `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+      );
+      // Mirror every heartbeat frame back to the viewer.
+      socket.on("data", (data) => socket.write(data));
+    });
+    const edge = await startEdge(origin, { websocketIdleMs: idleMs });
+    closers.push(() => edge.close());
+
+    const socket = tls.connect({
+      host: "127.0.0.1",
+      port: edge.ports.https,
+      ca,
+      servername: "localhost",
+    });
+    await new Promise((resolve, reject) => {
+      socket.once("secureConnect", resolve);
+      socket.once("error", reject);
+    });
+    const upgraded = new Promise((resolve) => {
+      let buffer = "";
+      socket.on("data", (data) => {
+        buffer += data.toString();
+        if (buffer.includes("\r\n\r\n")) resolve();
+      });
+    });
+    socket.write(
+      "GET /supabase/realtime/v1/websocket?apikey=x HTTP/1.1\r\n" +
+        `Host: 127.0.0.1:${edge.ports.https}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+    );
+    await upgraded;
+    return socket;
+  }
+
+  test("a heartbeating Realtime socket survives the idle cutoff", async () => {
+    const idleMs = 150;
+    const socket = await openRealtimeTunnel(idleMs);
+
+    let echoes = 0;
+    socket.on("data", (data) => {
+      if (data.toString().includes("heartbeat")) echoes += 1;
+    });
+    // Beat every ~idle/3, past several whole idle windows.
+    const beats = 6;
+    for (let i = 0; i < beats; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, idleMs / 3));
+      assert.equal(
+        socket.destroyed,
+        false,
+        `tunnel closed before heartbeat ${i + 1}`,
+      );
+      socket.write("heartbeat");
+    }
+    // Total elapsed (~2.5 idle windows) far exceeds a single idle timeout.
+    await new Promise((resolve) => setTimeout(resolve, idleMs / 3));
+    assert.equal(socket.destroyed, false, "heartbeating tunnel was cut");
+    assert.ok(echoes >= 1, "origin never saw a heartbeat through the tunnel");
+    socket.destroy();
+  });
+
+  test("a silent Realtime socket is cut at the idle cutoff", async () => {
+    const idleMs = 150;
+    const socket = await openRealtimeTunnel(idleMs);
+
+    const closed = new Promise((resolve) => {
+      socket.on("close", () => resolve(true));
+      socket.on("end", () => resolve(true));
+    });
+    // Send nothing: the tunnel must hit the idle timeout and close.
+    const result = await Promise.race([
+      closed,
+      new Promise((resolve) => setTimeout(() => resolve(false), idleMs * 8)),
+    ]);
+    assert.equal(result, true, "silent tunnel was not cut at the idle cutoff");
   });
 });

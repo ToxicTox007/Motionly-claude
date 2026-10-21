@@ -31,7 +31,7 @@ export function StaleIndicator({
       role="status"
       aria-live="polite"
       className={cn(
-        "flex items-center gap-2 rounded border-2 border-warning bg-warning/10 px-3 py-2",
+        "flex items-center gap-2 rounded-neu-md bg-surface px-3 py-2 shadow-neu-raised-sm ring-1 ring-warning/30",
         className,
       )}
     >
@@ -39,7 +39,7 @@ export function StaleIndicator({
         className="size-4 shrink-0 text-warning"
         aria-hidden="true"
       />
-      <span className="flex-1 text-xs font-bold text-foreground">
+      <span className="flex-1 text-xs font-semibold text-foreground">
         {message}
       </span>
       {onAction && (

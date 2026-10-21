@@ -10,7 +10,14 @@ from app.schemas.creative_variants import (
     CreativeVariant,
     CreativeVariantDimension,
 )
-from app.schemas.plans import BrollDensity, EditPlan
+from app.schemas.plans import (
+    BrollDensity,
+    BrollRequest,
+    CaptionHighlight,
+    EditPlan,
+    EditPlanCut,
+    PlanOpeningFrame,
+)
 
 _CAPTION_ALTERNATIVES = (
     CreativeCaptionVariant(
@@ -203,3 +210,131 @@ def _bounded(value: str, maximum: int) -> str:
     if len(normalized) <= maximum:
         return normalized
     return f"{normalized[: maximum - 1].rsplit(' ', 1)[0]}…"
+
+
+class AppliedCreativeVariant:
+    """Result of applying a creative variant to a plan.
+
+    ``plan`` is a new EditPlan that differs from the source plan ONLY in the
+    fields owned by the variant's primary dimension; ``broll_density`` is the
+    density to persist on the plan record (only changed for a B-roll variant).
+    """
+
+    __slots__ = ("plan", "broll_density", "dimension")
+
+    def __init__(
+        self,
+        *,
+        plan: EditPlan,
+        broll_density: BrollDensity,
+        dimension: CreativeVariantDimension,
+    ) -> None:
+        self.plan = plan
+        self.broll_density = broll_density
+        self.dimension = dimension
+
+
+def apply_creative_variant(
+    *,
+    plan: EditPlan,
+    variant: CreativeVariant,
+    broll_density: BrollDensity,
+) -> AppliedCreativeVariant:
+    """Turn a chosen creative variant into concrete plan changes.
+
+    Only the variant's ``primary_dimension`` is applied, so the resulting plan
+    differs from the source plan exactly in that dimension. Each dimension maps
+    to real, persisted plan content (not just a recorded choice):
+
+    - pacing: scale every cut's duration by ``cut_duration_multiplier`` (cuts
+      repacked back-to-back) and recompute ``target_duration_s``.
+    - caption_style: set ``plan.caption_preset`` to the chosen preset.
+    - broll: set the plan record's B-roll density and trim ``broll_requests``.
+    - hook: set ``plan.hook_text`` and refresh the opening caption highlight.
+    - opening_frame: set ``plan.opening_frame`` and move the first cut's start.
+    """
+    dimension = variant.primary_dimension
+    updates: dict[str, object] = {}
+    next_density = broll_density
+
+    if dimension == CreativeVariantDimension.PACING:
+        updates["cuts"] = _rescale_cuts(plan.cuts, variant.pacing.cut_duration_multiplier)
+        updates["target_duration_s"] = _retimed_target_duration(updates["cuts"])  # type: ignore[arg-type]
+    elif dimension == CreativeVariantDimension.CAPTION_STYLE:
+        updates["caption_preset"] = variant.caption.preset
+    elif dimension == CreativeVariantDimension.BROLL:
+        next_density = variant.broll.density
+        updates["broll_requests"] = _trim_broll_requests(plan.broll_requests, variant.broll.density)
+    elif dimension == CreativeVariantDimension.HOOK:
+        updates["hook_text"] = variant.hook.text
+        updates["caption_highlights"] = _hook_caption_highlights(plan, variant.hook)
+    elif dimension == CreativeVariantDimension.OPENING_FRAME:
+        updates["opening_frame"] = PlanOpeningFrame(
+            label=variant.opening_frame.label,
+            start_ms=variant.opening_frame.start_ms,
+            frame_direction=variant.opening_frame.frame_direction,
+            thumbnail_direction=variant.opening_frame.thumbnail_direction,
+        )
+        updates["cuts"] = _shift_first_cut_start(plan.cuts, variant.opening_frame.start_ms)
+
+    new_plan = plan.model_copy(update=updates)
+    return AppliedCreativeVariant(plan=new_plan, broll_density=next_density, dimension=dimension)
+
+
+def _rescale_cuts(cuts: list[EditPlanCut], multiplier: float) -> list[EditPlanCut]:
+    """Scale each cut's duration by ``multiplier`` and repack back-to-back.
+
+    The timeline keeps the same first-cut start; each subsequent cut starts where
+    the previous scaled cut ends, so the whole edit tightens or relaxes evenly.
+    """
+    if not cuts:
+        return cuts
+    cursor = cuts[0].start_ms
+    rescaled: list[EditPlanCut] = []
+    for cut in cuts:
+        duration = max(1, round((cut.end_ms - cut.start_ms) * multiplier))
+        rescaled.append(
+            EditPlanCut(start_ms=cursor, end_ms=cursor + duration, reason=cut.reason)
+        )
+        cursor += duration
+    return rescaled
+
+
+def _retimed_target_duration(cuts: list[EditPlanCut]) -> int:
+    total_ms = sum(cut.end_ms - cut.start_ms for cut in cuts)
+    return max(10, min(90, round(total_ms / 1000)))
+
+
+def _trim_broll_requests(
+    requests: list[BrollRequest], density: BrollDensity
+) -> list[BrollRequest]:
+    if density == BrollDensity.NONE:
+        return []
+    if density == BrollDensity.LOW:
+        return list(requests[:1])
+    if density == BrollDensity.MEDIUM:
+        return list(requests[: (len(requests) + 1) // 2])
+    return list(requests)
+
+
+def _hook_caption_highlights(plan: EditPlan, hook: CreativeHookVariant) -> list[CaptionHighlight]:
+    """Refresh the opening highlight so the hook word pops at the plan start."""
+    opening_ms = plan.cuts[0].start_ms if plan.cuts else 0
+    hook_word = _bounded(hook.text.split()[0] if hook.text.split() else hook.text, 80)
+    opening = CaptionHighlight(timestamp_ms=opening_ms, word=hook_word, effect="pulse")
+    remainder = [
+        highlight for highlight in plan.caption_highlights if highlight.timestamp_ms != opening_ms
+    ]
+    return [opening, *remainder][:12]
+
+
+def _shift_first_cut_start(cuts: list[EditPlanCut], start_ms: int) -> list[EditPlanCut]:
+    if not cuts:
+        return cuts
+    first = cuts[0]
+    if start_ms >= first.end_ms:
+        return cuts
+    return [
+        EditPlanCut(start_ms=start_ms, end_ms=first.end_ms, reason=first.reason),
+        *cuts[1:],
+    ]

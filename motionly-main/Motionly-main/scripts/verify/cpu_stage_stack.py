@@ -86,7 +86,9 @@ def compose_args(state: dict) -> list[str]:
     args = ["docker", "compose", "--project-name", PROJECT, "--env-file", state["env_file"]]
     for path in STACK["compose_files"]:
         args += ["-f", str(ROOT / path)]
-    return [*args, "--profile", state["size"]]
+    # `demo-billing` brings up the mock payment gateway (Task 22); it is always
+    # enabled in the CPU stage so /pay/* has an upstream and billing is demoed.
+    return [*args, "--profile", state["size"], "--profile", "demo-billing"]
 
 
 def run(
@@ -309,6 +311,32 @@ def cmd_up(args: argparse.Namespace) -> None:
         )
     log(f"stack healthy in {state['startup_seconds']}s")
     wait_for_api_ready(state)
+    seed_music_catalog(state)
+
+
+def seed_music_catalog(state: dict) -> None:
+    """Seed the generated 'Test track' music catalog (non-production only).
+
+    FixtureMusicProvider was deleted; the licensed-catalog provider is the only
+    music source. In the CPU stage it must serve real catalog rows, so once the
+    API is ready (migrations applied, storage up) we run the seed CLI inside the
+    API container. The CLI refuses production and synthesises generated test
+    tracks into the private music-catalog bucket.
+    """
+    result = compose(
+        state,
+        "exec",
+        "-T",
+        "api",
+        "python",
+        "-m",
+        "app.ops.seed_music_catalog",
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[-2000:]
+        raise StackError(f"seeding the generated music catalog failed:\n{detail}")
+    log("generated test-track music catalog seeded")
 
 
 def wait_for_api_ready(state: dict) -> None:
@@ -465,6 +493,13 @@ def check_edge(state: dict) -> dict:
     if not buckets:
         raise StackError("Storage has no buckets; the migrations create them")
     log(f"Auth, REST (RLS) and Storage answer at /supabase; buckets: {', '.join(buckets)}")
+
+    # Realtime answers through Kong at /supabase/realtime/v1. /api/ping needs no
+    # auth and reports the Phoenix endpoint (and so its realtime schema) is up.
+    status, body = http(f"{supabase}/realtime/v1/api/ping")
+    if status != 200:
+        raise StackError(f"Realtime health at /supabase/realtime/v1 returned {status}: {body[:300]}")
+    log("Realtime answers at /supabase/realtime/v1 (/api/ping)")
 
     web = check_web_runtime(origin, env)
     status, body = http(f"{origin}/app-api/health")

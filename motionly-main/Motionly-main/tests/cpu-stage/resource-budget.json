@@ -38,6 +38,16 @@
       "browser_peak_memory_bytes": 52575600,
       "browser_peak_cpu_percent": 1.52
     },
+    "payment-gateway": {
+      "pending_baseline": true,
+      "pending_baseline_reason": "Task 22 added the mock payment gateway (Compose profile demo-billing); its CPU-stage baseline has not been measured on the reference runner yet. The perf stage reports it as pending until a measured baseline is recorded (scripts/verify/record_baselines.py) and approved under Decision D2.",
+      "baseline_peak_memory_bytes": null,
+      "baseline_peak_cpu_percent": null,
+      "budget_memory_bytes": null,
+      "budget_cpu_percent": null,
+      "browser_peak_memory_bytes": null,
+      "browser_peak_cpu_percent": null
+    },
     "postgres": {
       "baseline_peak_memory_bytes": 150156083,
       "baseline_peak_cpu_percent": 69.5,
@@ -77,6 +87,16 @@
       "budget_cpu_percent": 19.5,
       "browser_peak_memory_bytes": 196188569,
       "browser_peak_cpu_percent": 15.55
+    },
+    "supabase-realtime": {
+      "pending_baseline": true,
+      "pending_baseline_reason": "Task 25 added Supabase Realtime; its CPU-stage baseline has not been measured on the slim stack yet. The perf stage (Tasks 3/6/32) skips pending-baseline services until a measured baseline is recorded (scripts/verify/record_baselines.py) and re-approved under Decision D2.",
+      "baseline_peak_memory_bytes": null,
+      "baseline_peak_cpu_percent": null,
+      "budget_memory_bytes": null,
+      "budget_cpu_percent": null,
+      "browser_peak_memory_bytes": null,
+      "browser_peak_cpu_percent": null
     },
     "supabase-rest": {
       "baseline_peak_memory_bytes": 28919726,

@@ -562,6 +562,49 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
     )
 
 
+def test_retention_cleanup_steps_are_independent_b19(monkeypatch, tmp_path) -> None:
+    """B19: one failing cleanup step does not stop the rest of the run."""
+    seen = []
+
+    def fake_request(method, url, headers, timeout, **kwargs):
+        seen.append(url)
+        if method == "POST" and url.endswith("/retention_runs"):
+            return httpx.Response(200, json=[{"id": "run-1"}])
+        if method == "PATCH" and "/retention_runs" in url:
+            return httpx.Response(200, json=[{"id": "run-1"}])
+        # The first expiry step fails hard.
+        if url.endswith("/rpc/motionly_expire_upload_sessions"):
+            return httpx.Response(500, json={"message": "boom"})
+        if url.endswith("/rpc/motionly_claim_storage_deletion_queue"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
+    service = RetentionService(
+        settings=SimpleNamespace(
+            supabase_url="https://supabase.example",
+            supabase_service_role_key="service-role",
+            retention_export_days=90,
+            retention_local_cache_days=7,
+            media_cache_max_bytes=1024,
+            media_work_dir=str(tmp_path),
+        ),
+        storage_signer=SimpleNamespace(delete_object=lambda **_kwargs: None),
+    )
+
+    # run_scheduled does not raise even though a step failed, and later steps
+    # (the aged-queue drain, exports) still executed.
+    counts = service.run_scheduled()
+
+    assert counts["expired_upload_sessions"] == 0  # failed step defaulted
+    assert any(url.endswith("/exports") for url in seen), "exports step still ran"
+    # The run was recorded as completed, not failed, because steps are isolated.
+    completed = [
+        url for url in seen if "/retention_runs" in url
+    ]
+    assert len(completed) >= 2  # started + completed PATCH
+
+
 def test_retention_acknowledges_generic_media_only_after_storage_delete(
     monkeypatch, tmp_path
 ) -> None:

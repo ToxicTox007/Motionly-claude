@@ -492,7 +492,7 @@ def test_production_fixture_result_fails_closed_without_plan_mutation() -> None:
 
 
 def test_plan_queue_worker_completes_proposal_without_activating_plan() -> None:
-    from app.api.internal_jobs import run_queue_job
+    from app.services.job_engine import run_queue_job
 
     plans, proposals, _, project_id, workspace_id, user_id = _repositories()
     context = build_multimodal_context(
@@ -645,7 +645,7 @@ def test_proposal_http_flow_queues_reads_and_decides() -> None:
             settings=SimpleNamespace(app_env="test"),
         )
         assert result["status"] == "awaiting_approval"
-        ready = client.get(f"/projects/{project_id}/proposals/{proposal_id}/status")
+        ready = client.get(f"/projects/{project_id}/proposals/{proposal_id}")
         ready_body = ready.json()
         revision = ready_body["revision"]
         action_id = ready_body["actions"][0]["id"]

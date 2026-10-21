@@ -10,6 +10,7 @@ from app.api.dependencies import (
     get_music_queue,
     get_music_repository,
     get_plan_repository,
+    get_storage_signer,
 )
 from app.api.errors import ApiError
 from app.repositories.music import InMemoryMusicRepository
@@ -20,6 +21,7 @@ from app.schemas.music import (
     MusicSelectRequest,
     MusicSelectResponse,
     MusicTrackListResponse,
+    MusicTrackPreviewResponse,
 )
 from app.services.layer_job_enqueue import (
     build_queued_layer_response_fields,
@@ -28,6 +30,7 @@ from app.services.layer_job_enqueue import (
 )
 from app.services.music import MusicProvider, MusicTrackCandidate
 from app.services.queue import MusicQueue
+from app.services.storage import StorageSigner
 
 router = APIRouter(prefix="/projects/{project_id}/music", tags=["Music"])
 
@@ -36,6 +39,12 @@ MusicRepositoryDep = Annotated[InMemoryMusicRepository, Depends(get_music_reposi
 PlanRepositoryDep = Annotated[InMemoryPlanRepository, Depends(get_plan_repository)]
 MusicProvidersDep = Annotated[list[MusicProvider], Depends(get_music_providers)]
 MusicQueueDep = Annotated[MusicQueue, Depends(get_music_queue)]
+StorageSignerDep = Annotated[StorageSigner, Depends(get_storage_signer)]
+
+# Previews are short-lived; the music-catalog bucket is private so the signed
+# link is the only way a browser reaches the audio.
+_PREVIEW_TTL_SECONDS = 300
+_MUSIC_BUCKET = "music-catalog"
 
 
 async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
@@ -233,6 +242,51 @@ async def list_music_tracks(
     return MusicTrackListResponse(
         tracks=[track.to_response() for track in tracks],
         mood=search_mood,
+    )
+
+
+@router.get("/tracks/{track_id}/preview", response_model=MusicTrackPreviewResponse)
+async def preview_music_track(
+    project_id: UUID,
+    track_id: UUID,
+    actor: ActorDep,
+    repository: MusicRepositoryDep,
+    storage_signer: StorageSignerDep,
+) -> MusicTrackPreviewResponse:
+    """Mint a short-lived signed preview link for a catalog track.
+
+    The audio lives in the private ``music-catalog`` bucket (Task 27). The
+    browser never reads it directly; this route signs a 300-second download so
+    the Audio tab can preview the track before selecting it.
+    """
+    track = await _repository_call(
+        repository,
+        "get_track_async",
+        "get_track",
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        track_id=track_id,
+    )
+    metadata = track.raw_metadata if isinstance(track.raw_metadata, dict) else {}
+    bucket = str(metadata.get("audio_bucket") or _MUSIC_BUCKET)
+    path = str(metadata.get("audio_path") or "")
+    if not path:
+        raise ApiError(
+            404,
+            "music_preview_unavailable",
+            "This track has no previewable audio.",
+        )
+    signed = storage_signer.create_signed_download(
+        bucket=bucket,
+        path=path,
+        expires_in_seconds=_PREVIEW_TTL_SECONDS,
+    )
+    return MusicTrackPreviewResponse(
+        track_id=track.id,
+        provider_track_id=track.provider_track_id,
+        title=track.title,
+        preview_url=signed.url,
+        expires_in_seconds=_PREVIEW_TTL_SECONDS,
     )
 
 

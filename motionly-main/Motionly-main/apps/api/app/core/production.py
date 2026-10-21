@@ -13,6 +13,11 @@ ORCHESTRATION_PROCESS_ROLES = {
     "workflow-reconciler",
 }
 
+# Deployment-level billing posture. Live/Stripe billing is being removed, so the
+# only production-allowed values are a fully disabled surface or an explicitly
+# labelled no-charge demo surface. Production must state one explicitly.
+BILLING_MODES = ("disabled", "demo")
+
 
 def validate_production_settings(settings: object) -> None:
     if settings.app_env != "production":
@@ -141,9 +146,6 @@ def validate_production_settings(settings: object) -> None:
 
     if settings.allow_fixture_providers:
         raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
-    if not getattr(settings, "render_execute_ffmpeg", True):
-        # Without FFmpeg, renders write a short black test clip (fixtures/registry.json).
-        raise RuntimeError("RENDER_EXECUTE_FFMPEG must be true in production")
     if settings.stem_separation_provider != "demucs":
         raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
     explicit_gateway_routes = bool(str(getattr(settings, "model_gateway_routes", "") or "").strip())
@@ -258,13 +260,37 @@ def validate_production_settings(settings: object) -> None:
     if not settings.redis_url:
         raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
 
-    if settings.billing_enabled and (
-        not settings.stripe_secret_key or not settings.stripe_webhook_secret
-    ):
-        raise RuntimeError("Stripe settings are required when BILLING_ENABLED=true")
+    if settings.billing_enabled:
+        mode = str(getattr(settings, "billing_mode", "") or "").strip().lower()
+        if mode == "demo" and (
+            not getattr(settings, "mock_gateway_base_url", None)
+            or not getattr(settings, "merchant_api_key", None)
+            or not getattr(settings, "mock_gateway_webhook_secret", None)
+        ):
+            raise RuntimeError(
+                "MOCK_GATEWAY_BASE_URL, MERCHANT_API_KEY and "
+                "MOCK_GATEWAY_WEBHOOK_SECRET are required when BILLING_ENABLED=true "
+                "and BILLING_MODE=demo"
+            )
+
+    _require_billing_mode(settings)
 
     if settings.force_local_media_storage:
         raise RuntimeError("FORCE_LOCAL_MEDIA_STORAGE must be false in production")
+
+
+def _require_billing_mode(settings: object) -> None:
+    value = str(getattr(settings, "billing_mode", "") or "").strip().lower()
+    if not value:
+        raise RuntimeError(
+            "BILLING_MODE is required in production; set it to one of "
+            f"{', '.join(BILLING_MODES)}"
+        )
+    if value not in BILLING_MODES:
+        raise RuntimeError(
+            f"BILLING_MODE has unsupported production value {value!r}; "
+            f"expected one of {', '.join(BILLING_MODES)}"
+        )
 
 
 def _reject_local_url(name: str, value: str) -> None:

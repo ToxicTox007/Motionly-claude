@@ -57,6 +57,9 @@ services:
   supabase-storage:
     profiles: [local-audit]
 
+  supabase-realtime:
+    profiles: [local-audit]
+
   supabase-gateway:
     profiles: [local-audit]
 

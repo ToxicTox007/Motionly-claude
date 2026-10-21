@@ -137,20 +137,18 @@ async def refresh_media_urls(
 
 
 @router.get(
-    "/projects/{project_id}/media/quota",
+    "/storage/quota",
     response_model=QuotaResponse,
 )
-async def get_storage_quota(
-    project_id: UUID,
+async def get_workspace_storage_quota(
     actor: ActorDep,
-    project_repository: ProjectRepositoryDep,
     quota_service: StorageQuotaServiceDep,
 ) -> QuotaResponse:
-    await _verify_project(
-        project_repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-    )
+    """Real storage usage for the actor's workspace (B23: dashboard gauge).
+
+    Sourced from the StorageQuotaService — never fabricated. The web gauge shows
+    'not metered' when max_bytes is unknown/zero.
+    """
     usage = await quota_service.get_usage(actor.workspace_id)
     return QuotaResponse(
         used_bytes=usage.used_bytes,

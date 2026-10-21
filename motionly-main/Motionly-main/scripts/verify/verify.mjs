@@ -59,6 +59,18 @@ const pinnedPnpm = String(packageJson.packageManager || "").replace(
 );
 const pnpmCommand = pinnedPnpm ? `corepack pnpm@${pinnedPnpm}` : "pnpm";
 const pythonCommand = resolvePython();
+// Tools that run pnpm themselves (turbo runs `pnpm run lint` per package) find
+// it on PATH, which may hold a different global pnpm that refuses to run this
+// project. Steps get a shim directory first on PATH that runs the pinned one.
+const shimDir = join(verifyDir, ".bin");
+if (pinnedPnpm) {
+  await mkdir(shimDir, { recursive: true });
+  await writeFile(
+    join(shimDir, "pnpm"),
+    `#!/bin/sh\nexec corepack pnpm@${pinnedPnpm} "$@"\n`,
+    { mode: 0o755 },
+  );
+}
 
 function resolvePython() {
   if (process.env.MOTIONLY_PYTHON) {
@@ -109,7 +121,7 @@ async function runStep(stage, step) {
       env: {
         ...process.env,
         // Scripts that call a bare `python` must get the same interpreter.
-        PATH: `${dirname(pythonCommand)}:${process.env.PATH}`,
+        PATH: `${pinnedPnpm ? `${shimDir}:` : ""}${dirname(pythonCommand)}:${process.env.PATH}`,
         ...(step.env || {}),
         FORCE_COLOR: "0",
       },
@@ -190,6 +202,26 @@ await writeFile(
   join(verifyDir, "summary.json"),
   `${JSON.stringify(summary, null, 2)}\n`,
 );
+
+// Final step of every verify run (Task 32, Definition-of-done item 10): map the
+// 10 DoD items to the stage/step and tests that prove them, from the summary
+// just written. Descriptive evidence only — it never changes the run's result.
+const evidenceLog = join(verifyDir, "evidence-report.log");
+const evidence = spawnSync(
+  pythonCommand,
+  [join(root, "scripts/verify/evidence_report.py")],
+  { cwd: root, encoding: "utf8" },
+);
+await writeFile(
+  evidenceLog,
+  `$ ${pythonCommand} scripts/verify/evidence_report.py\n${evidence.stdout || ""}${evidence.stderr || ""}`,
+);
+if (evidence.status === 0) {
+  console.log(`\n${(evidence.stdout || "").trim()}`);
+} else {
+  console.log(`\nevidence report: could not run (see ${evidenceLog})`);
+}
+
 const notImplemented = summary.stages.filter(
   (stage) => stage.status === "not_implemented",
 );

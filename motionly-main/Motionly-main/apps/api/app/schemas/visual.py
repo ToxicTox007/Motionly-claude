@@ -89,6 +89,7 @@ class SegmentationMatte(BaseModel):
     bucket: str = Field(min_length=1, max_length=120)
     path: str = Field(min_length=1, max_length=512)
     model: str = Field(default="mediapipe-selfie-segmentation", max_length=120)
+    provenance: str | None = Field(default=None, max_length=120)
     fps: float = Field(gt=0, le=120)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
@@ -176,6 +177,7 @@ class MattePreviewResponse(BaseModel):
     path: str | None = None
     cache_key: str | None = None
     model: str | None = None
+    provenance: str | None = None
     source: Literal["segmentation_matte", "approximate_preview", "none"] = "none"
 
 

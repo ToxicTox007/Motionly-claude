@@ -73,10 +73,16 @@ test("every signed-in page is guarded, including /admin", async () => {
     assert.ok(isSignedInPath(`/${section}`));
     assert.ok(isSignedInPath(`/${section}/anything/deeper`));
   }
+  // /reset-password lives in app/(auth) but needs the recovery session that
+  // /auth/confirm sets, so it is guarded alongside the app sections.
+  assert.ok(isSignedInPath("/reset-password"));
+  assert.ok(isSignedInPath("/reset-password/anything"));
   for (const path of [
     "/",
     "/login",
     "/signup",
+    "/forgot-password",
+    "/auth/confirm",
     "/pricing",
     "/review/abc",
     "/terms",

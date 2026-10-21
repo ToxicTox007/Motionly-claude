@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "decision": "D4",
+  "status": "reviewed",
+  "description": "Reviewed allow-list of symbols, modules, services and files that the CPU stage never calls but that MUST be kept because the GPU stage (or a deferred capability) needs them. The dead-code guards agent (Task 32 deadcode stage: knip, vulture, uncalled-route check) consumes this file and treats every listed entry as intentionally-unreferenced-in-CPU-stage, so it is not flagged as dead code. Anything NOT on this list that the detectors flag is real dead code and must be deleted or wired up. Each entry records WHY it is kept although nothing in the CPU stage reaches it, and the GPU-stage check (tests/gpu-stage.json) or deferred task that will exercise it. Keeping a symbol here is not a licence to leave it untested: it is tested by the GPU stage or a fixture contract, just not in the CPU stage.",
+  "schema": {
+    "entries[]": {
+      "id": "stable unique identifier (kebab-case)",
+      "kind": "one of: python_symbol, python_module, ts_symbol, ts_module, api_route, compose_service, dockerfile, file. Tells the consuming detector which tool's finding this suppresses (python_* -> vulture, ts_* -> knip, api_route -> uncalled-route check, compose_service/dockerfile/file -> path allow-list).",
+      "locations[]": "repo-relative path, optionally with a symbol: 'path#symbol' or 'path::Class.method'. Detectors match a finding to an entry by location and (for symbols) name.",
+      "symbols[]": "optional explicit symbol names kept at the locations (for python_symbol / ts_symbol).",
+      "reason": "why the CPU stage never calls it AND why it must be kept (required, non-empty).",
+      "exercised_by": "the tests/gpu-stage.json id, deferred Task, or fixture contract that proves it; use 'none-yet' only with an explicit note."
+    }
+  },
+  "consumed_by": [
+    "scripts/verify/stages.json#deadcode (Task 32: knip, vulture, route-caller check)",
+    "the dead-code guards agent"
+  ],
+  "entries": [
+    {
+      "id": "gpu-autoscaling-helpers",
+      "kind": "python_symbol",
+      "locations": ["apps/api/app/services/gpu_autoscaling.py"],
+      "symbols": [
+        "autoscale_decision",
+        "should_timeout_job",
+        "oom_alert_event",
+        "policy_from_settings",
+        "GpuAutoscalingPolicy",
+        "positive_int"
+      ],
+      "reason": "GPU worker autoscaling policy: scale-up/scale-down on queue depth with a cooldown, long-job timeout, and the OOM alert event. The CPU stage runs no GPU workers and never autoscales, so no CPU-stage code path calls these; they are driven by the GPU-stage autoscaler (gpu-inference-worker / matte-worker) only.",
+      "exercised_by": "apps/api/tests/test_phase4_gpu_media_workers.py (unit) + gpu-stage[release-compose-integration] (runtime)"
+    },
+    {
+      "id": "gpu-queue-routing",
+      "kind": "python_symbol",
+      "locations": [
+        "apps/api/app/services/queue.py",
+        "apps/api/app/services/queue_slo.py",
+        "apps/api/app/services/compute_backend.py",
+        "apps/api/app/services/workflow_renders.py"
+      ],
+      "symbols": ["render_gpu", "matte_extraction", "visual_analysis"],
+      "reason": "Queue routing and SLO definitions for the GPU-only queues render_gpu, matte_extraction and visual_analysis. In the CPU stage these jobs run on fixture/CPU backends (matte/visual via fixtures, render via render queue), so the GPU queue branches are never selected; the GPU stage routes real jobs to them. GPU_ONLY_QUEUES={'render_gpu'} is asserted absent from the CPU stack by apps/api/tests/test_cpu_stage_stack.py.",
+      "exercised_by": "apps/api/tests/test_phase4_gpu_media_workers.py, test_queue_backends.py, test_metrics_telemetry.py (unit) + gpu-stage[release-compose-integration]"
+    },
+    {
+      "id": "gpu-worker-routing-ts",
+      "kind": "ts_symbol",
+      "locations": [
+        "apps/worker/src/ml-execution.mjs",
+        "apps/worker/src/queue-common.mjs",
+        "apps/worker/src/worker.mjs#mlExecutionPlan"
+      ],
+      "symbols": ["ML_QUEUES", "mlExecutionPlan"],
+      "reason": "Worker-side ML/GPU queue routing (visual_analysis, matte_extraction, render_gpu with FFMPEG_GPU_ENABLED). The CPU-stage worker image runs only upload_preprocess/render; it refuses matte_extraction ('requires the dedicated GPU/media worker image'). These branches are reached only by the GPU worker images.",
+      "exercised_by": "apps/worker/src/ml-execution.test.mjs, worker-routing.test.mjs (unit) + gpu-stage[release-compose-integration]"
+    },
+    {
+      "id": "gpu-profile-compose-services",
+      "kind": "compose_service",
+      "locations": ["infra/docker-compose.gpu.yml"],
+      "symbols": ["gpu-inference-worker", "matte-worker", "gpu-ffmpeg-worker"],
+      "reason": "The three Compose services under 'profiles: [gpu]' that request 'gpus: all'. The CPU stage starts the same file WITHOUT the gpu profile, so these services never start; they require a self-hosted GPU runner. Keeping them is required for the production/GPU topology.",
+      "exercised_by": "gpu-stage[release-compose-integration] (.github/workflows/gpu-stage.yml)"
+    },
+    {
+      "id": "demucs-worker-service",
+      "kind": "compose_service",
+      "locations": ["infra/docker-compose.gpu.yml"],
+      "symbols": ["demucs-worker"],
+      "reason": "Demucs stem-separation worker (audio_demucs queue). The CPU stage uses FixtureStemSeparator (fixtures/registry.json#stem-separation) instead of the real GPU-accelerated Demucs model, so this service never starts in the CPU stage.",
+      "exercised_by": "gpu-stage[release-compose-integration]; fixture contract fixtures/registry.json#stem-separation covers the CPU-stage substitute"
+    },
+    {
+      "id": "dockerfile-gpu",
+      "kind": "dockerfile",
+      "locations": ["apps/worker/Dockerfile.gpu"],
+      "reason": "Builds the CUDA/GPU worker image (visual, matte, nvenc ffmpeg, demucs). The CPU stage builds apps/worker/Dockerfile only. supply-chain.yml still builds and scans Dockerfile.gpu (component: gpu-worker) but never starts it; it is used by the GPU stage.",
+      "exercised_by": "supply-chain.yml (build+scan) + gpu-stage[release-compose-integration] (run)"
+    },
+    {
+      "id": "real-model-providers",
+      "kind": "python_symbol",
+      "locations": [
+        "apps/api/app/services/transcription_provider.py#WhisperCompatibleHttpProvider",
+        "apps/api/app/services/scale.py#DemucsStemSeparator",
+        "apps/api/app/services/scale.py#RunwayGen3Provider",
+        "apps/api/app/services/stock_video.py#PexelsStockVideoProvider",
+        "apps/api/app/services/stock_video.py#PixabayStockVideoProvider",
+        "apps/api/app/services/stock_video.py#CompatibleClipEmbeddingProvider",
+        "apps/api/app/services/model_domain_adapters.py#LocalClipEmbeddingsAdapter",
+        "apps/api/app/services/model_domain_adapters.py#GatewayClipEmbeddingProvider",
+        "apps/api/app/services/model_domain_adapters.py#RunwayVideoGenerationAdapter",
+        "apps/api/app/services/model_adapters.py#AzureOpenAIAdapter"
+      ],
+      "reason": "The real external/GPU model providers (Whisper STT, Demucs stems, Runway Gen-3 video, Pexels/Pixabay stock, CLIP embeddings, Azure OpenAI). The CPU stage selects the Fixture* stand-ins for every one of these (fixtures/registry.json), so the real providers are constructed only when their API keys / GPU are present, which the CPU stage never configures. They are selected by the model_gateway factory and provider config in the GPU stage or with live provider accounts.",
+      "exercised_by": "apps/api/tests/test_provider_contracts.py (recorded/contract), optional[live-provider-contracts] (live), gpu-stage[local-audit-gpu-inference-smoke]/[local-audit-matte-smoke]"
+    }
+  ]
+}

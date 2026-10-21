@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.api.errors import ApiError
 from app.api.internal_jobs import require_worker_token
+from app.core.security import constant_time_token_matches
 from app.services.offload import run_blocking
 from app.services.queue import BullMQQueueRegistry
 from app.services.queue_slo import queue_slo_state
@@ -33,8 +34,15 @@ class ProviderSloRequest(BaseModel):
 @router.get("/metrics", response_class=PlainTextResponse)
 async def metrics(request: Request, authorization: str | None = Header(default=None)) -> str:
     token = request.app.state.settings.metrics_bearer_token
-    if token and authorization != f"Bearer {token}":
-        raise ApiError(401, "metrics_auth_required", "Metrics credentials are required.")
+    if token:
+        prefix = "Bearer "
+        provided = (
+            authorization[len(prefix) :]
+            if authorization and authorization.startswith(prefix)
+            else None
+        )
+        if not constant_time_token_matches(provided, token):
+            raise ApiError(401, "metrics_auth_required", "Metrics credentials are required.")
     metrics_registry = request.app.state.metrics_registry
     queue_registry = request.app.state.queue_registry
     queue_backend = "bullmq" if isinstance(queue_registry, BullMQQueueRegistry) else "in_memory"

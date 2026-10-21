@@ -75,6 +75,7 @@ export interface PreviewLookState {
     bucket?: string | null;
     path?: string | null;
     cacheKey?: string | null;
+    provenance?: string | null;
     source?: "segmentation_matte" | "approximate_preview" | "none";
   } | null;
   reducedMotion: boolean;
@@ -322,7 +323,7 @@ export function VideoPreview({
   return (
     <div
       ref={previewRootRef}
-      className="pixel-grid-fine flex h-full min-h-0 max-w-full flex-col items-center justify-center gap-2 overflow-hidden bg-foreground/[0.02] p-1.5 sm:gap-3 sm:p-4"
+      className="flex h-full min-h-0 max-w-full flex-col items-center justify-center gap-2 overflow-hidden bg-background p-1.5 sm:gap-3 sm:p-4"
     >
       <h2 id="preview-heading" className="sr-only">
         Preview
@@ -331,7 +332,7 @@ export function VideoPreview({
       <div className="relative flex min-h-0 w-full flex-1 items-center justify-center">
         <div
           ref={setCanvasDropRef}
-          className="pixel-corners relative h-auto max-h-[min(100%,calc(100dvh-220px))] min-h-0 w-full max-w-[min(100%,22rem)] overflow-hidden border border-foreground/20 bg-black shadow-[3px_3px_0_hsl(var(--foreground)/0.1)] sm:max-w-[28rem] sm:border-2 sm:shadow-[6px_6px_0_hsl(var(--foreground)/0.12)] lg:h-full lg:max-h-full lg:max-w-full"
+          className="relative h-auto max-h-[min(100%,calc(100dvh-220px))] min-h-0 w-full max-w-[min(100%,22rem)] overflow-hidden rounded-neu-2xl bg-ink shadow-neu-raised-lg sm:max-w-[28rem] lg:h-full lg:max-h-full lg:max-w-full"
           style={{
             aspectRatio: previewAspectRatio,
             outline: isCanvasDropActive
@@ -406,16 +407,26 @@ export function VideoPreview({
                   transformOrigin={previewMotion.transformOrigin}
                 />
               ) : null}
+              {previewLook?.backgroundRemoval?.enabled &&
+              previewLook.mattePreview?.provenance ? (
+                <span
+                  className="absolute left-2 top-2 z-10 rounded-full bg-ink/80 px-2.5 py-0.5 text-xs font-semibold text-white"
+                  aria-label={previewLook.mattePreview.provenance}
+                  title={previewLook.mattePreview.provenance}
+                >
+                  Test
+                </span>
+              ) : null}
             </>
           ) : (
             /* Empty state when no source yet */
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-900">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink">
               <div className="grid size-12 grid-cols-3 gap-1 opacity-30">
                 {Array.from({ length: 9 }).map((_, index) => (
                   <span key={index} className="bg-white/50" />
                 ))}
               </div>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs font-medium text-white">
                 {isProcessing ? "Processing video…" : "No video yet"}
               </p>
             </div>
@@ -500,14 +511,14 @@ export function VideoPreview({
         >
           <span className="flex items-center gap-1">
             <SkipBack className="size-3.5" />
-            <span className="text-[10px] font-bold">5s</span>
+            <span className="text-xs font-semibold tabular-nums">5s</span>
           </span>
         </ControlButton>
 
         <button
           onClick={togglePlay}
           aria-label={isPlaying ? "Pause preview video" : "Play preview video"}
-          className="pixel-button flex size-11 items-center justify-center bg-primary text-primary-foreground"
+          className="flex size-11 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-neu-glow transition-shadow duration-200 active:shadow-neu-pressed"
         >
           {isPlaying ? (
             <Pause className="size-4" />
@@ -522,7 +533,7 @@ export function VideoPreview({
           ariaLabel="Seek forward 5 seconds"
         >
           <span className="flex items-center gap-1">
-            <span className="text-[10px] font-bold">5s</span>
+            <span className="text-xs font-semibold tabular-nums">5s</span>
             <SkipForward className="size-3.5" />
           </span>
         </ControlButton>
@@ -537,7 +548,7 @@ export function VideoPreview({
             <Volume2 className="size-4" />
           )}
         </ControlButton>
-        <label className="flex min-h-11 items-center gap-2 text-sm font-bold text-muted-foreground">
+        <label className="flex min-h-11 items-center gap-2 text-sm font-semibold text-muted-foreground">
           <span>Volume</span>
           <input
             type="range"
@@ -547,7 +558,8 @@ export function VideoPreview({
             aria-label="Preview volume"
             aria-valuetext={`${volume} percent`}
             onChange={(event) => updateVolume(Number(event.target.value))}
-            className="w-24 accent-primary"
+            className="pixel-range w-24"
+            style={{ ["--range-pct" as string]: `${volume}%` }}
           />
         </label>
         <ControlButton
@@ -561,7 +573,7 @@ export function VideoPreview({
 
       {/* Timecode */}
       <p
-        className="border border-border bg-surface px-2 py-1 font-mono text-xs tabular-nums text-muted-foreground shadow-soft"
+        className="rounded-full bg-muted px-3 py-1 font-mono text-xs tabular-nums text-muted-foreground shadow-neu-inset-sm"
         aria-live="polite"
       >
         <span className="sr-only">Current time </span>
@@ -1223,7 +1235,7 @@ function PreviewSyncBadges({
       {badges.map((badge) => (
         <span
           key={badge}
-          className="border border-border bg-surface px-2 py-1 text-[10px] font-bold text-muted-foreground shadow-soft"
+          className="inline-flex items-center rounded-full bg-surface px-3 py-1 text-xs font-semibold text-muted-foreground shadow-neu-raised-sm"
         >
           {badge}
         </span>
@@ -1323,7 +1335,7 @@ function CaptionOverlay({ segments, style, playheadMs }: CaptionOverlayProps) {
       <p style={inlineStyle}>
         {mode === "educational_card" ? (
           <span
-            className="mr-2 inline-block rounded-full px-2 py-0.5 text-[10px] font-black text-white"
+            className="mr-2 inline-block rounded-full px-2 py-0.5 text-xs font-bold text-white"
             style={{ backgroundColor: style.accent_color }}
           >
             STEP {active.index + 1}
@@ -1423,7 +1435,7 @@ function ControlButton({
       onClick={onClick}
       title={title}
       aria-label={ariaLabel}
-      className="flex size-11 items-center justify-center border border-border bg-surface text-muted-foreground transition hover:border-primary/40 hover:bg-muted hover:text-foreground"
+      className="flex size-11 items-center justify-center rounded-full bg-surface text-muted-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:text-foreground hover:shadow-neu-raised active:shadow-neu-pressed"
     >
       {children}
     </button>

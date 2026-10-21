@@ -1,5 +1,5 @@
 begin;
-select plan(67);
+select plan(62);
 
 insert into auth.users (id, email, raw_user_meta_data)
 values
@@ -119,16 +119,6 @@ select ok(
   and not has_function_privilege(
     'authenticated',
     'public.motionly_initialize_upload(uuid,uuid,uuid,text,text,text,text,bigint,integer)',
-    'EXECUTE'
-  )
-  and not has_function_privilege(
-    'authenticated',
-    'public.motionly_claim_legacy_upload(uuid,uuid,uuid,uuid,bigint,timestamptz)',
-    'EXECUTE'
-  )
-  and not has_function_privilege(
-    'authenticated',
-    'public.motionly_finalize_legacy_upload(uuid,uuid,uuid,uuid,uuid,bigint,text)',
     'EXECUTE'
   )
   and not has_function_privilege(
@@ -698,82 +688,18 @@ select is(
   'terminal cleanup preserves pre-transition completing state and queues the final object'
 );
 
-select is(
-  public.motionly_reserve_storage_quota(
-    '66000000-0000-4000-8000-000000000009',
-    '36000000-0000-4000-8000-000000000002', 4, 1, '2099-01-01T00:00:00Z'
-  ),
-  true,
-  'legacy finalize-wins fixture reserves quota'
-);
-insert into public.uploaded_videos (
-  id, workspace_id, project_id, storage_bucket, storage_path,
-  original_filename, mime_type, byte_size, file_size_bytes, status,
-  legacy_quota_reservation_id, legacy_upload_expires_at
-) values (
-  '56000000-0000-4000-8000-000000000004',
-  '36000000-0000-4000-8000-000000000002',
-  '46000000-0000-4000-8000-000000000002',
-  'raw-uploads',
-  'workspaces/36000000-0000-4000-8000-000000000002/projects/46000000-0000-4000-8000-000000000002/raw/finalize-wins.mp4',
-  'finalize-wins.mp4', 'video/mp4', 4, 4, 'uploading',
-  '66000000-0000-4000-8000-000000000009', '2099-01-01T00:00:00Z'
-);
-insert into public.object_references (
-  id, workspace_id, project_id, storage_bucket, storage_path,
-  owner_type, owner_id, object_type, size_bytes
-) values (
-  '86000000-0000-4000-8000-000000000005',
-  '36000000-0000-4000-8000-000000000002',
-  '46000000-0000-4000-8000-000000000002',
-  'raw-uploads',
-  'workspaces/36000000-0000-4000-8000-000000000002/projects/46000000-0000-4000-8000-000000000002/raw/finalize-wins.mp4',
-  'uploaded_video', '56000000-0000-4000-8000-000000000004', 'source_video', 4
-);
-select is(
-  public.motionly_finalize_legacy_upload(
-    '56000000-0000-4000-8000-000000000004',
-    '36000000-0000-4000-8000-000000000002',
-    '46000000-0000-4000-8000-000000000002',
-    '66000000-0000-4000-8000-000000000009',
-    '86000000-0000-4000-8000-000000000005',
-    4, repeat('b', 64)
-  ),
-  true,
-  'legacy finalization atomically wins against cancellation'
-);
-select is(
-  public.motionly_cancel_legacy_upload(
-    '56000000-0000-4000-8000-000000000004',
-    '36000000-0000-4000-8000-000000000002',
-    '46000000-0000-4000-8000-000000000002',
-    '66000000-0000-4000-8000-000000000009'
-  ),
-  false,
-  'legacy cancellation cannot overwrite committed finalization'
-);
-select ok(
-  (select status = 'processing'
-          and source_object_reference_id = '86000000-0000-4000-8000-000000000005'
-          and storage_quota_reservation_id = '66000000-0000-4000-8000-000000000009'
-   from public.uploaded_videos
-   where id = '56000000-0000-4000-8000-000000000004')
-  and (select state = 'committed'
-       from public.storage_quota_reservations
-       where id = '66000000-0000-4000-8000-000000000009')
-  and (select status = 'active'
-       from public.object_references
-       where id = '86000000-0000-4000-8000-000000000005'),
-  'finalize-wins outcome is fully processing, committed, and referenced'
-);
-
+-- NOTE (integration, Task 17): motionly_finalize_legacy_upload was dropped by
+-- migration 202610190401 (the legacy one-shot upload completion path was
+-- removed). The former finalize-vs-cancel race scenarios are therefore no
+-- longer reachable. motionly_cancel_legacy_upload is retained (the /cancel
+-- endpoint still uses it), so its positive cancellation path is kept below.
 select is(
   public.motionly_reserve_storage_quota(
     '66000000-0000-4000-8000-000000000010',
     '36000000-0000-4000-8000-000000000002', 4, 1, '2099-01-01T00:00:00Z'
   ),
   true,
-  'legacy cancel-wins fixture reserves quota'
+  'legacy cancel fixture reserves quota'
 );
 insert into public.uploaded_videos (
   id, workspace_id, project_id, storage_bucket, storage_path,
@@ -810,19 +736,7 @@ select is(
     '66000000-0000-4000-8000-000000000010'
   ),
   true,
-  'legacy cancellation atomically wins against finalization'
-);
-select is(
-  public.motionly_finalize_legacy_upload(
-    '56000000-0000-4000-8000-000000000005',
-    '36000000-0000-4000-8000-000000000002',
-    '46000000-0000-4000-8000-000000000002',
-    '66000000-0000-4000-8000-000000000010',
-    '86000000-0000-4000-8000-000000000006',
-    4, repeat('c', 64)
-  ),
-  false,
-  'legacy finalization cannot overwrite atomic cancellation'
+  'legacy cancellation releases the reservation and dereferences the object'
 );
 select ok(
   (select status = 'failed'
@@ -839,7 +753,7 @@ select ok(
   and (select count(*) = 1
        from public.storage_deletion_queue
        where storage_path = 'workspaces/36000000-0000-4000-8000-000000000002/projects/46000000-0000-4000-8000-000000000002/raw/cancel-wins.mp4'),
-  'cancel-wins outcome is fully failed, released, dereferenced, and queued'
+  'cancel outcome is fully failed, released, dereferenced, and queued'
 );
 
 select throws_ok(

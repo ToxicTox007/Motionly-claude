@@ -62,6 +62,7 @@ def _environment(secret_directory: Path, *, effects_enabled: bool = False) -> di
         "SUPABASE_SERVICE_ROLE_KEY": "local-audit-service-key-123",
         "APP_DOMAIN": "app.audit.localhost",
         "PUBLIC_ORIGIN": "https://app.audit.localhost:18443",
+        "BILLING_MODE": "demo",
         "TEMPORAL_BOOTSTRAP_ADMIN_UNTIL": "2027-01-01T00:00:00Z",
         "MOTIONLY_API_IMAGE": "motionly-api:dev",
         "MOTIONLY_WEB_IMAGE": "motionly-web:dev",

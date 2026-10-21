@@ -68,7 +68,7 @@ def _workflow_values() -> dict[str, object]:
         "source_media_revision": 1,
         "source_object_reference_id": uuid4(),
         "workflow_type": "first_draft",
-        "workflow_version": "first-draft-v1",
+        "workflow_version": "first-draft-v2",
         "idempotency_key": "temporal-test-idempotency",
         "request_hash": HASH,
         "started_by": uuid4(),
@@ -81,6 +81,9 @@ class _TemporalFake:
         self.starts: list[tuple[str, WorkflowStartInput]] = []
         self.signals: list[tuple[str, StepOutcomeSignal]] = []
         self.descriptions: dict[str, TemporalExecutionDescription | None] = {}
+        self.cancels: list[tuple[str, str]] = []
+        self.cancel_present: dict[str, bool] = {}
+        self.cancel_error: Exception | None = None
         self.start_error: Exception | None = None
         self.signal_error: Exception | None = None
 
@@ -100,6 +103,12 @@ class _TemporalFake:
 
     async def describe_workflow(self, *, workflow_id: str) -> TemporalExecutionDescription | None:
         return self.descriptions.get(workflow_id)
+
+    async def cancel_workflow(self, *, workflow_id: str, reason: str) -> bool:
+        if self.cancel_error:
+            raise self.cancel_error
+        self.cancels.append((workflow_id, reason))
+        return self.cancel_present.get(workflow_id, True)
 
 
 def test_temporal_connection_uses_tls_enabled_environment_name(
@@ -324,6 +333,49 @@ def test_activity_enqueue_is_deterministic_idempotent_and_identifier_only() -> N
     assert job.next_run_state == "proposal_ready"
 
 
+def test_activity_surfaces_step_retry_conflict_cause_not_unavailable() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    from app.api.errors import ApiError
+
+    class ConflictingWorkflowRepository:
+        def prepare_step(self, **_kwargs):
+            raise ApiError(
+                409,
+                "workflow_step_transport_conflict",
+                "Workflow step transport identity conflicts.",
+            )
+
+    registry = QueueRegistry()
+    activity = BullMQActivities(registry, workflow_repository=ConflictingWorkflowRepository())
+    request = EnqueueStepRequest(
+        workflow_run_id=str(uuid4()),
+        workflow_step_id=None,
+        workspace_id=str(uuid4()),
+        project_id=str(uuid4()),
+        step_key="analyze-source-v1",
+        step_kind="analyze_source",
+        job_kind="visual_analysis",
+        queue_name="visual_analysis",
+        attempt_number=2,
+        attempt_key="temporal-attempt:identifier-0002",
+        input_hash=HASH,
+        next_run_state="proposal_ready",
+        resource_id=str(uuid4()),
+    )
+
+    try:
+        asyncio.run(activity.enqueue_bullmq_step(request))
+    except ApplicationError as error:
+        # The real cause is surfaced, not masked as temporarily unavailable, and
+        # it is non-retryable (a conflict will not resolve by retrying).
+        assert error.type == "workflow_step_transport_conflict"
+        assert error.type != "bullmq_enqueue_unavailable"
+        assert error.non_retryable is True
+    else:
+        raise AssertionError("expected the transport conflict to surface")
+
+
 def test_workflow_signal_handler_deduplicates_and_buffers_out_of_order() -> None:
     run_id = str(uuid4())
     workflow_instance = MotionlyWorkflow()
@@ -442,6 +494,7 @@ def test_supabase_get_workflow_query_is_tenant_scoped() -> None:
         "source_media_revision": 1,
         "source_object_reference_id": str(uuid4()),
         "workflow_type": "first_draft",
+        # Historical first-draft-v1 rows remain readable after v1 removal.
         "workflow_version": "first-draft-v1",
         "idempotency_key": "tenant-safe-read",
         "request_hash": HASH,
@@ -552,7 +605,7 @@ def test_temporal_workflow_time_skipping_signal_completion() -> None:
             workspace_id=str(uuid4()),
             project_id=str(uuid4()),
             workflow_type="first_draft",
-            workflow_version="first-draft-v1",
+            workflow_version="first-draft-v2",
             request_hash=HASH,
             steps=[
                 WorkflowStepSpec(
@@ -622,9 +675,99 @@ def test_temporal_workflow_time_skipping_signal_completion() -> None:
                         output_hash="d" * 64,
                     ),
                 )
+                # The explicit analyze step failed retryably on attempt 1 and
+                # succeeded on attempt 2: exactly two enqueue attempts for it.
+                def _analyze_jobs() -> list[object]:
+                    return [
+                        job
+                        for job in registry.jobs.values()
+                        if job.step_key == "analyze-source-v1"
+                        and job.workflow_run_id is not None
+                        and str(job.workflow_run_id) == run_id
+                    ]
+
+                for _ in range(100):
+                    if len(_analyze_jobs()) == 2:
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    raise AssertionError(
+                        f"expected 2 analyze attempts, saw {len(_analyze_jobs())}"
+                    )
+                # first-draft-v1 is removed; every run is first-draft-v2, so the
+                # workflow now continues through the durable proposal/approval/
+                # render tail. Drive it to completion for this run.
+                for _ in range(100):
+                    if any(
+                        job.workflow_run_id is not None
+                        and str(job.workflow_run_id) == run_id
+                        and job.step_key == "generate-proposal-v2"
+                        and str(job.resource_id) == proposal_id
+                        for job in registry.jobs.values()
+                    ):
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    raise AssertionError("run did not enqueue the planning job")
+                await temporal.signal_workflow(
+                    workflow_id=workflow_input.temporal_workflow_id,
+                    signal=StepOutcomeSignal(
+                        event_id="event:v1run:planning:complete",
+                        workflow_run_id=run_id,
+                        step_key="generate-proposal-v2",
+                        attempt_number=1,
+                        outcome=StepOutcome.SUCCEEDED,
+                        output_hash="e" * 64,
+                    ),
+                )
+                for _ in range(100):
+                    status = await handle.query("status")
+                    if status["current_step_key"] == "approval-gate-v2":
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    raise AssertionError("run did not enter durable approval wait")
+                approval = signal_from_outbox(
+                    event_type="workflow.approval.decided",
+                    event_id="event:v1run:approval",
+                    payload={
+                        "workflow_run_id": run_id,
+                        "proposal_id": proposal_id,
+                        "decision_id": str(uuid4()),
+                        "decision": "approve",
+                        "proposal_revision": 2,
+                        "workflow_revision": 8,
+                        "edit_plan_id": str(uuid4()),
+                        "edit_plan_revision": 1,
+                    },
+                )
+                assert isinstance(approval, ApprovalGateSignal)
+                await temporal.signal_workflow(
+                    workflow_id=workflow_input.temporal_workflow_id,
+                    signal=approval,
+                )
+                for _ in range(100):
+                    if (await handle.query("status"))["current_step_key"] == (
+                        "render-first-draft-v2"
+                    ):
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    raise AssertionError("run did not reach the render step")
+                await temporal.signal_workflow(
+                    workflow_id=workflow_input.temporal_workflow_id,
+                    signal=StepOutcomeSignal(
+                        event_id="event:v1run:render:complete",
+                        workflow_run_id=run_id,
+                        step_key="render-first-draft-v2",
+                        attempt_number=1,
+                        outcome=StepOutcome.SUCCEEDED,
+                        output_hash="7" * 64,
+                        next_run_state="draft_ready",
+                    ),
+                )
                 result = await handle.result()
                 assert result["state"] == WorkflowExecutionState.COMPLETED.value
-                assert len(registry.jobs) == 2
                 history = await handle.fetch_history()
                 replay = await replay_history_document(
                     history.to_json_dict(),
@@ -776,7 +919,7 @@ def test_temporal_workflow_time_skipping_signal_completion() -> None:
                     workspace_id=workflow_input.workspace_id,
                     project_id=workflow_input.project_id,
                     workflow_type="first_draft",
-                    workflow_version="first-draft-v1",
+                    workflow_version="first-draft-v2",
                     request_hash=HASH,
                     steps=workflow_input.steps,
                 )
@@ -872,8 +1015,12 @@ def test_workflow_run_to_activity_enqueues_executable_visual_bootstrap() -> None
     run, _ = repository.start_workflow(**_workflow_values())
     start = workflow_start_for_run(run)
 
-    assert len(start.steps) == 1
-    step = start.steps[0]
+    assert [step.step_key for step in start.steps] == [
+        "preprocess-source-v2",
+        "transcribe-source-v2",
+        "analyze-source-v2",
+    ]
+    step = next(step for step in start.steps if step.step_kind == "analyze_source")
     request = EnqueueStepRequest(
         workflow_run_id=start.workflow_run_id,
         workflow_step_id=None,
@@ -1350,34 +1497,47 @@ def test_v2_rejection_cancels_temporal_workflow_without_a_plan() -> None:
     assert rejected.edit_plan_revision is None
 
 
-def test_v2_contract_keeps_v1_static_steps_and_adds_durable_proposal_gate() -> None:
+def test_v2_is_the_only_executable_contract_with_durable_proposal_gate() -> None:
     import inspect
 
     run_id, upload_id = uuid4(), uuid4()
-    v1_steps = workflow_steps_for(
+    # first-draft-v1 is removed: it is no longer an executable workflow version.
+    with pytest.raises(HistoryPayloadRejected):
+        workflow_steps_for(
+            workflow_type="first_draft",
+            workflow_version="first-draft-v1",
+            request_hash="a" * 64,
+            uploaded_video_id=str(upload_id),
+        )
+
+    v2_steps = workflow_steps_for(
         workflow_type="first_draft",
-        workflow_version="first-draft-v1",
+        workflow_version="first-draft-v2",
         request_hash="a" * 64,
         uploaded_video_id=str(upload_id),
     )
-    assert [step.step_key for step in v1_steps] == ["analyze-source-v1"]
+    assert [step.step_key for step in v2_steps] == [
+        "preprocess-source-v2",
+        "transcribe-source-v2",
+        "analyze-source-v2",
+    ]
     assert job_id_for(
         EnqueueStepRequest(
             workflow_run_id=str(run_id),
             workflow_step_id=None,
             workspace_id=str(uuid4()),
             project_id=str(uuid4()),
-            step_key=v1_steps[0].step_key,
-            step_kind=v1_steps[0].step_kind,
-            job_kind=v1_steps[0].job_kind,
-            queue_name=v1_steps[0].queue_name,
+            step_key=v2_steps[0].step_key,
+            step_kind=v2_steps[0].step_kind,
+            job_kind=v2_steps[0].job_kind,
+            queue_name=v2_steps[0].queue_name,
             attempt_number=1,
-            attempt_key="temporal-attempt-v1",
-            input_hash=v1_steps[0].input_hash,
-            next_run_state=v1_steps[0].next_run_state,
-            resource_id=v1_steps[0].resource_id,
+            attempt_key="temporal-attempt-v2",
+            input_hash=v2_steps[0].input_hash,
+            next_run_state=v2_steps[0].next_run_state,
+            resource_id=v2_steps[0].resource_id,
         )
-    ).startswith(f"workflow--{run_id}--analyze-source-v1--")
+    ).startswith(f"workflow--{run_id}--preprocess-source-v2--")
 
     source = inspect.getsource(MotionlyWorkflow.run)
     assert 'if input.workflow_version == "first-draft-v2"' in source
@@ -1392,7 +1552,7 @@ def test_v2_contract_keeps_v1_static_steps_and_adds_durable_proposal_gate() -> N
     )
 
 
-def test_render_draft_activity_routes_specialized_queue_without_changing_v1_contract() -> None:
+def test_render_draft_activity_routes_specialized_queue_for_v2_contract() -> None:
     for queue_name, expected_engine in (
         ("render", "ffmpeg_basic"),
         ("render_gpu", "ffmpeg_basic"),
@@ -1505,3 +1665,229 @@ def test_claiming_an_empty_outbox_returns_no_messages() -> None:
 
     assert repository.claim_outbox(lease_owner="dispatcher-a") == []
     assert asyncio.run(repository.claim_outbox_async(lease_owner="dispatcher-a")) == []
+
+
+def _cancellation_record(
+    *, run_id=None, temporal_workflow_id="motionly:deleted:run", dispatched=None
+):
+    from app.repositories.workflows import WorkflowCancellationRecord
+
+    return WorkflowCancellationRecord(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        workflow_run_id=run_id or uuid4(),
+        temporal_workflow_id=temporal_workflow_id,
+        reason="project_deleted",
+        dispatched_at=dispatched,
+    )
+
+
+def test_dispatcher_cancels_orphaned_deleted_project_workflow_by_temporal_id() -> None:
+    """A deleted project leaves a durable cancellation request (no FK, survives
+    the cascade). The dispatcher claims it and cancels the orphaned Temporal
+    workflow by temporal_workflow_id so it stops calling the database."""
+    repository = InMemoryWorkflowRepository()
+    run, _ = repository.start_workflow(**_workflow_values())
+    # The project-delete trigger's effect, modelled in-memory.
+    repository.record_project_delete_cancellation(run=run)
+    temporal = _TemporalFake()
+    dispatcher = OutboxDispatcher(
+        repository=repository,
+        temporal=temporal,
+        lease_owner="dispatcher-cancel",
+    )
+
+    first = asyncio.run(dispatcher.dispatch_once())
+    # Second pass: the request was already claimed (dispatched_at set), so no
+    # duplicate cancellation is issued — idempotent at the claim level.
+    second = asyncio.run(dispatcher.dispatch_once())
+
+    assert first.cancellations_claimed == 1
+    assert first.cancellations_processed == 1
+    assert temporal.cancels == [(run.temporal_workflow_id, "project_deleted")]
+    assert second.cancellations_claimed == 0
+    assert len(temporal.cancels) == 1
+
+
+def test_dispatcher_treats_not_found_cancellation_as_quiet_terminal_success() -> None:
+    """A workflow Temporal no longer knows about (already gone) is a terminal,
+    quiet outcome: cancel_workflow returns False, the request is still consumed,
+    and no retry storm is produced."""
+    repository = InMemoryWorkflowRepository()
+    run, _ = repository.start_workflow(**_workflow_values())
+    repository.record_project_delete_cancellation(run=run)
+    temporal = _TemporalFake()
+    temporal.cancel_present[run.temporal_workflow_id] = False  # not found in Temporal
+    dispatcher = OutboxDispatcher(
+        repository=repository,
+        temporal=temporal,
+        lease_owner="dispatcher-cancel-missing",
+    )
+
+    result = asyncio.run(dispatcher.dispatch_once())
+
+    assert result.cancellations_claimed == 1
+    assert result.cancellations_processed == 1
+    assert temporal.cancels == [(run.temporal_workflow_id, "project_deleted")]
+
+
+def test_dispatcher_cancellation_failure_does_not_block_outbox_or_raise() -> None:
+    repository = InMemoryWorkflowRepository()
+    run, _ = repository.start_workflow(**_workflow_values())
+    repository.record_project_delete_cancellation(run=run)
+    temporal = _TemporalFake()
+    temporal.cancel_error = RuntimeError("Temporal unavailable")
+    dispatcher = OutboxDispatcher(
+        repository=repository,
+        temporal=temporal,
+        lease_owner="dispatcher-cancel-error",
+    )
+
+    # The pending workflow.start outbox message is still dispatched; one bad
+    # cancellation id does not raise or block the batch.
+    result = asyncio.run(dispatcher.dispatch_once())
+
+    assert result.cancellations_claimed == 1
+    assert result.cancellations_processed == 0
+    assert result.dispatched == 1
+
+
+def test_activity_maps_deleted_run_not_found_to_nonretryable_quiet_terminal() -> None:
+    """When a project is deleted mid-flight, prepare_step returns
+    workflow_not_found. The enqueue activity must surface it as a non-retryable
+    ApplicationError so Temporal stops the step loop instead of hammering the
+    database (no WORKFLOW_NOT_FOUND storm)."""
+    from temporalio.exceptions import ApplicationError
+
+    class DeletedRunRepository:
+        def prepare_step(self, **_kwargs):
+            raise ApiError(404, "workflow_not_found", "Workflow run was not found.")
+
+    registry = QueueRegistry()
+    activity = BullMQActivities(registry, workflow_repository=DeletedRunRepository())
+    request = EnqueueStepRequest(
+        workflow_run_id=str(uuid4()),
+        workflow_step_id=None,
+        workspace_id=str(uuid4()),
+        project_id=str(uuid4()),
+        step_key="analyze-source-v1",
+        step_kind="analyze_source",
+        job_kind="visual_analysis",
+        queue_name="visual_analysis",
+        attempt_number=1,
+        attempt_key="temporal-attempt:deleted-run-0001",
+        input_hash=HASH,
+        next_run_state="proposal_ready",
+        resource_id=str(uuid4()),
+    )
+
+    try:
+        asyncio.run(activity.enqueue_bullmq_step(request))
+    except ApplicationError as error:
+        assert error.type == "workflow_not_found"
+        assert error.non_retryable is True
+    else:
+        raise AssertionError("expected workflow_not_found to surface as terminal")
+    # The job must not have been enqueued for a run that no longer exists.
+    assert registry.jobs == {}
+
+
+def test_supabase_claim_workflow_cancellations_wires_service_role_rpc() -> None:
+    record_run_id = uuid4()
+    row = {
+        "id": str(uuid4()),
+        "workspace_id": str(uuid4()),
+        "project_id": str(uuid4()),
+        "workflow_run_id": str(record_run_id),
+        "temporal_workflow_id": "motionly:first_draft:deleted",
+        "reason": "project_deleted",
+        "created_at": datetime.now(UTC).isoformat(),
+        "dispatched_at": datetime.now(UTC).isoformat(),
+    }
+    request = httpx.Request(
+        "POST", "https://supabase.test/rpc/motionly_claim_workflow_cancellations"
+    )
+    response = httpx.Response(200, request=request, json=[row])
+    calls: list[dict[str, object]] = []
+
+    class _Client:
+        def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+            calls.append({"method": method, "path": path, **kwargs})
+            return response
+
+    repository = SupabaseWorkflowRepository(
+        supabase_url="https://supabase.test",
+        service_role_key="service-role",
+    )
+    repository.client = _Client()  # type: ignore[assignment]
+
+    claimed = repository.claim_workflow_cancellations(limit=25)
+
+    assert len(claimed) == 1
+    assert claimed[0].workflow_run_id == record_run_id
+    assert claimed[0].temporal_workflow_id == "motionly:first_draft:deleted"
+    assert calls[0]["path"] == "/rpc/motionly_claim_workflow_cancellations"
+    assert calls[0]["json"] == {"p_limit": 25}
+
+
+def test_supabase_claim_workflow_cancellations_tolerates_idle_queue() -> None:
+    request = httpx.Request(
+        "POST", "https://supabase.test/rpc/motionly_claim_workflow_cancellations"
+    )
+    empty = httpx.Response(200, request=request, json=[])
+
+    class _Client:
+        def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+            return empty
+
+        async def async_request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+            return empty
+
+    repository = SupabaseWorkflowRepository(
+        supabase_url="https://supabase.test",
+        service_role_key="service-role",
+    )
+    repository.client = _Client()  # type: ignore[assignment]
+
+    assert repository.claim_workflow_cancellations() == []
+    assert asyncio.run(repository.claim_workflow_cancellations_async()) == []
+
+
+def test_temporal_client_cancel_is_idempotent_on_not_found() -> None:
+    from temporalio.service import RPCError, RPCStatusCode
+
+    class _NotFoundHandle:
+        async def cancel(self) -> None:
+            raise RPCError("not found", RPCStatusCode.NOT_FOUND, b"")
+
+    class _RunningHandle:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        async def cancel(self) -> None:
+            self.cancelled = True
+
+    class _ClientFake:
+        def __init__(self, handle) -> None:
+            self._handle = handle
+
+        def get_workflow_handle(self, workflow_id: str):
+            return self._handle
+
+    running = _RunningHandle()
+    present = TemporalOrchestrationClient(
+        _ClientFake(running), task_queue="motionly-orchestration"
+    )
+    assert asyncio.run(
+        present.cancel_workflow(workflow_id="motionly:run:present", reason="project_deleted")
+    ) is True
+    assert running.cancelled is True
+
+    absent = TemporalOrchestrationClient(
+        _ClientFake(_NotFoundHandle()), task_queue="motionly-orchestration"
+    )
+    # NOT_FOUND means the desired end state already holds: quiet success.
+    assert asyncio.run(
+        absent.cancel_workflow(workflow_id="motionly:run:gone", reason="project_deleted")
+    ) is False

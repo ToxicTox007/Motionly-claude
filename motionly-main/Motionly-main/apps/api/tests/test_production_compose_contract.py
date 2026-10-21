@@ -41,6 +41,7 @@ REQUIRED_VARIABLES = (
     "SUPABASE_SERVICE_ROLE_KEY",
     "APP_DOMAIN",
     "PUBLIC_ORIGIN",
+    "BILLING_MODE",
     "TEMPORAL_BOOTSTRAP_ADMIN_UNTIL",
 )
 
@@ -49,7 +50,11 @@ SECRET_FILE_NAMES = (
     "redis_password",
     "temporal_db_password",
     "supabase_service_role_key",
+    "supabase_worker_key",
     "supabase_jwt_secret",
+    "realtime_db_enc_key",
+    "realtime_secret_key_base",
+    "realtime_metrics_jwt_secret",
     "admin_api_token",
     "worker_api_token",
     "groq_api_key",
@@ -95,6 +100,7 @@ def _production_values(secret_directory: Path) -> dict[str, str]:
         "SUPABASE_SERVICE_ROLE_KEY": "test-service-role-key",
         "APP_DOMAIN": "app.example.test",
         "PUBLIC_ORIGIN": "https://app.example.test",
+        "BILLING_MODE": "disabled",
         "TEMPORAL_BOOTSTRAP_ADMIN_UNTIL": "2026-08-12T00:00:00Z",
     }
     for variable in APPLICATION_IMAGE_VARIABLES:
@@ -243,15 +249,19 @@ def test_services_derive_every_public_url_from_the_one_public_origin(tmp_path: P
     origin = "https://d111abcdef8.cloudfront.net"
 
     # The web image is configured at runtime: no NEXT_PUBLIC_* build values.
+    # BILLING_MODE comes from the one env input so the web runtime agrees with
+    # the API on the deployment's billing posture (B17).
     assert services["web"]["environment"] == {
         "APP_ENV": "production",
         "PUBLIC_ORIGIN": origin,
         "API_INTERNAL_URL": "http://api:8000",
         "SUPABASE_URL": "http://supabase-gateway:8000",
         "SUPABASE_ANON_KEY": "test-anon-key",
+        "BILLING_MODE": "disabled",
     }
     api = services["api"]["environment"]
     assert api["API_PUBLIC_BASE_URL"] == f"{origin}/api"
+    assert api["BILLING_MODE"] == "disabled"
     assert api["SUPABASE_PUBLIC_URL"] == f"{origin}/supabase"
     assert api["API_CORS_ORIGINS"] == origin
     assert api["SUPABASE_URL"] == "http://supabase-gateway:8000"
@@ -322,6 +332,7 @@ def test_compose_network_contract_has_no_default_or_temporal_persistence_escape(
         "supabase-auth",
         "supabase-rest",
         "supabase-storage",
+        "supabase-realtime",
         "supabase-gateway",
         "api",
         "temporal-dispatcher",
@@ -382,3 +393,102 @@ def test_temporal_bootstrap_scripts_use_secrets_and_matching_schema_tools() -> N
     assert "clientCaFiles:" in template
     assert "serverName: temporal" in template
     assert "temporal_server_cert" in template and "temporal_internode_cert" in template
+
+
+# Variables the pinned Realtime release reads with System.fetch_env! (its
+# /app/releases/2.78.10/runtime.exs). GEN_RPC_CERTFILE/KEYFILE/CACERTFILE are
+# required only when GEN_RPC_SSL_SERVER_PORT is set, which the stack does not.
+REALTIME_REQUIRED_SECRETS = {
+    "METRICS_JWT_SECRET": "realtime_metrics_jwt_secret",
+    "SECRET_KEY_BASE": "realtime_secret_key_base",
+}
+
+
+def test_realtime_receives_every_variable_its_pinned_release_requires() -> None:
+    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    block = _service_block(source, "supabase-realtime")
+    assert "supabase/realtime:v2.78.10@sha256:" in block
+    assert "GEN_RPC_SSL_SERVER_PORT" not in block
+    writer = (ROOT / "scripts" / "release" / "write_compose_test_env.py").read_text("utf-8")
+    agent = (ROOT / "scripts" / "deploy" / "apply_release.sh").read_text("utf-8")
+    for variable, secret in REALTIME_REQUIRED_SECRETS.items():
+        assert f'export {variable}="$(cat /run/secrets/{secret})"' in block, variable
+        assert re.search(rf"^\s+{secret},?$", block, re.MULTILINE), secret
+        assert re.search(rf"^  {secret}:\n    file: ", source, re.MULTILINE), secret
+        # Generated for the CPU stage and the release rehearsal; fetched by the
+        # release agent from Parameter Store in production.
+        assert writer.count(f'"{secret}"') == 2, secret
+        assert f'"$secrets_dir/{secret}"' in agent, secret
+
+
+
+def test_a_fresh_database_creates_the_schema_realtime_migrates_into() -> None:
+    """Realtime sets search_path to _realtime and creates its migrations table
+    there; Postgres refuses ("no schema has been selected to create in") unless
+    the schema exists first. Like Supabase's own self-hosting setup, a Postgres
+    init script creates it when the data directory is initialised."""
+    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    realtime = _service_block(source, "supabase-realtime")
+    assert 'DB_AFTER_CONNECT_QUERY: "SET search_path TO _realtime"' in realtime
+    postgres = _service_block(source, "postgres")
+    mount = "./db/realtime.sql:/docker-entrypoint-initdb.d/init-scripts/98-realtime.sql:ro"
+    assert mount in postgres
+    script = (ROOT / "infra" / "db" / "realtime.sql").read_text(encoding="utf-8")
+    assert "create schema if not exists _realtime;" in script
+    assert "alter schema _realtime owner to supabase_admin;" in script
+    assert "DB_USER: supabase_admin" in realtime
+
+
+def test_realtime_healthcheck_uses_a_tool_its_image_ships() -> None:
+    """The pinned Realtime image has curl and no wget; a wget healthcheck can
+    never pass, so the service never reports healthy and db-migrate never runs."""
+    block = _service_block(COMPOSE_PATH.read_text(encoding="utf-8"), "supabase-realtime")
+    healthcheck = block[block.index("healthcheck:") :]
+    assert '"wget"' not in healthcheck
+    assert '"curl"' in healthcheck
+    assert "http://127.0.0.1:4000/api/ping" in healthcheck
+    # Realtime resolves the tenant from the Host header and answers 401
+    # "Tenant not found" without it; Kong sends this host for the seeded tenant.
+    assert '"Host: realtime-dev.supabase-realtime"' in healthcheck
+
+
+def test_realtime_secret_shim_hands_off_to_the_images_own_startup() -> None:
+    """The image's entrypoint (tini -> /app/run.sh) migrates, seeds the
+    `realtime-dev` tenant Kong routes to when SEED_SELF_HOST=true, and applies
+    RLIMIT_NOFILE. The secret-reading shim must exec it, not replace it: without
+    the seed every /supabase/realtime request is refused with 'Tenant not found'."""
+    block = _service_block(COMPOSE_PATH.read_text(encoding="utf-8"), "supabase-realtime")
+    assert 'SEED_SELF_HOST: "true"' in block
+    assert "exec /usr/bin/tini -s -g -- /app/run.sh /app/bin/server" in block
+    assert "Realtime.Release.migrate" not in block
+
+
+def _compose_services() -> dict[str, dict]:
+    import yaml
+
+    return yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))["services"]
+
+
+def test_every_secret_path_a_service_reads_is_mounted_into_that_service() -> None:
+    """A service that names /run/secrets/<x> in its environment or entrypoint
+    without mounting <x> crashes at start (the API read the workers'
+    supabase_worker_key through the shared media environment)."""
+    problems = []
+    for name, service in _compose_services().items():
+        mounted = set(service.get("secrets") or [])
+        text = json.dumps([service.get("environment") or {}, service.get("entrypoint") or []])
+        for secret in sorted(set(re.findall(r"/run/secrets/([a-z0-9_]+)", text))):
+            if secret not in mounted:
+                problems.append(f"{name} reads /run/secrets/{secret} but does not mount it")
+    assert problems == []
+
+
+def test_the_api_uses_the_service_role_key_and_workers_use_the_restricted_key() -> None:
+    services = _compose_services()
+    assert services["api"]["environment"]["SUPABASE_SERVICE_ROLE_KEY_FILE"] == (
+        "/run/secrets/supabase_service_role_key"
+    )
+    for worker in ("cpu-ffmpeg-worker", "remotion-worker"):
+        assert services[worker]["environment"]["SUPABASE_SERVICE_ROLE_KEY_FILE"] == (
+            "/run/secrets/supabase_worker_key"
+        ), worker

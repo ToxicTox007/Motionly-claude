@@ -107,6 +107,8 @@ def test_routes_strip_the_secret_and_report_the_https_viewer() -> None:
     assert [upstream for upstream, _ in proxies] == [
         "api:8000",
         "supabase-gateway:8000",
+        # /pay/*: the mock payment gateway (demo billing only, Task 22).
+        "payment-gateway:8010",
         "web:3000",
     ]
     for upstream, block in proxies:

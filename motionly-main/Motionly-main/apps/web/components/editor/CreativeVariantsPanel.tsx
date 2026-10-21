@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Sparkles } from "lucide-react";
 import type { EditPlanRecordSummary } from "@motionly/shared";
 import { Button } from "@/components/button";
-import { editorApiRequest } from "@/lib/client-api";
+import { editorApiRequest, RevisionConflictError } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
@@ -46,17 +46,30 @@ type CreativeVariantSet = {
   dimensions: CreativeVariantDimension[];
   variants: CreativeVariant[];
   selected_variant_id: string | null;
-  review_status: "needs_review" | "selected";
-  review_only: true;
+  review_status: "needs_review" | "selected" | "applied";
+  review_only: boolean;
+  applied_variant_id: string | null;
+  applied_plan_id: string | null;
+  applied_plan_revision: number | null;
   created_at: string;
 };
 
 type CreativeVariantSetList = { variant_sets: CreativeVariantSet[] };
 
+type CreativeVariantApplyResult = {
+  variant_set: CreativeVariantSet;
+  plan: EditPlanRecordSummary;
+  plan_revision: number;
+  applied_dimension: CreativeVariantDimension;
+  render_enqueued: boolean;
+  render_job_id: string | null;
+};
+
 interface CreativeVariantsPanelProps {
   projectId: string;
   workspaceId: string;
   activePlan: EditPlanRecordSummary | null;
+  onPlanUpdated?: (plan: EditPlanRecordSummary) => void;
 }
 
 const DIMENSIONS: Array<{ id: CreativeVariantDimension; label: string }> = [
@@ -77,7 +90,7 @@ function requestOptions({ workspaceId }: CreativeVariantRequestOptions) {
 }
 
 export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
-  const { activePlan, projectId, workspaceId } = props;
+  const { activePlan, projectId, workspaceId, onPlanUpdated } = props;
   const [dimensions, setDimensions] = useState<CreativeVariantDimension[]>(() =>
     DIMENSIONS.map((dimension) => dimension.id),
   );
@@ -202,16 +215,95 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
     }
   }
 
+  const fetchLatestPlanRevision = useCallback(async (): Promise<
+    number | null
+  > => {
+    if (!activePlan) return null;
+    const refreshed = await editorApiRequest<EditPlanRecordSummary>(
+      `${env.apiBaseUrl}/projects/${projectId}/plans/${activePlan.id}`,
+      {
+        ...requestOptions({ workspaceId }),
+        friendlyError: "Could not reload the current plan revision.",
+      },
+    );
+    return refreshed.revision ?? null;
+  }, [activePlan, projectId, workspaceId]);
+
+  const applyVariant = useCallback(
+    async (variantId: string, render: boolean) => {
+      if (!activeSet || !activePlan) return;
+      setBusy(true);
+      setMessage(null);
+
+      // The apply route creates a NEW plan version from the chosen variant, so
+      // the active plan's revision guards the write. A stale revision returns
+      // the standard 409; handle it the same way the editor does — refetch the
+      // latest revision once and retry the same change (handleConflict/retry).
+      const runApply = async (expectedPlanRevision: number) =>
+        editorApiRequest<CreativeVariantApplyResult>(
+          `${env.apiBaseUrl}/projects/${projectId}/creative-variants/${activeSet.id}/apply`,
+          {
+            ...requestOptions({ workspaceId }),
+            method: "POST",
+            body: {
+              variant_id: variantId,
+              expected_revision: activeSet.revision,
+              expected_plan_revision: expectedPlanRevision,
+              render,
+            },
+            friendlyError: "The variant could not be applied to the edit.",
+          },
+        );
+
+      try {
+        let result: CreativeVariantApplyResult;
+        try {
+          result = await runApply(activePlan.revision ?? 1);
+        } catch (error) {
+          if (!(error instanceof RevisionConflictError)) throw error;
+          // Conflict: reload the latest revision and retry the same apply.
+          const latest =
+            (await fetchLatestPlanRevision()) ?? error.currentRevision;
+          result = await runApply(latest);
+        }
+
+        setSets((current) =>
+          current.map((set) =>
+            set.id === result.variant_set.id ? result.variant_set : set,
+          ),
+        );
+        onPlanUpdated?.(result.plan);
+        setMessage(
+          result.render_enqueued
+            ? "Direction applied and a render was queued for the new version."
+            : "Direction applied. A new plan version is ready to preview.",
+        );
+      } catch (error) {
+        setMessage((error as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      activeSet,
+      activePlan,
+      fetchLatestPlanRevision,
+      onPlanUpdated,
+      projectId,
+      workspaceId,
+    ],
+  );
+
   return (
     <section
       data-testid="creative-variants"
-      className="rounded border-2 border-foreground bg-surface p-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]"
+      className="rounded-neu-xl bg-surface p-4 shadow-neu-raised-lg"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <Sparkles className="size-4 text-primary" strokeWidth={2.5} />
-            <h3 className="text-sm font-black uppercase tracking-tight text-foreground">
+            <Sparkles className="size-4 text-primary" strokeWidth={2} />
+            <h3 className="text-sm font-bold tracking-tight text-foreground">
               Creative variant testing
             </h3>
           </div>
@@ -222,7 +314,7 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
         {sets.length > 1 ? (
           <select
             aria-label="Saved creative test sets"
-            className="min-h-9 max-w-full rounded border-2 border-foreground bg-background px-2 text-xs font-bold"
+            className="min-h-9 max-w-full rounded-neu border border-control bg-surface px-2 text-xs font-semibold text-foreground shadow-neu-inset-sm"
             value={activeSet?.id ?? ""}
             onChange={(event) => setActiveSetId(event.target.value)}
           >
@@ -235,13 +327,14 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
         ) : null}
       </div>
 
-      <p className="mt-3 rounded border border-primary/50 bg-primary/10 px-3 py-2 text-xs font-medium text-foreground">
-        Review-only. This does not change the timeline or render media.
+      <p className="mt-3 rounded-neu bg-surface px-3 py-2 text-xs font-medium text-foreground shadow-neu-inset-sm">
+        Compare directions, then apply one — applying creates a new plan version
+        from that variant (optionally rendering it straight away).
       </p>
 
       <div className="mt-4 space-y-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+          <p className="text-xs font-semibold text-muted-foreground">
             Test dimensions
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -253,10 +346,10 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
                   type="button"
                   aria-pressed={selected}
                   className={cn(
-                    "min-h-9 rounded border-2 px-2.5 text-xs font-bold transition-colors",
+                    "min-h-9 rounded-full px-3 text-xs font-semibold transition-shadow duration-200",
                     selected
-                      ? "border-foreground bg-primary text-primary-foreground"
-                      : "border-foreground bg-background text-foreground hover:bg-muted",
+                      ? "bg-primary text-primary-foreground shadow-neu-glow"
+                      : "bg-surface text-foreground shadow-neu-raised-sm hover:shadow-neu-raised active:shadow-neu-pressed",
                   )}
                   onClick={() => toggleDimension(dimension.id)}
                 >
@@ -267,10 +360,10 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
           </div>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <label className="grid gap-1 text-xs font-bold text-foreground">
+          <label className="grid gap-1 text-xs font-semibold text-foreground">
             Versions to compare
             <select
-              className="min-h-9 rounded border-2 border-foreground bg-background px-2 text-xs font-bold"
+              className="min-h-9 rounded-neu border border-control bg-surface px-2 text-xs font-semibold text-foreground shadow-neu-inset-sm"
               value={variantCount}
               onChange={(event) =>
                 setVariantCount(
@@ -291,7 +384,7 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
           </label>
           <Button
             disabled={busy || !activePlan || !dimensions.length}
-            className="min-h-9 text-xs font-bold"
+            className="min-h-9 text-xs font-semibold"
             onClick={() => void generateSet()}
           >
             {busy ? (
@@ -303,7 +396,7 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
           </Button>
         </div>
         {!activePlan ? (
-          <p className="text-xs font-medium text-destructive">
+          <p className="text-xs font-medium text-danger">
             Create or activate an edit plan before generating comparison
             directions.
           </p>
@@ -321,40 +414,43 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
       {activeSet ? (
         <div className="mt-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-bold text-foreground">
+            <p className="text-xs font-semibold text-foreground">
               {activeSet.name} · plan revision {activeSet.source_plan_revision}
             </p>
-            <span className="text-[11px] font-mono text-muted-foreground">
-              {activeSet.review_status === "selected"
-                ? "preferred direction selected"
-                : "awaiting a preferred direction"}
+            <span className="text-xs font-semibold text-muted-foreground">
+              {activeSet.review_status === "applied"
+                ? "direction applied to the edit"
+                : activeSet.review_status === "selected"
+                  ? "preferred direction selected"
+                  : "awaiting a preferred direction"}
             </span>
           </div>
           <div className="mt-3 grid gap-3 xl:grid-cols-2">
             {activeSet.variants.map((variant) => {
               const selected = activeSet.selected_variant_id === variant.id;
+              const applied = activeSet.applied_variant_id === variant.id;
               return (
                 <article
                   key={variant.id}
                   className={cn(
-                    "rounded border-2 p-3",
+                    "rounded-neu-lg bg-surface p-3",
                     selected
-                      ? "border-primary bg-primary/10"
-                      : "border-foreground bg-background",
+                      ? "shadow-neu-glow ring-2 ring-primary/50"
+                      : "shadow-neu-raised",
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs font-black uppercase text-foreground">
+                      <p className="text-xs font-bold text-foreground">
                         {variant.label}
                       </p>
-                      <p className="mt-0.5 text-[11px] font-mono text-muted-foreground">
+                      <p className="mt-0.5 text-xs text-muted-foreground">
                         Primary:{" "}
                         {variant.primary_dimension.replaceAll("_", " ")}
                       </p>
                     </div>
                     {selected ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-primary">
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
                         <Check className="size-3.5" /> Preferred
                       </span>
                     ) : null}
@@ -386,6 +482,31 @@ export function CreativeVariantsPanel(props: CreativeVariantsPanelProps) {
                   >
                     {selected ? "Preferred direction" : "Mark preferred"}
                   </Button>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Button
+                      variant="primary"
+                      disabled={busy || !activePlan}
+                      aria-label={`Apply ${variant.label} to the edit`}
+                      className="min-h-8 w-full text-xs font-bold"
+                      onClick={() => void applyVariant(variant.id, false)}
+                    >
+                      Apply direction
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={busy || !activePlan}
+                      aria-label={`Apply ${variant.label} and render the new version`}
+                      className="min-h-8 w-full text-xs font-bold"
+                      onClick={() => void applyVariant(variant.id, true)}
+                    >
+                      Apply &amp; render
+                    </Button>
+                  </div>
+                  {applied ? (
+                    <p className="mt-2 text-xs font-semibold text-primary">
+                      Applied to the edit (new plan version).
+                    </p>
+                  ) : null}
                 </article>
               );
             })}

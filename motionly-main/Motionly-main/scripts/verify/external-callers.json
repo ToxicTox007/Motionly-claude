@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "description": "The ONE list of live API routes that no statically-visible in-repo product caller references, each justified. The route-caller check (scripts/verify/route_callers.py, deadcode stage) treats each listed (method, path) as reachable. Two reasons qualify a route for this list: (a) its caller is EXTERNAL to this codebase (health probes, metrics scrape, the payment webhook, the public share/review surface); or (b) a real in-repo product caller reaches it through a code shape the static scanner cannot resolve (an internal control-plane endpoint invoked over a computed base URL, or a route whose final segment is a runtime variable). Anything NOT listed here, NOT referenced by product source (web/worker/renderer/shared/scripts/api orchestration), and NOT in tests/gpu-stage-allowlist.json is real dead product surface and FAILS. Keep this list minimal and reviewed: every entry needs a concrete caller and a reason. Browser specs and the test suites are NOT product callers — a route only a test touches is dead product surface, not an entry here.",
+  "schema": {
+    "entries[]": {
+      "method": "HTTP method (GET/POST/PUT/PATCH/DELETE)",
+      "path": "the exact OpenAPI path template, e.g. /public/reviews/{share_link_id}/resolve",
+      "reason": "who calls it and why no statically-visible in-repo caller exists (required, non-empty)"
+    }
+  },
+  "consumed_by": [
+    "scripts/verify/route_callers.py",
+    "scripts/verify/stages.json#deadcode"
+  ],
+  "entries": [
+    {
+      "method": "GET",
+      "path": "/health/live",
+      "reason": "External: liveness probe. Called by the container orchestrator / load balancer health check and the CDN, not by application code."
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "reason": "External: readiness probe. Called by the orchestrator before routing traffic; no in-repo caller."
+    },
+    {
+      "method": "GET",
+      "path": "/health/dependencies",
+      "reason": "External: operator/monitoring dependency-health probe, polled by external uptime monitors and run books, not application code."
+    },
+    {
+      "method": "GET",
+      "path": "/health/deep",
+      "reason": "External: operator deep health check, invoked manually or by external monitors during incidents; no in-repo caller."
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "reason": "External: Prometheus scrape endpoint. Pulled by the metrics collector configured in infra, not by application code."
+    },
+    {
+      "method": "POST",
+      "path": "/billing/webhooks/mock-gateway",
+      "reason": "External: payment-gateway webhook receiver. Called by the (mock/real) payment gateway over HTTP when a payment settles; the sender is an external service, not in-repo product code."
+    },
+    {
+      "method": "POST",
+      "path": "/public/exports/resolve",
+      "reason": "External: public share surface. Called by the standalone public share/watch page for an unauthenticated viewer resolving a share link; the token-bearing caller is the public viewer's browser, outside the authenticated app."
+    },
+    {
+      "method": "POST",
+      "path": "/public/reviews/{share_link_id}/resolve",
+      "reason": "External: public review surface. Called by an external reviewer's browser opening a share link; no authenticated in-app caller."
+    },
+    {
+      "method": "POST",
+      "path": "/public/reviews/{share_link_id}/comments",
+      "reason": "External: public review surface. An external reviewer posts a comment via the shared review link; caller is outside the authenticated app."
+    },
+    {
+      "method": "POST",
+      "path": "/public/reviews/{share_link_id}/decision",
+      "reason": "External: public review surface. An external reviewer approves/requests-changes via the shared review link; caller is outside the authenticated app."
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project_id}/workflows/{workflow_run_id}/cancel",
+      "reason": "Dynamic dispatch: apps/web/hooks/useWorkflowStatus.ts posts to `.../workflows/${id}/${command}` where command is a WorkflowCommand union; the literal argument \"cancel\" is passed at the call site workflowStatus.runCommand(\"cancel\") in apps/web/components/editor-client.tsx. The static scanner cannot resolve the computed final segment."
+    },
+    {
+      "method": "POST",
+      "path": "/projects/{project_id}/workflows/{workflow_run_id}/retry",
+      "reason": "Dynamic dispatch: apps/web/hooks/useWorkflowStatus.ts posts to `.../workflows/${id}/${command}`; the literal argument \"retry\" is passed at workflowStatus.runCommand(\"retry\") in apps/web/components/editor-client.tsx. The static scanner cannot resolve the computed final segment."
+    }
+  ]
+}

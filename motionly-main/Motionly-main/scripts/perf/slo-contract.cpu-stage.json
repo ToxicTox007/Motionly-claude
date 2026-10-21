@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "contract_revision": "cpu-stage-2026-10-20",
+  "window_seconds": 60,
+  "minimum_samples": {
+    "http_requests": 100,
+    "projects": 20,
+    "uploads": 20,
+    "plans": 20,
+    "render_status": 20,
+    "ops": 20
+  },
+  "thresholds": {
+    "http_error_rate": 0.0,
+    "status_5xx_rate": 0.0,
+    "p95_ms_by_surface": {
+      "projects": 1000,
+      "uploads": 1500,
+      "plans": 2000,
+      "render_status": 750,
+      "ops": 1500
+    },
+    "queue_backpressure_count": 0,
+    "queue_oldest_queued_seconds": 120,
+    "provider_error_rate": 0.0,
+    "provider_p95_latency_ms": 2000,
+    "relative_p95_regression": 1.2,
+    "relative_error_rate_increase": 0.005
+  },
+  "notes": "CPU-stage smoke SLO (Decision D2). The k6 smoke run (scripts/perf/k6-api-workflows.js) runs with K6_STRICT_SLO=1 so any non-2xx fails it, and its summary is adapted (scripts/perf/k6-to-canary.mjs) into the canary shape assert-slo.mjs enforces. http_error_rate and status_5xx_rate are 0: the CPU-stage smoke serves only known-good 2xx workflows, so any 5xx or failed request is a gate failure. Provider and queue surfaces are fixture-backed in the CPU stage; their thresholds match zero error and bounded latency. The window is 60s because the CPU-stage smoke runs a single 1-minute k6 scenario set, not the 5-minute canary window."
+}

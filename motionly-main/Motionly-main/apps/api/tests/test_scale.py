@@ -10,13 +10,14 @@ import pytest
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
 from app.api.plans import _apply_phase5_learning
+from app.api.scale import _profile as _profile
 from app.api.scale import (
-    complete_style_reference,
+    complete_style_reference_multipart,
     create_brand_kit,
     create_style_profile,
     delete_brand_kit,
     get_collaboration_manifest,
-    init_style_reference,
+    init_style_reference_multipart,
     list_brand_kits,
     list_project_scale_resources,
     list_saved_templates,
@@ -33,6 +34,7 @@ from app.repositories.scale import (
     SupabaseScaleRepository,
 )
 from app.repositories.uploads import InMemoryUploadRepository
+from app.schemas.media_uploads import MediaUploadCompleteRequest
 from app.schemas.plans import PlanCreateRequest
 from app.schemas.scale import (
     BrandKitCreateRequest,
@@ -63,6 +65,44 @@ from app.services.scale import (
 )
 from app.services.storage import StorageSigner
 from app.services.storage_quota import StorageQuotaService
+
+# Task 17: style references upload only through the resumable multipart path.
+# These thin adapters preserve the legacy init/complete call shape used by the
+# tests below, mapping it onto the multipart handlers (the one-piece
+# init_style_reference / complete_style_reference endpoints are gone).
+
+
+async def init_style_reference(*, project_id, profile_id, payload, actor, request):
+    initialized = await init_style_reference_multipart(
+        project_id=project_id,
+        profile_id=profile_id,
+        payload=payload,
+        actor=actor,
+        request=request,
+    )
+    return SimpleNamespace(
+        profile=initialized.profile,
+        reference_id=initialized.reference_id,
+        session_id=initialized.session.session_id,
+        signed_upload_url=initialized.session.pending_part_urls[0].upload_url,
+    )
+
+
+async def complete_style_reference(*, project_id, profile_id, payload, actor, request):
+    profile = _profile(request, profile_id=profile_id, workspace_id=actor.workspace_id)
+    reference = next(
+        item
+        for item in profile.payload.get("references", [])
+        if item.get("id") == str(payload.reference_id)
+    )
+    return await complete_style_reference_multipart(
+        project_id=project_id,
+        profile_id=profile_id,
+        session_id=UUID(str(reference["media_upload_session_id"])),
+        payload=MediaUploadCompleteRequest(),
+        actor=actor,
+        request=request,
+    )
 
 
 def test_scale_repository_and_queue_persist_phase5_jobs() -> None:
@@ -362,6 +402,46 @@ def test_select_audio_stem_persists_verified_no_vocals_with_cas(tmp_path: Path) 
     ] == ("no_vocals")
 
 
+def test_selected_stem_flows_into_the_render_manifest(tmp_path: Path) -> None:
+    """Task 31: the stem a user picks in the Audio tab is the stem the render uses.
+
+    This proves the full capability chain, not just the write: selecting
+    ``no_vocals`` through the API route, then building the render source stems
+    with the same repository/storage, surfaces ``active == "no_vocals"`` in the
+    render manifest so FFmpeg/Remotion render with the chosen instrumental stem.
+    """
+    from app.api.renders import _source_stems_for_render
+
+    actor, project_id, repository, record, _storage, request = _ready_stem_selection_context(
+        tmp_path
+    )
+
+    # 1. The user chooses the instrumental (no_vocals) stem in the Audio tab.
+    asyncio.run(
+        select_audio_stem(
+            project_id=project_id,
+            resource_id=record.id,
+            payload=StemSelectionUpdateRequest(active="no_vocals", expected_revision=1),
+            actor=actor,
+            request=request,
+        )
+    )
+
+    # 2. A render built from the same workspace/project resolves source stems.
+    source_stems = asyncio.run(
+        _source_stems_for_render(
+            request=request,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+        )
+    )
+
+    # 3. The render manifest carries the chosen stem, not the default vocals.
+    assert source_stems is not None
+    assert source_stems["active"] == "no_vocals"
+    assert source_stems["no_vocals"] == record.result["no_vocals"]
+
+
 def test_select_audio_stem_rejects_missing_selected_artifact(tmp_path: Path) -> None:
     actor, project_id, _repository, record, storage, request = _ready_stem_selection_context(
         tmp_path
@@ -548,7 +628,10 @@ def test_model_training_uses_frozen_consented_dataset_and_promoted_memory() -> N
     assert completed.status == ScaleResourceStatus.READY
     assert completed.result["preferences"]["cuts"] == {"pace": "fast"}
     assert completed.result["dataset_id"] == str(dataset.id)
-    assert "Consented editorial memory provenance" in adapted.prompt
+    # Task 29: the prompt now carries structured preference direction derived
+    # from the promoted memory (not just an opaque provenance hash).
+    assert "Consented editorial memory" in adapted.prompt
+    assert "cut pace fast" in adapted.prompt
 
 
 def test_collaboration_manifest_rejects_stale_revision() -> None:
@@ -715,6 +798,39 @@ def test_production_stems_fail_closed_before_direct_separator(tmp_path) -> None:
         )
 
     assert exc_info.value.code == "stem_gateway_route_required"
+
+
+def test_fixture_stem_separation_marks_result_as_test_stems(monkeypatch, tmp_path) -> None:
+    """Task 31: non-production stems come from the labelled FixtureStemSeparator,
+    so the result records ``stem_provider == "fixture"`` and the Audio tab can
+    show the fixture registry's 'Test stems' badge next to the stem choice."""
+    uploads, record, settings = _stem_context(tmp_path)
+    settings.app_env = "test"
+
+    def fake_materialize(**_kwargs):
+        return LocalObjectStorage(root=tmp_path).ensure_object(
+            bucket=uploads.get_active_upload(
+                project_id=record.project_id,
+                workspace_id=record.workspace_id,
+            ).storage_bucket,
+            path=uploads.get_active_upload(
+                project_id=record.project_id,
+                workspace_id=record.workspace_id,
+            ).storage_path,
+        )
+
+    monkeypatch.setattr("app.services.scale.materialize_upload_source", fake_materialize)
+
+    result = _separate_stems(
+        record=record,
+        settings=settings,
+        upload_repository=uploads,
+        stem_separator=FixtureStemSeparator(),
+    )
+
+    assert result["stem_provider"] == "fixture"
+    assert result["active"] == "vocals"
+    assert "model_gateway" not in result
 
 
 def test_stem_cleanup_only_removes_motionly_temp_directory(tmp_path) -> None:
@@ -1137,7 +1253,6 @@ def test_style_training_worker_rechecks_active_durable_references() -> None:
 
 def test_style_multipart_mutations_reject_foreign_sessions_before_side_effects() -> None:
     from app.api.scale import (
-        abort_style_reference_multipart,
         confirm_style_reference_multipart_part,
     )
     from app.schemas.media_uploads import PartCompleteRequest
@@ -1180,17 +1295,6 @@ def test_style_multipart_mutations_reject_foreign_sessions_before_side_effects()
                 session_id=foreign_session.id,
                 part_number=1,
                 payload=PartCompleteRequest(),
-                actor=actor,
-                request=request,
-            )
-        )
-    assert error.value.code == "media_upload_session_not_found"
-    with pytest.raises(ApiError) as error:
-        asyncio.run(
-            abort_style_reference_multipart(
-                project_id=project_id,
-                profile_id=profile.id,
-                session_id=foreign_session.id,
                 actor=actor,
                 request=request,
             )

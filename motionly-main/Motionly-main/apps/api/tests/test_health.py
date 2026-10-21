@@ -83,7 +83,6 @@ def test_renderer_readiness_requires_worker_queue_in_production() -> None:
         update={
             "app_env": "production",
             "redis_url": None,
-            "render_execute_ffmpeg": True,
             "remotion_enabled": False,
         }
     )

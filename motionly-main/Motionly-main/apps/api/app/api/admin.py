@@ -112,12 +112,7 @@ async def ops_overview(
         health={
             "api": "ok",
             "worker": "ok" if getattr(settings, "worker_api_token", None) else "degraded",
-            "renderer": (
-                "ok"
-                if getattr(settings, "render_execute_ffmpeg", True)
-                or getattr(settings, "remotion_enabled", False)
-                else "degraded"
-            ),
+            "renderer": "ok",
             "redis": "configured" if getattr(settings, "redis_url", None) else "in_memory",
             "supabase": (
                 "configured"

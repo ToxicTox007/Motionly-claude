@@ -56,6 +56,7 @@ def _production_settings(*, process_role: str = "api", **updates):
         "pexels_api_key": "pexels-key",
         "pixabay_api_key": "pixabay-key",
         "billing_enabled": False,
+        "billing_mode": "disabled",
         "force_local_media_storage": False,
     }
     values.update(updates)
@@ -220,6 +221,19 @@ def test_production_worker_requires_worker_token_without_admin_secret() -> None:
         _validate_production_settings(settings.model_copy(update={"worker_api_token": None}))
 
 
+def test_production_requires_an_explicit_billing_mode() -> None:
+    """B17: production must state its billing posture; there is no default."""
+    with pytest.raises(RuntimeError, match="BILLING_MODE is required"):
+        _validate_production_settings(_production_settings(billing_mode=""))
+
+    with pytest.raises(RuntimeError, match="unsupported production value"):
+        _validate_production_settings(_production_settings(billing_mode="stripe"))
+
+    # Both supported values start cleanly.
+    _validate_production_settings(_production_settings(billing_mode="disabled"))
+    _validate_production_settings(_production_settings(billing_mode="demo"))
+
+
 def test_api_security_headers_are_applied_at_runtime() -> None:
     app = FastAPI()
     app.middleware("http")(security_headers_middleware)
@@ -240,21 +254,26 @@ def test_api_security_headers_are_applied_at_runtime() -> None:
 
 
 def test_worker_credentials_are_structurally_separated_in_runtime_config() -> None:
+    # Task 32 removed the dead /internal/jobs run route and all /internal/renders
+    # routes. internal_jobs.py now holds only the shared require_worker_token
+    # dependency (no APIRouter); the in-process job engine moved to the non-route
+    # module app/services/job_engine.py. The remaining internal control-plane
+    # surface is batches/retention/workflows/operations.
     internal_route_paths = list((ROOT / "apps/api/app/api").glob("internal_*.py"))
     internal_route_paths.append(ROOT / "apps/api/app/api/operations.py")
     internal_route_sources = {
-        path.name: path.read_text(encoding="utf-8")
-        for path in internal_route_paths
-        if "APIRouter" in path.read_text(encoding="utf-8")
+        path.name: path.read_text(encoding="utf-8") for path in internal_route_paths
     }
     assert set(internal_route_sources) == {
         "internal_batches.py",
         "internal_jobs.py",
-        "internal_renders.py",
         "internal_retention.py",
         "internal_workflows.py",
         "operations.py",
     }
+    # The dead HTTP surfaces are gone; the job engine is a non-route module.
+    assert not (ROOT / "apps/api/app/api/internal_renders.py").exists()
+    assert "APIRouter" not in internal_route_sources["internal_jobs.py"]
     for relative, source in internal_route_sources.items():
         assert "require_worker_token" in source, relative
         assert "admin_api_token" not in source, relative
@@ -274,13 +293,18 @@ def test_worker_credentials_are_structurally_separated_in_runtime_config() -> No
     assert "admin_api_token" in admin_source
     assert "constant_time_token_matches" in admin_source
 
-    for relative in (
-        "apps/worker/src/queue-common.mjs",
-        "apps/api/worker-bridge/queue-common.mjs",
-    ):
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        assert 'return env("WORKER_API_TOKEN");' in source
-        assert "ADMIN_API_TOKEN" not in source
+    # The worker queue bridge is a single source (apps/worker/src); the API
+    # control-plane copy is produced by the Dockerfiles at build time (Task 32).
+    source = (ROOT / "apps/worker/src/queue-common.mjs").read_text(encoding="utf-8")
+    assert 'return env("WORKER_API_TOKEN");' in source
+    assert "ADMIN_API_TOKEN" not in source
+    assert not (ROOT / "apps/api/worker-bridge/queue-common.mjs").exists()
+    for dockerfile in ("Dockerfile", "apps/api/Dockerfile"):
+        text = (ROOT / dockerfile).read_text(encoding="utf-8")
+        assert (
+            "COPY apps/worker/src/queue-common.mjs ./apps/api/worker-bridge/queue-common.mjs"
+            in text
+        )
 
     compose = (ROOT / "infra/docker-compose.gpu.yml").read_text(encoding="utf-8")
     shared_worker_env = compose.split("x-media-environment:", 1)[1].split("x-media-volumes:", 1)[0]

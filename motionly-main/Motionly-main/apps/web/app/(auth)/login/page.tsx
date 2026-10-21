@@ -17,7 +17,7 @@ function SubmitButton() {
     <button
       type="submit"
       disabled={pending}
-      className="mt-6 inline-flex h-11 w-full items-center justify-center gap-2 rounded border-2 border-foreground bg-primary text-sm font-black uppercase text-primary-foreground shadow-brutal transition-all duration-[100ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none disabled:shadow-none focus:outline-none"
+      className="mt-6 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-neu bg-primary text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed active:brightness-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm focus:outline-none"
     >
       {pending ? (
         <>
@@ -69,15 +69,13 @@ function LoginFormContent() {
   };
 
   const errorMessage =
-    errorParam === "email_not_confirmed"
-      ? "Confirm your email address before logging in."
-      : errorParam === "rate_limited"
-        ? "Too many attempts. Please try again shortly."
-        : errorParam === "invalid_credentials"
-          ? "Invalid email or password. Please try again."
-          : errorParam
-            ? "We could not complete that sign-in. Try again."
-            : null;
+    errorParam === "rate_limited"
+      ? "Too many attempts. Please try again shortly."
+      : errorParam === "invalid_credentials"
+        ? "Invalid email or password. Please try again."
+        : errorParam
+          ? "We could not complete that sign-in. Try again."
+          : null;
 
   return (
     <form
@@ -88,7 +86,7 @@ function LoginFormContent() {
     >
       {/* Logo */}
       <Link href="/" className="group mb-8 inline-flex items-center gap-2.5">
-        <div className="flex size-9 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal-sm">
+        <div className="flex size-9 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
           <Image
             src="/icon.svg"
             alt="Motionly"
@@ -98,22 +96,18 @@ function LoginFormContent() {
             priority
           />
         </div>
-        <span className="text-base font-black uppercase text-foreground">
-          Motionly
-        </span>
+        <span className="text-base font-bold text-foreground">Motionly</span>
       </Link>
 
-      <p className="text-xs font-black uppercase tracking-wider text-muted-foreground font-mono">
-        Welcome back
-      </p>
-      <h1 className="mt-2 text-3xl font-black uppercase tracking-tight text-foreground">
+      <p className="text-xs font-semibold text-primary">Welcome back</p>
+      <h1 className="mt-2 text-3xl font-bold tracking-tight text-foreground">
         Log in to Motionly
       </h1>
 
       {/* Notices & Errors */}
-      {noticeParam === "check_email" && (
+      {noticeParam === "account_created" && (
         <Alert tone="info" className="mt-5">
-          Check your email to confirm the account, then log in.
+          Your account is ready. Log in to continue.
         </Alert>
       )}
       {errorMessage && (
@@ -128,7 +122,7 @@ function LoginFormContent() {
       <div className="mt-6 space-y-1.5">
         <label
           htmlFor="email"
-          className="block text-xs font-black uppercase tracking-wider text-foreground"
+          className="block text-xs font-semibold text-foreground"
         >
           Email
         </label>
@@ -156,7 +150,7 @@ function LoginFormContent() {
       <div className="mt-4 space-y-1.5">
         <label
           htmlFor="password"
-          className="block text-xs font-black uppercase tracking-wider text-foreground"
+          className="block text-xs font-semibold text-foreground"
         >
           Password
         </label>
@@ -185,11 +179,20 @@ function LoginFormContent() {
 
       <SubmitButton />
 
-      <p className="mt-5 text-center text-sm text-muted-foreground font-mono">
+      <p className="mt-4 text-center text-sm text-muted-foreground">
+        <Link
+          href="/forgot-password"
+          className="inline-flex min-h-10 items-center font-semibold text-primary hover:underline"
+        >
+          Forgot password?
+        </Link>
+      </p>
+
+      <p className="mt-5 text-center text-sm text-muted-foreground">
         Need an account?{" "}
         <Link
-          href="/signup"
-          className="inline-flex min-h-10 items-center font-bold text-foreground hover:underline"
+          href={`/signup?next=${encodeURIComponent(nextParam)}`}
+          className="inline-flex min-h-10 items-center font-semibold text-primary hover:underline"
         >
           Sign up
         </Link>
@@ -200,12 +203,15 @@ function LoginFormContent() {
 
 export default function LoginPage() {
   return (
-    <main className="min-h-screen grid lg:grid-cols-2">
+    <main className="grid min-h-screen bg-background lg:grid-cols-2">
       <PageTitle title="Log in" />
-      {/* Left decorative panel */}
-      <div className="relative hidden flex-col items-center justify-center overflow-hidden border-r-4 border-foreground bg-surface lg:flex">
-        <div className="relative text-center px-12">
-          <div className="mb-6 inline-flex size-16 items-center justify-center rounded border-2 border-foreground bg-primary shadow-brutal">
+      {/* Left showcase panel (decorative) */}
+      <div
+        aria-hidden="true"
+        className="relative m-4 hidden flex-col items-center justify-center overflow-hidden rounded-neu-2xl bg-surface p-12 shadow-neu-raised-lg lg:flex"
+      >
+        <div className="relative text-center">
+          <div className="mb-6 inline-flex size-16 items-center justify-center rounded-neu-md bg-primary text-primary-foreground shadow-neu-glow">
             <Image
               src="/icon.svg"
               alt=""
@@ -214,37 +220,30 @@ export default function LoginPage() {
               className="size-12"
             />
           </div>
-          <h2 className="text-3xl font-black uppercase tracking-tight text-foreground">
+          <h2 className="text-3xl font-bold tracking-tight text-foreground">
             Make polished reels.
           </h2>
-          <p className="mt-3 text-muted-foreground max-w-xs font-mono text-xs">
-            Upload a clip. AI edits it. You post.
+          <p className="mx-auto mt-3 max-w-xs text-sm font-medium text-muted-foreground">
+            Upload a clip. AI edits it. You download or share.
           </p>
           {/* Fake editor preview */}
-          <div className="mt-10 w-[260px] rounded border-2 border-foreground bg-background overflow-hidden shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] mx-auto text-left">
-            <div className="flex h-8 items-center gap-1.5 border-b-2 border-foreground px-3 bg-surface-elevated">
-              {["bg-red-400", "bg-amber-400", "bg-green-400"].map((c, i) => (
-                <div
-                  key={i}
-                  className={`size-2 rounded border border-foreground ${c}`}
-                />
+          <div className="mx-auto mt-10 w-[260px] overflow-hidden rounded-neu-lg bg-surface text-left shadow-neu-raised">
+            <div className="flex h-9 items-center gap-1.5 rounded-t-neu-lg bg-muted px-3 shadow-neu-inset-sm">
+              {["bg-danger", "bg-warning", "bg-success"].map((c, i) => (
+                <div key={i} className={`size-2 rounded-full ${c}`} />
               ))}
-              <span className="ml-auto text-[9px] font-bold text-muted-foreground font-mono">
+              <span className="ml-auto text-[10px] font-semibold text-muted-foreground">
                 Motionly
               </span>
             </div>
-            <div className="p-3 space-y-2">
+            <div className="space-y-2 p-3">
               {["AI Timeline", "Captions", "B-roll", "Music", "Export"].map(
                 (item, i) => (
                   <div
                     key={item}
-                    className={`h-7 rounded border-2 border-foreground flex items-center px-2.5 ${i === 0 ? "bg-primary text-primary-foreground shadow-[1px_1px_0px_#000]" : "bg-surface"}`}
+                    className={`flex h-8 items-center rounded-neu px-2.5 ${i === 0 ? "bg-primary text-primary-foreground shadow-neu-glow" : "bg-surface text-muted-foreground shadow-neu-raised-sm"}`}
                   >
-                    <span
-                      className={`text-[9px] font-bold ${i === 0 ? "text-primary-foreground" : "text-muted-foreground"}`}
-                    >
-                      {item}
-                    </span>
+                    <span className="text-[10px] font-semibold">{item}</span>
                     {i === 0 && (
                       <PixelIcon name="play" className="ml-auto size-3" />
                     )}
@@ -257,10 +256,10 @@ export default function LoginPage() {
       </div>
 
       {/* Right: form */}
-      <div className="flex items-center justify-center px-6 py-16 sm:px-8 bg-background">
+      <div className="flex items-center justify-center bg-background px-6 py-16 sm:px-8">
         <Suspense
           fallback={
-            <div className="flex size-16 items-center justify-center rounded border-2 border-foreground bg-surface shadow-[3px_3px_0px_#000]">
+            <div className="flex size-16 items-center justify-center rounded-neu-md bg-surface shadow-neu-raised">
               <Loader2 className="size-6 animate-spin text-primary" />
             </div>
           }

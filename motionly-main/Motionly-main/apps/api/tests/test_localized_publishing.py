@@ -551,7 +551,6 @@ def test_render_requires_approval_then_uses_reviewed_locale_copy() -> None:
         export_storage_bucket="exports",
         export_signed_url_ttl_seconds=300,
         should_complete_renders_synchronously=False,
-        render_execute_ffmpeg=False,
         media_work_dir=".motionly/test-storage",
         remotion_enabled=False,
     )

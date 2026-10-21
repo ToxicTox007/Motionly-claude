@@ -171,11 +171,11 @@ export function RepurposePanel({
   }
 
   return (
-    <div className="mt-4 space-y-4 border-t-2 border-foreground/20 pt-4">
+    <div className="mt-4 space-y-4 border-t border-hairline pt-4">
       <div className="space-y-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Label className="mb-0">Repurpose this source</Label>
-          <span className="rounded border border-foreground/40 px-2 py-0.5 font-mono text-[10px] font-bold text-muted-foreground">
+          <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold tabular-nums text-muted-foreground shadow-neu-inset-sm">
             {targets.length}/6 outputs
           </span>
         </div>
@@ -203,14 +203,14 @@ export function RepurposePanel({
                     : [...current, createRepurposeTarget(profile.platform)],
                 );
               }}
-              className={`flex min-h-[48px] items-center justify-between gap-3 rounded-md border-2 px-3 py-2 text-left text-xs font-bold transition-all shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-45 ${
+              className={`flex min-h-[48px] items-center justify-between gap-3 rounded-neu px-3 py-2 text-left text-xs font-semibold transition-shadow duration-200 disabled:cursor-not-allowed disabled:opacity-45 ${
                 selected
-                  ? "border-foreground bg-primary text-primary-foreground"
-                  : "border-foreground/30 bg-surface text-foreground hover:border-foreground"
+                  ? "bg-primary text-primary-foreground shadow-neu-glow"
+                  : "bg-surface text-foreground shadow-neu-raised-sm hover:shadow-neu-raised active:shadow-neu-pressed"
               }`}
             >
               <span>{profile.label}</span>
-              <span className="font-mono text-[10px]">
+              <span className="text-xs">
                 {selected ? "Selected" : profile.durationRecommendation}
               </span>
             </button>
@@ -229,19 +229,21 @@ export function RepurposePanel({
             return (
               <article
                 key={target.platform}
-                className="space-y-3 rounded-md border-2 border-foreground bg-muted/35 p-3"
+                className="space-y-3 rounded-neu-lg bg-surface p-3 shadow-neu-raised"
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <h4 className="text-sm font-black">{profile.label}</h4>
-                    <p className="font-mono text-[10px] text-muted-foreground">
+                    <h4 className="text-sm font-bold text-foreground">
+                      {profile.label}
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
                       {profile.aspect} · {profile.durationRecommendation}
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={() => onPreview(target)}
-                    className="min-h-9 rounded border-2 border-foreground bg-surface px-2.5 text-[10px] font-black uppercase shadow-[1px_1px_0px_#000] transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none dark:shadow-[1px_1px_0px_#fff]"
+                    className="min-h-9 rounded-neu bg-surface px-2.5 text-xs font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                   >
                     Preview crop
                   </button>
@@ -262,14 +264,14 @@ export function RepurposePanel({
                       }
                       options={durationOptions}
                     />
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       Recommended: {profile.durationRecommendation}
                     </p>
                   </div>
-                  <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border-2 border-foreground/40 bg-surface px-3 text-xs font-bold">
+                  <label className="flex min-h-11 items-center justify-between gap-3 rounded-neu border border-control bg-surface px-3 text-xs font-semibold shadow-neu-inset-sm">
                     <span>
                       <span className="block">Burn captions</span>
-                      <span className="block text-[10px] font-medium text-muted-foreground">
+                      <span className="block text-xs font-medium text-muted-foreground">
                         {profile.captionGuidance}
                       </span>
                     </span>
@@ -302,9 +304,9 @@ export function RepurposePanel({
                         hookText: event.target.value,
                       }))
                     }
-                    className="flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface px-3 text-xs font-medium text-foreground outline-none transition-shadow focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff]"
+                    className="flex min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm outline-none focus:border-focus focus:ring-4 focus:ring-primary/30"
                   />
-                  <p className="text-[10px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Rendered as an opening text layer for the first three
                     seconds.
                   </p>
@@ -328,12 +330,12 @@ export function RepurposePanel({
                       }
                       options={fitModeOptions}
                     />
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       {profile.cropGuidance}
                     </p>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <label className="space-y-1 text-[10px] font-bold">
+                    <label className="space-y-1 text-xs font-semibold">
                       Horizontal crop {Math.round(target.framing.crop.x * 100)}%
                       <input
                         type="range"
@@ -357,7 +359,7 @@ export function RepurposePanel({
                         className="w-full accent-primary"
                       />
                     </label>
-                    <label className="space-y-1 text-[10px] font-bold">
+                    <label className="space-y-1 text-xs font-semibold">
                       Vertical crop {Math.round(target.framing.crop.y * 100)}%
                       <input
                         type="range"
@@ -387,7 +389,7 @@ export function RepurposePanel({
                 {target.includeCaptions && !captionTrackId ? (
                   <p
                     role="alert"
-                    className="rounded border border-amber-500/70 bg-amber-500/10 p-2 text-[10px] font-bold text-amber-800 dark:text-amber-200"
+                    className="rounded-neu bg-warning/10 p-2 text-xs font-semibold text-warning shadow-neu-inset-sm"
                   >
                     Generate captions before creating this captioned output, or
                     turn captions off for this platform.
@@ -398,7 +400,7 @@ export function RepurposePanel({
           })}
         </div>
       ) : (
-        <p className="rounded-md border-2 border-dashed border-foreground/40 p-4 text-center text-xs text-muted-foreground">
+        <p className="rounded-neu-lg border border-dashed border-primary bg-surface p-4 text-center text-xs text-muted-foreground shadow-neu-inset-sm">
           Select at least one platform to create tailored outputs.
         </p>
       )}

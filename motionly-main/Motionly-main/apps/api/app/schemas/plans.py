@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.captions import CaptionPresetKey
 from app.schemas.request_body import JsonStringBodyMixin
 from app.services.media_url_policy import sanitize_manual_element_properties
 
@@ -222,6 +223,15 @@ class TimelineDocument(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PlanOpeningFrame(BaseModel):
+    """The opening-frame direction applied to a plan (hook thumbnail intent)."""
+
+    label: str = Field(min_length=1, max_length=80)
+    start_ms: int = Field(ge=0)
+    frame_direction: str = Field(min_length=1, max_length=180)
+    thumbnail_direction: str = Field(min_length=1, max_length=180)
+
+
 class EditPlan(BaseModel):
     schema_version: int = EDIT_PLAN_SCHEMA_VERSION
     prompt_version: str = EDIT_PLAN_PROMPT_VERSION
@@ -240,6 +250,11 @@ class EditPlan(BaseModel):
     risk_flags: list[str] = Field(default_factory=list, max_length=10)
     manual_elements: list[ManualElement] = Field(default_factory=list, max_length=200)
     timeline: TimelineDocument | None = None
+    # Applied creative-direction fields (Task 30). Optional + defaulted so every
+    # existing persisted plan stays valid; set when a creative variant is applied.
+    hook_text: str | None = Field(default=None, max_length=180)
+    caption_preset: CaptionPresetKey | None = None
+    opening_frame: PlanOpeningFrame | None = None
 
 
 class PlanCreateRequest(JsonStringBodyMixin, BaseModel):
@@ -349,12 +364,6 @@ class PlanListResponse(BaseModel):
 
 class PlanGetResponse(BaseModel):
     plan: EditPlanResponse
-
-
-class PlanActivateResponse(BaseModel):
-    plan: EditPlanResponse
-    revision: int | None = None
-    status: Literal["active"] = "active"
 
 
 class PlanCutsUpdateRequest(JsonStringBodyMixin, BaseModel):

@@ -116,9 +116,6 @@ def _runner():
 
 
 def _serve() -> None:
-    import app
-    print(f"DEBUG: app.__file__ = {app.__file__}", flush=True)
-    print(f"DEBUG: sys.path = {sys.path}", flush=True)
     execute = _runner()
     print("VISUAL_DEBUG executor_ready", file=sys.stderr, flush=True)
     for line in sys.stdin:

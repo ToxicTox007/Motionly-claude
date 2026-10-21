@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "approved": true,
+  "decision": "D3",
+  "approved_on": "2026-10-20",
+  "description": "Music licence allow-list for the import tool, approved at Decision D3 (2026-10-20): CC0 1.0, or public domain only when BOTH the composition and the recording are independently verified. The importer enforces this list: a track whose licence identifier is not present, or whose composition OR recording rights are not fully covered, is refused. Attribution (CC-BY), non-commercial (NC), no-derivatives (ND) and share-alike (SA) licences are excluded because the rendered output is a derivative commercial work distributed without per-track attribution. Approving the policy does not approve any track: each real track is imported only after its own sign-off (music-starter-signoff.md).",
+  "allowed": [
+    {
+      "id": "CC0-1.0",
+      "version": "1.0",
+      "name": "Creative Commons Zero v1.0 Universal",
+      "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "requires_both_sides_public_domain": false
+    },
+    {
+      "id": "PD",
+      "version": "n/a",
+      "name": "Public Domain",
+      "url": "https://en.wikipedia.org/wiki/Public_domain",
+      "requires_both_sides_public_domain": true
+    }
+  ],
+  "excluded": [
+    {
+      "id": "CC-BY-4.0",
+      "reason": "attribution required; rendered output carries no per-track attribution"
+    },
+    {
+      "id": "CC-BY-SA-4.0",
+      "reason": "share-alike would force the output licence"
+    },
+    {
+      "id": "CC-BY-NC-4.0",
+      "reason": "non-commercial excludes paid/commercial renders"
+    },
+    {
+      "id": "CC-BY-ND-4.0",
+      "reason": "no-derivatives forbids mixing into an edit"
+    }
+  ]
+}

@@ -180,3 +180,100 @@ def test_supabase_upload_ttl_is_truthful_and_cleanup_outlives_it(
 
     assert signed.expires_in_seconds == 7200
     assert SIGNED_UPLOAD_CLEANUP_GRACE_SECONDS > signed.expires_in_seconds
+
+
+def _signed_upload(tmp_path: Path, content: bytes, signed_url: str, monkeypatch, observed):
+    import app.services.worker_media as worker_media
+
+    workspace_id, project_id, reference_id = uuid4(), uuid4(), uuid4()
+    monkeypatch.setenv("WORKER_API_BASE_URL", "http://api:8000")
+    monkeypatch.setenv("WORKER_API_TOKEN", "worker-secret")
+    monkeypatch.setenv("SUPABASE_URL", "http://supabase-gateway:8000")
+
+    class SignResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"signed_urls": {str(reference_id): signed_url}}
+
+    monkeypatch.setattr(worker_media.httpx, "post", lambda *a, **k: SignResponse())
+
+    class StreamResponse:
+        status_code = 200
+        headers = {"content-length": str(len(content))}
+
+        @staticmethod
+        def iter_bytes(*, chunk_size):
+            yield content
+
+    @contextmanager
+    def internal_stream(method, url, *, timeout, follow_redirects):
+        observed.update(internal=url, follow_redirects=follow_redirects)
+        yield StreamResponse()
+
+    @contextmanager
+    def public_stream(url, *, timeout):
+        observed["public"] = url
+        yield StreamResponse()
+
+    monkeypatch.setattr(worker_media.httpx, "stream", internal_stream)
+    monkeypatch.setattr(worker_media, "safe_http_stream", public_stream)
+    return UploadRecord(
+        id=uuid4(),
+        project_id=project_id,
+        workspace_id=workspace_id,
+        storage_bucket="raw-uploads",
+        storage_path=f"workspaces/{workspace_id}/projects/{project_id}/raw/source.mp4",
+        original_filename="source.mp4",
+        mime_type="video/mp4",
+        file_size_bytes=len(content),
+        status=UploadStatus.READY,
+        source_object_reference_id=reference_id,
+        verified_size_bytes=len(content),
+        verified_sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+
+@pytest.mark.parametrize("app_env", ["production", "cpu-stage"])
+def test_worker_fetches_links_signed_on_the_configured_internal_storage_origin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, app_env: str
+) -> None:
+    """The API signs worker downloads on SUPABASE_URL (the private gateway, plain
+    HTTP inside the network), in production as on the CPU stage. Only that exact
+    origin is trusted; redirects are never followed from it."""
+    monkeypatch.setenv("APP_ENV", app_env)
+    content = b"internal source bytes"
+    observed: dict[str, object] = {}
+    url = "http://supabase-gateway:8000/storage/v1/object/sign/raw-uploads/s.mp4?token=t"
+    upload = _signed_upload(tmp_path, content, url, monkeypatch, observed)
+
+    path = materialize_upload_source(upload=upload, storage=LocalObjectStorage(root=tmp_path))
+
+    assert path.read_bytes() == content
+    assert observed["internal"] == url
+    assert observed["follow_redirects"] is False
+    assert "public" not in observed
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://10.0.0.5/storage/v1/object/sign/raw-uploads/s.mp4?token=t",
+        "http://supabase-gateway:8001/storage/v1/object/sign/raw-uploads/s.mp4",
+        "http://user:pw@supabase-gateway:8000/storage/v1/object/sign/x",
+        "ftp://supabase-gateway:8000/x",
+    ],
+)
+def test_worker_refuses_signed_links_off_the_internal_origin_unless_https(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, url: str
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    observed: dict[str, object] = {}
+    upload = _signed_upload(tmp_path, b"x", url, monkeypatch, observed)
+
+    with pytest.raises(ApiError) as exc_info:
+        materialize_upload_source(upload=upload, storage=LocalObjectStorage(root=tmp_path))
+
+    assert exc_info.value.code == "worker_media_signing_invalid"
+    assert observed == {}

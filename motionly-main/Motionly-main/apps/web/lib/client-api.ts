@@ -73,7 +73,7 @@ export class RevisionConflictError extends EditorApiError {
       message:
         "Your changes conflict with a newer version. Please reload or force save.",
       status: 409,
-      code: "revision_conflict",
+      code: "collaboration_revision_conflict",
       requestId,
       technicalMessage: `Expected revision ${expectedRevision}, server is at ${currentRevision}`,
     });
@@ -139,11 +139,15 @@ export async function editorApiRequest<T>(
       | { code?: string; message?: string; request_id?: string }
       | undefined;
 
-    // Handle 409 revision conflict specifically
-    if (
+    // Handle 409 revision conflict specifically. The API normalizes every
+    // plan conflict to the standard envelope with code
+    // "collaboration_revision_conflict"; the flat legacy string is still
+    // accepted for forward/backward compatibility during rollout.
+    const isRevisionConflict =
       response.status === 409 &&
-      (payload as any)?.error === "revision_conflict"
-    ) {
+      (error?.code === "collaboration_revision_conflict" ||
+        (payload as any)?.error === "revision_conflict");
+    if (isRevisionConflict) {
       throw new RevisionConflictError({
         expectedRevision: (payload as any)?.expected_revision ?? 0,
         currentRevision: (payload as any)?.current_revision ?? 0,

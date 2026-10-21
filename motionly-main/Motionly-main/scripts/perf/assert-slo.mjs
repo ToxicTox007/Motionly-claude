@@ -2,30 +2,36 @@
 
 import { readFile } from "node:fs/promises";
 
-const args = parseArgs(process.argv.slice(2));
-if (!args.contract || !args.canary) {
-  throw new Error(
-    "Usage: assert-slo.mjs --contract <path> --canary <path> [--baseline <path>] [--revision <sha>] [--mode observe|enforce]",
-  );
-}
-const mode = args.mode || "enforce";
-if (!new Set(["observe", "enforce"]).has(mode)) {
-  throw new Error("--mode must be observe or enforce");
+if (import.meta.url === `file://${process.argv[1]}`) {
+  await main();
 }
 
-const contract = await readJson(args.contract, "SLO contract");
-const canary = await readJson(args.canary, "canary metrics");
-const baseline = args.baseline
-  ? await readJson(args.baseline, "baseline metrics")
-  : null;
-const decision = evaluate({
-  contract,
-  canary,
-  baseline,
-  revision: args.revision,
-});
-console.log(JSON.stringify({ mode, ...decision }, null, 2));
-if (!decision.passed && mode === "enforce") process.exitCode = 1;
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (!args.contract || !args.canary) {
+    throw new Error(
+      "Usage: assert-slo.mjs --contract <path> --canary <path> [--baseline <path>] [--revision <sha>] [--mode observe|enforce]",
+    );
+  }
+  const mode = args.mode || "enforce";
+  if (!new Set(["observe", "enforce"]).has(mode)) {
+    throw new Error("--mode must be observe or enforce");
+  }
+
+  const contract = await readJson(args.contract, "SLO contract");
+  const canary = await readJson(args.canary, "canary metrics");
+  const baseline = args.baseline
+    ? await readJson(args.baseline, "baseline metrics")
+    : null;
+  const decision = evaluate({
+    contract,
+    canary,
+    baseline,
+    revision: args.revision,
+  });
+  console.log(JSON.stringify({ mode, ...decision }, null, 2));
+  if (!decision.passed && mode === "enforce") process.exitCode = 1;
+}
 
 export function evaluate({
   contract,

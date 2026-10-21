@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import { headers } from "next/headers";
+import { CommandPaletteProvider } from "@/components/command-palette";
+import { MotionProvider } from "@/components/motion-provider";
 import { ToastProvider } from "@/components/toast";
 import { getPublicConfig } from "@/lib/env";
 import {
@@ -16,26 +19,30 @@ export const metadata: Metadata = {
   },
 };
 
-const themeScript = `(() => {
-  try {
-    const stored = window.localStorage.getItem("motionly-theme");
-    const theme = stored === "dark" || stored === "light"
-      ? stored
-      : window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light";
-    document.documentElement.dataset.theme = theme;
-  } catch {}
-})();`;
+const jakarta = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  display: "swap",
+  variable: "--font-sans",
+});
 
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  // proxy.ts issues a CSP nonce per request. Reading it also renders every
-  // page per request, which the nonce and the runtime config both need.
+  // proxy.ts issues a CSP nonce per request. Reading it also opts this layout
+  // into dynamic rendering, which the runtime config needs.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
+  // Source compatibility: the JSON data script intentionally does not render
+  // nonce={nonce}; it is data, not executable code. Next adds the nonce to its
+  // executable scripts from the request CSP automatically.
+  void nonce;
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-theme="light"
+      className={jakarta.variable}
+      suppressHydrationWarning
+    >
       <head>
         {/* Data, not code: the CSP does not apply to JSON script elements. */}
         <script
@@ -45,14 +52,13 @@ export default async function RootLayout({
             __html: serializePublicConfig(getPublicConfig()),
           }}
         />
-        <script
-          nonce={nonce}
-          dangerouslySetInnerHTML={{ __html: themeScript }}
-          suppressHydrationWarning
-        />
       </head>
       <body>
-        <ToastProvider>{children}</ToastProvider>
+        <MotionProvider>
+          <ToastProvider>
+            <CommandPaletteProvider>{children}</CommandPaletteProvider>
+          </ToastProvider>
+        </MotionProvider>
       </body>
     </html>
   );

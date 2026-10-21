@@ -3,8 +3,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin import router as admin_router
+from app.api.admin_music import router as admin_music_router
+from app.api.admin_users import router as admin_users_router
 from app.api.ai_proposals import router as ai_proposals_router
 from app.api.analytics import router as analytics_router
+from app.api.api_keys import router as api_keys_router
+from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.broll import router as broll_router
 from app.api.captions import router as captions_router
@@ -13,11 +17,10 @@ from app.api.creative_variants import router as creative_variants_router
 from app.api.editorial_learning import router as editorial_learning_router
 from app.api.effects import router as effects_router
 from app.api.errors import ApiError, api_error_handler, request_validation_error_handler
+from app.api.export_shares import router as export_shares_router
 from app.api.feedback import router as feedback_router
 from app.api.health import router as health_router
 from app.api.internal_batches import router as internal_batches_router
-from app.api.internal_jobs import router as internal_jobs_router
-from app.api.internal_renders import router as internal_renders_router
 from app.api.internal_retention import router as internal_retention_router
 from app.api.internal_workflows import router as internal_workflows_router
 from app.api.layer_jobs import router as layer_jobs_router
@@ -34,6 +37,7 @@ from app.api.renders import router as renders_router
 from app.api.reviews import router as reviews_router
 from app.api.revision_errors import RevisionConflictError, revision_conflict_error_handler
 from app.api.scale import router as scale_router
+from app.api.team import router as team_router
 from app.api.uploads import router as uploads_router
 from app.api.visual import router as visual_router
 from app.api.workflows import router as workflows_router
@@ -52,6 +56,7 @@ from app.repositories.ai_proposals import (
     SupabaseAIProposalRepository,
 )
 from app.repositories.analytics import InMemoryAnalyticsRepository, SupabaseAnalyticsRepository
+from app.repositories.api_keys import InMemoryApiKeyRepository, SupabaseApiKeyRepository
 from app.repositories.billing import InMemoryBillingRepository, SupabaseBillingRepository
 from app.repositories.broll import InMemoryBrollRepository, SupabaseBrollRepository
 from app.repositories.captions import InMemoryCaptionRepository, SupabaseCaptionRepository
@@ -60,6 +65,10 @@ from app.repositories.editorial_learning import (
     SupabaseEditorialLearningRepository,
 )
 from app.repositories.effects import InMemoryEffectsRepository, SupabaseEffectsRepository
+from app.repositories.export_shares import (
+    InMemoryExportShareRepository,
+    SupabaseExportShareRepository,
+)
 from app.repositories.localized_publishing import (
     InMemoryLocalizedPublishingRepository,
     SupabaseLocalizedPublishingRepository,
@@ -74,19 +83,24 @@ from app.repositories.regeneration import (
 from app.repositories.renders import InMemoryRenderRepository, SupabaseRenderRepository
 from app.repositories.reviews import InMemoryReviewRepository, SupabaseReviewRepository
 from app.repositories.scale import InMemoryScaleRepository, SupabaseScaleRepository
+from app.repositories.team import InMemoryTeamRepository, SupabaseTeamRepository
 from app.repositories.uploads import InMemoryUploadRepository, SupabaseUploadRepository
 from app.repositories.visual import InMemoryVisualRepository, SupabaseVisualRepository
 from app.repositories.workflows import (
     InMemoryWorkflowRepository,
     SupabaseWorkflowRepository,
 )
+from app.services.admin_user_directory import AdminUserDirectory
 from app.services.analytics_recovery import AnalyticsRecoveryQueue
 from app.services.audio_ml_providers import (
     PyannoteSpeakerDiarizationProvider,
     Wav2VecEmotionProvider,
     YamnetSoundClassifier,
 )
-from app.services.billing import StripeBillingClient
+from app.services.auth_admin import AuthAdminClient
+from app.services.collaboration import (
+    notifier_from_settings as collaboration_notifier_from_settings,
+)
 from app.services.compute_backend import compute_backend_from_settings
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.generic_media_upload import GenericMediaUploadSessionService
@@ -112,9 +126,10 @@ from app.services.model_provider_bridges import (
     GatewayEditPlannerProvider,
     GatewayTranscriptionProvider,
 )
-from app.services.music import FixtureMusicProvider, LicensedCatalogMusicProvider
+from app.services.music import LicensedCatalogMusicProvider
 from app.services.object_references import ObjectReferenceService
 from app.services.operations import MetricsRegistry, OperationsRepository
+from app.services.payment_gateway import build_gateway
 from app.services.queue import (
     BrollQueue,
     BullMQQueueRegistry,
@@ -177,6 +192,7 @@ def create_app() -> FastAPI:
     app.state.local_audit_live_effects_gate = local_audit_live_effects_gate_from_settings(settings)
     app.state.launch_feedback = []
     app.state.metrics_registry = MetricsRegistry()
+    app.state.collaboration_notifier = collaboration_notifier_from_settings(settings)
     app.state.operations_repository = OperationsRepository(
         supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
         service_role_key=settings.supabase_service_role_key,
@@ -243,6 +259,25 @@ def create_app() -> FastAPI:
         )
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryRenderRepository(app.state.caption_repository)
+    )
+    app.state.export_share_repository = (
+        SupabaseExportShareRepository(
+            render_repository=app.state.render_repository,
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryExportShareRepository(app.state.render_repository)
+    )
+    app.state.team_repository = (
+        SupabaseTeamRepository(
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryTeamRepository()
     )
     app.state.plan_repository = (
         SupabasePlanRepository(
@@ -321,6 +356,15 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryBillingRepository()
     )
+    app.state.api_key_repository = (
+        SupabaseApiKeyRepository(
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryApiKeyRepository()
+    )
     app.state.analytics_repository = (
         SupabaseAnalyticsRepository(
             supabase_url=str(settings.supabase_url),
@@ -362,7 +406,7 @@ def create_app() -> FastAPI:
         else InMemoryVisualRepository(upload_repository)
     )
     app.state.plan_repository.visual_repository = app.state.visual_repository
-    app.state.stripe_billing_client = StripeBillingClient(api_key=settings.stripe_secret_key)
+    app.state.payment_gateway = build_gateway(settings)
     storage_supabase_url = None if settings.force_local_media_storage else settings.supabase_url
     storage_service_role_key = (
         None if settings.force_local_media_storage else settings.supabase_service_role_key
@@ -375,6 +419,9 @@ def create_app() -> FastAPI:
         public_supabase_url=None
         if settings.force_local_media_storage
         else settings.browser_supabase_url,
+        # Local-storage links are HMAC-signed with an expiry (B38); the same
+        # secret verifies them in app.api.local_storage.
+        signing_secret=settings.supabase_jwt_secret,
     )
     app.state.object_storage = create_object_storage(
         root=settings.media_work_dir,
@@ -425,6 +472,21 @@ def create_app() -> FastAPI:
     )
     app.state.rate_limiter = (
         RedisRateLimiter(settings.redis_url) if settings.redis_url else InMemoryRateLimiter()
+    )
+    # Accounts are created through Auth's admin API (public sign-up is off).
+    app.state.auth_admin = (
+        AuthAdminClient(
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else None
+    )
+    # Password-reset requests and the admin audit log (Task 12).
+    app.state.admin_user_directory = AdminUserDirectory(
+        supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
+        service_role_key=settings.supabase_service_role_key,
+        metrics_registry=app.state.metrics_registry,
     )
     if settings.redis_url:
         app.state.queue_registry = BullMQQueueRegistry(
@@ -675,8 +737,10 @@ def create_app() -> FastAPI:
                 table_name=settings.licensed_music_catalog_table,
             )
         )
-    if settings.app_env != "production" or settings.allow_fixture_providers:
-        music_providers.append(FixtureMusicProvider())
+    # Non-production and the CPU stage serve music from the SAME licensed catalog
+    # provider, seeded with generated "Test track" entries (see
+    # app.ops.seed_music_catalog, run once at non-prod startup after migrations).
+    # There is no bespoke fixture music provider anymore.
     app.state.music_providers = music_providers
     app.state.music_queue = MusicQueue(app.state.queue_registry)
     app.state.effects_queue = EffectsQueue(app.state.queue_registry)
@@ -701,6 +765,7 @@ def create_app() -> FastAPI:
     )
     app.middleware("http")(security_headers_middleware)
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(operations_router)
     app.include_router(feedback_router)
     app.include_router(projects_router)
@@ -722,17 +787,20 @@ def create_app() -> FastAPI:
     app.include_router(effects_router)
     app.include_router(regeneration_router)
     app.include_router(renders_router)
+    app.include_router(export_shares_router)
+    app.include_router(team_router)
     app.include_router(scale_router)
     app.include_router(billing_router)
+    app.include_router(api_keys_router)
     app.include_router(analytics_router)
     app.include_router(editorial_learning_router)
-    app.include_router(internal_jobs_router)
     app.include_router(internal_batches_router)
     app.include_router(internal_retention_router)
-    app.include_router(internal_renders_router)
     app.include_router(internal_workflows_router)
     app.include_router(local_storage_router)
     app.include_router(admin_router)
+    app.include_router(admin_users_router)
+    app.include_router(admin_music_router)
     return app
 
 

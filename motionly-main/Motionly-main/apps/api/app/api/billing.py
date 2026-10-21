@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
-from typing import Annotated, Any
-from uuid import UUID
+from typing import Annotated
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, Request
 
@@ -8,18 +8,29 @@ from app.api.dependencies import (
     Actor,
     get_actor,
     get_billing_repository,
-    get_stripe_billing_client,
+    get_payment_gateway,
+    require_role,
 )
 from app.api.errors import ApiError
-from app.repositories.billing import InMemoryBillingRepository, SubscriptionRecord
+from app.repositories.billing import (
+    BillingAdjustmentRecord,
+    InMemoryBillingRepository,
+    SubscriptionRecord,
+)
 from app.schemas.billing import (
     BillingMode,
     BillingPlanKey,
     BillingStatusResponse,
+    CancelSubscriptionResponse,
     CheckoutSessionRequest,
     CheckoutSessionResponse,
-    CustomerPortalResponse,
-    StripeWebhookResponse,
+    GatewayWebhookResponse,
+    PaymentHistoryResponse,
+    PaymentReceipt,
+    PublicPlansResponse,
+    RefundRequest,
+    RefundResponse,
+    RetryRenewalResponse,
     SubscriptionStatus,
     SubscriptionSummary,
     UsageEventType,
@@ -27,17 +38,36 @@ from app.schemas.billing import (
 )
 from app.services.billing import (
     PLAN_DEFINITIONS,
-    StripeBillingClient,
     monthly_period,
-    parse_verified_stripe_event,
     plan_for_subscription_status,
+    verify_gateway_webhook,
 )
+from app.services.payment_gateway import DEMO_NOTICE, PaymentGateway
 
 router = APIRouter(tags=["billing"])
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
 BillingRepositoryDep = Annotated[InMemoryBillingRepository, Depends(get_billing_repository)]
-StripeClientDep = Annotated[StripeBillingClient, Depends(get_stripe_billing_client)]
+GatewayDep = Annotated[PaymentGateway, Depends(get_payment_gateway)]
+
+
+def _billing_mode(request: Request) -> str:
+    return str(getattr(request.app.state.settings, "billing_mode", "") or "").strip().lower()
+
+
+def _demo_notice(request: Request) -> str | None:
+    """The 'Demo payment — no money is charged' notice when BILLING_MODE=demo.
+
+    Returned on every payment surface in demo mode; the leakage gate asserts it.
+    """
+    return DEMO_NOTICE if _billing_mode(request) == "demo" else None
+
+
+def _require_billing_enabled(request: Request) -> None:
+    if not request.app.state.settings.billing_enabled:
+        raise ApiError(503, "billing_disabled", "Billing is not enabled yet.")
+    if _billing_mode(request) == "disabled":
+        raise ApiError(503, "billing_disabled", "Billing is disabled.")
 
 
 async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
@@ -45,6 +75,17 @@ async def _repository_call(repository, async_name: str, sync_name: str, **kwargs
     if async_method is not None:
         return await async_method(**kwargs)
     return getattr(repository, sync_name)(**kwargs)
+
+
+@router.get("/plans", response_model=PublicPlansResponse, tags=["plans"])
+async def list_public_plans() -> PublicPlansResponse:
+    """Public catalogue of billing plans (single source of truth).
+
+    Unauthenticated: the pricing page reads plans from here instead of keeping a
+    hand-written duplicate. Backed by PLAN_DEFINITIONS, loaded from
+    app/config/plans.json (INR paise).
+    """
+    return PublicPlansResponse(plans=list(PLAN_DEFINITIONS.values()))
 
 
 @router.get("/billing/status", response_model=BillingStatusResponse)
@@ -60,114 +101,414 @@ async def get_billing_status(
     )
 
 
-@router.post("/billing/checkout", response_model=CheckoutSessionResponse)
+@router.post(
+    "/billing/checkout",
+    response_model=CheckoutSessionResponse,
+    dependencies=[Depends(require_role("owner"))],
+)
 async def create_checkout_session(
     payload: CheckoutSessionRequest,
     request: Request,
     actor: ActorDep,
     repository: BillingRepositoryDep,
-    stripe_client: StripeClientDep,
+    gateway: GatewayDep,
 ) -> CheckoutSessionResponse:
-    if not request.app.state.settings.billing_enabled:
-        raise ApiError(503, "billing_disabled", "Billing is not enabled yet.")
+    _require_billing_enabled(request)
     if payload.plan == BillingPlanKey.FREE:
         raise ApiError(422, "checkout_free_plan", "Free plan does not require checkout.")
-    price_id = stripe_price_for_plan(request, payload.plan)
-    subscription = await _repository_call(
-        repository,
-        "get_subscription_async",
-        "get_subscription",
-        workspace_id=actor.workspace_id,
+    plan = PLAN_DEFINITIONS[payload.plan]
+    order = gateway.create_order(
+        amount_paise=plan.price_paise,
+        currency=plan.currency,
+        receipt=f"ws_{actor.workspace_id}",
+        notes={"workspace_id": str(actor.workspace_id), "plan": payload.plan.value},
     )
-    success_url = str(request.app.state.settings.billing_success_url or "")
-    cancel_url = str(request.app.state.settings.billing_cancel_url or "")
-    if not success_url or not cancel_url:
-        raise ApiError(
-            503,
-            "billing_urls_not_configured",
-            "Billing return URLs are not configured.",
-        )
-
-    checkout_url, session_id = stripe_client.create_checkout_session(
-        price_id=price_id,
-        plan=payload.plan,
-        workspace_id=actor.workspace_id,
-        success_url=success_url,
-        cancel_url=cancel_url,
-        customer_id=subscription.stripe_customer_id,
+    return CheckoutSessionResponse(
+        checkout_url=order.checkout_url,
+        session_id=order.id,
+        demo_notice=_demo_notice(request),
     )
-    return CheckoutSessionResponse(checkout_url=checkout_url, session_id=session_id)
 
 
-@router.post("/billing/customer-portal", response_model=CustomerPortalResponse)
-async def create_customer_portal_session(
+@router.post(
+    "/billing/cancel",
+    response_model=CancelSubscriptionResponse,
+    dependencies=[Depends(require_role("owner"))],
+)
+async def cancel_subscription(
     request: Request,
     actor: ActorDep,
     repository: BillingRepositoryDep,
-    stripe_client: StripeClientDep,
-) -> CustomerPortalResponse:
-    if not request.app.state.settings.billing_enabled:
-        raise ApiError(503, "billing_disabled", "Billing is not enabled yet.")
+) -> CancelSubscriptionResponse:
+    """Cancel at period end — the plan stays active until the period closes."""
+    _require_billing_enabled(request)
     subscription = await _repository_call(
         repository,
         "get_subscription_async",
         "get_subscription",
         workspace_id=actor.workspace_id,
     )
-    if not subscription.stripe_customer_id:
-        raise ApiError(404, "stripe_customer_missing", "Upgrade before opening billing management.")
-    return_url = str(request.app.state.settings.billing_portal_return_url or "")
-    if not return_url:
-        raise ApiError(
-            503,
-            "billing_portal_url_not_configured",
-            "Billing portal return URL is not configured.",
-        )
-    return CustomerPortalResponse(
-        portal_url=stripe_client.create_customer_portal_session(
-            customer_id=subscription.stripe_customer_id,
-            return_url=return_url,
-        ),
+    if subscription.plan == BillingPlanKey.FREE or subscription.status in {
+        SubscriptionStatus.NONE,
+        SubscriptionStatus.CANCELED,
+    }:
+        raise ApiError(422, "no_active_subscription", "There is no active subscription to cancel.")
+    updated = await _repository_call(
+        repository,
+        "upsert_subscription_async",
+        "upsert_subscription",
+        workspace_id=actor.workspace_id,
+        plan=subscription.plan,
+        status=subscription.status,
+        gateway_customer_id=subscription.gateway_customer_id,
+        gateway_subscription_id=subscription.gateway_subscription_id,
+        gateway_price_id=subscription.gateway_price_id,
+        current_period_start=subscription.current_period_start,
+        current_period_end=subscription.current_period_end,
+        cancel_at_period_end=True,
+    )
+    return CancelSubscriptionResponse(
+        subscription=subscription_to_summary(updated),
+        demo_notice=_demo_notice(request),
     )
 
 
-@router.post("/webhooks/stripe", response_model=StripeWebhookResponse)
-async def handle_stripe_webhook(
+@router.post(
+    "/billing/retry",
+    response_model=RetryRenewalResponse,
+    dependencies=[Depends(require_role("owner"))],
+)
+async def retry_renewal(
+    request: Request,
+    actor: ActorDep,
+    repository: BillingRepositoryDep,
+    gateway: GatewayDep,
+) -> RetryRenewalResponse:
+    """Retry a failed renewal — returns a fresh checkout to re-authorise.
+
+    The plan is restored to active only once the gateway webhook lands
+    (subscription.charged); this endpoint produces the order the user pays.
+    """
+    _require_billing_enabled(request)
+    subscription = await _repository_call(
+        repository,
+        "get_subscription_async",
+        "get_subscription",
+        workspace_id=actor.workspace_id,
+    )
+    if subscription.status != SubscriptionStatus.PAST_DUE:
+        raise ApiError(422, "no_failed_renewal", "There is no failed renewal to retry.")
+    plan = PLAN_DEFINITIONS[subscription.plan]
+    order = gateway.create_order(
+        amount_paise=plan.price_paise,
+        currency=plan.currency,
+        receipt=f"retry_{actor.workspace_id}",
+        notes={
+            "workspace_id": str(actor.workspace_id),
+            "plan": subscription.plan.value,
+            "retry": "true",
+        },
+    )
+    return RetryRenewalResponse(
+        subscription=subscription_to_summary(subscription),
+        demo_notice=_demo_notice(request),
+        checkout_url=order.checkout_url,
+        session_id=order.id,
+    )
+
+
+@router.get("/billing/history", response_model=PaymentHistoryResponse)
+async def get_payment_history(
+    request: Request,
+    actor: ActorDep,
+    repository: BillingRepositoryDep,
+) -> PaymentHistoryResponse:
+    adjustments = await _repository_call(
+        repository,
+        "list_billing_adjustments_async",
+        "list_billing_adjustments",
+        workspace_id=actor.workspace_id,
+    )
+    notice = _demo_notice(request) or ""
+    return PaymentHistoryResponse(
+        receipts=[_adjustment_to_receipt(adjustment, notice) for adjustment in adjustments]
+    )
+
+
+@router.post(
+    "/billing/refunds",
+    response_model=RefundResponse,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
+async def issue_refund(
+    payload: RefundRequest,
+    request: Request,
+    actor: ActorDep,
+    repository: BillingRepositoryDep,
+    gateway: GatewayDep,
+) -> RefundResponse:
+    """Issue a refund for a workspace. Owner/admin only; audit-logged."""
+    _require_billing_enabled(request)
+    subscription = await _repository_call(
+        repository,
+        "get_subscription_async",
+        "get_subscription",
+        workspace_id=payload.workspace_id,
+    )
+    plan = PLAN_DEFINITIONS[subscription.plan]
+    amount = payload.amount_paise or plan.price_paise
+    if amount <= 0:
+        raise ApiError(422, "refund_amount_invalid", "Refund amount must be positive.")
+    event_id = f"refund_{uuid4().hex}"
+    adjustment = await _repository_call(
+        repository,
+        "record_billing_adjustment_async",
+        "record_billing_adjustment",
+        workspace_id=payload.workspace_id,
+        gateway_event_id=event_id,
+        adjustment_type="refund",
+        amount_paise=-amount,
+        currency=plan.currency.lower(),
+        reason=payload.reason,
+        metadata={
+            "issued_by": str(actor.user_id),
+            "source": "admin_refund",
+        },
+    )
+    _audit_log(
+        request,
+        action="billing.refund",
+        actor=actor,
+        workspace_id=payload.workspace_id,
+        amount_paise=amount,
+        reason=payload.reason,
+    )
+    notice = _demo_notice(request) or ""
+    return RefundResponse(receipt=_adjustment_to_receipt(adjustment, notice))
+
+
+@router.post(
+    "/billing/webhooks/mock-gateway",
+    response_model=GatewayWebhookResponse,
+    tags=["webhooks"],
+)
+async def handle_gateway_webhook(
     request: Request,
     repository: BillingRepositoryDep,
-    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
-) -> StripeWebhookResponse:
-    if not request.app.state.settings.billing_enabled:
-        raise ApiError(503, "billing_disabled", "Billing is not enabled yet.")
+    x_mock_gateway_event: str | None = Header(default=None, alias="X-Mock-Gateway-Event"),
+    x_mock_gateway_event_id: str | None = Header(default=None, alias="X-Mock-Gateway-Event-Id"),
+    x_mock_gateway_timestamp: str | None = Header(default=None, alias="X-Mock-Gateway-Timestamp"),
+    x_mock_gateway_signature: str | None = Header(default=None, alias="X-Mock-Gateway-Signature"),
+) -> GatewayWebhookResponse:
+    _require_billing_enabled(request)
     payload = await request.body()
-    event = parse_verified_stripe_event(
+    envelope = verify_gateway_webhook(
         payload=payload,
-        signature_header=stripe_signature,
-        webhook_secret=request.app.state.settings.stripe_webhook_secret,
+        event_id=x_mock_gateway_event_id,
+        timestamp_header=x_mock_gateway_timestamp,
+        signature=x_mock_gateway_signature,
+        webhook_secret=getattr(request.app.state.settings, "mock_gateway_webhook_secret", None),
     )
-    event_id = str(event["id"])
-    event_type = str(event["type"])
     if await _repository_call(
         repository,
-        "has_processed_stripe_event_async",
-        "has_processed_stripe_event",
-        event_id=event_id,
+        "has_processed_gateway_event_async",
+        "has_processed_gateway_event",
+        event_id=envelope.id,
     ):
-        return StripeWebhookResponse(received=True, duplicate=True)
+        return GatewayWebhookResponse(received=True, duplicate=True)
 
-    await apply_stripe_event_async(
-        event=event,
-        repository=repository,
-        settings=request.app.state.settings,
-    )
+    await apply_gateway_event_async(envelope=envelope, repository=repository)
     await _repository_call(
         repository,
-        "record_stripe_event_async",
-        "record_stripe_event",
-        event_id=event_id,
-        event_type=event_type,
+        "record_gateway_event_async",
+        "record_gateway_event",
+        event_id=envelope.id,
+        event_type=str(envelope.event),
     )
-    return StripeWebhookResponse(received=True)
+    return GatewayWebhookResponse(received=True)
+
+
+# ------------------------------------------------------------------------
+# Webhook application
+# ------------------------------------------------------------------------
+
+
+def _workspace_and_plan(notes: dict[str, str]) -> tuple[UUID | None, BillingPlanKey]:
+    workspace_id = None
+    if notes.get("workspace_id"):
+        try:
+            workspace_id = UUID(str(notes["workspace_id"]))
+        except ValueError:
+            workspace_id = None
+    try:
+        plan = BillingPlanKey(str(notes.get("plan")))
+    except ValueError:
+        plan = BillingPlanKey.FREE
+    return workspace_id, plan
+
+
+async def apply_gateway_event_async(
+    *,
+    envelope,
+    repository: InMemoryBillingRepository,
+) -> None:
+    event = str(envelope.event)
+    order = envelope.order
+    subscription = envelope.subscription
+    refund = envelope.refund
+
+    if event in {"payment.captured", "subscription.charged"} and order is not None:
+        workspace_id, plan = _workspace_and_plan(order.notes)
+        # subscription.charged carries plan in the subscription notes instead.
+        if subscription is not None:
+            ws_sub, plan_sub = _workspace_and_plan(subscription.notes)
+            workspace_id = workspace_id or ws_sub
+            if plan == BillingPlanKey.FREE:
+                plan = plan_sub
+        if workspace_id is None:
+            raise ApiError(400, "gateway_workspace_missing", "Event is missing workspace id.")
+        start, end = monthly_period()
+        await _repository_call(
+            repository,
+            "upsert_subscription_async",
+            "upsert_subscription",
+            workspace_id=workspace_id,
+            plan=plan,
+            status=SubscriptionStatus.ACTIVE,
+            gateway_customer_id=None,
+            gateway_subscription_id=subscription.id if subscription else None,
+            gateway_price_id=plan.value,
+            current_period_start=start,
+            current_period_end=end,
+            cancel_at_period_end=False,
+        )
+        await _repository_call(
+            repository,
+            "record_billing_adjustment_async",
+            "record_billing_adjustment",
+            workspace_id=workspace_id,
+            gateway_event_id=envelope.id,
+            adjustment_type="charge",
+            amount_paise=order.amount_paise,
+            currency=order.currency.lower(),
+            reason=None,
+            metadata={"plan": plan.value, "order_id": order.id},
+        )
+        return
+
+    if event == "subscription.charge_failed" and subscription is not None:
+        workspace_id, _ = _workspace_and_plan(subscription.notes)
+        if workspace_id is None:
+            workspace_id = await _repository_call(
+                repository,
+                "workspace_for_gateway_subscription_async",
+                "workspace_for_gateway_subscription",
+                gateway_subscription_id=subscription.id,
+            )
+        if workspace_id is None:
+            raise ApiError(400, "gateway_workspace_missing", "Event is missing workspace id.")
+        existing = await _repository_call(
+            repository,
+            "get_subscription_async",
+            "get_subscription",
+            workspace_id=workspace_id,
+        )
+        await _repository_call(
+            repository,
+            "upsert_subscription_async",
+            "upsert_subscription",
+            workspace_id=workspace_id,
+            plan=existing.plan,
+            status=SubscriptionStatus.PAST_DUE,
+            gateway_customer_id=existing.gateway_customer_id,
+            gateway_subscription_id=subscription.id,
+            gateway_price_id=existing.gateway_price_id,
+            current_period_start=existing.current_period_start,
+            current_period_end=existing.current_period_end,
+            cancel_at_period_end=existing.cancel_at_period_end,
+        )
+        return
+
+    if event == "subscription.cancelled" and subscription is not None:
+        workspace_id, _ = _workspace_and_plan(subscription.notes)
+        if workspace_id is None:
+            workspace_id = await _repository_call(
+                repository,
+                "workspace_for_gateway_subscription_async",
+                "workspace_for_gateway_subscription",
+                gateway_subscription_id=subscription.id,
+            )
+        if workspace_id is None:
+            raise ApiError(400, "gateway_workspace_missing", "Event is missing workspace id.")
+        existing = await _repository_call(
+            repository,
+            "get_subscription_async",
+            "get_subscription",
+            workspace_id=workspace_id,
+        )
+        await _repository_call(
+            repository,
+            "upsert_subscription_async",
+            "upsert_subscription",
+            workspace_id=workspace_id,
+            plan=BillingPlanKey.FREE,
+            status=SubscriptionStatus.CANCELED,
+            gateway_customer_id=existing.gateway_customer_id,
+            gateway_subscription_id=subscription.id,
+            gateway_price_id=existing.gateway_price_id,
+            cancel_at_period_end=False,
+        )
+        return
+
+    if event == "payment.refunded" and order is not None and refund is not None:
+        workspace_id, _ = _workspace_and_plan(order.notes)
+        if workspace_id is None:
+            raise ApiError(400, "gateway_workspace_missing", "Event is missing workspace id.")
+        await _repository_call(
+            repository,
+            "record_billing_adjustment_async",
+            "record_billing_adjustment",
+            workspace_id=workspace_id,
+            gateway_event_id=envelope.id,
+            adjustment_type="refund",
+            amount_paise=-int(refund.amount_paise),
+            currency=order.currency.lower(),
+            reason=None,
+            metadata={"order_id": order.id, "refund_id": refund.id},
+        )
+        return
+
+    if event == "payment.failed" and order is not None:
+        workspace_id, _ = _workspace_and_plan(order.notes)
+        if workspace_id is None:
+            return
+        existing = await _repository_call(
+            repository,
+            "get_subscription_async",
+            "get_subscription",
+            workspace_id=workspace_id,
+        )
+        if existing.plan != BillingPlanKey.FREE:
+            await _repository_call(
+                repository,
+                "upsert_subscription_async",
+                "upsert_subscription",
+                workspace_id=workspace_id,
+                plan=existing.plan,
+                status=SubscriptionStatus.PAST_DUE,
+                gateway_customer_id=existing.gateway_customer_id,
+                gateway_subscription_id=existing.gateway_subscription_id,
+                gateway_price_id=existing.gateway_price_id,
+                current_period_start=existing.current_period_start,
+                current_period_end=existing.current_period_end,
+                cancel_at_period_end=existing.cancel_at_period_end,
+            )
+        return
+
+
+# ------------------------------------------------------------------------
+# Billing status helpers (unchanged shape, gateway-named summary)
+# ------------------------------------------------------------------------
 
 
 def _build_billing_status_response(
@@ -327,9 +668,9 @@ def subscription_to_summary(subscription: SubscriptionRecord) -> SubscriptionSum
         workspace_id=subscription.workspace_id,
         plan=subscription.plan,
         status=subscription.status,
-        stripe_customer_id=subscription.stripe_customer_id,
-        stripe_subscription_id=subscription.stripe_subscription_id,
-        stripe_price_id=subscription.stripe_price_id,
+        gateway_customer_id=subscription.gateway_customer_id,
+        gateway_subscription_id=subscription.gateway_subscription_id,
+        gateway_price_id=subscription.gateway_price_id,
         current_period_start=subscription.current_period_start,
         current_period_end=subscription.current_period_end,
         cancel_at_period_end=subscription.cancel_at_period_end,
@@ -339,284 +680,42 @@ def subscription_to_summary(subscription: SubscriptionRecord) -> SubscriptionSum
     )
 
 
-def stripe_price_for_plan(request: Request, plan: BillingPlanKey) -> str:
-    settings = request.app.state.settings
-    price_id = {
-        BillingPlanKey.CREATOR: settings.stripe_price_creator,
-        BillingPlanKey.PRO: settings.stripe_price_pro,
-        BillingPlanKey.AGENCY: settings.stripe_price_agency,
-    }.get(plan)
-    if not price_id:
-        raise ApiError(
-            503,
-            "stripe_price_missing",
-            f"Stripe price for {plan.value} is not configured.",
-        )
-    return price_id
-
-
-def apply_stripe_event(
-    *,
-    event: dict[str, object],
-    repository: InMemoryBillingRepository,
-    settings: object,
-) -> None:
-    event_type = str(event["type"])
-    obj = event_object(event)
-    event_id = str(event["id"])
-    if event_type == "checkout.session.completed":
-        workspace_id = UUID(
-            str(obj.get("client_reference_id") or obj.get("metadata", {}).get("workspace_id"))
-        )
-        metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
-        plan = plan_from_metadata_or_price(metadata, stripe_price_id_from_checkout(obj), settings)
-        repository.upsert_subscription(
-            workspace_id=workspace_id,
-            plan=plan,
-            status=SubscriptionStatus.ACTIVE,
-            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
-            stripe_subscription_id=obj.get("subscription") and str(obj["subscription"]),
-            stripe_price_id=stripe_price_id_from_checkout(obj),
-        )
-        return
-    if event_type.startswith("customer.subscription."):
-        workspace_id = UUID(str(obj.get("metadata", {}).get("workspace_id")))
-        status = subscription_status(str(obj.get("status", "incomplete")))
-        price_id = stripe_price_id_from_subscription(obj)
-        repository.upsert_subscription(
-            workspace_id=workspace_id,
-            plan=plan_from_price(price_id, settings),
-            status=status,
-            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
-            stripe_subscription_id=str(obj["id"]),
-            stripe_price_id=price_id,
-            current_period_start=timestamp_to_datetime(obj.get("current_period_start")),
-            current_period_end=timestamp_to_datetime(obj.get("current_period_end")),
-            cancel_at_period_end=bool(obj.get("cancel_at_period_end", False)),
-        )
-        return
-    if event_type == "invoice.payment_failed":
-        workspace_id = workspace_id_from_stripe_object(obj, repository)
-        if workspace_id is None:
-            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
-        existing = repository.get_subscription(workspace_id=workspace_id)
-        repository.upsert_subscription(
-            workspace_id=workspace_id,
-            plan=existing.plan,
-            status=SubscriptionStatus.PAST_DUE,
-            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
-            stripe_subscription_id=obj.get("subscription") and str(obj["subscription"]),
-            stripe_price_id=existing.stripe_price_id,
-            current_period_start=existing.current_period_start,
-            current_period_end=existing.current_period_end,
-            cancel_at_period_end=existing.cancel_at_period_end,
-        )
-        return
-    if event_type in {"charge.refunded", "charge.refund.updated"}:
-        workspace_id = workspace_id_from_stripe_object(obj, repository)
-        if workspace_id is None:
-            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
-        amount_cents = int(obj.get("amount_refunded") or obj.get("amount") or 0)
-        if amount_cents <= 0:
-            raise ApiError(400, "stripe_refund_invalid", "Stripe refund amount is invalid.")
-        repository.record_billing_adjustment(
-            workspace_id=workspace_id,
-            stripe_event_id=event_id,
-            adjustment_type="refund",
-            amount_cents=-amount_cents,
-            currency=str(obj.get("currency") or "usd"),
-            reason=obj.get("failure_message") and str(obj["failure_message"]),
-            metadata={
-                "stripe_charge_id": obj.get("id"),
-                "stripe_customer_id": obj.get("customer"),
-                "stripe_invoice_id": obj.get("invoice"),
-            },
-        )
-
-
-async def apply_stripe_event_async(
-    *,
-    event: dict[str, object],
-    repository: InMemoryBillingRepository,
-    settings: object,
-) -> None:
-    event_type = str(event["type"])
-    obj = event_object(event)
-    event_id = str(event["id"])
-    if event_type == "checkout.session.completed":
-        workspace_id = UUID(
-            str(obj.get("client_reference_id") or obj.get("metadata", {}).get("workspace_id"))
-        )
-        metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
-        plan = plan_from_metadata_or_price(metadata, stripe_price_id_from_checkout(obj), settings)
-        await _repository_call(
-            repository,
-            "upsert_subscription_async",
-            "upsert_subscription",
-            workspace_id=workspace_id,
-            plan=plan,
-            status=SubscriptionStatus.ACTIVE,
-            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
-            stripe_subscription_id=obj.get("subscription") and str(obj["subscription"]),
-            stripe_price_id=stripe_price_id_from_checkout(obj),
-        )
-        return
-    if event_type.startswith("customer.subscription."):
-        workspace_id = UUID(str(obj.get("metadata", {}).get("workspace_id")))
-        status = subscription_status(str(obj.get("status", "incomplete")))
-        price_id = stripe_price_id_from_subscription(obj)
-        await _repository_call(
-            repository,
-            "upsert_subscription_async",
-            "upsert_subscription",
-            workspace_id=workspace_id,
-            plan=plan_from_price(price_id, settings),
-            status=status,
-            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
-            stripe_subscription_id=str(obj["id"]),
-            stripe_price_id=price_id,
-            current_period_start=timestamp_to_datetime(obj.get("current_period_start")),
-            current_period_end=timestamp_to_datetime(obj.get("current_period_end")),
-            cancel_at_period_end=bool(obj.get("cancel_at_period_end", False)),
-        )
-        return
-    if event_type == "invoice.payment_failed":
-        workspace_id = await workspace_id_from_stripe_object_async(obj, repository)
-        if workspace_id is None:
-            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
-        existing = await _repository_call(
-            repository,
-            "get_subscription_async",
-            "get_subscription",
-            workspace_id=workspace_id,
-        )
-        await _repository_call(
-            repository,
-            "upsert_subscription_async",
-            "upsert_subscription",
-            workspace_id=workspace_id,
-            plan=existing.plan,
-            status=SubscriptionStatus.PAST_DUE,
-            stripe_customer_id=obj.get("customer") and str(obj["customer"]),
-            stripe_subscription_id=obj.get("subscription") and str(obj["subscription"]),
-            stripe_price_id=existing.stripe_price_id,
-            current_period_start=existing.current_period_start,
-            current_period_end=existing.current_period_end,
-            cancel_at_period_end=existing.cancel_at_period_end,
-        )
-        return
-    if event_type in {"charge.refunded", "charge.refund.updated"}:
-        workspace_id = await workspace_id_from_stripe_object_async(obj, repository)
-        if workspace_id is None:
-            raise ApiError(400, "stripe_workspace_missing", "Stripe event is missing workspace ID.")
-        amount_cents = int(obj.get("amount_refunded") or obj.get("amount") or 0)
-        if amount_cents <= 0:
-            raise ApiError(400, "stripe_refund_invalid", "Stripe refund amount is invalid.")
-        await _repository_call(
-            repository,
-            "record_billing_adjustment_async",
-            "record_billing_adjustment",
-            workspace_id=workspace_id,
-            stripe_event_id=event_id,
-            adjustment_type="refund",
-            amount_cents=-amount_cents,
-            currency=str(obj.get("currency") or "usd"),
-            reason=obj.get("failure_message") and str(obj["failure_message"]),
-            metadata={
-                "stripe_charge_id": obj.get("id"),
-                "stripe_customer_id": obj.get("customer"),
-                "stripe_invoice_id": obj.get("invoice"),
-            },
-        )
-
-
-
-def event_object(event: dict[str, object]) -> dict[str, Any]:
-    data = event.get("data")
-    if not isinstance(data, dict) or not isinstance(data.get("object"), dict):
-        raise ApiError(400, "stripe_event_invalid", "Stripe webhook event object is invalid.")
-    return data["object"]
-
-
-def stripe_price_id_from_checkout(obj: dict[str, Any]) -> str | None:
-    metadata_price = (
-        obj.get("metadata", {}).get("stripe_price_id")
-        if isinstance(obj.get("metadata"), dict)
-        else None
-    )
-    return metadata_price and str(metadata_price)
-
-
-def stripe_price_id_from_subscription(obj: dict[str, Any]) -> str | None:
-    items = obj.get("items", {}).get("data", []) if isinstance(obj.get("items"), dict) else []
-    if not items:
-        return None
-    price = items[0].get("price", {})
-    return price.get("id") and str(price["id"])
-
-
-def workspace_id_from_stripe_object(
-    obj: dict[str, Any],
-    repository: InMemoryBillingRepository,
-) -> UUID | None:
-    metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
-    if metadata.get("workspace_id"):
-        return UUID(str(metadata["workspace_id"]))
-    subscription = obj.get("subscription")
-    customer = obj.get("customer")
-    return repository.workspace_for_stripe_subscription(
-        stripe_subscription_id=subscription and str(subscription),
-        stripe_customer_id=customer and str(customer),
+def _adjustment_to_receipt(adjustment: BillingAdjustmentRecord, notice: str) -> PaymentReceipt:
+    kind = "refund" if adjustment.amount_paise < 0 else "charge"
+    plan_value = adjustment.metadata.get("plan") if adjustment.metadata else None
+    plan = None
+    if plan_value:
+        try:
+            plan = BillingPlanKey(str(plan_value))
+        except ValueError:
+            plan = None
+    return PaymentReceipt(
+        id=adjustment.id,
+        workspace_id=adjustment.workspace_id,
+        kind=kind,
+        plan=plan,
+        amount_paise=abs(adjustment.amount_paise),
+        currency=adjustment.currency.upper(),
+        gateway_event_id=adjustment.gateway_event_id,
+        gateway_order_id=(adjustment.metadata or {}).get("order_id"),
+        reason=adjustment.reason,
+        created_at=adjustment.created_at,
+        demo_notice=notice or DEMO_NOTICE,
     )
 
 
-async def workspace_id_from_stripe_object_async(
-    obj: dict[str, Any],
-    repository: InMemoryBillingRepository,
-) -> UUID | None:
-    metadata = obj.get("metadata", {}) if isinstance(obj.get("metadata"), dict) else {}
-    if metadata.get("workspace_id"):
-        return UUID(str(metadata["workspace_id"]))
-    subscription = obj.get("subscription")
-    customer = obj.get("customer")
-    return await _repository_call(
-        repository,
-        "workspace_for_stripe_subscription_async",
-        "workspace_for_stripe_subscription",
-        stripe_subscription_id=subscription and str(subscription),
-        stripe_customer_id=customer and str(customer),
-    )
+def _audit_log(request: Request, *, action: str, actor: Actor, **fields) -> None:
+    audit = getattr(request.app.state, "audit_logger", None)
+    entry = {
+        "action": action,
+        "actor_user_id": str(actor.user_id),
+        "actor_workspace_id": str(actor.workspace_id),
+        "at": datetime.now(UTC).isoformat(),
+        **{key: str(value) for key, value in fields.items() if value is not None},
+    }
+    if audit is not None and hasattr(audit, "record"):
+        audit.record(entry)
+    else:  # pragma: no cover - fallback path
+        import logging
 
-
-def plan_from_price(price_id: str | None, settings: object) -> BillingPlanKey:
-    if price_id == getattr(settings, "stripe_price_creator", None):
-        return BillingPlanKey.CREATOR
-    if price_id == getattr(settings, "stripe_price_pro", None):
-        return BillingPlanKey.PRO
-    if price_id == getattr(settings, "stripe_price_agency", None):
-        return BillingPlanKey.AGENCY
-    return BillingPlanKey.FREE
-
-
-def plan_from_metadata_or_price(
-    metadata: dict[str, Any],
-    price_id: str | None,
-    settings: object,
-) -> BillingPlanKey:
-    try:
-        return BillingPlanKey(str(metadata.get("plan")))
-    except ValueError:
-        return plan_from_price(price_id, settings)
-
-
-def subscription_status(value: str) -> SubscriptionStatus:
-    try:
-        return SubscriptionStatus(value)
-    except ValueError:
-        return SubscriptionStatus.INCOMPLETE
-
-
-def timestamp_to_datetime(value: object) -> datetime | None:
-    if not value:
-        return None
-    return datetime.fromtimestamp(int(value), tz=UTC)
+        logging.getLogger("motionly.audit").info("audit %s", entry)

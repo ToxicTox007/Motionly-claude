@@ -87,12 +87,25 @@ def _queues(service: dict) -> set[str]:
     return set(str(service["environment"].get("WORKER_QUEUES", "")).split(",")) - {""}
 
 
+# Profiles scripts/verify/cpu_stage_stack.py enables besides the size: the mock
+# payment gateway (Task 22) always runs on the CPU stage.
+EXTRA_PROFILES = ("demo-billing",)
+
+
 def _started(merged: dict[str, dict], size: str) -> dict[str, dict]:
+    profiles = {size, *EXTRA_PROFILES}
     return {
         name: service
         for name, service in merged.items()
-        if not service.get("profiles") or size in service["profiles"]
+        if not service.get("profiles") or profiles & set(service["profiles"])
     }
+
+
+def test_the_started_services_model_matches_the_profiles_the_runner_enables() -> None:
+    runner = (ROOT / "scripts" / "verify" / "cpu_stage_stack.py").read_text(encoding="utf-8")
+    enabled = re.findall(r'"--profile", "([a-z-]+)"', runner)
+    assert enabled == list(EXTRA_PROFILES)
+    assert '"--profile", state["size"]' in runner
 
 
 def test_overlay_is_a_named_cpu_stage_project_that_builds_nothing_and_pulls_no_app_images() -> None:
@@ -120,12 +133,17 @@ def test_each_size_serves_every_cpu_queue_exactly_once_and_no_gpu_service(size: 
 @pytest.mark.parametrize("size", ["slim", "full"])
 def test_every_application_process_runs_cpu_stage_fixtures_and_never_production(size: str) -> None:
     started = _started(_merged(), size)
-    # The web app runs no models or providers; it only needs its environment.
+    # The web app and the mock payment gateway (a separate app that imports no
+    # API settings, models or providers) only need their own environment.
     assert started["web"]["environment"]["APP_ENV"] == "cpu-stage"
+    gateway = started["payment-gateway"]["environment"]
+    assert gateway["APP_ENV"] == "cpu-stage"
+    assert gateway["BILLING_MODE"] == "demo"
+    no_providers = {"web", "payment-gateway"}
     application = [
         name
         for name, service in started.items()
-        if name != "web"
+        if name not in no_providers
         and ("APP_ENV" in service["environment"] or "PROCESS_ROLE" in service["environment"])
     ]
 
@@ -251,6 +269,39 @@ def test_cpu_stage_writer_creates_private_random_inputs_without_live_provider_ke
         assert stat.S_IMODE(path.stat().st_mode) == 0o444, path.name
 
 
+def test_cpu_stage_env_supplies_every_variable_compose_requires(tmp_path: Path) -> None:
+    """Compose refuses to start when a `${VAR:?...}` variable is unset (the stack
+    stage failed this way when BILLING_MODE became required)."""
+    env_file = tmp_path / "compose.env"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(WRITER),
+            "--cpu-stage",
+            str(STACK),
+            "--env-file",
+            str(env_file),
+            "--secrets-dir",
+            str(tmp_path / "secrets"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    environment = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
+    stack = json.loads(STACK.read_text(encoding="utf-8"))
+    required = set()
+    for compose_file in stack["compose_files"]:
+        text = (ROOT / compose_file).read_text(encoding="utf-8")
+        required |= set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", text))
+    assert "BILLING_MODE" in required
+    missing = sorted(name for name in required if not environment.get(name))
+    assert missing == []
+    # The CPU stage runs the mock gateway (demo-billing profile): demo mode.
+    assert environment["BILLING_MODE"] == "demo"
+
+
 def _load_sampler():
     spec = importlib.util.spec_from_file_location("motionly_resource_sampler", SAMPLER)
     assert spec and spec.loader
@@ -299,7 +350,18 @@ def test_resource_budget_awaits_decision_d2_and_lists_measured_services() -> Non
     assert budget["decision"] == "D2"
     assert budget["basis"] == "measured peak x 1.25"
     assert budget["status"] in {"pending-measurement", "measured", "approved"}
-    entries = budget["services"].values()
+    all_entries = list(budget["services"].values())
+    # A service added after the approved baseline (e.g. Task 25's Realtime) may
+    # declare pending_baseline:true with null budgets until it is measured and
+    # re-approved; the perf stage skips it. Every other entry is enforced.
+    for entry in all_entries:
+        if entry.get("pending_baseline"):
+            assert entry["budget_memory_bytes"] is None
+            assert entry["budget_cpu_percent"] is None
+            assert entry["baseline_peak_memory_bytes"] is None
+            assert isinstance(entry["pending_baseline_reason"], str)
+            assert entry["pending_baseline_reason"].strip()
+    entries = [entry for entry in all_entries if not entry.get("pending_baseline")]
     if budget["status"] != "approved":
         # Budgets are enforced only after the user approves them (Decision D2).
         assert all(entry["budget_memory_bytes"] is None for entry in entries)

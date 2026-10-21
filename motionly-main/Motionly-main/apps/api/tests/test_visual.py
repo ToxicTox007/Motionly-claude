@@ -2,12 +2,8 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-
 from app.api.dependencies import Actor
-from app.api.errors import ApiError
-from app.api.internal_jobs import run_queue_job
-from app.api.visual import analyze_visual_manifest, get_visual_manifest, get_visual_status
+from app.api.visual import get_visual_status
 from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
 from app.repositories.visual import (
     SEGMENTATION_MATTE_COLUMNS,
@@ -21,33 +17,69 @@ from app.schemas.visual import (
     MatteStatus,
     SceneType,
     SegmentationMatte,
-    VisualAnalyzeRequest,
     VisualManifestStatus,
 )
+from app.services.job_engine import run_queue_job
 from app.services.local_storage import LocalObjectStorage
 from app.services.queue import QueueRegistry, VisualQueue
 from app.services.storage import StorageSigner
 from app.services.visual_intelligence import FixtureVisualIntelligenceProvider
-from app.services.visual_jobs import build_visual_cache_key
+from app.services.visual_jobs import (
+    build_visual_cache_key,
+    queue_visual_analysis_for_upload,
+    visual_provider_identity,
+)
+
+
+def _schedule_visual_analysis(
+    context,
+    *,
+    force: bool = False,
+    sample_rate_fps: float | None = None,
+    scene_threshold: float | None = None,
+):
+    """Schedule visual analysis the same way the production pipeline does.
+
+    Mirrors the service orchestration (provider identity + cache key + queue)
+    that the worker-driven CPU pipeline performs; the worker job itself is run
+    separately via ``run_queue_job``. Returns the ``VisualScheduleResult``.
+    """
+    settings = context.request.app.state.settings
+    upload = context.visual_repository.get_active_upload(
+        project_id=context.project_id, workspace_id=context.workspace_id
+    )
+    provider_name, model = visual_provider_identity(settings)
+    cache_key = build_visual_cache_key(
+        upload=upload,
+        provider=provider_name,
+        model=model,
+        sample_rate_fps=(
+            sample_rate_fps if sample_rate_fps is not None else settings.visual_sample_fps
+        ),
+        scene_threshold=(
+            scene_threshold if scene_threshold is not None else settings.visual_scene_threshold
+        ),
+    )
+    return queue_visual_analysis_for_upload(
+        upload=upload,
+        repository=context.visual_repository,
+        visual_queue=context.visual_queue,
+        provider=provider_name,
+        model=model,
+        cache_key=cache_key,
+        force=force,
+    )
 
 
 def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> None:
     context = _make_visual_context(tmp_path)
     upload = _seed_upload(context, status=UploadStatus.READY)
 
-    first = asyncio.run(
-        analyze_visual_manifest(
-            project_id=context.project_id,
-            payload=VisualAnalyzeRequest(),
-            request=context.request,
-            actor=context.actor,
-            repository=context.visual_repository,
-            visual_queue=context.visual_queue,
-        )
-    )
+    first = _schedule_visual_analysis(context)
 
     assert first.cached is False
-    assert first.job_id == f"visual--{context.project_id}--{upload.id}--{context.workspace_id}"
+    assert first.job is not None
+    assert first.job.id == f"visual--{context.project_id}--{upload.id}--{context.workspace_id}"
     assert first.manifest.status == VisualManifestStatus.QUEUED
     assert first.manifest.uploaded_video_id == upload.id
     assert first.manifest.cache_key == build_visual_cache_key(
@@ -61,7 +93,7 @@ def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> N
 
     asyncio.run(
         run_queue_job(
-            queue_job_id=first.job_id,
+            queue_job_id=first.job.id,
             request=context.request,
             x_motionly_worker_token="worker-secret",
         )
@@ -107,28 +139,16 @@ def test_visual_analysis_builds_manifest_and_reuses_cached_result(tmp_path) -> N
     assert representative_scene.dominant_colors
     assert 0 < representative_scene.visual_importance_score <= 1
 
-    second = asyncio.run(
-        analyze_visual_manifest(
-            project_id=context.project_id,
-            payload=VisualAnalyzeRequest(),
-            request=context.request,
-            actor=context.actor,
-            repository=context.visual_repository,
-            visual_queue=context.visual_queue,
-        )
-    )
+    second = _schedule_visual_analysis(context)
 
     assert second.cached is True
     assert second.manifest.id == ready.id
     assert second.manifest.version == first.manifest.version
     assert second.manifest.cache_key == first.manifest.cache_key
 
-    fetched = asyncio.run(
-        get_visual_manifest(
-            project_id=context.project_id,
-            actor=context.actor,
-            repository=context.visual_repository,
-        )
+    fetched = context.visual_repository.latest_manifest(
+        project_id=context.project_id,
+        workspace_id=context.workspace_id,
     )
     assert fetched.id == ready.id
     assert fetched.manifest is not None
@@ -139,32 +159,16 @@ def test_visual_analysis_force_creates_new_manifest_version(tmp_path) -> None:
     context = _make_visual_context(tmp_path)
     _seed_upload(context, status=UploadStatus.READY)
 
-    first = asyncio.run(
-        analyze_visual_manifest(
-            project_id=context.project_id,
-            payload=VisualAnalyzeRequest(),
-            request=context.request,
-            actor=context.actor,
-            repository=context.visual_repository,
-            visual_queue=context.visual_queue,
-        )
-    )
+    first = _schedule_visual_analysis(context)
     asyncio.run(
         run_queue_job(
-            queue_job_id=first.job_id,
+            queue_job_id=first.job.id,
             request=context.request,
             x_motionly_worker_token="worker-secret",
         )
     )
-    forced = asyncio.run(
-        analyze_visual_manifest(
-            project_id=context.project_id,
-            payload=VisualAnalyzeRequest(force=True, sample_rate_fps=1.0, scene_threshold=0.25),
-            request=context.request,
-            actor=context.actor,
-            repository=context.visual_repository,
-            visual_queue=context.visual_queue,
-        )
+    forced = _schedule_visual_analysis(
+        context, force=True, sample_rate_fps=1.0, scene_threshold=0.25
     )
 
     assert forced.cached is False
@@ -172,26 +176,6 @@ def test_visual_analysis_force_creates_new_manifest_version(tmp_path) -> None:
     assert forced.manifest.version == first.manifest.version + 1
     assert forced.manifest.status == VisualManifestStatus.QUEUED
     assert forced.manifest.manifest is None
-
-
-def test_visual_analysis_rejects_upload_that_is_not_ready(tmp_path) -> None:
-    context = _make_visual_context(tmp_path)
-    _seed_upload(context, status=UploadStatus.PROCESSING)
-
-    with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            analyze_visual_manifest(
-                project_id=context.project_id,
-                payload=VisualAnalyzeRequest(),
-                request=context.request,
-                actor=context.actor,
-                repository=context.visual_repository,
-                visual_queue=context.visual_queue,
-            )
-        )
-
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.code == "source_video_not_ready"
 
 
 def test_worker_runs_visual_analysis_job(tmp_path) -> None:
@@ -229,16 +213,7 @@ def test_worker_runs_visual_analysis_job(tmp_path) -> None:
 def test_visual_status_is_processing_then_ready(tmp_path) -> None:
     context = _make_visual_context(tmp_path)
     _seed_upload(context, status=UploadStatus.READY)
-    scheduled = asyncio.run(
-        analyze_visual_manifest(
-            project_id=context.project_id,
-            payload=VisualAnalyzeRequest(),
-            request=context.request,
-            actor=context.actor,
-            repository=context.visual_repository,
-            visual_queue=context.visual_queue,
-        )
-    )
+    scheduled = _schedule_visual_analysis(context)
     processing = asyncio.run(
         get_visual_status(
             project_id=context.project_id,
@@ -250,7 +225,7 @@ def test_visual_status_is_processing_then_ready(tmp_path) -> None:
     assert processing.status == "processing"
     asyncio.run(
         run_queue_job(
-            queue_job_id=scheduled.job_id,
+            queue_job_id=scheduled.job.id,
             request=context.request,
             x_motionly_worker_token="worker-secret",
         )
@@ -460,10 +435,6 @@ def test_visual_api_prefers_async_repository_methods(tmp_path) -> None:
             self.async_calls.append("latest-matte-for-upload")
             return self.latest_matte_for_upload(**kwargs)
 
-        async def latest_manifest_async(self, **kwargs):
-            self.async_calls.append("latest-manifest")
-            return self.latest_manifest(**kwargs)
-
     repository = AsyncVisualRepository(context.upload_repository)
     context.request.app.state.visual_repository = repository
     repository.create_manifest(
@@ -495,20 +466,11 @@ def test_visual_api_prefers_async_repository_methods(tmp_path) -> None:
             repository=repository,
         )
     )
-    manifest = asyncio.run(
-        get_visual_manifest(
-            project_id=context.project_id,
-            actor=context.actor,
-            repository=repository,
-        )
-    )
 
     assert status.status == "processing"
-    assert manifest.cache_key == "visual-cache"
     assert repository.async_calls == [
         "latest-for-upload",
         "latest-matte-for-upload",
-        "latest-manifest",
     ]
 
 

@@ -23,7 +23,7 @@ def workflow_values() -> dict[str, object]:
         "source_media_revision": 3,
         "source_object_reference_id": uuid4(),
         "workflow_type": "first_draft",
-        "workflow_version": "first-draft-v1",
+        "workflow_version": "first-draft-v2",
         "idempotency_key": "upload-first-draft-0001",
         "request_hash": "a" * 64,
         "started_by": uuid4(),
@@ -662,3 +662,39 @@ def test_temporal_start_run_identity_is_exact_and_attempt_keys_are_step_scoped()
     )
     assert first.attempt is not None and second.attempt is not None
     assert first.attempt.id != second.attempt.id
+
+
+def test_b20_stalled_workflow_is_reported_as_delayed_retrying() -> None:
+    from app.schemas.workflows import (
+        WORKFLOW_DELAYED_AFTER_SECONDS,
+        WorkflowSummaryResponse,
+        workflow_run_is_delayed,
+    )
+
+    repository = InMemoryWorkflowRepository()
+    run, _ = repository.start_workflow(**workflow_values())
+
+    # A freshly updated non-terminal run is not delayed.
+    assert workflow_run_is_delayed(run, now=run.updated_at) is False
+
+    # Once it has not progressed past the threshold, it is delayed and the
+    # status API surfaces the "Delayed — retrying" detail for the status UI.
+    stalled_at = run.updated_at + timedelta(seconds=WORKFLOW_DELAYED_AFTER_SECONDS + 1)
+    assert workflow_run_is_delayed(run, now=stalled_at) is True
+
+    # A terminal run is never "delayed".
+    cancelled, _ = repository.cancel_workflow(
+        workflow_run_id=run.id,
+        workspace_id=run.workspace_id,
+        project_id=run.project_id,
+        expected_revision=run.revision,
+        idempotency_key="cancel-delayed-0001",
+        requested_by=run.started_by,
+    )
+    assert cancelled.state == WorkflowRunState.CANCELLED
+    far_future = cancelled.updated_at + timedelta(days=1)
+    assert workflow_run_is_delayed(cancelled, now=far_future) is False
+
+    summary = WorkflowSummaryResponse.from_record(cancelled)
+    assert summary.delayed is False
+    assert summary.status_detail is None

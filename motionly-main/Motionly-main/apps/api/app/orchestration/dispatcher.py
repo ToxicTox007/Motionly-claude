@@ -29,6 +29,7 @@ from app.orchestration.contracts import (
 from app.repositories.workflows import (
     OutboxRecord,
     SupabaseWorkflowRepository,
+    WorkflowCancellationRecord,
     WorkflowRunRecord,
 )
 
@@ -48,6 +49,10 @@ class WorkflowRepositoryProtocol(Protocol):
 
     async def fail_outbox_async(self, **values: object) -> OutboxRecord: ...
 
+    async def claim_workflow_cancellations_async(
+        self, *, limit: int
+    ) -> list[WorkflowCancellationRecord]: ...
+
 
 class TemporalClientProtocol(Protocol):
     async def start_workflow(
@@ -58,6 +63,8 @@ class TemporalClientProtocol(Protocol):
         self, *, workflow_id: str, signal: StepOutcomeSignal | ApprovalGateSignal
     ) -> str: ...
 
+    async def cancel_workflow(self, *, workflow_id: str, reason: str) -> bool: ...
+
 
 @dataclass(frozen=True)
 class DispatchBatchResult:
@@ -65,6 +72,8 @@ class DispatchBatchResult:
     dispatched: int = 0
     failed: int = 0
     stale: int = 0
+    cancellations_claimed: int = 0
+    cancellations_processed: int = 0
 
 
 class OutboxDispatcher:
@@ -96,6 +105,7 @@ class OutboxDispatcher:
         self.clock = clock or (lambda: datetime.now(UTC))
 
     async def dispatch_once(self) -> DispatchBatchResult:
+        cancellation = await self.cancel_orphaned_workflows()
         messages = await self.repository.claim_outbox_async(
             lease_owner=self.lease_owner,
             limit=self.batch_size,
@@ -112,7 +122,44 @@ class OutboxDispatcher:
             dispatched=dispatched,
             failed=failed,
             stale=stale,
+            cancellations_claimed=cancellation[0],
+            cancellations_processed=cancellation[1],
         )
+
+    async def cancel_orphaned_workflows(self) -> tuple[int, int]:
+        """Claim durable cancellation requests (written by the project-delete
+        trigger, surviving the cascade) and cancel each orphaned Temporal
+        workflow by its id. NOT_FOUND in Temporal is a terminal, quiet success:
+        the workflow is already gone, which is the desired end state."""
+        requests = await self.repository.claim_workflow_cancellations_async(
+            limit=self.batch_size
+        )
+        processed = 0
+        for request in requests:
+            try:
+                was_present = await self.temporal.cancel_workflow(
+                    workflow_id=request.temporal_workflow_id,
+                    reason=request.reason,
+                )
+            except Exception as exc:  # noqa: BLE001 - keep one bad id from blocking the rest
+                logger.warning(
+                    "temporal_cancellation_failed",
+                    extra={
+                        "workflow_run_id": str(request.workflow_run_id),
+                        "error_code": _error_code(exc),
+                    },
+                )
+                continue
+            processed += 1
+            logger.info(
+                "temporal_cancellation_dispatched",
+                extra={
+                    "workflow_run_id": str(request.workflow_run_id),
+                    "reason": request.reason,
+                    "was_present": was_present,
+                },
+            )
+        return len(requests), processed
 
     async def dispatch_message(self, message: OutboxRecord) -> str:
         if message.lease_token is None:

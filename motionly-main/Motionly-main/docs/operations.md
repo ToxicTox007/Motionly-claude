@@ -65,6 +65,35 @@ page returns only to a path on this site (`lib/safe-redirect.mjs`). Browser call
 the browser session's current token for every request and, if the API answers 401, renew the
 session and retry once (`lib/api-session.mjs`). The API logs the user named by the verified token.
 
+## Admin-assisted password reset
+
+Nothing emails a reset link. A user who forgot their password asks for help on the public
+`/forgot-password` page, which calls `POST /auth/password-reset-requests`. The API records the
+request (recording unknown emails too, so it never reveals whether an account exists) and always
+answers the same way; the request is rate-limited per viewer and globally like sign-up.
+
+An admin opens `/admin/users`, searches by email, and issues a **one-time recovery link** built
+from GoTrue's `generate_link` (`POST /admin/users/reset-links`). The link points at
+`<PUBLIC_ORIGIN>/auth/confirm#token_hash=…&type=recovery`: the token rides in the URL _fragment_, so
+it never reaches proxy or server access logs. `/auth/confirm` verifies it through the Supabase
+client (setting the recovery session cookie) and sends the user to `/reset-password`, where the new
+password must pass the same policy as sign-up. Setting it then signs the user out of their **other**
+sessions. Links expire after one hour (`GOTRUE_MAILER_OTP_EXP=3600`), are single-use, and issuing a
+new link invalidates the previous one. Admins can also ban/unban a user and dismiss a request; every
+such action is written to the `admin_audit_events` table (actor, action, target, redacted details —
+never a token or link).
+
+Admin access is granted through `ADMIN_USER_IDS` (a comma-separated list of auth user UUIDs). To
+find the first admin's UUID, run the CLI against the configured GoTrue:
+
+```
+cd apps/api && APP_ENV=production .venv/bin/python -m app.ops.find_user admin@example.com
+```
+
+It reads `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` and prints `<uuid>\t<email>` (and nothing
+else — it never issues a link or touches a password). Copy the UUID into `ADMIN_USER_IDS` for the
+`api` service and restart; that account can then open the Users page and help everyone else.
+
 ## Consented editorial learning
 
 Editorial learning is globally **default-off** (`EDITORIAL_LEARNING_ENABLED=false`)

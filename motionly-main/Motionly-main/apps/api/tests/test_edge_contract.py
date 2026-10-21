@@ -141,7 +141,9 @@ def test_only_public_immutable_assets_are_cached(contract: dict) -> None:
         assert forwarded["forwards_authorization"] is False, pattern
 
 
-@pytest.mark.parametrize("path", ["/api/projects", "/supabase/auth/v1/token", "/dashboard"])
+@pytest.mark.parametrize(
+    "path", ["/api/projects", "/supabase/auth/v1/token", "/pay/checkout/order_1", "/dashboard"]
+)
 def test_dynamic_paths_reach_the_origin_uncached_with_the_whole_request(
     contract: dict, path: str
 ) -> None:

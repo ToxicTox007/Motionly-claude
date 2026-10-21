@@ -311,3 +311,43 @@ test("worker validates manual graphic and CSS background URLs and sanitizes lega
     MediaUrlPolicyError,
   );
 });
+
+test("trusted internal fetch allows the configured internal origin only", async () => {
+  const { createServer } = await import("node:http");
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "video/mp4" });
+    response.end(Buffer.alloc(16, 1));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const internalOrigin = `http://127.0.0.1:${port}`;
+  const url = `${internalOrigin}/workspaces/w/source.mp4?token=signed`;
+  try {
+    // The configured internal origin (the SUPABASE_URL origin) is allowed even
+    // though it resolves to a private address.
+    const response = await safeFetchMedia(url, {
+      trustedInternal: true,
+      internalOrigin,
+    });
+    assert.equal(response.status, 200);
+    await response.body?.cancel?.().catch?.(() => undefined);
+
+    // A different private origin is NOT allowed, even with trustedInternal.
+    await assert.rejects(
+      safeFetchMedia("http://127.0.0.1:1/other.mp4", {
+        trustedInternal: true,
+        internalOrigin,
+      }),
+      MediaUrlPolicyError,
+    );
+
+    // trustedInternal without a configured internal origin never relaxes the
+    // private-address guard.
+    await assert.rejects(
+      safeFetchMedia(url, { trustedInternal: true, internalOrigin: null }),
+      MediaUrlPolicyError,
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

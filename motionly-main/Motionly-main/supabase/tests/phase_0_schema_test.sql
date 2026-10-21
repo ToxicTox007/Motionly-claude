@@ -60,14 +60,14 @@ select ok(
 select col_is_pk('public', 'subscriptions', 'workspace_id', 'workspace is subscription primary key');
 select has_column('public', 'subscriptions', 'plan', 'subscriptions use canonical plan');
 select has_column('public', 'subscriptions', 'status', 'subscriptions use canonical status');
-select has_column('public', 'subscriptions', 'stripe_price_id', 'subscriptions store Stripe price');
+select has_column('public', 'subscriptions', 'gateway_price_id', 'subscriptions store gateway price');
 select has_column('public', 'usage_ledger', 'source_id', 'usage entries store source ID');
 select has_index('public', 'usage_ledger', 'usage_ledger_workspace_created_at_idx', 'usage has canonical workspace timestamp index');
 select has_index('public', 'usage_ledger', 'usage_ledger_outcome_source_unique_idx', 'successful render usage is idempotent');
 select has_index('public', 'ai_edit_feedback_events', 'ai_edit_feedback_decision_outcome_unique_idx', 'kept outcomes are idempotent');
 select has_table('public', 'billing_adjustments', 'billing refunds and credits are persisted');
-select has_column('public', 'billing_adjustments', 'stripe_event_id', 'billing adjustments retain Stripe event ID');
-select has_index('public', 'billing_adjustments', 'billing_adjustments_stripe_event_unique_idx', 'Stripe refund handling is idempotent');
+select has_column('public', 'billing_adjustments', 'gateway_event_id', 'billing adjustments retain gateway event ID');
+select has_index('public', 'billing_adjustments', 'billing_adjustments_gateway_event_unique_idx', 'gateway refund handling is idempotent');
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.billing_adjustments'::regclass),
   'billing adjustments enforce RLS'

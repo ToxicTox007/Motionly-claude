@@ -103,9 +103,6 @@ SKIP_PARTS = {
     "playwright-report",
     "dist",
     "build",
-    # Applied migration history is immutable; the drop migration removes the
-    # objects and the pgTAP test proves they are gone.
-    "migrations_legacy",
 }
 SKIP_NAMES = {"pnpm-lock.yaml", "package-lock.json", ".env"}
 TEXT_SUFFIXES = {
@@ -208,11 +205,15 @@ def test_removed_modules_and_settings_are_gone() -> None:
 
 
 def test_no_publish_queue_worker_service_image_or_secret_remains() -> None:
-    for registry in (
-        ROOT / "apps" / "worker" / "src" / "queue-common.mjs",
-        ROOT / "apps" / "api" / "worker-bridge" / "queue-common.mjs",
-    ):
-        assert "publish" not in _queue_names(registry), registry
+    # The worker queue registry is a single source (apps/worker/src); the API
+    # control-plane bridge is built from it by the Dockerfiles, not duplicated on
+    # disk (Task 32 removed the apps/api/worker-bridge/*.mjs copies).
+    assert "publish" not in _queue_names(ROOT / "apps" / "worker" / "src" / "queue-common.mjs")
+    copy_line = "COPY apps/worker/src/queue-common.mjs ./apps/api/worker-bridge/queue-common.mjs"
+    for dockerfile in ("Dockerfile", "apps/api/Dockerfile"):
+        text = (ROOT / dockerfile).read_text("utf-8")
+        assert copy_line in text
+    assert not (ROOT / "apps" / "api" / "worker-bridge" / "queue-common.mjs").exists()
     compose = yaml.safe_load((ROOT / "infra" / "docker-compose.gpu.yml").read_text("utf-8"))
     assert "publishing-worker" not in compose["services"]
     assert not {"publish_token_encryption_key", "publish_oauth_state_secret"} & set(

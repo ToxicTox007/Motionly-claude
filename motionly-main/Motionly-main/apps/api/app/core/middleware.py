@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import LOCAL_AUTH_BYPASS_ENVS, env_flag_enabled
 from app.core.logging import get_logger
+from app.repositories.api_keys import KEY_SCHEME_PREFIX as API_KEY_SCHEME_PREFIX
+from app.repositories.api_keys import key_fingerprint as _api_key_fingerprint
 from app.services.auth import verify_supabase_jwt, verify_supabase_token_with_auth_api
 from app.services.request_counters import RequestCounters, current_request_counters
 from app.services.tracing import current_trace_id
@@ -203,6 +205,11 @@ def _verified_identity(request: Request) -> str | None:
         and authorization.lower().startswith("bearer ")
     ):
         token = authorization.split(" ", 1)[1].strip()
+        # Agency API keys (``mtly_...``) are rate-limited per key: the SHA-256
+        # fingerprint is a stable, 1:1 stand-in for the key id, so the limiter
+        # keys on it without a database lookup in the hot path (Task 24).
+        if token.startswith(API_KEY_SCHEME_PREFIX):
+            return f"apikey:{_api_key_fingerprint(token)}"
         try:
             verified = verify_supabase_jwt(token=token, jwt_secret=settings.supabase_jwt_secret)
         except Exception:

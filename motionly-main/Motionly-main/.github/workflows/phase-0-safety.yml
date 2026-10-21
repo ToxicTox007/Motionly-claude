@@ -58,7 +58,7 @@ jobs:
       - name: Run CPU-stage verification stages
         env:
           MOTIONLY_PYTHON: python
-        run: pnpm verify --stage static,unit,leakage,contracts,media
+        run: pnpm verify --stage static,unit,leakage,contracts,media,deadcode
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4
@@ -344,12 +344,18 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
           pnpm --filter @motionly/web exec playwright install --with-deps chromium firefox webkit
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
-      - name: Stack from empty volumes, browser suite, log scan, verdict, tear down
+          sudo apt-get install -y ffmpeg gnupg
+          # k6 for the perf-stage API-workflow smoke.
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+      - name: Stack from empty volumes, browser suite, perf smoke and budgets, verdict, tear down
         env:
           MOTIONLY_PYTHON: python
           CPU_STAGE_SIZE: slim
-        run: pnpm verify --stage browser
+        run: pnpm verify --stage browser,perf
       - name: Upload browser results
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
@@ -16,6 +16,31 @@ from app.repositories.workflows import (
     WorkflowStepRecord,
     WorkflowStepState,
 )
+
+# B20: a non-terminal workflow run that has not progressed for this long is
+# reported as "delayed — retrying" so a stall is visible instead of silent.
+WORKFLOW_DELAYED_AFTER_SECONDS = 120
+
+_WORKFLOW_TERMINAL_STATES = {
+    WorkflowRunState.EXPORT_READY,
+    WorkflowRunState.FAILED,
+    WorkflowRunState.CANCELLED,
+    WorkflowRunState.SUPERSEDED,
+}
+
+
+def workflow_run_is_delayed(
+    record: WorkflowRunRecord, *, now: datetime | None = None
+) -> bool:
+    if record.state in _WORKFLOW_TERMINAL_STATES:
+        return False
+    updated_at = record.updated_at
+    if updated_at is None:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    reference = now or datetime.now(UTC)
+    return reference - updated_at >= timedelta(seconds=WORKFLOW_DELAYED_AFTER_SECONDS)
 
 
 class WorkflowAllowedAction(StrEnum):
@@ -111,6 +136,12 @@ class WorkflowSummaryResponse(BaseModel):
     root_workflow_run_id: UUID
     failure_code: str | None = None
     allowed_actions: list[WorkflowAllowedAction]
+    # B20: stalled work is detected and surfaced. `delayed` is true when a
+    # non-terminal run has not progressed within WORKFLOW_DELAYED_AFTER_SECONDS;
+    # the web status UI shows `status_detail` ("Delayed — retrying") so users
+    # know the system is still working rather than silently stuck.
+    delayed: bool = False
+    status_detail: str | None = None
     started_at: datetime
     completed_at: datetime | None = None
     created_at: datetime
@@ -118,6 +149,7 @@ class WorkflowSummaryResponse(BaseModel):
 
     @classmethod
     def from_record(cls, record: WorkflowRunRecord) -> WorkflowSummaryResponse:
+        delayed = workflow_run_is_delayed(record)
         return cls(
             id=record.id,
             project_id=record.project_id,
@@ -132,6 +164,8 @@ class WorkflowSummaryResponse(BaseModel):
             root_workflow_run_id=record.root_workflow_run_id or record.id,
             failure_code=record.failure_code,
             allowed_actions=allowed_actions(record.state),
+            delayed=delayed,
+            status_detail="Delayed — retrying" if delayed else None,
             started_at=record.started_at,
             completed_at=record.completed_at,
             created_at=record.created_at,

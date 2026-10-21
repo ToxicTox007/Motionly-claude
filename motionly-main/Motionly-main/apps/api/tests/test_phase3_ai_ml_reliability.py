@@ -7,7 +7,6 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.internal_jobs import run_queue_job
 from app.api.plans import create_plan
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.plans import InMemoryPlanRepository
@@ -20,6 +19,7 @@ from app.schemas.captions import (
 )
 from app.schemas.plans import PlanCreateRequest
 from app.schemas.uploads import UploadStatus, VideoMetadata
+from app.services.job_engine import run_queue_job
 from app.services.local_storage import LocalObjectStorage
 from app.services.ml_failures import CudaOomFailure, clear_cuda_cache, is_cuda_oom_error
 from app.services.provider_resilience import (

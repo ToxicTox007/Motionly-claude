@@ -276,8 +276,9 @@ function handleSupervisorStdout(state, chunk) {
         );
         return;
       }
+      // A log line, not a reply: pass it on and keep reading the chunk.
       globalThis.process.stderr.write(`[${state.name} stdout] ${line}\n`);
-      return;
+      continue;
     }
     const pending = state.pending.get(response.id);
     if (!pending) {

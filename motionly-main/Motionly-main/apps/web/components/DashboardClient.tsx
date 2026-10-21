@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "./toast";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { Button } from "./button";
-import { deleteProject } from "../app/(app)/projects/actions";
+import { deleteProjectResult } from "../app/(app)/projects/actions";
 
 interface UploadedVideo {
   status: string;
@@ -37,6 +37,13 @@ interface Project {
 interface DashboardClientProps {
   initialProjects: Project[];
   workspaceName: string;
+  storage?: {
+    metered: boolean;
+    label: string;
+    percent: number | null;
+    percentLabel: string | null;
+    ariaLabel: string;
+  };
 }
 
 function formatDuration(durationMs: number | null) {
@@ -48,19 +55,20 @@ function formatDuration(durationMs: number | null) {
 function getStatusBadgeClass(status: string | undefined) {
   switch (status) {
     case "ready":
-      return "bg-emerald-500 text-white";
+      return "text-success";
     case "processing":
-      return "bg-amber-500 text-black";
+      return "text-warning";
     case "error":
-      return "bg-danger text-white";
+      return "text-danger";
     default:
-      return "bg-muted text-muted-foreground";
+      return "text-muted-foreground";
   }
 }
 
 export function DashboardClient({
   initialProjects,
   workspaceName,
+  storage,
 }: DashboardClientProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -110,10 +118,19 @@ export function DashboardClient({
     setDeleteLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.set("projectId", projectToDelete.id);
+      const result = await deleteProjectResult(projectToDelete.id);
 
-      await deleteProject(formData);
+      if (!result.ok) {
+        toast({
+          title: "Delete Failed",
+          description: `Could not delete "${projectToDelete.title}" (${result.error.replaceAll(
+            "_",
+            " ",
+          )}). The project was kept.`,
+          variant: "error",
+        });
+        return;
+      }
 
       toast({
         title: "Project Deleted",
@@ -125,16 +142,8 @@ export function DashboardClient({
         current.filter((p) => p.id !== projectToDelete.id),
       );
       setProjectToDelete(null);
+      router.refresh();
     } catch (error) {
-      const errMsg = (error as Error).message;
-      if (errMsg === "NEXT_REDIRECT") {
-        setLocalProjects((current) =>
-          current.filter((p) => p.id !== projectToDelete.id),
-        );
-        setProjectToDelete(null);
-        router.refresh();
-        return;
-      }
       console.error(error);
       toast({
         title: "Delete Failed",
@@ -153,54 +162,61 @@ export function DashboardClient({
     return (
       <div className="flex flex-col gap-8">
         {/* Header */}
-        <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
-            <span className="px-2 py-0.5 font-bold font-mono border-2 border-foreground rounded-md bg-primary text-primary-foreground mb-3 inline-flex">
-              Your Workspace
+            <span
+              className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-foreground shadow-neu-raised-sm"
+              data-testid="workspace-name"
+            >
+              {workspaceName}
             </span>
-            <h1 className="text-4xl font-black uppercase tracking-tight text-foreground">
+            <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
               Your Projects
             </h1>
-            <p className="text-muted-foreground mt-1 text-sm font-mono">
+            <p className="mt-1 text-sm font-medium text-muted-foreground">
               AI-powered video editing pipeline
             </p>
           </div>
           <Link
             href="/projects/new"
-            className="inline-flex h-12 shrink-0 items-center justify-center bg-primary border-2 border-foreground text-primary-foreground rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[5px_5px_0px_#000] dark:hover:shadow-[5px_5px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-6 text-sm font-bold uppercase tracking-wider"
+            className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-neu bg-primary px-6 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
           >
-            <PlusCircle className="mr-2 size-5" strokeWidth={1.5} />
+            <PlusCircle
+              className="size-5"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
             Create New Video
           </Link>
         </div>
 
         <div className="space-y-8">
           {/* Empty state hero */}
-          <section className="bg-card rounded-md border-4 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-10 text-center">
-            <div className="size-16 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center mx-auto mb-6 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff]">
+          <section className="rounded-neu-2xl bg-surface p-8 text-center shadow-neu-raised-lg sm:p-10">
+            <div className="mx-auto mb-6 flex size-16 items-center justify-center rounded-neu-md bg-primary text-primary-foreground shadow-neu-glow">
               <Film
                 className="size-7 text-primary-foreground"
                 aria-hidden="true"
-                strokeWidth={2}
+                strokeWidth={1.75}
               />
             </div>
-            <h2 className="text-2xl font-black uppercase text-foreground">
+            <h2 className="text-2xl font-bold tracking-tight text-foreground">
               No projects yet
             </h2>
-            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
+            <p className="mx-auto mt-2 max-w-sm text-sm font-medium leading-relaxed text-muted-foreground">
               Follow the quick onboarding steps below to start transforming your
               footage.
             </p>
             <Link
               href="/projects/new"
-              className="inline-flex h-11 items-center justify-center bg-primary border-2 border-foreground text-primary-foreground rounded-md hover:shadow-[5px_5px_0px_#000] dark:hover:shadow-[5px_5px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] px-6 mt-6 font-bold uppercase tracking-wider"
+              className="mt-6 inline-flex min-h-11 items-center justify-center rounded-neu bg-primary px-6 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
             >
               Create my first reel
             </Link>
           </section>
 
           {/* Onboarding step cards */}
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
+          <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
               {
                 step: 1,
@@ -225,15 +241,15 @@ export function DashboardClient({
             ].map(({ step, title, desc }) => (
               <div
                 key={step}
-                className="bg-card rounded-md border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-4 flex flex-col gap-3"
+                className="flex flex-col gap-3 rounded-neu-lg bg-surface p-5 shadow-neu-raised"
               >
-                <div className="size-8 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold font-mono mb-3 select-none shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+                <div className="flex size-10 select-none items-center justify-center rounded-full bg-surface text-sm font-bold tabular-nums text-primary shadow-neu-inset-sm">
                   {step}
                 </div>
-                <h3 className="text-sm font-black uppercase text-foreground tracking-wider">
+                <h3 className="text-sm font-semibold text-foreground">
                   {title}
                 </h3>
-                <p className="text-[11px] text-muted-foreground leading-relaxed font-mono">
+                <p className="text-xs font-medium leading-relaxed text-muted-foreground">
                   {desc}
                 </p>
               </div>
@@ -253,23 +269,30 @@ export function DashboardClient({
   return (
     <div className="flex flex-col gap-8">
       {/* Header */}
-      <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <span className="px-2 py-0.5 font-bold font-mono border-2 border-foreground rounded-md bg-primary text-primary-foreground mb-3 inline-flex">
-            Your Workspace
+          <span
+            className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-foreground shadow-neu-raised-sm"
+            data-testid="workspace-name"
+          >
+            {workspaceName}
           </span>
-          <h1 className="text-4xl font-black uppercase tracking-tight text-foreground">
+          <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
             Your Projects
           </h1>
-          <p className="text-muted-foreground mt-1 text-sm font-mono">
+          <p className="mt-1 text-sm font-medium text-muted-foreground">
             AI-powered video editing pipeline
           </p>
         </div>
         <Link
           href="/projects/new"
-          className="inline-flex h-12 shrink-0 items-center justify-center bg-primary border-2 border-foreground text-primary-foreground rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[5px_5px_0px_#000] dark:hover:shadow-[5px_5px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-6 text-sm font-bold uppercase tracking-wider"
+          className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-neu bg-primary px-6 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
         >
-          <PlusCircle className="mr-2 size-5" strokeWidth={1.5} />
+          <PlusCircle
+            className="size-5"
+            strokeWidth={1.75}
+            aria-hidden="true"
+          />
           Create New Video
         </Link>
       </div>
@@ -278,57 +301,65 @@ export function DashboardClient({
       {!searchQuery.trim() && featuredProject && (
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Featured Recent Project */}
-          <div className="lg:col-span-2 bg-card rounded-md border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[6px_6px_0px_#000] dark:hover:shadow-[6px_6px_0px_#fff] overflow-hidden group">
+          <div className="group overflow-hidden rounded-neu-lg bg-surface shadow-neu-raised transition-shadow duration-200 hover:shadow-neu-raised-lg lg:col-span-2">
             {/* Thumbnail */}
-            <div className="h-40 bg-muted border-b-2 border-foreground flex items-center justify-center relative">
-              <span className="absolute top-3 right-3">
+            <div className="relative flex h-40 items-center justify-center bg-ink">
+              <span className="absolute right-3 top-3">
                 <span
                   className={cn(
                     getStatusBadgeClass(
                       featuredProject.uploaded_videos?.[0]?.status,
                     ),
-                    "rounded-md px-2 py-0.5 font-bold font-mono border-2 border-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]",
+                    "inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold capitalize shadow-neu-inset-sm",
                   )}
                 >
                   {featuredProject.uploaded_videos?.[0]?.status ?? "draft"}
                 </span>
               </span>
-              <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] transition-transform group-hover:scale-110">
+              <div className="flex size-14 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow transition-transform group-hover:scale-105">
                 <Play
                   className="size-6 fill-current text-primary-foreground"
-                  strokeWidth={2}
+                  strokeWidth={1.75}
                 />
               </div>
             </div>
 
             {/* Card body */}
-            <div className="p-5 flex flex-col justify-between flex-1">
+            <div className="flex flex-1 flex-col justify-between p-5">
               <div className="space-y-1">
-                <h3 className="text-xl font-bold uppercase tracking-tight text-foreground truncate group-hover:text-primary transition-colors">
+                <h3 className="truncate text-xl font-bold tracking-tight text-foreground transition-colors group-hover:text-primary">
                   <Link
                     href={`/projects/${featuredProject.id}`}
-                    className="focus:outline-none focus:underline"
+                    className="focus:underline focus:outline-none"
                   >
                     {featuredProject.title}
                   </Link>
                 </h3>
-                <p className="text-xs font-mono text-muted-foreground truncate">
+                <p className="truncate text-xs font-medium text-muted-foreground">
                   {featuredProject.uploaded_videos?.[0]?.original_filename ??
                     "Waiting for source video upload..."}
                 </p>
               </div>
 
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t-2 border-foreground pt-4">
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-hairline pt-4">
                 {/* Metadata chips */}
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-md border-2 border-foreground bg-muted px-2.5 py-1 text-xs font-mono font-bold text-foreground inline-flex items-center gap-1 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                    <Play className="size-3" strokeWidth={2} />
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
+                    <Play
+                      className="size-3"
+                      strokeWidth={1.75}
+                      aria-hidden="true"
+                    />
                     {formatDuration(
                       featuredProject.uploaded_videos?.[0]?.duration_ms ?? null,
                     )}
                   </span>
-                  <span className="rounded-md border-2 border-foreground bg-muted px-2.5 py-1 text-xs font-mono font-bold text-foreground inline-flex items-center gap-1 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                    <Clock className="size-3" strokeWidth={2} />
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
+                    <Clock
+                      className="size-3"
+                      strokeWidth={1.75}
+                      aria-hidden="true"
+                    />
                     {new Date(featuredProject.updated_at).toLocaleDateString()}
                   </span>
                 </div>
@@ -337,7 +368,7 @@ export function DashboardClient({
                 <div className="flex items-center gap-2">
                   <Link
                     href={`/projects/${featuredProject.id}`}
-                    className="bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] text-xs px-4 py-2 font-bold uppercase tracking-wider"
+                    className="inline-flex items-center justify-center rounded-neu bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
                   >
                     Open Reel
                   </Link>
@@ -348,7 +379,7 @@ export function DashboardClient({
                         title: featuredProject.title,
                       })
                     }
-                    className="bg-danger text-white border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] text-xs px-3 py-2 font-bold uppercase tracking-wider"
+                    className="inline-flex items-center justify-center rounded-neu bg-surface px-3 py-2 text-xs font-semibold text-danger shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                     aria-label={`Delete ${featuredProject.title}`}
                   >
                     Delete
@@ -359,29 +390,29 @@ export function DashboardClient({
           </div>
 
           {/* Workspace Stats Card */}
-          <div className="bg-surface rounded-md border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-5 flex flex-col justify-between transition-all duration-[220ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[6px_6px_0px_#000] dark:hover:shadow-[6px_6px_0px_#fff]">
+          <div className="flex flex-col justify-between rounded-neu-lg bg-surface p-5 shadow-neu-raised transition-shadow duration-200 hover:shadow-neu-raised-lg">
             <div>
-              <h3 className="text-xs font-mono font-black uppercase tracking-widest text-primary">
+              <h3 className="text-xs font-semibold text-primary">
                 Workspace Stats
               </h3>
-              <p className="text-[11px] font-mono text-muted-foreground mt-0.5">
+              <p className="mt-0.5 text-xs font-medium text-muted-foreground">
                 Status overview of reels.
               </p>
 
               <div className="mt-4 space-y-3">
-                <div className="rounded-md border-2 border-foreground bg-muted p-3 flex justify-between items-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                  <span className="text-xs font-bold font-mono text-muted-foreground">
+                <div className="flex items-center justify-between rounded-neu-md bg-surface p-3 shadow-neu-inset-sm">
+                  <span className="text-xs font-semibold text-muted-foreground">
                     Total Projects
                   </span>
-                  <span className="text-sm font-bold font-mono">
+                  <span className="text-sm font-bold tabular-nums text-foreground">
                     {localProjects.length}
                   </span>
                 </div>
-                <div className="rounded-md border-2 border-foreground bg-muted p-3 flex justify-between items-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                  <span className="text-xs font-bold font-mono text-muted-foreground">
+                <div className="flex items-center justify-between rounded-neu-md bg-surface p-3 shadow-neu-inset-sm">
+                  <span className="text-xs font-semibold text-muted-foreground">
                     Ready to Render
                   </span>
-                  <span className="text-sm font-bold font-mono">
+                  <span className="text-sm font-bold tabular-nums text-foreground">
                     {
                       localProjects.filter(
                         (p) => p.uploaded_videos?.[0]?.status === "ready",
@@ -389,11 +420,11 @@ export function DashboardClient({
                     }
                   </span>
                 </div>
-                <div className="rounded-md border-2 border-foreground bg-muted p-3 flex justify-between items-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                  <span className="text-xs font-bold font-mono text-muted-foreground">
+                <div className="flex items-center justify-between rounded-neu-md bg-surface p-3 shadow-neu-inset-sm">
+                  <span className="text-xs font-semibold text-muted-foreground">
                     Draft Phase
                   </span>
-                  <span className="text-sm font-bold font-mono">
+                  <span className="text-sm font-bold tabular-nums text-foreground">
                     {
                       localProjects.filter(
                         (p) =>
@@ -405,26 +436,44 @@ export function DashboardClient({
                 </div>
               </div>
 
-              {/* Usage progress */}
+              {/* Usage progress — real storage quota from the API (B23). */}
               <div className="mt-4">
-                <div className="flex justify-between text-xs font-mono text-muted-foreground mb-1.5">
+                <div className="mb-1.5 flex justify-between text-xs font-medium text-muted-foreground">
                   <span>Storage used</span>
-                  <span>{Math.min(localProjects.length * 10, 100)}%</span>
+                  <span className="tabular-nums">
+                    {storage?.percentLabel ?? "Not metered"}
+                  </span>
                 </div>
-                <div className="h-4 border-2 border-foreground bg-muted rounded-md overflow-hidden shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] mt-1">
+                {storage?.metered && storage.percent !== null ? (
                   <div
-                    className="bg-primary h-full transition-all"
-                    style={{
-                      width: `${Math.min(localProjects.length * 10, 100)}%`,
-                    }}
-                  />
-                </div>
+                    className="mt-1 h-4 overflow-hidden rounded-full bg-surface shadow-neu-inset-sm"
+                    role="progressbar"
+                    aria-label={storage.ariaLabel}
+                    aria-valuenow={storage.percent}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <div
+                      className="h-full rounded-full bg-primary transition-[width] duration-[600ms]"
+                      style={{ width: `${storage.percent}%` }}
+                    />
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs font-medium text-muted-foreground">
+                    {storage?.label ?? "Storage usage unavailable"}
+                  </p>
+                )}
+                {storage?.metered ? (
+                  <p className="mt-1 text-xs font-medium text-muted-foreground">
+                    {storage.label}
+                  </p>
+                ) : null}
               </div>
             </div>
 
             <Link
               href="/projects/new"
-              className="w-full bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] text-center py-3 text-xs mt-6 font-bold uppercase tracking-wider block"
+              className="mt-6 block w-full rounded-neu bg-primary py-3 text-center text-xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
             >
               + Create New Reel
             </Link>
@@ -433,16 +482,16 @@ export function DashboardClient({
       )}
 
       {/* Grid of Other Projects */}
-      <div className="space-y-4 border-t-2 border-foreground pt-6">
+      <div className="space-y-4 border-t border-hairline pt-6">
         {/* Search + Sort bar */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative flex-1 max-w-md">
+        <div className="flex flex-col gap-4 rounded-neu-xl bg-surface px-3 py-2 shadow-neu-raised sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative max-w-md flex-1">
             <label htmlFor="project-search" className="sr-only">
               Search projects
             </label>
             <Search
-              className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none"
-              strokeWidth={1.5}
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              strokeWidth={1.75}
             />
             <input
               id="project-search"
@@ -450,29 +499,33 @@ export function DashboardClient({
               placeholder="Search projects by title..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full h-11 pl-9 pr-4 text-xs font-mono rounded-md border-2 border-foreground bg-background text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] focus:outline-none focus:shadow-none focus:translate-x-0.5 focus:translate-y-0.5 transition-all"
+              className="h-11 w-full rounded-neu border border-control bg-surface pl-9 pr-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="inline-flex gap-1 rounded-full bg-surface p-1 shadow-neu-inset-sm">
             <button
+              type="button"
+              aria-pressed={sortBy === "updated"}
               onClick={() => setSortBy("updated")}
               className={cn(
-                "text-xs px-3 py-2 font-mono font-bold border-2 border-foreground rounded-md transition-all duration-[100ms]",
+                "min-h-10 rounded-full px-4 text-sm font-semibold transition-shadow duration-200",
                 sortBy === "updated"
-                  ? "bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
-                  : "bg-background text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
+                  ? "bg-surface text-foreground shadow-neu-raised-sm"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               Recent
             </button>
             <button
+              type="button"
+              aria-pressed={sortBy === "title"}
               onClick={() => setSortBy("title")}
               className={cn(
-                "text-xs px-3 py-2 font-mono font-bold border-2 border-foreground rounded-md transition-all duration-[100ms]",
+                "min-h-10 rounded-full px-4 text-sm font-semibold transition-shadow duration-200",
                 sortBy === "title"
-                  ? "bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
-                  : "bg-background text-foreground hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none",
+                  ? "bg-surface text-foreground shadow-neu-raised-sm"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               A–Z
@@ -488,60 +541,72 @@ export function DashboardClient({
               return (
                 <div
                   key={project.id}
-                  className="bg-card rounded-md border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] overflow-hidden group transition-all duration-[220ms] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[6px_6px_0px_#000] dark:hover:shadow-[6px_6px_0px_#fff]"
+                  className="group overflow-hidden rounded-neu-lg bg-surface shadow-neu-raised transition-shadow duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
                 >
                   {/* Thumbnail */}
-                  <div className="h-36 bg-muted border-b-2 border-foreground flex items-center justify-center relative">
+                  <div className="relative flex h-36 items-center justify-center bg-ink">
                     {/* Status badge overlay */}
-                    <span className="absolute top-2 right-2">
+                    <span className="absolute right-2 top-2">
                       <span
                         className={cn(
                           getStatusBadgeClass(upload?.status),
-                          "rounded-md px-2 py-0.5 font-bold font-mono border-2 border-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]",
+                          "inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold capitalize shadow-neu-inset-sm",
                         )}
                       >
                         {upload?.status ?? "draft"}
                       </span>
                     </span>
-                    <div className="size-10 rounded-md border-2 border-foreground bg-primary text-primary-foreground flex items-center justify-center shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] transition-transform group-hover:scale-110">
+                    <div className="flex size-10 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow transition-transform group-hover:scale-105">
                       <Play
                         className="size-4 fill-current text-primary-foreground"
-                        strokeWidth={2}
+                        strokeWidth={1.75}
                       />
                     </div>
                   </div>
 
                   {/* Content */}
                   <div className="p-4">
-                    <h3 className="font-bold text-foreground text-sm truncate hover:text-primary transition-colors">
+                    <h3 className="truncate text-sm font-semibold text-foreground transition-colors hover:text-primary">
                       <Link
                         href={`/projects/${project.id}`}
-                        className="focus:outline-none focus:underline"
+                        className="focus:underline focus:outline-none"
                       >
                         {project.title}
                       </Link>
                     </h3>
-                    <p className="text-xs font-mono text-muted-foreground truncate mt-0.5">
+                    <p className="mt-0.5 truncate text-xs font-medium text-muted-foreground">
                       {upload?.original_filename ?? "Waiting for source..."}
                     </p>
 
                     {warnings.length > 0 && (
-                      <div className="flex gap-1 items-center text-[10px] text-amber-500 font-bold font-mono uppercase tracking-tight mt-2">
-                        <AlertTriangle className="size-3" strokeWidth={1.5} />
+                      <div className="mt-2 flex items-center gap-1 text-xs font-semibold text-warning">
+                        <AlertTriangle
+                          className="size-3"
+                          strokeWidth={1.75}
+                          aria-hidden="true"
+                        />
                         {warnings.length} issues found
                       </div>
                     )}
 
                     {/* Footer */}
-                    <div className="mt-3 flex items-center justify-between border-t-2 border-foreground pt-3">
+                    <div className="mt-3 flex items-center justify-between border-t border-hairline pt-3">
                       {/* Metadata chips */}
                       <div className="flex items-center gap-1.5">
-                        <span className="rounded-md border-2 border-foreground bg-muted px-2 py-0.5 text-[10px] font-mono font-bold text-foreground inline-flex items-center gap-1 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                          <Play className="size-2.5" strokeWidth={2} />
+                        <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
+                          <Play
+                            className="size-2.5"
+                            strokeWidth={1.75}
+                            aria-hidden="true"
+                          />
                           {formatDuration(upload?.duration_ms ?? null)}
                         </span>
-                        <span className="rounded-md border-2 border-foreground bg-muted px-2 py-0.5 text-[10px] font-mono font-bold text-foreground inline-flex items-center gap-1 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-                          <Clock className="size-2.5" strokeWidth={2} />
+                        <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
+                          <Clock
+                            className="size-2.5"
+                            strokeWidth={1.75}
+                            aria-hidden="true"
+                          />
                           {new Date(project.updated_at).toLocaleDateString()}
                         </span>
                       </div>
@@ -550,7 +615,7 @@ export function DashboardClient({
                       <div className="flex items-center gap-1.5">
                         <Link
                           href={`/projects/${project.id}`}
-                          className="bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider"
+                          className="inline-flex items-center justify-center rounded-neu bg-primary px-2.5 py-1 text-[10px] font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
                         >
                           Open
                         </Link>
@@ -561,7 +626,7 @@ export function DashboardClient({
                               title: project.title,
                             })
                           }
-                          className="bg-danger text-white border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-2 py-1 text-[10px] font-bold uppercase tracking-wider"
+                          className="inline-flex items-center justify-center rounded-neu bg-surface px-2 py-1 text-[10px] font-semibold text-danger shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                           aria-label={`Delete ${project.title}`}
                         >
                           Delete
@@ -574,7 +639,7 @@ export function DashboardClient({
             })}
           </div>
         ) : (
-          <p className="bg-card rounded-md border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-8 text-center text-sm font-mono text-muted-foreground">
+          <p className="rounded-neu-lg bg-surface p-8 text-center text-sm font-medium text-muted-foreground shadow-neu-raised">
             No projects found matching your search.
           </p>
         )}
@@ -586,7 +651,7 @@ export function DashboardClient({
           <button
             type="button"
             aria-label="Close delete confirmation overlay"
-            className="fixed inset-0 z-45 cursor-default bg-background/60 backdrop-blur-sm w-full h-full text-left"
+            className="fixed inset-0 z-45 h-full w-full cursor-default bg-background/60 text-left backdrop-blur-sm"
             onClick={handleCancelDelete}
           />
           <div
@@ -594,20 +659,24 @@ export function DashboardClient({
             role="dialog"
             aria-modal="true"
             aria-labelledby="delete-dialog-title"
-            className="bg-card rounded-md border-4 border-foreground shadow-[8px_8px_0px_#000] dark:shadow-[8px_8px_0px_#fff] p-6 w-full max-w-md animate-scale-in fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2"
+            className="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg animate-scale-in"
           >
             {/* Warning icon */}
-            <div className="size-12 rounded-md border-2 border-foreground bg-amber-500 text-black flex items-center justify-center mx-auto mb-4 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-              <ShieldAlert className="size-6 text-black" strokeWidth={2} />
+            <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-neu text-warning shadow-neu-inset-sm">
+              <ShieldAlert
+                className="size-6"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
             </div>
 
             <h3
               id="delete-dialog-title"
-              className="text-xl font-black uppercase text-center mt-2 text-foreground"
+              className="mt-2 text-center text-xl font-bold tracking-tight text-foreground"
             >
               Confirm Delete
             </h3>
-            <p className="text-sm text-muted-foreground text-center mt-2 leading-relaxed">
+            <p className="mt-2 text-center text-sm font-medium leading-relaxed text-muted-foreground">
               Are you sure you want to permanently delete project{" "}
               <strong className="text-foreground">
                 &quot;{projectToDelete.title}&quot;
@@ -616,12 +685,12 @@ export function DashboardClient({
               exports. This action is irreversible.
             </p>
 
-            <div className="flex gap-3 mt-6 justify-end">
+            <div className="mt-6 flex justify-end gap-3">
               <button
                 type="button"
                 disabled={deleteLoading}
                 onClick={handleCancelDelete}
-                className="border-2 border-foreground rounded-md bg-background text-foreground shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-4 py-2 text-xs font-bold font-mono uppercase tracking-wider"
+                className="inline-flex items-center justify-center rounded-neu bg-surface px-4 py-2 text-xs font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -630,13 +699,13 @@ export function DashboardClient({
                 disabled={deleteLoading}
                 onClick={confirmDelete}
                 aria-busy={deleteLoading}
-                className="bg-danger text-white border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-4 py-2 text-xs font-bold font-mono uppercase tracking-wider inline-flex items-center"
+                className="inline-flex items-center justify-center rounded-neu bg-danger px-4 py-2 text-xs font-semibold text-danger-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-50"
               >
                 {deleteLoading ? (
                   <>
                     <Loader2
                       className="mr-1.5 size-3.5 animate-spin"
-                      strokeWidth={2}
+                      strokeWidth={1.75}
                     />
                     Deleting...
                   </>

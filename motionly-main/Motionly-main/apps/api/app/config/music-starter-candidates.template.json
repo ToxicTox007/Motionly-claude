@@ -1,0 +1,546 @@
+{
+  "environment": "local",
+  "_note": "Candidate tracks pending the user's D3 sign-off. Fill every field from the track's own source page; do NOT import until each row is signed off (see music-starter-signoff.md). Each mood_tag must be one of: uplifting, ambient, luxury, clean, confident, minimal, subtle, conversational, podcast, energetic, cinematic, dramatic, happy, calm, inspiring, neutral, dark, playful.",
+  "tracks": [
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    },
+    {
+      "provider_track_id": "",
+      "title": "",
+      "audio_path": "",
+      "mood_tags": [],
+      "is_test_track": false,
+      "verification": {
+        "source_page_url": "",
+        "license_archive_sha256": "",
+        "license_id": "",
+        "license_version": "",
+        "rights_holder": "",
+        "composition_rights_status": "",
+        "recording_rights_status": "",
+        "verified_by": "",
+        "verified_at": ""
+      }
+    }
+  ]
+}

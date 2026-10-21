@@ -6,25 +6,25 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "accent";
 type ButtonSize = "sm" | "md" | "lg" | "icon";
 
 const baseButtonClasses =
-  "inline-flex items-center justify-center gap-2 rounded border-2 border-foreground font-black uppercase transition-all duration-[100ms] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:translate-x-0 aria-disabled:translate-y-0 aria-disabled:shadow-none";
+  "inline-flex items-center justify-center gap-2 rounded-neu font-semibold transition-all duration-[140ms] ease-spring focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:shadow-neu-raised-sm";
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    "bg-primary text-primary-foreground shadow-brutal hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg active:translate-x-0 active:translate-y-0 active:shadow-none",
+    "bg-primary text-primary-foreground shadow-neu-glow hover:brightness-105 active:shadow-neu-pressed active:brightness-100",
   secondary:
-    "bg-surface text-foreground shadow-brutal-sm hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-surface-elevated hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none",
+    "bg-surface text-foreground shadow-neu-raised hover:shadow-neu-raised-lg active:shadow-neu-pressed",
   ghost:
-    "border-transparent bg-transparent text-muted-foreground shadow-none hover:border-foreground hover:bg-surface-elevated hover:text-foreground hover:shadow-brutal-sm active:translate-x-0 active:translate-y-0 active:shadow-none",
+    "bg-transparent text-muted-foreground shadow-none hover:bg-surface hover:text-foreground hover:shadow-neu-raised-sm active:shadow-neu-pressed",
   danger:
-    "bg-danger text-danger-foreground shadow-brutal hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg active:translate-x-0 active:translate-y-0 active:shadow-none",
+    "bg-danger text-danger-foreground shadow-neu-raised hover:brightness-105 active:shadow-neu-pressed active:brightness-100",
   accent:
-    "bg-accent text-accent-foreground shadow-brutal hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-brutal-lg active:translate-x-0 active:translate-y-0 active:shadow-none",
+    "bg-accent text-accent-foreground shadow-neu-raised hover:brightness-105 active:shadow-neu-pressed active:brightness-100",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: "min-h-10 px-3 text-xs",
-  md: "min-h-11 px-4 text-sm",
-  lg: "min-h-12 px-6 text-base",
+  sm: "min-h-10 px-4 text-xs",
+  md: "min-h-11 px-5 text-sm",
+  lg: "min-h-12 px-7 text-base",
   icon: "size-11 p-0 text-sm",
 };
 

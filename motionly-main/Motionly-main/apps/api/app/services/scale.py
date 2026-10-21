@@ -415,6 +415,11 @@ def _separate_stems(
         stems = stem_separator.separate(source_path=source, model=model)
         provenance = None
     result: dict[str, Any] = {"provider": "demucs", "model": model, "active": "vocals"}
+    if provenance is None:
+        # Non-production stems are produced by the labelled FixtureStemSeparator
+        # (fixtures/registry.json id "stem-separation", label "Test stems"); mark
+        # the result so the Audio tab can show that badge next to the stem choice.
+        result["stem_provider"] = "fixture"
     if provenance is not None:
         result["model_gateway"] = provenance
     try:

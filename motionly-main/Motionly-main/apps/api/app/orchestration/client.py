@@ -184,6 +184,24 @@ class TemporalOrchestrationClient:
             status=description.status.name.lower(),
         )
 
+    async def cancel_workflow(self, *, workflow_id: str, reason: str) -> bool:
+        """Cancel an orphaned workflow by id, idempotently.
+
+        A workflow that Temporal no longer knows about (already closed, or never
+        started because its project was deleted before dispatch) is treated as a
+        terminal, quiet success: NOT_FOUND means the desired end state already
+        holds. Returns True when a running execution was cancelled, False when
+        Temporal had nothing to cancel.
+        """
+        handle = self.client.get_workflow_handle(workflow_id)
+        try:
+            await handle.cancel()
+        except RPCError as exc:
+            if exc.status in (RPCStatusCode.NOT_FOUND, RPCStatusCode.FAILED_PRECONDITION):
+                return False
+            raise
+        return True
+
 
 def _read_optional(path: str | None) -> bytes | None:
     if not path:

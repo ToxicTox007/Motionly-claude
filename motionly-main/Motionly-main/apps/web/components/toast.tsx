@@ -7,7 +7,7 @@ import React, {
   useEffect,
   useCallback,
 } from "react";
-import { cn } from "@/lib/utils";
+import { AnimatePresence, m } from "motion/react";
 import { PixelIcon } from "@/components/pixel-icons";
 
 export type ToastVariant = "success" | "error" | "warning" | "info" | "loading";
@@ -76,9 +76,11 @@ export function ToastContainer({
       aria-relevant="additions"
       className="fixed bottom-3 right-3 z-[200] flex w-[calc(100vw-1.5rem)] max-w-[420px] flex-col items-end gap-2 pointer-events-none sm:bottom-4 sm:right-4"
     >
-      {toasts.map((t) => (
-        <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
-      ))}
+      <AnimatePresence initial={false}>
+        {toasts.map((t) => (
+          <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
+        ))}
+      </AnimatePresence>
     </div>
   );
 }
@@ -102,35 +104,36 @@ function ToastItem({
   }, [duration, onDismiss]);
 
   const icons: Record<ToastVariant, React.ReactNode> = {
-    success: <PixelIcon name="success" className="mt-px size-5 text-success" />,
-    error: <PixelIcon name="warning" className="mt-px size-5 text-danger" />,
-    warning: <PixelIcon name="warning" className="mt-px size-5 text-warning" />,
-    info: <PixelIcon name="info" className="mt-px size-5 text-info" />,
+    success: <PixelIcon name="success" className="size-5 text-success" />,
+    error: <PixelIcon name="warning" className="size-5 text-danger" />,
+    warning: <PixelIcon name="warning" className="size-5 text-warning" />,
+    info: <PixelIcon name="info" className="size-5 text-info" />,
     loading: (
       <span
-        className="mt-1 size-4 animate-spin border-2 border-foreground border-t-primary"
+        className="size-4 animate-spin rounded-full border-2 border-hairline border-t-primary"
         aria-hidden="true"
       />
     ),
   };
 
   return (
-    <div
+    <m.div
+      layout
+      initial={{ y: 16, scale: 0.98 }}
+      animate={{ y: 0, scale: 1 }}
+      exit={{ scale: 0.96 }}
+      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
       role={variant === "error" || variant === "warning" ? "alert" : "status"}
-      className={cn(
-        "pointer-events-auto flex w-full min-w-0 max-w-[420px] animate-slide-in-up items-start gap-3 rounded border-2 border-foreground border-l-[10px] bg-surface p-4 text-foreground shadow-brutal",
-        variant === "success" && "border-l-success",
-        variant === "error" && "border-l-danger",
-        variant === "warning" && "border-l-warning",
-        (variant === "info" || variant === "loading") && "border-l-primary",
-      )}
+      className="pointer-events-auto flex w-full min-w-0 max-w-[420px] items-start gap-3 rounded-neu-md bg-surface p-4 text-foreground shadow-neu-raised"
     >
-      {/* Icon */}
-      <div className="shrink-0">{icons[variant]}</div>
+      {/* Icon well */}
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-neu-sm shadow-neu-inset-sm">
+        {icons[variant]}
+      </div>
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        <h3 className="text-sm font-bold text-foreground leading-tight">
+        <h3 className="text-sm font-semibold text-foreground leading-tight">
           {title}
         </h3>
         {description && (
@@ -143,11 +146,11 @@ function ToastItem({
       {/* Dismiss */}
       <button
         onClick={onDismiss}
-        className="flex size-7 shrink-0 items-center justify-center rounded border-2 border-foreground bg-surface text-foreground shadow-brutal-sm transition-colors hover:bg-surface-elevated active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
+        className="flex size-8 shrink-0 items-center justify-center rounded-neu-sm bg-surface text-muted-foreground shadow-neu-raised-sm transition-shadow hover:text-foreground active:shadow-neu-pressed"
         aria-label="Dismiss toast"
       >
         <PixelIcon name="x" className="size-3.5" />
       </button>
-    </div>
+    </m.div>
   );
 }

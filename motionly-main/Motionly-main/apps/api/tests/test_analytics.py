@@ -5,7 +5,6 @@ from uuid import UUID, uuid4
 from app.api.ai_proposals import decide_proposal
 from app.api.analytics import (
     get_ai_edit_analytics,
-    get_fine_tuning_dataset,
     record_ai_edit_feedback,
 )
 from app.api.dependencies import Actor
@@ -32,7 +31,7 @@ from app.services.queue import PlanQueue
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
 
-def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -> None:
+def test_ai_edit_analytics_summarizes_events() -> None:
     repository = InMemoryAnalyticsRepository()
     project_id = uuid4()
     workspace_id = uuid4()
@@ -89,18 +88,6 @@ def test_ai_edit_analytics_summarizes_events_and_builds_fine_tuning_examples() -
     assert cuts.kept == 1
     assert cuts.changed == 1
     assert cuts.keep_rate == 0.5
-
-    dataset = asyncio.run(
-        get_fine_tuning_dataset(
-            project_id=project_id,
-            actor=actor,
-            repository=repository,
-            request=request,
-        )
-    )
-    # Operational analytics is deliberately not exportable as training data.
-    assert dataset.example_count == 0
-    assert dataset.examples == []
 
 
 def test_supabase_analytics_repository_lists_with_explicit_projection(monkeypatch) -> None:
@@ -317,15 +304,6 @@ def test_analytics_api_prefers_async_repository_methods() -> None:
             actor=actor,
             repository=repository,
             layer=AIEditLayer.CUTS,
-            limit=25,
-        )
-    )
-    asyncio.run(
-        get_fine_tuning_dataset(
-            project_id=project_id,
-            actor=actor,
-            repository=repository,
-            request=request,
             limit=25,
         )
     )

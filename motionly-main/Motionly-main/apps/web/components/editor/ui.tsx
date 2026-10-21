@@ -1,26 +1,6 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 
-export interface PixelCardProps extends React.HTMLAttributes<HTMLDivElement> {
-  children: React.ReactNode;
-}
-
-export function PixelCard({ className, children, ...props }: PixelCardProps) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg bg-surface border-2 border-foreground shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] transition-all p-5",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </div>
-  );
-}
-
-export const Card = PixelCard;
-
 export function Label({
   className,
   children,
@@ -29,7 +9,7 @@ export function Label({
   return (
     <label
       className={cn(
-        "text-xs font-black text-foreground uppercase tracking-wider mb-1.5 block",
+        "text-xs font-semibold text-foreground mb-1.5 block",
         className,
       )}
       {...props}
@@ -45,7 +25,7 @@ export function PixelInput({ className, ...props }: PixelInputProps) {
   return (
     <input
       className={cn(
-        "flex min-h-11 w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 text-base font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground",
+        "flex min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-base font-medium shadow-neu-inset-sm transition disabled:cursor-not-allowed disabled:opacity-60 focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 sm:text-sm text-foreground",
         className,
       )}
       {...props}
@@ -61,7 +41,7 @@ export function PixelTextarea({ className, ...props }: PixelTextareaProps) {
   return (
     <textarea
       className={cn(
-        "flex min-h-[7rem] w-full rounded-md border-2 border-foreground bg-surface-elevated px-4 py-3 text-base font-bold transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground",
+        "flex min-h-[7rem] w-full rounded-neu border border-control bg-surface px-4 py-3 text-base font-medium shadow-neu-inset-sm transition disabled:cursor-not-allowed disabled:opacity-60 focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 sm:text-sm text-foreground",
         className,
       )}
       {...props}
@@ -101,7 +81,7 @@ export function PixelSelect({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
-          "flex min-h-11 w-full appearance-none rounded-md border-2 border-foreground bg-surface-elevated px-4 py-2 pr-10 text-base font-bold transition-all hover:border-primary focus:bg-surface focus:shadow-[3px_3px_0px_#000] dark:focus:shadow-[3px_3px_0px_#fff] focus:outline-none sm:text-sm text-foreground",
+          "flex min-h-11 w-full appearance-none rounded-neu border border-control bg-surface px-4 py-2 pr-10 text-base font-medium shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 sm:text-sm text-foreground",
           className,
         )}
         {...props}
@@ -118,7 +98,7 @@ export function PixelSelect({
       </select>
       <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center">
         <svg
-          className="h-4 w-4 text-foreground"
+          className="h-4 w-4 text-muted-foreground"
           fill="none"
           stroke="currentColor"
           strokeWidth={2}
@@ -145,10 +125,7 @@ export function LoadingPixelSkeleton({
 }: LoadingPixelSkeletonProps) {
   return (
     <div
-      className={cn(
-        "skeleton h-6 border-2 border-foreground rounded-md w-full",
-        className,
-      )}
+      className={cn("neu-shimmer h-6 w-full rounded-neu", className)}
       {...props}
     />
   );
@@ -170,16 +147,16 @@ export function PanelSection({
   return (
     <details
       className={cn(
-        "group rounded-lg border-2 border-foreground bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] overflow-hidden",
+        "group rounded-neu-md bg-surface shadow-neu-raised overflow-hidden",
         className,
       )}
       open={defaultOpen}
       {...props}
     >
-      <summary className="flex items-center justify-between px-4 py-3 font-bold text-sm cursor-pointer select-none hover:bg-surface-elevated list-none [&::-webkit-details-marker]:hidden text-foreground focus:outline-none border-b-2 border-transparent group-open:border-foreground transition-colors">
+      <summary className="flex items-center justify-between rounded-neu-md px-4 py-3 font-semibold text-sm cursor-pointer select-none hover:bg-surface-elevated list-none [&::-webkit-details-marker]:hidden text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus transition-colors">
         <span>{title}</span>
         <svg
-          className="size-4 text-foreground transition-transform duration-[120ms] group-open:rotate-90"
+          className="size-4 text-muted-foreground transition-transform duration-[140ms] group-open:rotate-90"
           fill="none"
           stroke="currentColor"
           strokeWidth={2}
@@ -240,7 +217,7 @@ export function Slider({
         <Label htmlFor={id} className="mb-0">
           {label}
         </Label>
-        <span className="rounded border-2 border-foreground px-2 py-0.5 text-xs font-bold font-mono bg-surface text-foreground shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]">
+        <span className="rounded-full px-2.5 py-0.5 text-xs font-semibold tabular-nums bg-surface text-foreground shadow-neu-raised-sm">
           {value}
           {suffix}
         </span>
@@ -259,7 +236,12 @@ export function Slider({
         aria-valuetext={`${value} ${suffix}`}
         onChange={(e) => onChange(parseInt(e.target.value))}
         onKeyDown={onKeyDown}
-        className="pixel-range h-2 w-full rounded-full focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2"
+        style={
+          {
+            "--range-pct": `${((value - min) / (max - min || 1)) * 100}%`,
+          } as React.CSSProperties
+        }
+        className="pixel-range h-3 w-full rounded-full focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2"
       />
     </div>
   );

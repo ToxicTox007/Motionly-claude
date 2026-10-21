@@ -68,7 +68,7 @@ export function AdminJobsList({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by job ID, queue, or kind..."
-            className="min-h-11 w-full rounded border-2 border-foreground bg-background px-3 py-2 pl-9 text-sm font-bold focus:border-primary focus:outline-none focus:shadow-brutal-sm"
+            className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 pl-9 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
           />
         </div>
         <div className="relative">
@@ -78,7 +78,7 @@ export function AdminJobsList({
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="min-h-11 appearance-none rounded border-2 border-foreground bg-background px-8 py-2 pr-10 text-sm font-bold focus:border-primary focus:outline-none focus:shadow-brutal-sm"
+            className="min-h-11 appearance-none rounded-neu border border-control bg-surface px-8 py-2 pr-10 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
           >
             <option value="all">All statuses</option>
             {statuses.map((status) => (
@@ -91,7 +91,7 @@ export function AdminJobsList({
             ▼
           </span>
         </div>
-        <p className="text-xs font-black uppercase tracking-wider text-muted-foreground">
+        <p className="text-xs font-semibold text-muted-foreground">
           Showing {Math.min(jobs.length, limit)} of {totalJobs} latest jobs
         </p>
       </div>
@@ -100,24 +100,25 @@ export function AdminJobsList({
         {filteredJobs.map((job) => (
           <div
             key={job.id}
-            className="pixel-panel flex flex-wrap items-center justify-between gap-3 bg-surface p-4 transition-all hover:-translate-x-0.5 hover:-translate-y-0.5"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-neu-md bg-surface p-4 shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised"
           >
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">{job.id}</p>
+              <p className="truncate text-sm font-semibold text-foreground">
+                {job.id}
+              </p>
               <p className="text-xs text-muted-foreground mt-1">
-                <span className="font-bold text-foreground">
+                <span className="font-semibold text-foreground">
                   {job.queue_name}
                 </span>{" "}
                 | {job.kind} |{" "}
                 <span
                   className={cn(
-                    "rounded border-2 border-foreground px-1.5 py-0.5 text-[10px] font-black uppercase",
+                    "rounded-full px-2 py-0.5 text-[10px] font-semibold shadow-neu-inset-sm",
                     ["failed", "dead_letter"].includes(job.status) &&
-                      "bg-danger text-white",
+                      "bg-danger text-danger-foreground",
                     ["queued"].includes(job.status) && "bg-info text-ink",
                     ["running"].includes(job.status) && "bg-warning text-ink",
-                    ["succeeded"].includes(job.status) &&
-                      "bg-success text-white",
+                    ["succeeded"].includes(job.status) && "bg-success text-ink",
                   )}
                 >
                   {job.status}
@@ -131,7 +132,7 @@ export function AdminJobsList({
                   <input type="hidden" name="jobId" value={job.id} />
                   <button
                     type="submit"
-                    className="pixel-button inline-flex h-9 items-center gap-2 bg-background px-3 text-xs font-bold hover:bg-muted"
+                    className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
                   >
                     <RotateCcw className="size-3.5" aria-hidden="true" />
                     Retry
@@ -143,7 +144,7 @@ export function AdminJobsList({
                   <input type="hidden" name="jobId" value={job.id} />
                   <button
                     type="submit"
-                    className="pixel-button inline-flex h-9 items-center gap-2 bg-background px-3 text-xs font-bold text-red-600 hover:bg-red-50"
+                    className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-danger shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
                   >
                     <Square className="size-3.5" aria-hidden="true" />
                     Cancel
@@ -154,7 +155,7 @@ export function AdminJobsList({
           </div>
         ))}
         {filteredJobs.length === 0 ? (
-          <div className="pixel-panel p-8 text-center text-sm text-muted-foreground bg-muted/20">
+          <div className="rounded-neu-lg bg-surface p-8 text-center text-sm font-medium text-muted-foreground shadow-neu-inset">
             No queue jobs match your filters.
           </div>
         ) : null}

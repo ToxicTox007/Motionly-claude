@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
+  Eye,
   FolderPlus,
   Heart,
   Languages,
@@ -67,6 +68,12 @@ export function PublishingLibraryPanel({
   const [targetProjectId, setTargetProjectId] = useState(projectId);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<{
+    id: string;
+    name: string;
+    kind: string;
+    url: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     const [localized, library, collectionResponse] = await Promise.all([
@@ -310,12 +317,58 @@ export function PublishingLibraryPanel({
     }
   }
 
+  async function assetMediaUrl(item: Asset): Promise<string> {
+    const response = await editorApiRequest<{ url: string }>(
+      `${env.apiBaseUrl}/asset-library/items/${item.id}/media-url`,
+      {
+        ...auth,
+        friendlyError: "A media link for this asset is not available.",
+      },
+    );
+    return response.url;
+  }
+
+  async function previewAssetItem(item: Asset) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const url = await assetMediaUrl(item);
+      setPreviewAsset({ id: item.id, name: item.name, kind: item.kind, url });
+    } catch (error) {
+      setPreviewAsset(null);
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadAssetItem(item: Asset) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const url = await assetMediaUrl(item);
+      const response = await apiFetch(url, {}, auth);
+      if (!response.ok) throw new Error("The asset could not be downloaded.");
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = item.name;
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+      setMessage(`Downloaded ${item.name}.`);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4" aria-live="polite">
-      <section className="rounded-md border-2 border-foreground bg-surface p-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]">
+      <section className="rounded-neu-lg bg-surface p-4 shadow-neu-raised">
         <div className="mb-3 flex items-center gap-2">
-          <Languages className="size-4" />
-          <h3 className="text-sm font-black">Translations</h3>
+          <Languages className="size-4 text-primary" aria-hidden="true" />
+          <h3 className="text-sm font-bold text-foreground">Translations</h3>
         </div>
         <div className="flex gap-2">
           <Select
@@ -332,7 +385,7 @@ export function PublishingLibraryPanel({
             Prepare
           </Button>
         </div>
-        <p className="mt-2 text-[11px] text-muted-foreground">
+        <p className="mt-2 text-[11px] font-medium text-muted-foreground">
           Each language gets independent captions, translated text overlays,
           metadata suggestions, and a required review step. Voice dubbing is
           intentionally not included.
@@ -342,17 +395,19 @@ export function PublishingLibraryPanel({
             packages.map((item) => (
               <div
                 key={item.id}
-                className="rounded border border-border p-2 text-xs"
+                className="rounded-neu-md bg-surface p-2 text-xs shadow-neu-raised-sm"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <strong className="uppercase">{item.language}</strong>
-                  <span>
+                  <strong className="uppercase text-foreground">
+                    {item.language}
+                  </strong>
+                  <span className="text-muted-foreground">
                     {item.review_status === "approved"
                       ? "Approved"
                       : "Needs review"}
                   </span>
                 </div>
-                <p className="mt-1 line-clamp-1">
+                <p className="mt-1 line-clamp-1 text-foreground">
                   {item.title_suggestions[0] ?? "No title suggestion"}
                 </p>
                 <p className="line-clamp-2 text-muted-foreground">
@@ -394,18 +449,20 @@ export function PublishingLibraryPanel({
               </div>
             ))
           ) : (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs font-medium text-muted-foreground">
               Prepare a language package to translate captions, editable
               overlays, and title and description suggestions.
             </p>
           )}
         </div>
       </section>
-      <section className="rounded-md border-2 border-foreground bg-surface p-4 shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff]">
+      <section className="rounded-neu-lg bg-surface p-4 shadow-neu-raised">
         <div className="mb-3 flex items-center justify-between gap-2">
           <div>
-            <h3 className="text-sm font-black">Workspace asset library</h3>
-            <p className="text-[11px] text-muted-foreground">
+            <h3 className="text-sm font-bold text-foreground">
+              Workspace asset library
+            </h3>
+            <p className="text-[11px] font-medium text-muted-foreground">
               Search past exports and clips; favorite, collect, and reuse assets
               across projects.
             </p>
@@ -446,7 +503,7 @@ export function PublishingLibraryPanel({
           </Button>
         </div>
         {collections.length ? (
-          <p className="mt-2 text-[10px] text-muted-foreground">
+          <p className="mt-2 text-[10px] font-medium text-muted-foreground">
             Newest collection: {collections[0].name} (
             {collections[0].asset_ids.length} assets). Add library cards to it.
           </p>
@@ -455,10 +512,12 @@ export function PublishingLibraryPanel({
           {assets.map((item) => (
             <div
               key={item.id}
-              className="flex items-center gap-2 rounded border border-border p-2 text-xs"
+              className="flex items-center gap-2 rounded-neu-md bg-surface p-2 text-xs shadow-neu-raised-sm"
             >
               <div className="min-w-0 flex-1">
-                <strong className="truncate">{item.name}</strong>
+                <strong className="truncate text-foreground">
+                  {item.name}
+                </strong>
                 <p className="truncate text-[10px] text-muted-foreground">
                   {item.kind} · {item.description}
                 </p>
@@ -470,7 +529,7 @@ export function PublishingLibraryPanel({
                 className="p-1"
               >
                 <Heart
-                  className={`size-4 ${item.is_favorite ? "fill-current text-red-500" : ""}`}
+                  className={`size-4 ${item.is_favorite ? "fill-current text-danger" : "text-muted-foreground"}`}
                 />
               </button>
               <Button
@@ -480,6 +539,30 @@ export function PublishingLibraryPanel({
               >
                 Collect
               </Button>
+              {item.kind !== "clip" ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    aria-label={`Preview ${item.name}`}
+                    onClick={() => void previewAssetItem(item)}
+                    disabled={busy}
+                  >
+                    <Eye className="size-3" />
+                    Preview
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    aria-label={`Download ${item.name}`}
+                    onClick={() => void downloadAssetItem(item)}
+                    disabled={busy}
+                  >
+                    <Download className="size-3" />
+                    Download
+                  </Button>
+                </>
+              ) : null}
               <Button
                 size="sm"
                 onClick={() => void reuseAsset(item)}
@@ -490,8 +573,48 @@ export function PublishingLibraryPanel({
               </Button>
             </div>
           ))}
+          {previewAsset ? (
+            <div
+              role="dialog"
+              aria-label={`Preview of ${previewAsset.name}`}
+              className="rounded-neu-md bg-surface p-3 shadow-neu-raised"
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <strong className="truncate text-xs text-foreground">
+                  {previewAsset.name}
+                </strong>
+                <button
+                  type="button"
+                  onClick={() => setPreviewAsset(null)}
+                  aria-label="Close preview"
+                  className="text-xs font-semibold text-primary underline"
+                >
+                  Close
+                </button>
+              </div>
+              {previewAsset.kind === "music" ? (
+                <audio
+                  controls
+                  src={previewAsset.url}
+                  aria-label={`Audio preview for ${previewAsset.name}`}
+                  className="w-full"
+                >
+                  <track kind="captions" />
+                </audio>
+              ) : (
+                <video
+                  controls
+                  src={previewAsset.url}
+                  aria-label={`Video preview for ${previewAsset.name}`}
+                  className="w-full rounded-neu bg-ink shadow-neu-inset"
+                >
+                  <track kind="captions" />
+                </video>
+              )}
+            </div>
+          ) : null}
           {!assets.length ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs font-medium text-muted-foreground">
               Index a project to add its B-roll, music, uploads, exports, clips,
               and style recipe.
             </p>
@@ -501,7 +624,7 @@ export function PublishingLibraryPanel({
       {message ? (
         <p
           role="status"
-          className="rounded border border-border bg-muted p-2 text-xs"
+          className="rounded-neu bg-surface p-2 text-xs font-semibold text-foreground shadow-neu-inset-sm"
         >
           {message}
         </p>

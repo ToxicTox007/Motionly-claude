@@ -16,6 +16,7 @@ import { AdminJobsList } from "./AdminJobsList";
 import {
   cancelQueueJob,
   cancelRenderJob,
+  deadLetterStuckJobs,
   retryQueueJob,
   retryRenderJob,
 } from "./actions";
@@ -224,10 +225,10 @@ export default async function LaunchOpsPage() {
       <section className="mb-8 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div>
           <h2 className="mb-3 text-base font-bold">Provider SLOs</h2>
-          <div className="pixel-panel overflow-x-auto">
+          <div className="overflow-x-auto rounded-neu-lg bg-surface shadow-neu-raised">
             <table className="min-w-[760px] w-full text-left text-sm">
-              <thead className="bg-muted text-xs uppercase text-muted-foreground">
-                <tr>
+              <thead className="text-xs font-semibold text-muted-foreground">
+                <tr className="border-b border-hairline">
                   <th className="px-4 py-3">Provider</th>
                   <th className="px-4 py-3">Operation</th>
                   <th className="px-4 py-3">Success</th>
@@ -236,19 +237,18 @@ export default async function LaunchOpsPage() {
                   <th className="px-4 py-3">Last error</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-hairline">
                 {(overview?.provider_slos ?? []).map((slo) => (
-                  <tr
-                    key={`${slo.provider}:${slo.operation}`}
-                    className="border-t border-border"
-                  >
-                    <td className="px-4 py-3 font-semibold">{slo.provider}</td>
+                  <tr key={`${slo.provider}:${slo.operation}`}>
+                    <td className="px-4 py-3 font-semibold text-foreground">
+                      {slo.provider}
+                    </td>
                     <td className="px-4 py-3">{slo.operation}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 tabular-nums">
                       {formatPercent(slo.success_rate)}
                     </td>
-                    <td className="px-4 py-3">{slo.errors}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 tabular-nums">{slo.errors}</td>
+                    <td className="px-4 py-3 tabular-nums">
                       {formatLatency(slo.p95_latency_ms)}
                     </td>
                     <td className="px-4 py-3">
@@ -273,11 +273,11 @@ export default async function LaunchOpsPage() {
 
         <div>
           <h2 className="mb-3 text-base font-bold">Provider costs</h2>
-          <div className="pixel-panel p-4">
-            <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+          <div className="rounded-neu-lg bg-surface p-5 shadow-neu-raised">
+            <p className="text-xs font-semibold text-muted-foreground">
               Total tracked
             </p>
-            <p className="mt-2 text-2xl font-black">
+            <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">
               {formatUsd(overview?.provider_costs?.total_usd)}
             </p>
             <p className="mt-1 text-xs font-semibold text-muted-foreground">
@@ -286,18 +286,20 @@ export default async function LaunchOpsPage() {
                 overview?.provider_costs?.cost_per_approved_export_usd,
               )}
             </p>
-            <div className="mt-4 grid gap-2">
+            <div className="mt-4 grid gap-2 divide-y divide-hairline">
               {providerCostEntries.map(([provider, amount]) => (
                 <div
                   key={provider}
-                  className="flex items-center justify-between gap-3 border-t border-border pt-2 text-sm"
+                  className="flex items-center justify-between gap-3 pt-2 text-sm"
                 >
-                  <span className="font-semibold">{provider}</span>
-                  <span>{formatUsd(amount)}</span>
+                  <span className="font-semibold text-foreground">
+                    {provider}
+                  </span>
+                  <span className="tabular-nums">{formatUsd(amount)}</span>
                 </div>
               ))}
               {!providerCostEntries.length ? (
-                <p className="border-t border-border pt-3 text-sm text-muted-foreground">
+                <p className="pt-3 text-sm text-muted-foreground">
                   No provider costs reported.
                 </p>
               ) : null}
@@ -309,14 +311,43 @@ export default async function LaunchOpsPage() {
       <section className="mb-8">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-base font-bold">Queues</h2>
-          <ButtonLink href="/feedback" variant="secondary">
-            Send feedback
-          </ButtonLink>
+          <div className="flex items-center gap-3">
+            <form
+              action={deadLetterStuckJobs}
+              className="flex items-center gap-2"
+            >
+              <label
+                htmlFor="dead-letter-timeout"
+                className="text-xs font-semibold text-muted-foreground"
+              >
+                Stuck after (s)
+              </label>
+              <input
+                id="dead-letter-timeout"
+                name="timeoutSeconds"
+                type="number"
+                min={1}
+                max={86400}
+                defaultValue={1800}
+                className="min-h-10 w-24 rounded-neu border border-control bg-surface px-3 text-xs font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              />
+              <button
+                type="submit"
+                className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-danger shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
+              >
+                <AlertTriangle className="size-3.5" aria-hidden="true" />
+                Dead-letter stuck jobs
+              </button>
+            </form>
+            <ButtonLink href="/feedback" variant="secondary">
+              Send feedback
+            </ButtonLink>
+          </div>
         </div>
-        <div className="pixel-panel overflow-x-auto">
+        <div className="overflow-x-auto rounded-neu-lg bg-surface shadow-neu-raised">
           <table className="min-w-[760px] w-full text-left text-sm">
-            <thead className="bg-muted text-xs uppercase text-muted-foreground">
-              <tr>
+            <thead className="text-xs font-semibold text-muted-foreground">
+              <tr className="border-b border-hairline">
                 <th className="px-4 py-3">Queue</th>
                 <th className="px-4 py-3">Queued</th>
                 <th className="px-4 py-3">Running</th>
@@ -326,18 +357,20 @@ export default async function LaunchOpsPage() {
                 <th className="px-4 py-3">Oldest</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-hairline">
               {(overview?.queues ?? []).map((queue) => (
-                <tr key={queue.queue_name} className="border-t border-border">
-                  <td className="px-4 py-3 font-semibold">
+                <tr key={queue.queue_name}>
+                  <td className="px-4 py-3 font-semibold text-foreground">
                     {queue.queue_name}
                   </td>
-                  <td className="px-4 py-3">{queue.queued}</td>
-                  <td className="px-4 py-3">{queue.running}</td>
-                  <td className="px-4 py-3">{queue.succeeded}</td>
-                  <td className="px-4 py-3">{queue.failed}</td>
-                  <td className="px-4 py-3">{queue.dead_letter}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 tabular-nums">{queue.queued}</td>
+                  <td className="px-4 py-3 tabular-nums">{queue.running}</td>
+                  <td className="px-4 py-3 tabular-nums">{queue.succeeded}</td>
+                  <td className="px-4 py-3 tabular-nums">{queue.failed}</td>
+                  <td className="px-4 py-3 tabular-nums">
+                    {queue.dead_letter}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">
                     {formatAge(queue.oldest_queued_seconds)}
                   </td>
                 </tr>
@@ -374,16 +407,18 @@ export default async function LaunchOpsPage() {
           {(overview?.recent_renders ?? []).map((render) => (
             <div
               key={render.id}
-              className="pixel-panel flex flex-wrap items-center justify-between gap-3 p-4"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-neu-md bg-surface p-4 shadow-neu-raised-sm"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{render.id}</p>
+                <p className="truncate text-sm font-semibold text-foreground">
+                  {render.id}
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {render.status} | {render.progress_pct}% |{" "}
                   {new Date(render.created_at).toLocaleString()}
                 </p>
               </div>
-              <span className="inline-flex items-center gap-2 border border-border bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
+              <span className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground shadow-neu-inset-sm">
                 <RotateCcw className="size-3.5" aria-hidden="true" />
                 {render.error_code ?? "healthy"}
               </span>
@@ -414,7 +449,7 @@ export default async function LaunchOpsPage() {
             </div>
           ))}
           {!overview?.recent_renders.length ? (
-            <div className="pixel-panel p-8 text-center text-sm text-muted-foreground">
+            <div className="rounded-neu-lg bg-surface p-8 text-center text-sm font-medium text-muted-foreground shadow-neu-inset">
               No render activity yet.
             </div>
           ) : null}
@@ -427,11 +462,14 @@ export default async function LaunchOpsPage() {
           {Object.entries(
             dependencyHealth?.dependencies ?? overview?.health ?? {},
           ).map(([name, value]) => (
-            <div key={name} className="pixel-panel p-4">
-              <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+            <div
+              key={name}
+              className="rounded-neu-lg bg-surface p-5 shadow-neu-raised"
+            >
+              <p className="text-xs font-semibold text-muted-foreground">
                 {name}
               </p>
-              <p className="mt-2 text-sm font-semibold">
+              <p className="mt-2 text-sm font-semibold text-foreground">
                 {typeof value === "object" && value && "status" in value
                   ? String((value as { status: unknown }).status)
                   : String(value)}
@@ -447,9 +485,9 @@ export default async function LaunchOpsPage() {
           {(overview?.render_failure_diagnostics ?? []).map((diagnostic) => (
             <div
               key={String(diagnostic.render_job_id)}
-              className="pixel-panel p-4"
+              className="rounded-neu-md bg-surface p-4 shadow-neu-raised-sm"
             >
-              <p className="truncate text-sm font-semibold">
+              <p className="truncate text-sm font-semibold text-foreground">
                 {String(diagnostic.render_job_id)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -463,7 +501,7 @@ export default async function LaunchOpsPage() {
             </div>
           ))}
           {!overview?.render_failure_diagnostics?.length ? (
-            <div className="pixel-panel p-8 text-center text-sm text-muted-foreground">
+            <div className="rounded-neu-lg bg-surface p-8 text-center text-sm font-medium text-muted-foreground shadow-neu-inset">
               No recent render failures.
             </div>
           ) : null}
@@ -539,12 +577,14 @@ function MetricCard({
   value: string;
 }) {
   return (
-    <div className="pixel-panel p-4">
-      <div className="flex items-center gap-2 text-xs font-black uppercase text-primary">
+    <div className="rounded-neu-lg bg-surface p-5 shadow-neu-raised">
+      <div className="flex items-center gap-2 text-xs font-semibold text-primary">
         <Icon className="size-4" />
         {label}
       </div>
-      <p className="mt-3 break-words text-2xl font-black">{value}</p>
+      <p className="mt-3 break-words text-2xl font-bold tabular-nums text-foreground">
+        {value}
+      </p>
     </div>
   );
 }
@@ -565,7 +605,7 @@ function ActionForm({
       <input type="hidden" name="jobId" value={jobId} />
       <button
         type="submit"
-        className="pixel-button inline-flex h-9 items-center gap-2 bg-background px-3 text-xs font-bold"
+        className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
       >
         <Icon className="size-3.5" aria-hidden="true" />
         {label}

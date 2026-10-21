@@ -26,6 +26,7 @@ export function ConflictDialog({
   onDismiss,
 }: ConflictDialogProps) {
   const [loading, setLoading] = useState<"reload" | "force" | null>(null);
+  const [forceError, setForceError] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Focus the dialog on mount
@@ -35,6 +36,7 @@ export function ConflictDialog({
 
   const handleReload = useCallback(async () => {
     setLoading("reload");
+    setForceError(null);
     try {
       await onReload();
     } finally {
@@ -44,8 +46,15 @@ export function ConflictDialog({
 
   const handleForceSave = useCallback(async () => {
     setLoading("force");
+    setForceError(null);
     try {
       await onForceSave();
+    } catch (error) {
+      setForceError(
+        error instanceof Error
+          ? error.message
+          : "Force save failed. Please reload and try again.",
+      );
     } finally {
       setLoading(null);
     }
@@ -94,18 +103,23 @@ export function ConflictDialog({
       }
     >
       <div className="space-y-3">
-        <div className="flex items-start gap-3 rounded border-2 border-warning bg-warning/10 p-3">
+        <div className="flex items-start gap-3 rounded-neu-md bg-surface p-3 shadow-neu-raised-sm ring-1 ring-warning/30">
           <AlertTriangle
             className="mt-0.5 size-5 shrink-0 text-warning"
             aria-hidden="true"
           />
-          <div className="text-sm font-bold text-foreground">
+          <div className="text-sm font-semibold text-foreground">
             <p>
               Someone else (or another tab) modified this plan while you were
               editing. Your version is at revision{" "}
-              <span className="font-black">{conflict.expectedRevision}</span>,
-              but the server is at revision{" "}
-              <span className="font-black">{conflict.currentRevision}</span>.
+              <span className="font-bold tabular-nums">
+                {conflict.expectedRevision}
+              </span>
+              , but the server is at revision{" "}
+              <span className="font-bold tabular-nums">
+                {conflict.currentRevision}
+              </span>
+              .
             </p>
             {timeSinceConflict && (
               <p className="mt-1 text-xs text-muted-foreground">
@@ -117,16 +131,48 @@ export function ConflictDialog({
 
         <div className="space-y-2 text-sm text-muted-foreground">
           <p>
-            <strong className="font-black">Reload &amp; Discard</strong> — fetch
-            the latest version from the server. Your unsaved changes will be
-            lost.
+            <strong className="font-semibold text-foreground">
+              Reload &amp; Discard
+            </strong>{" "}
+            — fetch the latest version from the server. Your unsaved changes
+            will be lost.
           </p>
           <p>
-            <strong className="font-black">Force Save</strong> — overwrite the
-            server version with your local changes. The other person&apos;s
-            edits will be lost.
+            <strong className="font-semibold text-foreground">
+              Force Save
+            </strong>{" "}
+            — re-apply your change on top of the latest version. The change
+            below will overwrite the newer server copy.
           </p>
         </div>
+
+        {conflict.localSummary && conflict.localSummary.length > 0 && (
+          <div
+            className="space-y-1 rounded-neu-md bg-muted p-3 shadow-neu-inset-sm"
+            aria-label="Changes that Force Save will overwrite on the server"
+          >
+            <p className="text-xs font-semibold text-foreground">
+              Will overwrite the server with your change
+            </p>
+            <ul className="list-disc space-y-0.5 pl-5 text-sm text-foreground">
+              {conflict.localSummary.map((change, index) => (
+                <li key={`${change.field}-${index}`}>
+                  <span className="font-semibold">{change.field}:</span>{" "}
+                  {change.detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {forceError && (
+          <p
+            className="rounded-neu-md bg-surface p-3 text-sm font-semibold text-danger shadow-neu-raised-sm ring-1 ring-danger/30"
+            role="alert"
+          >
+            {forceError}
+          </p>
+        )}
       </div>
     </Modal>
   );

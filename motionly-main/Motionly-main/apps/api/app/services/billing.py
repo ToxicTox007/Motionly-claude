@@ -1,11 +1,9 @@
-import hashlib
-import hmac
 import json
 import time
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import UUID
-
-import httpx
 
 from app.api.errors import ApiError
 from app.schemas.billing import (
@@ -15,71 +13,39 @@ from app.schemas.billing import (
     SubscriptionStatus,
 )
 
-PLAN_DEFINITIONS: dict[BillingPlanKey, PlanDefinition] = {
-    BillingPlanKey.FREE: PlanDefinition(
-        key=BillingPlanKey.FREE,
-        name="Free",
-        price_cents=0,
-        stripe_price_env=None,
-        entitlements=PlanEntitlements(
-            monthly_renders=3,
-            watermark=True,
-            max_resolution="720p",
-            broll=False,
-        ),
-        features=["3 renders/month", "Watermarked exports", "720p exports", "No B-roll"],
-    ),
-    BillingPlanKey.CREATOR: PlanDefinition(
-        key=BillingPlanKey.CREATOR,
-        name="Creator",
-        price_cents=2900,
-        stripe_price_env="STRIPE_PRICE_CREATOR",
-        entitlements=PlanEntitlements(
-            monthly_renders=30,
-            watermark=False,
-            max_resolution="1080p",
-            broll=True,
-        ),
-        features=["30 renders/month", "No watermark", "1080p exports", "B-roll"],
-    ),
-    BillingPlanKey.PRO: PlanDefinition(
-        key=BillingPlanKey.PRO,
-        name="Pro",
-        price_cents=7900,
-        stripe_price_env="STRIPE_PRICE_PRO",
-        entitlements=PlanEntitlements(
-            monthly_renders=100,
-            watermark=False,
-            max_resolution="1080p",
-            broll=True,
-            priority_queue=True,
-            premium_effects=True,
-        ),
-        features=["100 renders/month", "Priority queue", "Premium effects", "B-roll"],
-    ),
-    BillingPlanKey.AGENCY: PlanDefinition(
-        key=BillingPlanKey.AGENCY,
-        name="Agency",
-        price_cents=19900,
-        stripe_price_env="STRIPE_PRICE_AGENCY",
-        entitlements=PlanEntitlements(
-            monthly_renders=250,
-            watermark=False,
-            max_resolution="4k",
-            broll=True,
-            priority_queue=True,
-            premium_effects=True,
-            seats=5,
-            brand_kits=True,
-            bulk_uploads=True,
-            api_access=True,
-        ),
-        features=["5 seats", "4K exports", "Brand kits", "Bulk uploads", "API access"],
-    ),
-}
+# ---------------------------------------------------------------------------
+# Single source of truth for plan prices + entitlements: app/config/plans.json.
+# Prices are INR paise (₹1 = 100 paise). Never hard-code prices anywhere else;
+# a test (test_prices_are_not_hard_coded) fails on duplicated price literals.
+# ---------------------------------------------------------------------------
+PLANS_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "plans.json"
 
 
-ACTIVE_STRIPE_STATUSES = {
+def _load_plan_definitions(
+    path: Path = PLANS_CONFIG_PATH,
+) -> dict[BillingPlanKey, PlanDefinition]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    currency = str(raw.get("currency", "INR"))
+    interval = str(raw.get("interval", "month"))
+    definitions: dict[BillingPlanKey, PlanDefinition] = {}
+    for entry in raw["plans"]:
+        key = BillingPlanKey(entry["key"])
+        definitions[key] = PlanDefinition(
+            key=key,
+            name=entry["name"],
+            price_paise=int(entry["price_paise"]),
+            currency=currency,
+            interval=interval,
+            entitlements=PlanEntitlements(**entry["entitlements"]),
+            features=list(entry["features"]),
+        )
+    return definitions
+
+
+PLAN_DEFINITIONS: dict[BillingPlanKey, PlanDefinition] = _load_plan_definitions()
+
+
+ACTIVE_SUBSCRIPTION_STATUSES = {
     SubscriptionStatus.TRIALING,
     SubscriptionStatus.ACTIVE,
     SubscriptionStatus.PAST_DUE,
@@ -93,7 +59,7 @@ def plan_for_subscription_status(
 ) -> BillingPlanKey:
     if plan == BillingPlanKey.FREE:
         return BillingPlanKey.FREE
-    return plan if status in ACTIVE_STRIPE_STATUSES else BillingPlanKey.FREE
+    return plan if status in ACTIVE_SUBSCRIPTION_STATUSES else BillingPlanKey.FREE
 
 
 def monthly_period(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -172,139 +138,77 @@ def check_quota(
         )
 
 
-def stripe_signature_header(*, payload: bytes, secret: str, timestamp: int | None = None) -> str:
-    timestamp = timestamp or int(time.time())
-    signed_payload = f"{timestamp}.{payload.decode()}".encode()
-    digest = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
-    return f"t={timestamp},v1={digest}"
-
-
-def parse_verified_stripe_event(
+def verify_gateway_webhook(
     *,
     payload: bytes,
-    signature_header: str | None,
+    event_id: str | None,
+    timestamp_header: str | None,
+    signature: str | None,
     webhook_secret: str | None,
     tolerance_seconds: int = 300,
-) -> dict[str, object]:
+) -> "WebhookEnvelope":
+    """Verify and parse a signed mock-gateway webhook.
+
+    Uses the Task 22 signing scheme (HMAC-SHA256 over ``f"{timestamp}.{body}"``,
+    constant-time compare) and the Task 22 ``WebhookEnvelope`` model. Rejects a
+    missing/invalid signature, a stale timestamp, or a malformed body.
+    """
+    # Imported lazily so importing app.services.billing does not require the
+    # gateway package at module import time.
+    from app.mock_gateway.models import WebhookEnvelope
+    from app.mock_gateway.signing import verify_signature
+
     if not webhook_secret:
         raise ApiError(
             503,
-            "stripe_webhook_not_configured",
-            "Stripe webhook secret is not configured.",
+            "gateway_webhook_not_configured",
+            "Gateway webhook secret is not configured.",
         )
-    if not signature_header:
-        raise ApiError(400, "stripe_signature_missing", "Stripe signature header is missing.")
-
-    parts: dict[str, list[str]] = {}
-    for part in signature_header.split(","):
-        key, _, value = part.partition("=")
-        parts.setdefault(key, []).append(value)
+    if not signature:
+        raise ApiError(400, "gateway_signature_missing", "Gateway signature header is missing.")
     try:
-        timestamp = int(parts.get("t", [""])[0])
-    except ValueError as exc:
+        timestamp = int(str(timestamp_header))
+    except (TypeError, ValueError) as exc:
         raise ApiError(
             400,
-            "stripe_signature_invalid",
-            "Stripe signature timestamp is invalid.",
+            "gateway_signature_invalid",
+            "Gateway signature timestamp is invalid.",
         ) from exc
     if abs(int(time.time()) - timestamp) > tolerance_seconds:
-        raise ApiError(400, "stripe_signature_expired", "Stripe signature timestamp expired.")
-
-    expected = stripe_signature_header(
-        payload=payload,
-        secret=webhook_secret,
-        timestamp=timestamp,
-    ).split("v1=", 1)[1]
-    signatures = parts.get("v1", [])
-    if not any(hmac.compare_digest(expected, signature) for signature in signatures):
-        raise ApiError(400, "stripe_signature_invalid", "Stripe signature does not match.")
+        raise ApiError(400, "gateway_signature_expired", "Gateway signature timestamp expired.")
+    if not verify_signature(
+        webhook_secret,
+        timestamp,
+        payload,
+        signature,
+        tolerance_seconds=tolerance_seconds,
+    ):
+        raise ApiError(400, "gateway_signature_invalid", "Gateway signature does not match.")
 
     try:
-        event = json.loads(payload)
+        data = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise ApiError(
             400,
-            "stripe_payload_invalid",
-            "Stripe webhook payload is invalid JSON.",
+            "gateway_payload_invalid",
+            "Gateway webhook payload is invalid JSON.",
         ) from exc
-    if not isinstance(event, dict) or not event.get("id") or not event.get("type"):
+    try:
+        envelope = WebhookEnvelope.model_validate(data)
+    except Exception as exc:  # noqa: BLE001 - surface as a 400
         raise ApiError(
             400,
-            "stripe_event_invalid",
-            "Stripe webhook event is missing required fields.",
+            "gateway_event_invalid",
+            "Gateway webhook event is missing required fields.",
+        ) from exc
+    if event_id and event_id != envelope.id:
+        raise ApiError(
+            400,
+            "gateway_event_id_mismatch",
+            "Gateway event id header does not match the signed body.",
         )
-    return event
+    return envelope
 
 
-class StripeBillingClient:
-    def __init__(self, *, api_key: str | None) -> None:
-        self.api_key = api_key
-
-    def create_checkout_session(
-        self,
-        *,
-        price_id: str,
-        plan: BillingPlanKey,
-        workspace_id: UUID,
-        success_url: str,
-        cancel_url: str,
-        customer_id: str | None,
-    ) -> tuple[str, str]:
-        if not self.api_key:
-            raise ApiError(503, "stripe_not_configured", "Stripe API key is not configured.")
-        data = {
-            "mode": "subscription",
-            "line_items[0][price]": price_id,
-            "line_items[0][quantity]": "1",
-            "success_url": success_url,
-            "cancel_url": cancel_url,
-            "client_reference_id": str(workspace_id),
-            "metadata[workspace_id]": str(workspace_id),
-            "metadata[plan]": plan.value,
-            "metadata[stripe_price_id]": price_id,
-            "subscription_data[metadata][workspace_id]": str(workspace_id),
-            "subscription_data[metadata][plan]": plan.value,
-        }
-        if customer_id:
-            data["customer"] = customer_id
-        response = httpx.post(
-            "https://api.stripe.com/v1/checkout/sessions",
-            auth=(self.api_key, ""),
-            data=data,
-            timeout=10,
-        )
-        self._raise_for_stripe(response)
-        body = response.json()
-        return str(body["url"]), str(body["id"])
-
-    def create_customer_portal_session(
-        self,
-        *,
-        customer_id: str,
-        return_url: str,
-    ) -> str:
-        if not self.api_key:
-            raise ApiError(503, "stripe_not_configured", "Stripe API key is not configured.")
-        response = httpx.post(
-            "https://api.stripe.com/v1/billing_portal/sessions",
-            auth=(self.api_key, ""),
-            data={"customer": customer_id, "return_url": return_url},
-            timeout=10,
-        )
-        self._raise_for_stripe(response)
-        return str(response.json()["url"])
-
-    @staticmethod
-    def _raise_for_stripe(response: httpx.Response) -> None:
-        if response.status_code < 400:
-            return
-        code = "stripe_request_failed"
-        message = "Stripe request failed."
-        try:
-            body = response.json()
-            error = body.get("error", {})
-            code = error.get("code") or error.get("type") or code
-            message = error.get("message") or message
-        except ValueError:
-            pass
-        raise ApiError(502, code, message)
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.mock_gateway.models import WebhookEnvelope  # noqa: F401

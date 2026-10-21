@@ -29,22 +29,22 @@ export function PropertiesInspector({
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
       {/* Panel Header */}
-      <div className="flex min-h-[56px] items-center gap-3 border-b-2 border-foreground px-4 shrink-0">
+      <div className="flex min-h-[56px] shrink-0 items-center gap-3 border-b border-hairline px-4">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-black uppercase tracking-wider text-foreground">
+          <p className="truncate text-sm font-semibold text-foreground">
             {draft.name}
           </p>
-          <p className="text-[10px] font-bold uppercase text-muted-foreground mt-0.5 font-mono">
+          <p className="mt-0.5 font-mono text-xs text-muted-foreground">
             {draft.type} · {draft.zone}
           </p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="flex size-8 items-center justify-center rounded border-2 border-foreground bg-surface hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] p-0"
+          className="neu-pressable flex size-8 items-center justify-center rounded-neu bg-surface p-0 text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised"
           aria-label="Close element properties"
         >
-          <X className="size-4 text-foreground" strokeWidth={2} />
+          <X className="size-4 text-foreground" strokeWidth={1.75} />
         </button>
       </div>
 
@@ -58,14 +58,14 @@ export function PropertiesInspector({
       >
         {(["text", "caption", "graphic"] as string[]).includes(draft.type) ? (
           <InspectorSection title="Content">
-            <label className="block text-xs font-bold text-foreground">
+            <label className="block text-xs font-semibold text-foreground">
               Text
               <textarea
                 value={String(property("content", draft.name))}
                 onChange={(event) =>
                   updateProperty("content", event.target.value)
                 }
-                className="mt-1.5 min-h-[80px] w-full p-3 resize-y font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+                className="mt-1.5 min-h-[80px] w-full resize-y rounded-neu border border-control bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
               />
             </label>
           </InspectorSection>
@@ -91,7 +91,7 @@ export function PropertiesInspector({
             />
           </div>
           {draft.clip_id ? (
-            <p className="mt-2 text-[10px] font-bold font-mono text-muted-foreground">
+            <p className="mt-2 font-mono text-xs text-muted-foreground">
               Applied to {draft.clip_id}
             </p>
           ) : null}
@@ -163,7 +163,7 @@ export function PropertiesInspector({
             draft.type,
           ) ? (
             <div className="space-y-3.5">
-              <label className="block text-xs font-bold text-foreground">
+              <label className="block text-xs font-semibold text-foreground">
                 Color
                 <input
                   type="color"
@@ -171,7 +171,7 @@ export function PropertiesInspector({
                   onChange={(event) =>
                     updateProperty("color", event.target.value)
                   }
-                  className="mt-1.5 h-10 w-full rounded border-2 border-foreground bg-transparent p-0.5 cursor-pointer"
+                  className="mt-1.5 h-10 w-full cursor-pointer rounded-neu border border-control bg-surface p-0.5 shadow-neu-inset-sm"
                 />
               </label>
               <NumberField
@@ -215,15 +215,13 @@ export function PropertiesInspector({
         </InspectorSection>
 
         {draft.ai_reason ? (
-          <div className="rounded border-2 border-foreground bg-accent/10 p-3.5 text-xs mb-4 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-            <p className="font-bold uppercase tracking-wide text-foreground">
-              AI Insight
-            </p>
-            <p className="text-muted-foreground mt-1 leading-relaxed font-mono">
+          <div className="mb-4 rounded-neu-lg bg-surface p-4 shadow-neu-raised ring-1 ring-primary/20">
+            <p className="text-xs font-semibold text-primary">AI Insight</p>
+            <p className="mt-1 font-mono text-xs leading-relaxed text-muted-foreground">
               {draft.ai_reason}
             </p>
             {draft.confidence != null ? (
-              <p className="mt-1.5 font-black text-[10px] text-primary uppercase font-mono">
+              <p className="mt-1.5 font-mono text-xs font-semibold text-primary">
                 Confidence {Math.round(draft.confidence * 100)}%
               </p>
             ) : null}
@@ -235,7 +233,7 @@ export function PropertiesInspector({
           <button
             type="submit"
             disabled={saving}
-            className="flex-1 inline-flex items-center justify-center gap-2 h-11 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-black hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none transition-all duration-[100ms] focus:outline-none"
+            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-neu bg-primary text-xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus:outline-none active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm"
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : null}
             Save Changes
@@ -244,9 +242,9 @@ export function PropertiesInspector({
             type="button"
             onClick={() => void onDelete(draft.id)}
             disabled={saving}
-            className="inline-flex items-center justify-center gap-2 h-11 px-4 text-xs font-black border-2 border-danger text-danger bg-surface rounded hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms]"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-danger shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
           >
-            <Trash2 className="size-4" strokeWidth={2} />
+            <Trash2 className="size-4" strokeWidth={1.75} />
             Delete
           </button>
         </div>
@@ -263,8 +261,8 @@ function InspectorSection({
   children: React.ReactNode;
 }) {
   return (
-    <fieldset className="space-y-3.5 border-t-2 border-foreground pt-4 mt-4 first:border-t-0 first:pt-0 first:mt-0">
-      <legend className="pr-2 text-[10px] font-black uppercase tracking-wider text-foreground font-mono select-none">
+    <fieldset className="mt-4 space-y-3.5 border-t border-hairline pt-4 first:mt-0 first:border-t-0 first:pt-0">
+      <legend className="select-none pr-2 text-xs font-semibold text-foreground">
         {title}
       </legend>
       {children}
@@ -286,7 +284,7 @@ function NumberField({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="block text-xs font-bold text-foreground">
+    <label className="block text-xs font-semibold text-foreground">
       {label}
       <input
         type="number"
@@ -294,7 +292,7 @@ function NumberField({
         min={min}
         max={max}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="mt-1.5 min-h-[40px] w-full px-3 font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+        className="mt-1.5 min-h-[40px] w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
       />
     </label>
   );

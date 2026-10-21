@@ -329,45 +329,6 @@ class TestAPIEndpointRevision:
         # Revision is not incremented through the revision path (uses legacy update)
         assert response.plan.id == record.id
 
-    def test_update_timeline_with_revision(self, active_plan):
-        """PATCH /plans/{id}/timeline with revision."""
-        from app.api.plans import update_project_timeline
-        from app.schemas.plans import (
-            TimelineDocument,
-            TimelineSourceClip,
-            TimelineUpdateRequest,
-        )
-
-        env, record = active_plan
-        timeline = TimelineDocument(
-            duration_ms=3000,
-            clips=[
-                TimelineSourceClip(
-                    id="clip-1",
-                    source_start_ms=0,
-                    source_end_ms=3000,
-                    output_start_ms=0,
-                    output_end_ms=3000,
-                    reason="test timeline clip",
-                )
-            ],
-        )
-        payload = TimelineUpdateRequest(
-            timeline=timeline,
-            expected_revision=1,
-        )
-        response = asyncio.run(
-            update_project_timeline(
-                project_id=env.project_id,
-                plan_id=record.id,
-                payload=payload,
-                actor=Actor(user_id=env.user_id, workspace_id=env.workspace_id),
-                repository=env.plan_repository,
-                request=self._make_request(env.plan_repository),
-            )
-        )
-        assert response.revision == 2
-
     def test_update_manual_elements_with_revision(self, active_plan):
         """PATCH /plans/{id}/manual-elements with revision."""
         from app.api.plans import update_plan_manual_elements
@@ -455,13 +416,14 @@ class TestAPIEndpointRevision:
 
         body = json.loads(response.body.decode())
         assert response.status_code == 409
-        assert body["error"] == "revision_conflict"
+        # Normalized to the standard error envelope with a single conflict code.
+        assert body["error"]["code"] == "collaboration_revision_conflict"
         assert body["expected_revision"] == 3
         assert body["current_revision"] == 5
         assert body["plan_id"] == plan_id
-        assert "message" in body
-        assert "expected 3" in body["message"]
-        assert "actual 5" in body["message"]
+        assert "message" in body["error"]
+        assert "expected 3" in body["error"]["message"]
+        assert "actual 5" in body["error"]["message"]
 
     def test_concurrent_updates_one_wins(self, active_plan):
         """Two updates, second gets 409 (RevisionConflictError)."""
@@ -500,22 +462,6 @@ class TestAPIEndpointRevision:
             )
         assert exc_info.value.expected == 1
         assert exc_info.value.actual == 2
-
-    def test_activate_plan_returns_revision(self, active_plan):
-        """POST /plans/{id}/activate includes revision."""
-        from app.api.plans import activate_plan
-
-        env, record = active_plan
-        response = asyncio.run(
-            activate_plan(
-                project_id=env.project_id,
-                plan_id=record.id,
-                actor=Actor(user_id=env.user_id, workspace_id=env.workspace_id),
-                repository=env.plan_repository,
-            )
-        )
-        assert response.revision == record.revision
-        assert response.plan.revision == record.revision
 
     def test_render_creation_records_source_lineage(self, seeded_environment):
         """POST /renders stores source_plan_revision in manifest."""
@@ -565,7 +511,6 @@ class TestAPIEndpointRevision:
                         export_storage_bucket="exports",
                         export_signed_url_ttl_seconds=300,
                         should_complete_renders_synchronously=False,
-                        render_execute_ffmpeg=False,
                         media_work_dir=".motionly/test-storage",
                         billing_enabled=False,
                     ),
@@ -740,11 +685,11 @@ class TestHTTPIntegration:
         )
         assert response.status_code == 409
         body = response.json()
-        assert body["error"] == "revision_conflict"
+        assert body["error"]["code"] == "collaboration_revision_conflict"
         assert body["expected_revision"] == 999
         assert body["current_revision"] == 1
         assert body["plan_id"] == str(record.id)
-        assert "message" in body
+        assert "message" in body["error"]
 
     def test_http_get_plan_returns_the_authoritative_plan_shape(self, client_and_env):
         client, env, record = client_and_env

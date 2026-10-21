@@ -10,8 +10,21 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset?: () => void;
 }) {
+  const base = "hsl(215 24% 90%)";
+  const ink = "hsl(222 30% 17%)";
+  const muted = "hsl(220 16% 32%)";
+  const teal = "hsl(174 98% 44%)";
+  const tealText = "hsl(196 60% 8%)";
+  const danger = "hsl(352 74% 48%)";
+  const raised = "6px 6px 12px hsl(216 24% 72%), -6px -6px 12px #ffffff";
+  const raisedLg = "12px 12px 24px hsl(216 24% 72%), -12px -12px 24px #ffffff";
+  const inset =
+    "inset 4px 4px 8px hsl(216 24% 72%), inset -4px -4px 8px #ffffff";
+  const glow =
+    "6px 6px 12px hsl(216 24% 72%), -6px -6px 12px #ffffff, 0 0 0 1px hsl(174 98% 44% / 0.35)";
+
   return (
-    <html lang="en" data-theme="dark">
+    <html lang="en" data-theme="light">
       <head>
         <PageTitle title="Something went wrong" />
       </head>
@@ -20,9 +33,10 @@ export default function GlobalError({
           minHeight: "100vh",
           display: "grid",
           placeItems: "center",
-          background: "hsl(190 66% 6%)",
-          color: "hsl(172 32% 92%)",
-          fontFamily: "monospace",
+          background: base,
+          color: ink,
+          fontFamily:
+            "'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif",
           WebkitFontSmoothing: "antialiased",
           padding: "1rem",
           margin: 0,
@@ -31,13 +45,12 @@ export default function GlobalError({
         <main
           style={{
             width: "100%",
-            maxWidth: "440px",
+            maxWidth: "460px",
             textAlign: "center",
-            border: "4px solid hsl(172 32% 92%)",
-            background: "hsl(184 45% 10%)",
+            background: base,
             padding: "2.5rem 2rem",
-            boxShadow: "8px 8px 0px hsl(172 32% 92%)",
-            borderRadius: "4px",
+            boxShadow: raisedLg,
+            borderRadius: "28px",
           }}
         >
           {/* Error icon */}
@@ -45,22 +58,22 @@ export default function GlobalError({
             style={{
               width: "72px",
               height: "72px",
-              borderRadius: "4px",
-              background: "hsl(352 80% 58%)",
-              border: "2px solid hsl(172 32% 92%)",
+              borderRadius: "18px",
+              background: danger,
+              color: "#ffffff",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               margin: "0 auto 1.5rem",
-              boxShadow: "4px 4px 0px hsl(172 32% 92%)",
+              boxShadow: raised,
             }}
           >
             <AlertTriangle
               style={{
                 width: "32px",
                 height: "32px",
-                color: "white",
-                strokeWidth: 2,
+                color: "#ffffff",
+                strokeWidth: 1.75,
               }}
             />
           </div>
@@ -68,17 +81,16 @@ export default function GlobalError({
           {/* Status code */}
           <p
             style={{
-              fontSize: "10px",
-              fontWeight: 900,
+              fontSize: "0.75rem",
+              fontWeight: 600,
               letterSpacing: 0,
-              textTransform: "uppercase",
-              color: "hsl(192 78% 4%)",
-              background: "hsl(174 98% 46%)",
-              padding: "0.25rem 0.5rem",
-              borderRadius: "2px",
+              color: tealText,
+              background: teal,
+              padding: "0.25rem 0.75rem",
+              borderRadius: "9999px",
               display: "inline-block",
               marginBottom: "1rem",
-              border: "2px solid hsl(172 32% 92%)",
+              boxShadow: glow,
             }}
           >
             System error
@@ -87,12 +99,11 @@ export default function GlobalError({
           <h1
             style={{
               fontSize: "1.75rem",
-              fontWeight: 900,
-              lineHeight: 1.1,
-              letterSpacing: 0,
-              textTransform: "uppercase",
+              fontWeight: 700,
+              lineHeight: 1.15,
+              letterSpacing: "-0.01em",
               margin: "0 0 1rem",
-              color: "hsl(172 32% 92%)",
+              color: ink,
             }}
           >
             Something went off track.
@@ -100,9 +111,10 @@ export default function GlobalError({
 
           <p
             style={{
-              fontSize: "0.875rem",
+              fontSize: "0.9375rem",
               lineHeight: 1.6,
-              color: "hsl(173 19% 70%)",
+              fontWeight: 500,
+              color: muted,
               margin: "0 0 2rem",
             }}
           >
@@ -124,21 +136,19 @@ export default function GlobalError({
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "0.5rem",
-                height: "44px",
+                minHeight: "44px",
                 padding: "0 1.25rem",
-                borderRadius: "4px",
-                background: "hsl(174 98% 46%)",
-                color: "hsl(192 78% 4%)",
+                borderRadius: "14px",
+                background: teal,
+                color: tealText,
                 fontSize: "0.875rem",
-                fontWeight: 900,
+                fontWeight: 600,
                 textDecoration: "none",
-                border: "2px solid hsl(172 32% 92%)",
-                boxShadow: "3px 3px 0px hsl(172 32% 92%)",
-                transition: "transform 100ms ease",
+                boxShadow: glow,
               }}
             >
               <ArrowLeft
-                style={{ width: "16px", height: "16px", strokeWidth: 2 }}
+                style={{ width: "16px", height: "16px", strokeWidth: 1.75 }}
               />
               Go to dashboard
             </a>
@@ -149,21 +159,20 @@ export default function GlobalError({
                   display: "inline-flex",
                   alignItems: "center",
                   gap: "0.5rem",
-                  height: "44px",
+                  minHeight: "44px",
                   padding: "0 1.125rem",
-                  borderRadius: "4px",
-                  background: "hsl(176 41% 97%)",
-                  color: "hsl(192 78% 4%)",
+                  borderRadius: "14px",
+                  background: base,
+                  color: ink,
                   fontSize: "0.875rem",
-                  fontWeight: 900,
-                  border: "2px solid black",
+                  fontWeight: 600,
+                  border: "none",
                   cursor: "pointer",
-                  boxShadow: "3px 3px 0px hsl(172 32% 92%)",
-                  transition: "transform 100ms ease",
+                  boxShadow: raised,
                 }}
               >
                 <RefreshCw
-                  style={{ width: "15px", height: "15px", strokeWidth: 2 }}
+                  style={{ width: "15px", height: "15px", strokeWidth: 1.75 }}
                 />
                 Try again
               </button>
@@ -174,9 +183,12 @@ export default function GlobalError({
             <p
               style={{
                 marginTop: "2rem",
-                fontSize: "10px",
-                color: "hsl(173 19% 70%)",
-                fontFamily: "monospace",
+                padding: "0.5rem 0.75rem",
+                borderRadius: "10px",
+                boxShadow: inset,
+                fontSize: "0.75rem",
+                color: muted,
+                fontFamily: "ui-monospace, monospace",
               }}
             >
               Error ID: {error.digest}

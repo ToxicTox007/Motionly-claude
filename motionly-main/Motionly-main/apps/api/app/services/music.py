@@ -10,6 +10,7 @@ import httpx
 
 from app.api.errors import ApiError
 from app.schemas.music import MusicProviderKey
+from app.services.music_search import rank_tracks, resolve_mood_tags
 
 
 @dataclass(frozen=True)
@@ -112,81 +113,6 @@ class MusicProvider(Protocol):
     def get_track(self, *, provider_track_id: str) -> MusicTrackCandidate | None: ...
 
 
-SAMPLE_MUSIC: list[MusicTrackCandidate] = [
-    MusicTrackCandidate(
-        provider=MusicProviderKey.FIXTURE,
-        provider_track_id="fixture-ambient-luxury",
-        title="Ambient Luxury Bed",
-        license="royalty_free",
-        duration_ms=68_000,
-        mood_tags=["uplifting", "ambient", "luxury"],
-        bpm=80,
-        energy=0.35,
-        vocals=False,
-        loopable=True,
-        beat_map=[0.0, 750.0, 1500.0, 2250.0, 3000.0, 3750.0, 4500.0, 5250.0],
-        raw_metadata={"source": "fixture"},
-    ),
-    MusicTrackCandidate(
-        provider=MusicProviderKey.FIXTURE,
-        provider_track_id="fixture-clean-confident",
-        title="Clean Confident Groove",
-        license="royalty_free",
-        duration_ms=73_000,
-        mood_tags=["clean", "confident", "minimal"],
-        bpm=92,
-        energy=0.55,
-        vocals=False,
-        loopable=True,
-        beat_map=[0.0, 650.0, 1300.0, 1950.0, 2600.0, 3250.0, 3900.0, 4550.0],
-        raw_metadata={"source": "fixture"},
-    ),
-    MusicTrackCandidate(
-        provider=MusicProviderKey.FIXTURE,
-        provider_track_id="fixture-subtle-conversational",
-        title="Subtle Conversational Bed",
-        license="royalty_free",
-        duration_ms=80_000,
-        mood_tags=["subtle", "conversational", "podcast"],
-        bpm=72,
-        energy=0.2,
-        vocals=False,
-        loopable=True,
-        beat_map=[0.0, 1000.0, 2000.0, 3000.0, 4000.0],
-        raw_metadata={"source": "fixture"},
-    ),
-]
-
-
-@dataclass(frozen=True)
-class FixtureMusicProvider:
-    provider_key: MusicProviderKey = MusicProviderKey.FIXTURE
-
-    def search(self, *, mood: str, max_results: int = 5) -> list[MusicTrackCandidate]:
-        normalized = (mood or "").strip().lower()
-        if not normalized:
-            return SAMPLE_MUSIC[:max_results]
-
-        terms = [term for term in normalized.replace("-", " ").split() if term]
-        scored: list[tuple[int, MusicTrackCandidate]] = []
-        for track in SAMPLE_MUSIC:
-            searchable = " ".join([track.title.lower(), *track.mood_tags])
-            exact = normalized in searchable
-            score = (10 if exact else 0) + sum(1 for term in terms if term in searchable)
-            if score > 0:
-                scored.append((score, track))
-        candidates = [
-            track for _score, track in sorted(scored, key=lambda item: item[0], reverse=True)
-        ]
-        return candidates[:max_results] or SAMPLE_MUSIC[:max_results]
-
-    def get_track(self, *, provider_track_id: str) -> MusicTrackCandidate | None:
-        return next(
-            (track for track in SAMPLE_MUSIC if track.provider_track_id == provider_track_id),
-            None,
-        )
-
-
 @dataclass(frozen=True)
 class LicensedCatalogMusicProvider:
     supabase_url: str
@@ -211,7 +137,23 @@ class LicensedCatalogMusicProvider:
         }
 
     def search(self, *, mood: str, max_results: int = 5) -> list[MusicTrackCandidate]:
-        rows = self._fetch_rows(params={"active": "eq.true", "limit": "100"})
+        # N9: resolve the free-text mood to canonical mood tags via synonyms and
+        # filter in the database on the mood_synonyms array (GIN-indexed overlap,
+        # migration 2026101914xx). Fall back to the whole active catalog so a
+        # non-empty catalog ALWAYS returns something.
+        target_tags = resolve_mood_tags(mood)
+        rows: list[dict[str, object]] = []
+        if target_tags:
+            quoted = ",".join(f'"{tag}"' for tag in target_tags)
+            rows = self._fetch_rows(
+                params={
+                    "active": "eq.true",
+                    "mood_synonyms": f"ov.{{{quoted}}}",
+                    "limit": "100",
+                },
+            )
+        if not rows:
+            rows = self._fetch_rows(params={"active": "eq.true", "limit": "100"})
         candidates = [candidate for row in rows if (candidate := self._candidate_from_row(row))]
         return self._rank(candidates=candidates, mood=mood)[:max_results]
 
@@ -313,21 +255,10 @@ class LicensedCatalogMusicProvider:
         candidates: list[MusicTrackCandidate],
         mood: str,
     ) -> list[MusicTrackCandidate]:
-        normalized = (mood or "").strip().lower()
-        terms = [term for term in normalized.replace("-", " ").split() if term]
-        scored: list[tuple[int, MusicTrackCandidate]] = []
-        for track in candidates:
-            searchable = " ".join([track.title.lower(), *[tag.lower() for tag in track.mood_tags]])
-            exact = normalized and normalized in searchable
-            score = (10 if exact else 0) + sum(1 for term in terms if term in searchable)
-            if not terms:
-                score = 1
-            scored.append((score, track))
-        return [
-            track
-            for score, track in sorted(scored, key=lambda item: item[0], reverse=True)
-            if score > 0
-        ]
+        # N9: rank by mood-tag overlap (via synonyms) then energy/tempo fit.
+        # rank_tracks never drops a candidate, so a non-empty catalog always
+        # returns something.
+        return rank_tracks(candidates, mood=mood)
 
     def _string_list(self, value: object) -> list[str]:
         if not isinstance(value, list):

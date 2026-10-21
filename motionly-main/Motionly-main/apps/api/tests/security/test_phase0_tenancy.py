@@ -8,8 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.dependencies import Actor, get_actor
 from app.api.errors import ApiError, api_error_handler
-from app.api.internal_jobs import router as internal_jobs_router
-from app.api.internal_renders import update_render_progress
+from app.api.internal_retention import router as internal_retention_router
 from app.api.projects import get_project
 from app.api.renders import get_export_download_url, get_render
 from app.api.uploads import get_upload, get_upload_asset_urls
@@ -18,7 +17,6 @@ from app.repositories.projects import InMemoryProjectRepository
 from app.repositories.uploads import InMemoryUploadRepository
 from app.schemas.renders import RenderJobStatus, RenderOutputFormat
 from app.schemas.uploads import UploadStatus, VideoMetadata
-from app.services.queue import QueueRegistry
 from tests.test_renders import make_render_repository, make_request
 
 PROTECTED_ROUTE_GROUPS = [
@@ -92,21 +90,21 @@ def test_protected_route_groups_reject_forged_workspace_header(
     assert exc_info.value.status_code == 403
 
 
-def _internal_jobs_client() -> TestClient:
-    """Exercise the internal jobs router exactly as mounted, including its
-    router-level worker-token dependency (calling the handler directly would
-    bypass that dependency)."""
+def _internal_retention_client() -> TestClient:
+    """Exercise a surviving internal router (retention) exactly as mounted,
+    including its worker-token dependency. The dead /internal/jobs run route was
+    removed in Task 32; worker-token auth is now proven on the internal routes
+    that remain."""
     app = FastAPI()
     app.middleware("http")(request_id_middleware)
     app.add_exception_handler(ApiError, api_error_handler)
     app.state.settings = SimpleNamespace(app_env="local", worker_api_token="worker-secret")
-    app.state.queue_registry = QueueRegistry()
-    app.include_router(internal_jobs_router)
+    app.include_router(internal_retention_router)
     return TestClient(app)
 
 
 def test_internal_worker_route_rejects_missing_worker_token() -> None:
-    response = _internal_jobs_client().post("/internal/jobs/missing/run")
+    response = _internal_retention_client().post("/internal/retention/run")
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "worker_access_denied"
@@ -300,39 +298,26 @@ def test_worker_payload_cannot_update_render_in_another_workspace() -> None:
         manifest={},
         keep_segments=[],
     )
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            state=SimpleNamespace(
-                settings=SimpleNamespace(worker_api_token="worker-secret"),
-                render_repository=repository,
-            ),
-        ),
-    )
 
+    # The render control plane resolves every job through the render repository
+    # with the caller's workspace. A worker payload carrying a forged workspace
+    # id can never reach a render owned by another tenant: the repository raises
+    # 403 before any state mutation. (The dead /internal/renders/* HTTP surface
+    # that used to wrap this guard was removed in Task 32; the guard itself is
+    # the load-bearing tenant boundary and stays covered here.)
     with pytest.raises(ApiError) as exc_info:
-        asyncio.run(
-            update_render_progress(
-                render_job_id=render.id,
-                payload=SimpleNamespace(
-                    workspace_id=uuid4(),
-                    project_id=project_id,
-                    status=RenderJobStatus.RENDERING,
-                    progress_pct=50,
-                    message="Forged workspace update",
-                    event_type="worker_progress",
-                    metadata={},
-                ),
-                request=request,
-                x_motionly_worker_token="worker-secret",
-            )
+        repository.get_render_job(
+            project_id=project_id,
+            render_job_id=render.id,
+            workspace_id=uuid4(),
         )
 
     assert exc_info.value.status_code == 403
 
 
 def test_worker_route_rejects_wrong_worker_token() -> None:
-    response = _internal_jobs_client().post(
-        "/internal/jobs/any-job/run",
+    response = _internal_retention_client().post(
+        "/internal/retention/run",
         headers={"x-motionly-worker-token": "forged-token"},
     )
 

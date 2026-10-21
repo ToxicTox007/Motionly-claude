@@ -1,10 +1,19 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { isAdminIdentityAllowed } from "@/lib/admin-auth.mjs";
+import {
+  canManageBilling,
+  normalizeWorkspaceRole,
+} from "@/lib/workspace-roles.mjs";
 import { createClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
 
 export const WORKSPACE_COOKIE_NAME = "motionly_workspace_id";
+
+// The three workspace_role values, mirrored from the API (services/auth.py).
+export type WorkspaceRole = "owner" | "admin" | "member";
+
+export { canManageBilling };
 
 export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
   if (env.skipAuthMiddleware) {
@@ -13,6 +22,7 @@ export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
     return {
       userId: mockUserId,
       workspaceId: mockWorkspaceId,
+      role: "owner" as WorkspaceRole,
       headers: {
         authorization: `Bearer mock-local-bearer`,
         "content-type": "application/json",
@@ -34,7 +44,7 @@ export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
 
   const { data: memberships } = await supabase
     .from("workspace_members")
-    .select("workspace_id")
+    .select("workspace_id, role")
     .eq("user_id", user.id)
     .eq("status", "active");
 
@@ -56,9 +66,13 @@ export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
   }
 
   const workspaceId = String(membership.workspace_id);
+  const role: WorkspaceRole = normalizeWorkspaceRole(
+    (membership as { role?: unknown }).role,
+  );
   return {
     userId: user.id,
     workspaceId,
+    role,
     headers: {
       authorization: `Bearer ${session.access_token}`,
       "content-type": "application/json",

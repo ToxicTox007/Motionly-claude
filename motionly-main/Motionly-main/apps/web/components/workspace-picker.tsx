@@ -13,12 +13,12 @@ export function WorkspacePicker({
   error?: string | null;
 }) {
   return (
-    <div className="mx-auto max-w-lg space-y-4 border-2 border-foreground bg-surface p-6 shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff]">
+    <div className="mx-auto max-w-lg space-y-4 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg sm:p-8">
       <div>
-        <h2 className="text-lg font-black uppercase tracking-tight">
+        <h2 className="text-lg font-bold tracking-tight text-foreground">
           Select a workspace
         </h2>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-sm font-medium text-muted-foreground leading-relaxed">
           Choose the workspace for this session. Motionly will use this choice
           for API reads and mutations until you switch it.
         </p>
@@ -26,7 +26,7 @@ export function WorkspacePicker({
       {error ? (
         <p
           role="alert"
-          className="border-2 border-danger bg-danger/10 p-3 text-xs font-bold"
+          className="rounded-neu-md bg-surface p-3 text-xs font-semibold text-danger shadow-neu-inset-sm ring-1 ring-danger/30"
         >
           Workspace selection could not be applied. Choose an active workspace
           and try again.
@@ -38,7 +38,7 @@ export function WorkspacePicker({
         className="space-y-3"
       >
         <label
-          className="block text-xs font-black uppercase"
+          className="block text-xs font-semibold text-foreground"
           htmlFor="workspace_id"
         >
           Workspace
@@ -47,7 +47,7 @@ export function WorkspacePicker({
           id="workspace_id"
           name="workspace_id"
           required
-          className="min-h-11 w-full border-2 border-foreground bg-background px-3 text-sm font-bold"
+          className="min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
           defaultValue=""
         >
           <option value="" disabled>
@@ -61,7 +61,7 @@ export function WorkspacePicker({
         </select>
         <button
           type="submit"
-          className="min-h-11 border-2 border-foreground bg-primary px-4 text-xs font-black uppercase text-primary-foreground shadow-[2px_2px_0px_#000] hover:translate-x-px hover:translate-y-px hover:shadow-none"
+          className="min-h-11 rounded-neu bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-shadow duration-200 hover:brightness-105 active:shadow-neu-pressed"
         >
           Continue
         </button>

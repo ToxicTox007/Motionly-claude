@@ -382,12 +382,12 @@ export function BrandKitPanel({
   }
 
   return (
-    <section className="border-2 border-primary bg-primary/5 p-4 rounded space-y-3 shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+    <section className="space-y-3 rounded-neu-lg bg-surface p-5 shadow-neu-raised">
       <div>
-        <h3 className="text-sm font-black uppercase tracking-tight">
+        <h3 className="text-sm font-bold tracking-tight text-foreground">
           Brand Kit
         </h3>
-        <p className="mt-1 text-[11px] font-mono text-muted-foreground">
+        <p className="mt-1 text-[11px] font-medium text-muted-foreground">
           Apply your house look, assets, tone, and export defaults in one
           action.
         </p>
@@ -513,7 +513,7 @@ export function BrandKitPanel({
           />
         </Field>
       </div>
-      <p className="-mt-1 text-[10px] font-mono text-muted-foreground">
+      <p className="-mt-1 text-[10px] font-medium text-muted-foreground">
         Use public HTTPS or workspace media URLs. Logos and watermarks become
         editable canvas graphics; intros/outros become video overlays.
       </p>
@@ -542,8 +542,10 @@ export function BrandKitPanel({
         </Field>
       </div>
 
-      <div className="border-t-2 border-foreground/20 pt-3">
-        <p className="mb-2 text-xs font-black uppercase">Default export</p>
+      <div className="border-t border-hairline pt-3">
+        <p className="mb-2 text-xs font-semibold text-foreground">
+          Default export
+        </p>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Platform">
             <select
@@ -590,7 +592,7 @@ export function BrandKitPanel({
             </select>
           </Field>
         </div>
-        <label className="mt-2 flex items-center gap-2 text-xs font-bold">
+        <label className="mt-2 flex items-center gap-2 text-xs font-semibold text-foreground">
           <input
             type="checkbox"
             checked={form.includeCaptions}
@@ -603,11 +605,7 @@ export function BrandKitPanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button
-          disabled={busy}
-          onClick={() => void save()}
-          className="text-xs font-bold border-2 border-foreground"
-        >
+        <Button disabled={busy} onClick={() => void save()} className="text-xs">
           {editing ? "Update Brand Kit" : "Save Brand Kit"}
         </Button>
         {editing ? (
@@ -618,7 +616,7 @@ export function BrandKitPanel({
               setEditing(null);
               setForm(emptyForm(captionTrack));
             }}
-            className="text-xs font-bold border-2 border-foreground"
+            className="text-xs"
           >
             New kit
           </Button>
@@ -626,32 +624,34 @@ export function BrandKitPanel({
       </div>
 
       {kits.length ? (
-        <div className="space-y-2 border-t-2 border-foreground/20 pt-3">
+        <div className="space-y-2 border-t border-hairline pt-3">
           {kits.map((kit) => {
             const settings = kit.payload.settings ?? {};
             const exportPreset = settings.default_export;
             return (
               <div
                 key={kit.id}
-                className="border-2 border-foreground bg-surface p-3 rounded shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
+                className="rounded-neu-md bg-surface p-3 shadow-neu-raised-sm"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-black">{kit.name}</p>
-                    <p className="mt-1 text-[10px] font-mono text-muted-foreground">
+                    <p className="truncate text-xs font-semibold text-foreground">
+                      {kit.name}
+                    </p>
+                    <p className="mt-1 text-[10px] font-medium text-muted-foreground">
                       {(settings.colors ?? []).join(" · ") || "No colors"} ·{" "}
                       {settings.font_family ?? "System"} ·{" "}
                       {String(settings.caption_settings?.preset ?? "captions")}
                     </p>
                     {exportPreset ? (
-                      <p className="text-[10px] font-mono text-muted-foreground">
+                      <p className="text-[10px] font-medium text-muted-foreground">
                         {exportPreset.platform ?? "instagram"} ·{" "}
                         {exportPreset.output_aspect ?? "9:16"} ·{" "}
                         {exportPreset.resolution ?? "1080p"}
                       </p>
                     ) : null}
                   </div>
-                  <span className="shrink-0 text-[10px] font-mono text-muted-foreground">
+                  <span className="shrink-0 text-[10px] font-medium text-muted-foreground tabular-nums">
                     v{kit.revision}
                   </span>
                 </div>
@@ -659,7 +659,7 @@ export function BrandKitPanel({
                   <Button
                     disabled={busy}
                     onClick={() => void apply(kit)}
-                    className="h-8 px-2 text-[10px] font-bold border-2 border-foreground"
+                    className="h-8 px-2 text-[10px]"
                   >
                     Apply
                   </Button>
@@ -671,7 +671,7 @@ export function BrandKitPanel({
                       setForm(formForKit(kit, captionTrack));
                       setMessage(null);
                     }}
-                    className="h-8 px-2 text-[10px] font-bold border-2 border-foreground"
+                    className="h-8 px-2 text-[10px]"
                   >
                     Edit
                   </Button>
@@ -679,7 +679,7 @@ export function BrandKitPanel({
                     disabled={busy}
                     variant="secondary"
                     onClick={() => void remove(kit)}
-                    className="h-8 px-2 text-[10px] font-bold border-2 border-foreground"
+                    className="h-8 px-2 text-[10px]"
                   >
                     Delete
                   </Button>
@@ -689,14 +689,14 @@ export function BrandKitPanel({
           })}
         </div>
       ) : (
-        <p className="text-[11px] font-mono text-muted-foreground">
+        <p className="text-[11px] font-medium text-muted-foreground">
           Save your first kit to reuse it across projects.
         </p>
       )}
       {message ? (
         <p
           role="status"
-          className="border-2 border-foreground bg-muted p-2 text-[11px] font-bold font-mono"
+          className="rounded-neu bg-surface p-2 text-[11px] font-semibold text-foreground shadow-neu-inset-sm"
         >
           {message}
         </p>
@@ -713,9 +713,9 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="block text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+    <label className="block text-[10px] font-semibold tracking-wide text-muted-foreground">
       <span className="mb-1 block">{label}</span>
-      <span className="block [&_input]:min-h-9 [&_input]:w-full [&_input]:rounded [&_input]:border-2 [&_input]:border-foreground [&_input]:bg-surface [&_input]:px-2 [&_input]:text-xs [&_input]:font-bold [&_select]:min-h-9 [&_select]:w-full [&_select]:rounded [&_select]:border-2 [&_select]:border-foreground [&_select]:bg-surface [&_select]:px-2 [&_select]:text-xs [&_select]:font-bold [&_textarea]:min-h-16 [&_textarea]:w-full [&_textarea]:rounded [&_textarea]:border-2 [&_textarea]:border-foreground [&_textarea]:bg-surface [&_textarea]:p-2 [&_textarea]:text-xs [&_textarea]:font-bold">
+      <span className="block [&_input]:min-h-9 [&_input]:w-full [&_input]:rounded-neu [&_input]:border [&_input]:border-control [&_input]:bg-surface [&_input]:px-2 [&_input]:text-xs [&_input]:font-medium [&_input]:text-foreground [&_input]:shadow-neu-inset-sm [&_select]:min-h-9 [&_select]:w-full [&_select]:rounded-neu [&_select]:border [&_select]:border-control [&_select]:bg-surface [&_select]:px-2 [&_select]:text-xs [&_select]:font-medium [&_select]:text-foreground [&_select]:shadow-neu-inset-sm [&_textarea]:min-h-16 [&_textarea]:w-full [&_textarea]:rounded-neu [&_textarea]:border [&_textarea]:border-control [&_textarea]:bg-surface [&_textarea]:p-2 [&_textarea]:text-xs [&_textarea]:font-medium [&_textarea]:text-foreground [&_textarea]:shadow-neu-inset-sm">
         {children}
       </span>
     </label>

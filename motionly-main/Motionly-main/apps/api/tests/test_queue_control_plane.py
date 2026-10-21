@@ -10,8 +10,8 @@ import pytest
 
 from app.api.dependencies import Actor
 from app.api.errors import ApiError
-from app.api.internal_jobs import run_queue_job
 from app.api.plans import get_plan_job_status
+from app.services.job_engine import run_queue_job
 from app.services.queue import BullMQQueueRegistry, EnqueuedJob
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -19,11 +19,23 @@ RUN_REDIS_CONTRACTS = os.getenv("RUN_REDIS_CONTRACTS") == "true"
 
 
 def test_api_and_worker_bridges_have_one_exact_contract() -> None:
-    api_bridge = ROOT / "apps/api/worker-bridge"
+    # Single source of truth: the queue bridge lives only in apps/worker/src.
+    # The API control-plane copy is produced by the Dockerfiles at build time
+    # (Task 32 removed the on-disk apps/api/worker-bridge/*.mjs duplicates), so
+    # the two can never drift.
     worker_bridge = ROOT / "apps/worker/src"
+    api_bridge = ROOT / "apps/api/worker-bridge"
 
     for filename in ("queue-bridge.mjs", "queue-common.mjs"):
-        assert (api_bridge / filename).read_bytes() == (worker_bridge / filename).read_bytes()
+        assert (worker_bridge / filename).exists()
+        assert not (api_bridge / filename).exists()
+
+    for dockerfile in ("Dockerfile", "apps/api/Dockerfile"):
+        text = (ROOT / dockerfile).read_text(encoding="utf-8")
+        for filename in ("queue-bridge.mjs", "queue-common.mjs"):
+            assert (
+                f"COPY apps/worker/src/{filename} ./apps/api/worker-bridge/{filename}" in text
+            )
 
 
 def test_bullmq_registry_serializes_canonical_workflow_retry_fields(monkeypatch) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+from urllib.parse import SplitResult, urlsplit
 from uuid import UUID
 
 import httpx
@@ -47,13 +48,14 @@ def materialize_worker_object(
     expected_sha256: str | None = None,
 ) -> Path:
     """Fetch a reference-signed object into the worker cache, with bounded verification."""
-    signed_url = _sign_worker_reference(
+    signed = _sign_worker_reference(
         workspace_id=workspace_id,
         project_id=project_id,
         reference_id=reference_id,
     )
-    if signed_url is None:
+    if signed is None:
         return storage.ensure_object(bucket=bucket, path=path)
+    signed_url, internal = signed
 
     if expected_size_bytes is not None and not 0 < expected_size_bytes <= MAX_SOURCE_BYTES:
         raise ApiError(
@@ -68,7 +70,14 @@ def materialize_worker_object(
     hasher = hashlib.sha256()
     downloaded = 0
     try:
-        with safe_http_stream(signed_url, timeout=180) as response:
+        # A link on the configured internal storage origin is fetched directly
+        # (no redirects); any other link goes through the public-address guard.
+        stream = (
+            httpx.stream("GET", signed_url, timeout=180, follow_redirects=False)
+            if internal
+            else safe_http_stream(signed_url, timeout=180)
+        )
+        with stream as response:
             if response.status_code >= 400:
                 raise ApiError(
                     502,
@@ -134,12 +143,31 @@ def materialize_worker_object(
         ) from exc
 
 
+def _origin(parsed: SplitResult) -> str | None:
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return f"{parsed.scheme}://{parsed.hostname.lower()}:{port}"
+
+
+def _internal_storage_origin() -> str | None:
+    """The origin of SUPABASE_URL, the private storage gateway workers reach."""
+    value = os.getenv("SUPABASE_URL", "").strip()
+    return _origin(urlsplit(value)) if value else None
+
+
 def _sign_worker_reference(
     *,
     workspace_id: UUID,
     project_id: UUID,
     reference_id: UUID | None,
-) -> str | None:
+) -> tuple[str, bool] | None:
+    """A signed worker link and whether it is on the internal storage origin."""
     app_env = os.getenv("APP_ENV", "").strip().lower()
     api_base_url = (
         os.getenv("WORKER_API_BASE_URL") or os.getenv("API_PUBLIC_BASE_URL") or ""
@@ -198,10 +226,25 @@ def _sign_worker_reference(
             "worker_media_signing_invalid",
             "Worker media signing returned an invalid response.",
         ) from exc
-    if not isinstance(signed_url, str) or not signed_url.startswith("https://"):
+    if not isinstance(signed_url, str):
         raise ApiError(
             502,
             "worker_media_signing_invalid",
             "Worker media signing returned an invalid URL.",
         )
-    return signed_url
+    # The API signs worker links on SUPABASE_URL (StorageSigner
+    # create_signed_worker_download), the private gateway, which speaks plain
+    # HTTP inside the network. Only that exact origin is trusted; anything else
+    # must be HTTPS and still passes the public-address guard when fetched.
+    parsed = urlsplit(signed_url)
+    origin = _origin(parsed)
+    internal_origin = _internal_storage_origin()
+    if origin is not None and internal_origin is not None and origin == internal_origin:
+        return signed_url, True
+    if origin is None or parsed.scheme != "https":
+        raise ApiError(
+            502,
+            "worker_media_signing_invalid",
+            "Worker media signing returned an invalid URL.",
+        )
+    return signed_url, False

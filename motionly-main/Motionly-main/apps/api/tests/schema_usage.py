@@ -44,6 +44,22 @@ ATTRIBUTE_TABLES = {
     # table_name defaults to settings.licensed_music_catalog_table.
     ("app/services/music.py", "rest_url"): "licensed_music_tracks",
 }
+# Modules whose request helpers target GoTrue (``/auth/v1``), never PostgREST.
+# Their single-segment paths (e.g. ``/verify``, ``/signup``, ``/token``) are
+# GoTrue endpoints, not Supabase tables, so they are not table usages.
+GOTRUE_CLIENT_MODULES = {
+    "app/services/auth_admin.py",
+}
+# Modules whose PostgREST calls target a private non-``public`` schema via an
+# ``Accept-Profile``/``Content-Profile`` header, so their relation names
+# (``orders``, ``subscriptions``, ``refunds``, ``idempotency_keys``,
+# ``webhook_events``) are NOT ``public`` tables and must not be matched against
+# the public schema. The mock-gateway store reads/writes the ``mock_gateway``
+# schema with its own ``mock_gateway_role`` JWT (migration 202610190801); that
+# schema has its own pgTAP coverage (task_22_mock_gateway_schema_test.sql).
+NON_PUBLIC_SCHEMA_CLIENT_MODULES = {
+    "app/mock_gateway/store_db.py",
+}
 
 
 @dataclass(frozen=True)
@@ -479,6 +495,14 @@ def _rest_tables(
     bodies (their callers are analysed instead), RPC helpers, the REST root
     health probe, and non-Supabase HTTP calls.
     """
+    if module.rel in GOTRUE_CLIENT_MODULES and (
+        name in REQUEST_HELPERS or name in HTTPX_VERBS
+    ):
+        return None, False, True, ()  # GoTrue /auth/v1 call, not a Supabase table
+    if module.rel in NON_PUBLIC_SCHEMA_CLIENT_MODULES and (
+        name in REQUEST_HELPERS or name in HTTPX_VERBS
+    ):
+        return None, False, True, ()  # private non-public schema (Accept-Profile)
     if name in REQUEST_HELPERS or name in TABLE_HELPERS:
         for index, arg in enumerate(positional):
             follows_method = index > 0 and strings[index - 1] in HTTP_METHODS

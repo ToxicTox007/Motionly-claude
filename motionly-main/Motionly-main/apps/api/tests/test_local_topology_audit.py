@@ -48,6 +48,7 @@ def test_plan_only_report_covers_every_service_queue_and_feature_path() -> None:
         "supabase-auth",
         "supabase-rest",
         "supabase-storage",
+        "supabase-realtime",
         "supabase-gateway",
         "db-migrate",
         "api",

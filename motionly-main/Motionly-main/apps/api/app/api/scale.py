@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.billing import build_billing_status
-from app.api.dependencies import Actor, get_actor
+from app.api.dependencies import Actor, get_actor, require_role
 from app.api.errors import ApiError
 from app.schemas.billing import BillingPlanKey
 from app.schemas.media_uploads import (
@@ -32,9 +32,7 @@ from app.schemas.scale import (
     StemSelectionUpdateRequest,
     StemSeparationRequest,
     StyleProfileCreateRequest,
-    StyleReferenceCompleteRequest,
     StyleReferenceInitRequest,
-    StyleReferenceInitResponse,
     StyleReferenceMultipartInitResponse,
     StyleTrainRequest,
 )
@@ -44,6 +42,22 @@ from app.services.offload import run_blocking
 
 router = APIRouter(tags=["Phase 5 intelligence and scale"])
 ActorDep = Annotated[Actor, Depends(get_actor)]
+
+
+def _notify_manifest_updated(
+    request: Request, *, project_id: UUID, workspace_id: UUID, revision: int
+) -> None:
+    """Best-effort Task 26 broadcast that the shared manifest advanced, so other
+    editors reload only the collaboration panel. Carries ids/revision only and
+    never fails the save (the notifier swallows transport errors)."""
+    notifier = getattr(request.app.state, "collaboration_notifier", None)
+    if notifier is None:
+        return
+    notifier.notify_manifest_updated(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        revision=revision,
+    )
 
 
 async def _repository_call(repository, async_name: str, sync_name: str, **kwargs):
@@ -178,19 +192,6 @@ async def list_project_scale_resources(
         limit=limit,
     )
     return ScaleResourceListResponse(resources=[item.to_response() for item in resources])
-
-
-@router.get("/phase5/resources/{resource_id}", response_model=ScaleResourceResponse)
-async def get_scale_resource(
-    resource_id: UUID, actor: ActorDep, request: Request
-) -> ScaleResourceResponse:
-    return (
-        await _scale_get(
-            request,
-            resource_id=resource_id,
-            workspace_id=actor.workspace_id,
-        )
-    ).to_response()
 
 
 @router.post(
@@ -603,38 +604,6 @@ async def _complete_style_reference_media(
 
 
 @router.post(
-    "/projects/{project_id}/phase5/style-profiles/{profile_id}/references/init",
-    response_model=StyleReferenceInitResponse,
-    status_code=201,
-)
-async def init_style_reference(
-    project_id: UUID,
-    profile_id: UUID,
-    payload: StyleReferenceInitRequest,
-    actor: ActorDep,
-    request: Request,
-) -> StyleReferenceInitResponse:
-    # Legacy one-PUT facade over the same verified multipart state machine.
-    profile, reference_id, session = await _init_style_reference_media(
-        project_id=project_id,
-        profile_id=profile_id,
-        payload=payload,
-        actor=actor,
-        request=request,
-    )
-    first = (await _style_media_service(request).create_pending_part_urls(session))[0][1]
-    return StyleReferenceInitResponse(
-        profile=profile.to_response(),
-        reference_id=reference_id,
-        signed_upload_url=first.url,
-        upload_headers=first.headers,
-        expires_in_seconds=first.expires_in_seconds,
-        session_id=session.id,
-        part_size_bytes=session.part_size_bytes,
-    )
-
-
-@router.post(
     "/projects/{project_id}/phase5/style-profiles/{profile_id}/references/multipart/init",
     response_model=StyleReferenceMultipartInitResponse,
     status_code=201,
@@ -757,66 +726,6 @@ async def complete_style_reference_multipart(
         profile_id=profile_id,
         reference_id=UUID(str(reference["id"])),
         sha256_hash=payload.sha256_hash,
-        actor=actor,
-        request=request,
-    )
-
-
-@router.post(
-    "/projects/{project_id}/phase5/style-profiles/{profile_id}/references/multipart/{session_id}/abort",
-    response_model=MediaUploadSessionResponse,
-)
-async def abort_style_reference_multipart(
-    project_id: UUID,
-    profile_id: UUID,
-    session_id: UUID,
-    actor: ActorDep,
-    request: Request,
-) -> MediaUploadSessionResponse:
-    profile = _profile(request, profile_id=profile_id, workspace_id=actor.workspace_id)
-    if profile.project_id != project_id:
-        raise ApiError(422, "style_profile_project_mismatch", "Style profile project differs.")
-    service = _style_media_service(request)
-    await _require_owned_style_reference_session(
-        service=service,
-        profile=profile,
-        session_id=session_id,
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-    )
-    session = await service.abort(
-        session_id=session_id, workspace_id=actor.workspace_id, project_id=project_id
-    )
-    references = list(profile.payload.get("references") or [])
-    for reference in references:
-        if reference.get("media_upload_session_id") == str(session.id):
-            reference["status"] = session.status.value
-    await _scale_update_if_revision(
-        request,
-        record=profile,
-        expected_revision=profile.revision,
-        payload={**profile.payload, "references": references},
-        revision=profile.revision + 1,
-    )
-    return await _style_session_response(session, service)
-
-
-@router.post(
-    "/projects/{project_id}/phase5/style-profiles/{profile_id}/references/complete",
-    response_model=ScaleResourceResponse,
-)
-async def complete_style_reference(
-    project_id: UUID,
-    profile_id: UUID,
-    payload: StyleReferenceCompleteRequest,
-    actor: ActorDep,
-    request: Request,
-) -> ScaleResourceResponse:
-    return await _complete_style_reference_media(
-        project_id=project_id,
-        profile_id=profile_id,
-        reference_id=payload.reference_id,
-        sha256_hash=None,
         actor=actor,
         request=request,
     )
@@ -970,7 +879,11 @@ async def train_style_profile(
     return profile.to_response()
 
 
-@router.get("/phase5/templates", response_model=ScaleResourceListResponse)
+@router.get(
+    "/phase5/templates",
+    response_model=ScaleResourceListResponse,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def list_saved_templates(
     actor: ActorDep,
     request: Request,
@@ -985,7 +898,12 @@ async def list_saved_templates(
     return ScaleResourceListResponse(resources=[item.to_response() for item in records])
 
 
-@router.post("/phase5/templates", response_model=ScaleResourceResponse, status_code=201)
+@router.post(
+    "/phase5/templates",
+    response_model=ScaleResourceResponse,
+    status_code=201,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def create_saved_template(
     payload: SavedTemplateCreateRequest, actor: ActorDep, request: Request
 ) -> ScaleResourceResponse:
@@ -1002,7 +920,11 @@ async def create_saved_template(
     ).to_response()
 
 
-@router.patch("/phase5/templates/{template_id}", response_model=ScaleResourceResponse)
+@router.patch(
+    "/phase5/templates/{template_id}",
+    response_model=ScaleResourceResponse,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def update_saved_template(
     template_id: UUID,
     payload: SavedTemplateUpdateRequest,
@@ -1024,7 +946,11 @@ async def update_saved_template(
     return (await _scale_update(request, record=record, **values)).to_response()
 
 
-@router.delete("/phase5/templates/{template_id}", status_code=204)
+@router.delete(
+    "/phase5/templates/{template_id}",
+    status_code=204,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def delete_saved_template(template_id: UUID, actor: ActorDep, request: Request) -> Response:
     request.app.state.scale_repository.delete(
         resource_id=template_id, workspace_id=actor.workspace_id
@@ -1057,7 +983,11 @@ async def _validate_brand_kit_references(
             )
 
 
-@router.get("/phase5/brand-kits", response_model=ScaleResourceListResponse)
+@router.get(
+    "/phase5/brand-kits",
+    response_model=ScaleResourceListResponse,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def list_brand_kits(
     actor: ActorDep,
     request: Request,
@@ -1072,7 +1002,12 @@ async def list_brand_kits(
     return ScaleResourceListResponse(resources=[item.to_response() for item in records])
 
 
-@router.post("/phase5/brand-kits", response_model=ScaleResourceResponse, status_code=201)
+@router.post(
+    "/phase5/brand-kits",
+    response_model=ScaleResourceResponse,
+    status_code=201,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def create_brand_kit(
     payload: BrandKitCreateRequest,
     actor: ActorDep,
@@ -1095,7 +1030,11 @@ async def create_brand_kit(
     return record.to_response()
 
 
-@router.patch("/phase5/brand-kits/{brand_kit_id}", response_model=ScaleResourceResponse)
+@router.patch(
+    "/phase5/brand-kits/{brand_kit_id}",
+    response_model=ScaleResourceResponse,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def update_brand_kit(
     brand_kit_id: UUID,
     payload: BrandKitUpdateRequest,
@@ -1132,7 +1071,11 @@ async def update_brand_kit(
     return updated.to_response()
 
 
-@router.delete("/phase5/brand-kits/{brand_kit_id}", status_code=204)
+@router.delete(
+    "/phase5/brand-kits/{brand_kit_id}",
+    status_code=204,
+    dependencies=[Depends(require_role("owner", "admin"))],
+)
 async def delete_brand_kit(
     brand_kit_id: UUID,
     actor: ActorDep,
@@ -1218,6 +1161,12 @@ async def update_collaboration_manifest(
             payload={"manifest": payload.manifest},
             revision=1,
         )
+        _notify_manifest_updated(
+            request,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
+            revision=record.revision,
+        )
         return record.to_response()
     if record.revision != payload.base_revision:
         raise ApiError(
@@ -1226,15 +1175,20 @@ async def update_collaboration_manifest(
             "Another editor saved a newer revision. Reload before saving.",
             details={"current_revision": record.revision},
         )
-    return (
-        await _scale_update_if_revision(
-            request,
-            record=record,
-            expected_revision=payload.base_revision,
-            payload={"manifest": payload.manifest},
-            revision=record.revision + 1,
-        )
-    ).to_response()
+    updated = await _scale_update_if_revision(
+        request,
+        record=record,
+        expected_revision=payload.base_revision,
+        payload={"manifest": payload.manifest},
+        revision=record.revision + 1,
+    )
+    _notify_manifest_updated(
+        request,
+        project_id=project_id,
+        workspace_id=actor.workspace_id,
+        revision=updated.revision,
+    )
+    return updated.to_response()
 
 
 @router.post(

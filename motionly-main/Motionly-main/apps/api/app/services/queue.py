@@ -413,14 +413,15 @@ class BullMQQueueRegistry:
     @staticmethod
     def _default_bridge_path() -> Path:
         current = Path(__file__).resolve()
+        # The Docker image copies the single source (apps/worker/src/*.mjs) into
+        # apps/api/worker-bridge/ at build time, so that image path is tried
+        # first. Local development and tests resolve the single source directly
+        # from apps/worker/src/ -- the on-disk worker-bridge .mjs duplicates were
+        # removed (Task 32); only its package.json island remains for the image.
         candidates = [
             Path("/app/apps/api/worker-bridge/queue-bridge.mjs"),
             Path("/app/apps/worker/src/queue-bridge.mjs"),
         ]
-        candidates.extend(
-            parent / "apps" / "api" / "worker-bridge" / "queue-bridge.mjs"
-            for parent in current.parents
-        )
         candidates.extend(
             parent / "apps" / "worker" / "src" / "queue-bridge.mjs" for parent in current.parents
         )

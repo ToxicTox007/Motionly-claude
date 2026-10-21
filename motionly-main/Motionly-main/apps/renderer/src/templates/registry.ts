@@ -1,4 +1,4 @@
-import type { EditPlanStyleKey, RenderTemplateId } from "@motionly/shared";
+import type { RenderTemplateId } from "@motionly/shared";
 import type { TemplateDefinition } from "../types";
 
 export const templates: Record<RenderTemplateId, TemplateDefinition> = {
@@ -145,44 +145,6 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
   },
 };
 
-const styleDefaults: Record<EditPlanStyleKey, RenderTemplateId> = {
-  motivational: "talking_head_reel_v1",
-  emotional: "luxury_reel_v1",
-  cinematic: "luxury_reel_v1",
-  educational: "talking_head_reel_v1",
-  luxury: "luxury_reel_v1",
-  storytelling: "founder_reel_v1",
-  dramatic: "fashion_reel_v1",
-  fast_paced: "travel_reel_v1",
-  clean_minimal: "founder_reel_v1",
-  creator_influencer: "talking_head_reel_v1",
-  founder: "founder_reel_v1",
-  travel: "travel_reel_v1",
-  podcast: "podcast_reel_v1",
-  fashion: "fashion_reel_v1",
-};
-
 export function getTemplate(templateId: RenderTemplateId): TemplateDefinition {
   return templates[templateId];
-}
-
-export function templateForStyle(style: EditPlanStyleKey): TemplateDefinition {
-  return getTemplate(styleDefaults[style]);
-}
-
-export function downgradeUnsupportedEffects(
-  templateId: RenderTemplateId,
-  effects: string[],
-) {
-  const template = getTemplate(templateId);
-  const supported = new Set(template.supported_effects);
-  const applied = effects.filter((effect) => supported.has(effect));
-  const unsupported = effects.filter((effect) => !supported.has(effect));
-  return {
-    applied,
-    unsupported,
-    downgraded: unsupported.map(
-      (effect) => `${effect}->${template.default_color_grade}`,
-    ),
-  };
 }

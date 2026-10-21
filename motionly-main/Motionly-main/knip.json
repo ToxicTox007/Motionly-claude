@@ -1,0 +1,48 @@
+{
+  "$schema": "https://unpkg.com/knip@6.42.1/schema.json",
+  "workspaces": {
+    "apps/web": {
+      "entry": [
+        "app/**/{page,layout,template,loading,error,not-found,global-error,route,default,sitemap,robots,manifest,opengraph-image,icon,apple-icon}.{ts,tsx}",
+        "app/**/{actions,action}.ts",
+        "tests/**/*.{test,spec}.{mjs,ts,tsx}",
+        "tests/browser/**/*.spec.mjs",
+        "tests/e2e/**/*.spec.mjs",
+        "tests/browser/support/*.mjs"
+      ],
+      "project": [
+        "app/**/*.{ts,tsx}",
+        "components/**/*.{ts,tsx}",
+        "lib/**/*.{ts,tsx,mjs}",
+        "hooks/**/*.{ts,tsx}"
+      ],
+      "ignore": ["lib/**/*.d.mts"],
+      "ignoreDependencies": ["@typescript-eslint/parser"]
+    },
+    "apps/worker": {
+      "entry": ["src/worker.mjs", "src/*.test.mjs"],
+      "project": ["src/**/*.mjs"]
+    },
+    "apps/renderer": {
+      "entry": [
+        "src/index.ts",
+        "src/prebundle.ts",
+        "src/*.test.ts",
+        "src/*.test.mjs"
+      ],
+      "project": ["src/**/*.{ts,tsx,mjs}"],
+      "ignoreUnresolved": ["./ts-node-register.mjs"]
+    },
+    "packages/shared": {
+      "entry": ["src/index.ts", "src/timeline-eval.mjs"],
+      "project": ["src/**/*.{ts,mjs}"],
+      "ignore": ["src/generated/api.ts"]
+    },
+    ".": {
+      "entry": ["scripts/**/*.mjs"],
+      "project": ["scripts/**/*.mjs"]
+    }
+  },
+  "ignoreBinaries": ["openssl", "ffmpeg", "ffprobe", "k6"],
+  "ignoreExportsUsedInFile": true
+}

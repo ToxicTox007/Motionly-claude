@@ -11,6 +11,8 @@ test("runtime config refuses placeholder keys and the auth bypass in production"
     PUBLIC_ORIGIN: "https://d111abcdef8.cloudfront.net",
     API_INTERNAL_URL: "http://api:8000",
     SUPABASE_URL: "http://supabase-gateway:8000",
+    // Production must state its billing mode (Task 18, B17).
+    BILLING_MODE: "disabled",
   };
 
   for (const key of ["build-placeholder", "replace-with-supabase-anon-key"]) {
@@ -40,18 +42,23 @@ test("client-api.ts catches and friendly-maps AbortError and network failures", 
   assert.match(source, /Network connection lost/);
 });
 
-test("billing page contains sandbox warnings and Mock Plan badges", async () => {
+test("billing page labels demo payments and the disabled state honestly", async () => {
   const source = await readFile(
     new URL("app/(app)/billing/page.tsx", root),
     "utf8",
   );
 
-  // Verify banner titles and Mock Plan badge text
-  assert.match(source, /Billing Sandbox Preview/);
+  // Task 23: payments run through the mock gateway; every payment surface says
+  // so, and disabled billing says it is disabled.
+  assert.match(
+    source,
+    /const DEMO_NOTICE = "Demo payment — no money is charged";/,
+  );
   assert.match(source, /Billing Integration Offline/);
-  assert.match(source, /Manage sandbox billing/);
-  assert.match(source, /Preview checkout/);
-  assert.match(source, /Mock Plan/);
+  assert.match(source, /Billing is currently disabled\./);
+  assert.match(source, /Only the owner can manage billing/);
+  // The Stripe-era sandbox copy is gone.
+  assert.doesNotMatch(source, /Sandbox|Mock Plan|Stripe/i);
 });
 
 test("admin ops page sanitizes provider costs and integrates AdminJobsList", async () => {

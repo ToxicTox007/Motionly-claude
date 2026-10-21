@@ -62,6 +62,7 @@ def execute_proposal_generation(
     billing_repository: Any = None,
     operations_repository: Any = None,
     metrics_registry: Any = None,
+    editorial_learning_repository: Any = None,
 ) -> dict[str, Any]:
     proposal = proposal_repository.mark_generating(
         proposal_id=proposal_id,
@@ -162,6 +163,32 @@ def execute_proposal_generation(
         words=transcript.words,
         duration_ms=video_duration_ms or result.plan.target_duration_s * 1000,
     )
+    editorial_memory_provenance: dict[str, Any] | None = None
+    if editorial_learning_repository is not None and getattr(
+        settings, "editorial_learning_enabled", False
+    ):
+        # Only a per-user, explicitly promoted deployment may influence a new
+        # plan. Missing policy, revoked consent, or repository failures fail
+        # closed and leave the plan untouched (default provenance).
+        try:
+            preferences = editorial_learning_repository.resolve_active_preferences(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                user_id=proposal.created_by,
+            )
+        except Exception:
+            preferences = None
+        if preferences is not None:
+            from app.services.editorial_memory import apply_memory_to_plan
+
+            plan, field_provenance = apply_memory_to_plan(plan=plan, preferences=preferences)
+            editorial_memory_provenance = {
+                "memory_id": preferences.memory_id,
+                "memory_version": preferences.memory_version,
+                "policy_revision": preferences.policy_revision,
+                "example_count": preferences.example_count,
+                "fields": field_provenance,
+            }
     degradation = list(proposal.context.modality_degradation)
     if degradation:
         plan = plan.model_copy(
@@ -209,6 +236,7 @@ def execute_proposal_generation(
         ),
         planner_source=result.planner_source,
         prompt_version=result.prompt_version or EDIT_PLAN_PROMPT_VERSION,
+        editorial_memory=editorial_memory_provenance,
     )
     completed = proposal_repository.complete_generation(
         proposal_id=proposal.id,

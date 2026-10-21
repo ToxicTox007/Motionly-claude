@@ -1,6 +1,16 @@
 import type { Config } from "tailwindcss";
 
+// Light-only neumorphic ("soft UI") design system. `darkMode` is pinned to an
+// unused selector so any stray `dark:` class never applies (nothing sets
+// data-theme="dark"). Neumorphic shadows pair a light highlight (--neu-light,
+// top-left) with a dark shadow (--neu-dark, bottom-right).
+const raised = (d: number) =>
+  `${d}px ${d}px ${d * 2}px hsl(var(--neu-dark)), -${d}px -${d}px ${d * 2}px hsl(var(--neu-light))`;
+const inset = (d: number) =>
+  `inset ${d}px ${d}px ${d * 2}px hsl(var(--neu-dark)), inset -${d}px -${d}px ${d * 2}px hsl(var(--neu-light))`;
+
 const config: Config = {
+  darkMode: ["selector", '[data-theme="dark"]'],
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
@@ -24,9 +34,12 @@ const config: Config = {
         info: "hsl(var(--info))",
         accent: "hsl(var(--accent))",
         "accent-foreground": "hsl(var(--accent-foreground))",
-        // Legacy aliases kept so no TSX needs changing
-        "pixel-border": "hsl(var(--border-strong))",
-        "focus-ring": "hsl(var(--focus))",
+        // Neumorphic lines + focus
+        hairline: "hsl(var(--hairline))",
+        control: "hsl(var(--control-border))",
+        focus: "hsl(var(--focus))",
+        "neu-light": "hsl(var(--neu-light))",
+        "neu-dark": "hsl(var(--neu-dark))",
       },
       // Brand and status colours used as text keep WCAG AA contrast.
       textColor: {
@@ -37,34 +50,60 @@ const config: Config = {
         info: "hsl(var(--info-text))",
         accent: "hsl(var(--accent-text))",
       },
+      borderColor: {
+        hairline: "hsl(var(--hairline))",
+        control: "hsl(var(--control-border))",
+        focus: "hsl(var(--focus))",
+      },
+      divideColor: {
+        hairline: "hsl(var(--hairline))",
+      },
+      ringColor: {
+        focus: "hsl(var(--focus))",
+      },
+      outlineColor: {
+        focus: "hsl(var(--focus))",
+      },
+      fontFamily: {
+        sans: [
+          "var(--font-sans)",
+          "system-ui",
+          "-apple-system",
+          "Segoe UI",
+          "sans-serif",
+        ],
+      },
       borderRadius: {
-        sm: "4px",
-        DEFAULT: "4px",
-        md: "4px",
-        lg: "6px",
-        xl: "8px",
-        "2xl": "8px",
-        "3xl": "8px",
+        sm: "10px",
+        DEFAULT: "14px",
+        md: "18px",
+        lg: "22px",
+        xl: "28px",
+        "2xl": "32px",
+        "3xl": "36px",
+        "neu-sm": "10px",
+        neu: "14px",
+        "neu-md": "18px",
+        "neu-lg": "22px",
+        "neu-xl": "28px",
+        "neu-2xl": "36px",
       },
       boxShadow: {
-        sm: "2px 2px 0px 0px hsl(var(--border-strong))",
-        DEFAULT: "4px 4px 0px 0px hsl(var(--border-strong))",
-        md: "5px 5px 0px 0px hsl(var(--border-strong))",
-        lg: "7px 7px 0px 0px hsl(var(--border-strong))",
-        xl: "9px 9px 0px 0px hsl(var(--border-strong))",
-        glow: "5px 5px 0px 0px hsl(var(--border-strong))",
-        "glow-sm": "3px 3px 0px 0px hsl(var(--border-strong))",
-        "glow-accent": "5px 5px 0px 0px hsl(var(--border-strong))",
-        soft: "3px 3px 0px 0px hsl(var(--border-strong))",
-        inner: "inset 0 1px 3px hsl(var(--shadow-color)/0.2)",
+        // Canonical neumorphic names
+        "neu-raised-sm": raised(3),
+        "neu-raised": raised(6),
+        "neu-raised-lg": raised(12),
+        "neu-inset-sm": inset(2),
+        "neu-inset": inset(4),
+        "neu-pressed": inset(4),
+        "neu-glow": `${raised(6)}, 0 0 16px hsl(var(--primary) / 0.35)`,
+        // Tailwind's own scale, remapped to soft shadows (still used: shadow-xl).
+        sm: raised(3),
+        DEFAULT: raised(6),
+        md: raised(6),
+        lg: raised(12),
+        xl: raised(12),
         none: "none",
-        // Neo-brutalist solid offsets
-        brutal: "4px 4px 0px 0px hsl(var(--border-strong))",
-        "brutal-sm": "2px 2px 0px 0px hsl(var(--border-strong))",
-        "brutal-lg": "6px 6px 0px 0px hsl(var(--border-strong))",
-        "brutal-white": "4px 4px 0px 0px hsl(var(--border-strong))",
-        "brutal-white-sm": "2px 2px 0px 0px hsl(var(--border-strong))",
-        "brutal-white-lg": "6px 6px 0px 0px hsl(var(--border-strong))",
       },
       transitionTimingFunction: {
         spring: "cubic-bezier(0.16, 1, 0.3, 1)",
@@ -82,11 +121,11 @@ const config: Config = {
       },
       animation: {
         "fade-in": "fade-in 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
-        "fade-up": "fade-up 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
+        "fade-up": "fade-up 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
         "slide-in-right":
-          "slide-in-right 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
+          "slide-in-right 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
         "slide-in-up":
-          "slide-in-up 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
+          "slide-in-up 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
         "scale-in": "scale-in 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
         shimmer: "shimmer 1.8s ease-in-out infinite",
         float: "float 3s ease-in-out infinite",
@@ -100,20 +139,20 @@ const config: Config = {
           to: { opacity: "1" },
         },
         "fade-up": {
-          from: { opacity: "0", transform: "translateY(12px)" },
-          to: { opacity: "1", transform: "translateY(0)" },
+          from: { transform: "translateY(12px)" },
+          to: { transform: "translateY(0)" },
         },
         "slide-in-right": {
-          from: { opacity: "0", transform: "translateX(100%)" },
-          to: { opacity: "1", transform: "translateX(0)" },
+          from: { transform: "translateX(16px)" },
+          to: { transform: "translateX(0)" },
         },
         "slide-in-up": {
-          from: { opacity: "0", transform: "translateY(100%)" },
-          to: { opacity: "1", transform: "translateY(0)" },
+          from: { transform: "translateY(16px)" },
+          to: { transform: "translateY(0)" },
         },
         "scale-in": {
-          from: { opacity: "0", transform: "scale(0.92)" },
-          to: { opacity: "1", transform: "scale(1)" },
+          from: { transform: "scale(0.96)" },
+          to: { transform: "scale(1)" },
         },
         shimmer: {
           "0%": { backgroundPosition: "200% 0" },

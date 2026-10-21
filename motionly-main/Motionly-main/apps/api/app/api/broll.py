@@ -36,7 +36,6 @@ from app.schemas.broll import (
     UserBrollMultipartInitResponse,
     UserBrollUploadCompleteResponse,
     UserBrollUploadInitRequest,
-    UserBrollUploadInitResponse,
 )
 from app.schemas.media_uploads import (
     MediaUploadCompleteRequest,
@@ -374,37 +373,6 @@ async def _complete_broll_media_upload(
     return UserBrollUploadCompleteResponse(asset=asset.to_response())
 
 
-@router.post("/library/init", response_model=UserBrollUploadInitResponse, status_code=201)
-async def init_user_broll_upload(
-    project_id: UUID,
-    payload: UserBrollUploadInitRequest,
-    request: Request,
-    actor: ActorDep,
-    repository: BrollRepositoryDep,
-    storage_signer: StorageSignerDep,
-) -> UserBrollUploadInitResponse:
-    # Compatibility facade: a legacy client receives one signed part URL.  The
-    # object is still held in a multipart session and cannot become ready until
-    # it passes all server-side verification in /complete.
-    del storage_signer
-    asset, session = await _init_broll_media_upload(
-        project_id=project_id,
-        payload=payload,
-        request=request,
-        actor=actor,
-        repository=repository,
-    )
-    first = (await _media_service(request).create_pending_part_urls(session))[0][1]
-    return UserBrollUploadInitResponse(
-        asset=asset.to_response(),
-        signed_upload_url=first.url,
-        upload_headers=first.headers,
-        expires_in_seconds=first.expires_in_seconds,
-        session_id=session.id,
-        part_size_bytes=session.part_size_bytes,
-    )
-
-
 @router.post(
     "/library/multipart/init", response_model=UserBrollMultipartInitResponse, status_code=201
 )
@@ -511,55 +479,6 @@ async def complete_user_broll_multipart_upload(
         project_id=project_id,
         asset_id=session.owner_id,
         sha256_hash=payload.sha256_hash,
-        request=request,
-        actor=actor,
-        repository=repository,
-    )
-
-
-@router.post("/library/multipart/{session_id}/abort", response_model=MediaUploadSessionResponse)
-async def abort_user_broll_multipart_upload(
-    project_id: UUID,
-    session_id: UUID,
-    request: Request,
-    actor: ActorDep,
-    repository: BrollRepositoryDep,
-) -> MediaUploadSessionResponse:
-    service = _media_service(request)
-    session, asset = await _require_owned_broll_session(
-        service=service,
-        repository=repository,
-        session_id=session_id,
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-    )
-    session = await service.abort(
-        session_id=session.id, workspace_id=actor.workspace_id, project_id=project_id
-    )
-    await _repository_call(
-        repository,
-        "mark_library_asset_media_failed_async",
-        "mark_library_asset_media_failed",
-        asset=asset,
-        state=session.status.value,
-    )
-    return await _broll_session_response(session, service)
-
-
-@router.post("/library/{asset_id}/complete", response_model=UserBrollUploadCompleteResponse)
-async def complete_user_broll_upload(
-    project_id: UUID,
-    asset_id: UUID,
-    request: Request,
-    actor: ActorDep,
-    repository: BrollRepositoryDep,
-    storage_signer: StorageSignerDep,
-) -> UserBrollUploadCompleteResponse:
-    del storage_signer
-    return await _complete_broll_media_upload(
-        project_id=project_id,
-        asset_id=asset_id,
-        sha256_hash=None,
         request=request,
         actor=actor,
         repository=repository,

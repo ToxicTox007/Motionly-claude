@@ -313,6 +313,36 @@ class InMemoryEditorialLearningRepository:
             "policy_revision": policy.revision,
         }
 
+    def resolve_active_preferences(
+        self, *, workspace_id: UUID, project_id: UUID, user_id: UUID
+    ):
+        memory = self.resolve_active_memory(
+            workspace_id=workspace_id, project_id=project_id, user_id=user_id
+        )
+        if not memory:
+            return None
+        dataset = self.get_dataset(
+            dataset_id=UUID(str(memory["dataset_id"])),
+            workspace_id=workspace_id,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        deltas = sorted(
+            (item for item in self.dataset_deltas(dataset=dataset) if item.revoked_at is None),
+            key=lambda item: (item.created_at, str(item.id)),
+            reverse=True,
+        )
+        if not deltas:
+            return None
+        from app.services.editorial_memory import derive_memory_preferences
+
+        return derive_memory_preferences(
+            deltas=deltas,
+            memory_id=str(dataset.id),
+            memory_version=str(memory["manifest_hash"]),
+            policy_revision=int(memory["policy_revision"]),
+        )
+
     def promote(
         self,
         *,
@@ -657,6 +687,39 @@ class SupabaseEditorialLearningRepository:
             "manifest_hash": dataset.manifest_hash,
             "policy_revision": policy.revision,
         }
+
+    def resolve_active_preferences(
+        self, *, workspace_id: UUID, project_id: UUID, user_id: UUID
+    ):
+        memory = self.resolve_active_memory(
+            workspace_id=workspace_id, project_id=project_id, user_id=user_id
+        )
+        if not memory:
+            return None
+        try:
+            dataset = self.get_dataset(
+                dataset_id=UUID(str(memory["dataset_id"])),
+                workspace_id=workspace_id,
+                project_id=project_id,
+                user_id=user_id,
+            )
+        except ApiError:
+            return None
+        deltas = sorted(
+            (item for item in self.dataset_deltas(dataset=dataset) if item.revoked_at is None),
+            key=lambda item: (item.created_at, str(item.id)),
+            reverse=True,
+        )
+        if not deltas:
+            return None
+        from app.services.editorial_memory import derive_memory_preferences
+
+        return derive_memory_preferences(
+            deltas=deltas,
+            memory_id=str(dataset.id),
+            memory_version=str(memory["manifest_hash"]),
+            policy_revision=int(memory["policy_revision"]),
+        )
 
     def promote(
         self,

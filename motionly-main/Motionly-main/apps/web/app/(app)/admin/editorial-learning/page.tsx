@@ -76,12 +76,14 @@ export default async function EditorialLearningOperationsPage({
   return (
     <AppShell title="Editorial operations">
       <div className="mx-auto max-w-5xl space-y-6">
-        <section className="card-elevated p-6">
-          <span className="badge badge-primary">Admin only</span>
-          <h2 className="mt-3 text-3xl font-black tracking-tight">
+        <section className="rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg sm:p-8">
+          <span className="inline-flex items-center rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground shadow-neu-raised-sm">
+            Admin only
+          </span>
+          <h2 className="mt-3 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
             Editorial-learning operations
           </h2>
-          <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+          <p className="mt-2 max-w-3xl text-sm font-medium text-muted-foreground leading-relaxed">
             Review only frozen, consented dataset metadata. Activation changes a
             project preference deployment for the current administrator; it
             never silently enables consent or exposes source feedback.
@@ -93,7 +95,7 @@ export default async function EditorialLearningOperationsPage({
             <label className="flex-1">
               <span className="sr-only">Project ID</span>
               <input
-                className="pixel-input h-11 w-full px-3"
+                className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
                 defaultValue={projectId}
                 name="projectId"
                 pattern="[0-9a-fA-F-]{36}"
@@ -108,7 +110,7 @@ export default async function EditorialLearningOperationsPage({
         {result ? (
           <p
             role="status"
-            className="rounded border border-success bg-success/10 p-4 text-sm font-semibold text-success"
+            className="rounded-neu-md bg-surface p-4 text-sm font-semibold text-success shadow-neu-raised ring-1 ring-success/30"
           >
             {result}
           </p>
@@ -116,7 +118,7 @@ export default async function EditorialLearningOperationsPage({
         {error ? (
           <p
             role="alert"
-            className="rounded border border-danger bg-danger/10 p-4 text-sm font-semibold text-danger"
+            className="rounded-neu-md bg-surface p-4 text-sm font-semibold text-danger shadow-neu-raised ring-1 ring-danger/30"
           >
             {error}
           </p>
@@ -124,7 +126,7 @@ export default async function EditorialLearningOperationsPage({
         {operations?.error ? (
           <p
             role="alert"
-            className="rounded border border-danger bg-danger/10 p-4 text-sm font-semibold text-danger"
+            className="rounded-neu-md bg-surface p-4 text-sm font-semibold text-danger shadow-neu-raised ring-1 ring-danger/30"
           >
             Editorial operations are unavailable or disabled for this
             deployment.
@@ -132,15 +134,17 @@ export default async function EditorialLearningOperationsPage({
         ) : null}
 
         {operations?.deployment ? (
-          <section className="card rounded-xl p-6 space-y-4">
+          <section className="rounded-neu-lg bg-surface p-6 shadow-neu-raised space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-lg font-black">Current deployment</h3>
-                <p className="text-sm text-muted-foreground">
+                <h3 className="text-lg font-bold text-foreground">
+                  Current deployment
+                </h3>
+                <p className="text-sm font-medium text-muted-foreground">
                   State is revisioned to prevent stale activation decisions.
                 </p>
               </div>
-              <span className="badge badge-accent capitalize">
+              <span className="inline-flex items-center rounded-full bg-accent px-3 py-1 text-xs font-semibold capitalize text-accent-foreground shadow-neu-raised-sm">
                 {operations.deployment.state}
               </span>
             </div>
@@ -160,22 +164,22 @@ export default async function EditorialLearningOperationsPage({
             </dl>
             <form
               action={rollbackEditorialDeployment}
-              className="rounded-lg border border-border bg-muted p-4 space-y-3"
+              className="rounded-neu-md bg-surface p-4 shadow-neu-inset space-y-3 ring-1 ring-danger/30"
             >
               <input name="projectId" type="hidden" value={projectId} />
-              <label className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <label className="block text-xs font-semibold text-muted-foreground">
                 Rollback reason
                 <input
-                  className="pixel-input mt-1.5 h-10 w-full px-3 normal-case tracking-normal"
+                  className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
                   defaultValue="admin_rollback"
                   maxLength={160}
                   name="reason"
                 />
               </label>
-              <label className="block text-xs text-muted-foreground">
+              <label className="block text-xs font-medium text-muted-foreground">
                 Type <strong>ROLLBACK</strong> to confirm
                 <input
-                  className="pixel-input mt-1.5 h-10 w-full px-3"
+                  className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
                   name="confirmation"
                   required
                 />
@@ -188,10 +192,12 @@ export default async function EditorialLearningOperationsPage({
         ) : null}
 
         {operations ? (
-          <section className="card rounded-xl p-6 space-y-4">
+          <section className="rounded-neu-lg bg-surface p-6 shadow-neu-raised space-y-4">
             <div>
-              <h3 className="text-lg font-black">Frozen consented datasets</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <h3 className="text-lg font-bold text-foreground">
+                Frozen consented datasets
+              </h3>
+              <p className="mt-1 text-sm font-medium text-muted-foreground">
                 Only IDs, item counts, state, and immutable manifest hashes are
                 shown.
               </p>
@@ -200,13 +206,13 @@ export default async function EditorialLearningOperationsPage({
               operations.datasets.map((dataset) => (
                 <article
                   key={dataset.id}
-                  className="rounded-lg border border-border bg-muted p-4 space-y-3"
+                  className="rounded-neu-md bg-surface p-4 shadow-neu-inset space-y-3"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <code className="max-w-full truncate text-xs font-bold">
+                    <code className="max-w-full truncate font-mono text-xs font-semibold text-foreground">
                       {dataset.id}
                     </code>
-                    <span className="badge badge-secondary capitalize">
+                    <span className="inline-flex items-center rounded-full bg-surface px-3 py-1 text-xs font-semibold capitalize text-foreground shadow-neu-raised-sm">
                       {dataset.status}
                     </span>
                   </div>
@@ -238,10 +244,10 @@ export default async function EditorialLearningOperationsPage({
                         type="hidden"
                         value={operations.deployment?.revision ?? 0}
                       />
-                      <label className="flex-1 text-xs text-muted-foreground">
+                      <label className="flex-1 text-xs font-medium text-muted-foreground">
                         Type <strong>PROMOTE</strong> to activate this dataset
                         <input
-                          className="pixel-input mt-1.5 h-10 w-full px-3"
+                          className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
                           name="confirmation"
                           required
                         />
@@ -252,7 +258,7 @@ export default async function EditorialLearningOperationsPage({
                 </article>
               ))
             ) : (
-              <p className="rounded-lg border border-border bg-muted p-4 text-sm text-muted-foreground">
+              <p className="rounded-neu-md bg-surface p-4 text-sm font-medium text-muted-foreground shadow-neu-inset">
                 No datasets are available for this project and administrator.
               </p>
             )}
@@ -266,10 +272,10 @@ export default async function EditorialLearningOperationsPage({
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </dt>
-      <dd className="mt-1 truncate font-mono text-xs font-bold">{value}</dd>
+      <dt className="text-xs font-semibold text-muted-foreground">{label}</dt>
+      <dd className="mt-1 truncate font-mono text-xs font-semibold text-foreground">
+        {value}
+      </dd>
     </div>
   );
 }

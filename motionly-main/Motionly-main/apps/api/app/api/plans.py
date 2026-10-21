@@ -21,7 +21,6 @@ from app.schemas.plans import (
     EDIT_PLAN_PROMPT_VERSION,
     BrollDensity,
     EditPlanStyle,
-    PlanActivateResponse,
     PlanCaptionHighlightsUpdateRequest,
     PlanCaptionHighlightsUpdateResponse,
     PlanCreateRequest,
@@ -37,7 +36,6 @@ from app.schemas.plans import (
     PlanSnapshotCreateResponse,
     PlanSnapshotListResponse,
     PlanSnapshotRestoreResponse,
-    TimelineUpdateRequest,
     TimelineUpdateResponse,
 )
 from app.schemas.scale import ScaleResourceStatus
@@ -142,9 +140,15 @@ async def _update_plan_with_revision(
     summary,
     target_duration_s: int,
     change_type: str = "manual_edit",
+    request: Request | None = None,
 ):
-    """Revision-enforced plan update. Raises RevisionConflictError on mismatch."""
-    return await _repository_call(
+    """Revision-enforced plan update. Raises RevisionConflictError on mismatch.
+
+    On success, best-effort broadcasts ``plan_revision_updated`` on the project's
+    private live channel (Task 26) so other editors reload only the plan panel
+    and advance their tracked revision. The message carries ids/revision only.
+    """
+    updated = await _repository_call(
         repository,
         "update_plan_with_revision_async",
         "update_plan_with_revision",
@@ -156,6 +160,37 @@ async def _update_plan_with_revision(
         summary=summary,
         target_duration_s=target_duration_s,
         change_type=change_type,
+    )
+    _notify_plan_revision(
+        request,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=plan_id,
+        revision=getattr(updated, "revision", None),
+    )
+    return updated
+
+
+def _notify_plan_revision(
+    request: Request | None,
+    *,
+    project_id: UUID,
+    workspace_id: UUID,
+    plan_id: UUID,
+    revision: int | None,
+) -> None:
+    """Emit the collaboration broadcast if a notifier is wired and we have a
+    revision. Never raises: a missed broadcast must not fail the save."""
+    if request is None or revision is None:
+        return
+    notifier = getattr(request.app.state, "collaboration_notifier", None)
+    if notifier is None:
+        return
+    notifier.notify_plan_revision_updated(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=plan_id,
+        revision=revision,
     )
 
 
@@ -448,18 +483,17 @@ def _apply_phase5_learning(
         # Only a per-user, explicitly promoted deployment may influence a new
         # plan. Missing policy, revoked data, or repository failures fail closed.
         try:
-            memory = learning_repository.resolve_active_memory(
+            preferences = learning_repository.resolve_active_preferences(
                 workspace_id=workspace_id,
                 project_id=project_id,
                 user_id=user_id,
             )
         except Exception:
-            memory = None
-        if memory:
-            direction_parts.append(
-                "Consented editorial memory provenance: "
-                + str(memory.get("manifest_hash") or "")[:32]
-            )
+            preferences = None
+        if preferences is not None:
+            from app.services.editorial_memory import preferences_direction_text
+
+            direction_parts.append(preferences_direction_text(preferences))
     if direction_parts:
         updates["prompt"] = "\n".join(direction_parts)[:1200]
     return payload.model_copy(update=updates)
@@ -603,24 +637,6 @@ async def restore_plan_snapshot(
     )
 
 
-@router.post("/{plan_id}/activate", response_model=PlanActivateResponse)
-async def activate_plan(
-    project_id: UUID,
-    plan_id: UUID,
-    actor: ActorDep,
-    repository: PlanRepositoryDep,
-) -> PlanActivateResponse:
-    plan = await _repository_call(
-        repository,
-        "activate_plan_async",
-        "activate_plan",
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        plan_id=plan_id,
-    )
-    return PlanActivateResponse(plan=plan.to_response(), revision=plan.revision)
-
-
 @router.patch("/{plan_id}/cuts", response_model=PlanCutsUpdateResponse)
 async def update_plan_cuts(
     project_id: UUID,
@@ -685,6 +701,7 @@ async def update_plan_cuts(
             summary=summary,
             target_duration_s=target_duration_s,
             change_type="cuts_update",
+            request=request,
         )
     else:
         logger.warning(
@@ -751,6 +768,7 @@ async def update_plan_caption_highlights(
             summary=summary,
             target_duration_s=record.target_duration_s,
             change_type="caption_highlights_update",
+            request=request,
         )
     else:
         logger.warning(
@@ -843,6 +861,7 @@ async def update_plan_manual_elements(
             summary=summary,
             target_duration_s=record.target_duration_s,
             change_type="manual_elements_update",
+            request=request,
         )
     else:
         logger.warning(
@@ -886,77 +905,6 @@ async def update_plan_manual_elements(
         metadata={"previous_version": record.version},
     )
     return PlanManualElementsUpdateResponse(plan=updated.to_response(), revision=updated.revision)
-
-
-@router.patch("/{plan_id}/timeline", response_model=TimelineUpdateResponse)
-async def update_project_timeline(
-    project_id: UUID,
-    plan_id: UUID,
-    payload: TimelineUpdateRequest,
-    actor: ActorDep,
-    repository: PlanRepositoryDep,
-    request: Request = None,  # type: ignore[assignment]
-) -> TimelineUpdateResponse:
-    record = await _get_plan(
-        repository,
-        project_id=project_id,
-        workspace_id=actor.workspace_id,
-        plan_id=plan_id,
-    )
-    plan = project_timeline_to_legacy_plan(
-        plan=record.plan,
-        timeline=payload.timeline,
-    )
-    summary = summarize_plan(
-        plan,
-        style_classification=record.summary.style_classification,
-    )
-    if payload.expected_revision is not None:
-        updated = await _update_plan_with_revision(
-            repository,
-            plan_id=plan_id,
-            expected_revision=payload.expected_revision,
-            new_plan=plan,
-            project_id=project_id,
-            workspace_id=actor.workspace_id,
-            summary=summary,
-            target_duration_s=plan.target_duration_s,
-            change_type="timeline_update",
-        )
-    else:
-        logger.warning(
-            "plan_mutation_without_revision",
-            extra={"plan_id": str(plan_id), "endpoint": "timeline", "project_id": str(project_id)},
-        )
-        updated = await _update_plan_cuts(
-            repository,
-            project_id=project_id,
-            workspace_id=actor.workspace_id,
-            plan_id=plan_id,
-            plan=plan,
-            summary=summary,
-            target_duration_s=plan.target_duration_s,
-        )
-    record_ai_feedback(
-        request=request,
-        workspace_id=actor.workspace_id,
-        project_id=project_id,
-        user_id=actor.user_id,
-        edit_plan_id=plan_id,
-        event_type=AIEditFeedbackEventType.CHANGED,
-        layer=AIEditLayer.CUTS,
-        source="timeline_editor",
-        decision_id=f"{plan_id}:timeline",
-        action="update_timeline",
-        ai_payload={
-            "timeline": (
-                record.plan.timeline.model_dump(mode="json") if record.plan.timeline else None
-            )
-        },
-        user_payload={"timeline": payload.timeline.model_dump(mode="json")},
-        metadata={"previous_version": record.version},
-    )
-    return TimelineUpdateResponse(plan=updated.to_response(), revision=updated.revision)
 
 
 @router.post("/{plan_id}/compile-timeline", response_model=TimelineUpdateResponse)
@@ -1053,6 +1001,7 @@ async def compile_project_timeline(
             summary=summary,
             target_duration_s=plan.target_duration_s,
             change_type="compile_timeline",
+            request=request,
         )
     else:
         logger.warning(

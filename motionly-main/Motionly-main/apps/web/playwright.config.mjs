@@ -53,7 +53,6 @@ export default defineConfig({
         WORKER_API_TOKEN: "e2e-worker-token",
         ALLOW_FIXTURE_PROVIDERS: "true",
         VISUAL_PROVIDER: "fixture",
-        RENDER_EXECUTE_FFMPEG: "false",
         MEDIA_WORK_DIR: "/tmp/motionly-e2e-media",
         FORCE_LOCAL_MEDIA_STORAGE: "true",
       },

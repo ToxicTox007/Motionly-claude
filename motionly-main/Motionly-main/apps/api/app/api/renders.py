@@ -52,6 +52,7 @@ from app.services.edit_plan_validation import (
     EditPlanValidationFailure,
     validate_edit_plan_for_render,
 )
+from app.services.export_download import export_download_filename
 from app.services.matte_jobs import matte_availability
 from app.services.media_url_policy import MediaUrlPolicyError, validate_render_media_manifest
 from app.services.offload import run_blocking
@@ -1415,6 +1416,22 @@ async def get_render(
     return job.to_response(await _events_for_job(repository, job.id))
 
 
+# Keep the render event stream alive with an SSE comment at least this often.
+# `render_stream_now` / `render_stream_sleep` are module-level hooks so tests
+# can drive the loop with a fake clock instead of real wall-clock time.
+RENDER_STREAM_KEEPALIVE_SECONDS = 15
+
+
+def render_stream_now() -> float:
+    import time
+
+    return time.monotonic()
+
+
+async def render_stream_sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
+
+
 @router.get("/projects/{project_id}/renders/{render_job_id}/events")
 async def stream_render_events(
     project_id: UUID,
@@ -1430,6 +1447,11 @@ async def stream_render_events(
             RenderJobStatus.FAILED,
             RenderJobStatus.CANCELED,
         }
+        # Emit an SSE comment keep-alive at least every 15 seconds so idle
+        # renders keep the connection (and any intermediary buffers) alive while
+        # the worker is busy. Injectable clock/sleep hooks let tests drive this
+        # with a fake clock instead of real time.
+        last_emit = render_stream_now()
         while True:
             if await request.is_disconnected():
                 break
@@ -1450,9 +1472,13 @@ async def stream_render_events(
                 yield "event: render\n"
                 yield f"data: {json.dumps(payload)}\n\n"
                 last_signature = signature
+                last_emit = render_stream_now()
+            elif render_stream_now() - last_emit >= RENDER_STREAM_KEEPALIVE_SECONDS:
+                yield ": keep-alive\n\n"
+                last_emit = render_stream_now()
             if job.status in terminal:
                 break
-            await asyncio.sleep(2)
+            await render_stream_sleep(2)
 
     return StreamingResponse(
         event_stream(),
@@ -1617,15 +1643,18 @@ async def get_export_download_url(
         request.app.state.settings.export_signed_url_ttl_seconds,
         StorageSigner.MAX_DOWNLOAD_TTL_SECONDS,
     )
+    download_filename = _export_download_filename(request=request, export=export)
     signed = storage_signer.create_signed_download(
         bucket=export.storage_bucket,
         path=export.storage_path,
         expires_in_seconds=ttl,
+        download=download_filename,
     )
     return ExportDownloadUrlResponse(
         export_id=export.id,
         signed_download_url=signed.url,
         expires_in_seconds=ttl,
+        download_filename=download_filename,
     )
 
 
@@ -1648,6 +1677,34 @@ async def restore_export_version(
     return ExportRestoreResponse(
         export=export.to_response(),
         restored_from_export_id=export_id,
+    )
+
+
+def _export_download_filename(*, request: Request, export) -> str:
+    """Build a sanitized ``<project title>-vN.<ext>`` download filename.
+
+    The title falls back to a neutral label when it is unavailable, so the
+    Content-Disposition header the signed link produces is always well-formed.
+    """
+    title: str | None = None
+    render_repository = getattr(request.app.state, "render_repository", None)
+    caption_repository = getattr(render_repository, "caption_repository", None)
+    getter = getattr(caption_repository, "get_project_for_workspace", None)
+    if callable(getter):
+        try:
+            project = getter(
+                project_id=export.project_id,
+                workspace_id=export.workspace_id,
+            )
+            candidate = getattr(project, "title", None)
+            if isinstance(candidate, str) and candidate.strip():
+                title = candidate
+        except Exception:
+            title = None
+    return export_download_filename(
+        title=title,
+        version=export.version,
+        extension=getattr(export.format, "value", str(export.format)),
     )
 
 

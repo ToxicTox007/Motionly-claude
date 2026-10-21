@@ -63,7 +63,15 @@ interface TimelinePanelProps {
   onBrollSlotUpdated: (slot: BrollSlotSummary) => void;
   onMusicSelectionUpdated: (selection: MusicSelectionSummary) => void;
   getExpectedRevision?: () => number | undefined;
-  onConflictDetected?: (error: unknown, source: string) => boolean;
+  onConflictDetected?: (
+    error: unknown,
+    source: string,
+    handlers?: {
+      retry?: (latestRevision: number) => Promise<void>;
+      rollback?: () => void;
+      localSummary?: { field: string; detail: string }[];
+    },
+  ) => boolean;
 }
 
 type ReorderDirection = -1 | 1;
@@ -354,7 +362,29 @@ export function TimelinePanel({
             if (historyEntry) pushHistory(historyEntry);
             setMessage(nextMessage);
           } catch (error) {
-            if (onConflictDetected?.(error, "timeline")) return;
+            if (
+              onConflictDetected?.(error, "timeline", {
+                // Force Save re-runs the same action; `request` reads the
+                // revision ref which force-save has already advanced.
+                retry: async () => {
+                  await action();
+                },
+                // Revert the optimistic on-screen edit immediately; if the
+                // user force-saves, the retry re-applies it.
+                rollback,
+                localSummary: [
+                  {
+                    field: "Timeline",
+                    detail: "Your timeline edit (cuts/clip timing)",
+                  },
+                ],
+              })
+            ) {
+              // Roll the canvas back now so it shows the last saved state while
+              // the conflict dialog is open.
+              rollback?.();
+              return;
+            }
             console.error(error);
             const errMsg = (error as Error).message;
             setMessage(errMsg);
@@ -1090,15 +1120,15 @@ export function TimelinePanel({
       <h2 id="timeline-heading" className="sr-only">
         Timeline
       </h2>
-      <div className="pixel-grid-fine flex min-h-14 shrink-0 items-center gap-2 border-b-2 border-foreground bg-background px-2 sm:px-3">
+      <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-hairline bg-surface px-2 sm:px-3">
         <span
-          className="rounded border-2 border-foreground bg-surface px-2 py-1 font-mono text-xs font-black text-primary tabular-nums shadow-brutal-sm"
+          className="rounded-neu bg-muted px-2.5 py-1 font-mono text-xs font-semibold tabular-nums text-primary shadow-neu-inset-sm"
           aria-live="polite"
         >
           {formatMs(playheadMs)} <span className="opacity-40">/</span>{" "}
           {formatMs(totalDurationMs)}
         </span>
-        <span className="hidden truncate text-[11px] font-black uppercase text-muted-foreground sm:block">
+        <span className="hidden truncate text-xs font-semibold text-muted-foreground sm:block">
           {saving
             ? "Saving timeline..."
             : (message ?? currentLabel ?? selectedCopy)}
@@ -1127,7 +1157,7 @@ export function TimelinePanel({
           >
             <Redo2 className="size-3" />
           </TimelineButton>
-          <span className="mx-1 h-8 w-0.5 bg-foreground" />
+          <span className="mx-1 h-8 w-px bg-hairline" />
           <TimelineButton
             onClick={splitSelectedClip}
             title={
@@ -1162,7 +1192,7 @@ export function TimelinePanel({
           >
             <ArrowRight className="size-3" />
           </TimelineButton>
-          <span className="mx-1 h-8 w-0.5 bg-foreground" />
+          <span className="mx-1 h-8 w-px bg-hairline" />
           <TimelineButton
             onClick={zoomOut}
             title="Zoom out"
@@ -1185,7 +1215,7 @@ export function TimelinePanel({
             <ZoomIn className="size-3" />
           </TimelineButton>
           {zoomLevel !== 1 && (
-            <span className="ml-1 rounded border-2 border-foreground bg-primary px-1.5 py-1 font-mono text-[9px] font-black text-primary-foreground tabular-nums">
+            <span className="ml-1 rounded-full bg-primary px-2 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-primary-foreground shadow-neu-glow">
               {zoomLevel.toFixed(1)}x
             </span>
           )}
@@ -1193,7 +1223,7 @@ export function TimelinePanel({
       </div>
       {selectedClip ? (
         <form
-          className="flex flex-wrap items-end gap-2 border-b-2 border-foreground bg-surface-elevated p-2"
+          className="flex flex-wrap items-end gap-2 border-b border-hairline bg-surface-elevated p-2"
           onSubmit={(event) => {
             event.preventDefault();
             const form = new FormData(event.currentTarget);
@@ -1203,28 +1233,28 @@ export function TimelinePanel({
             );
           }}
         >
-          <span className="self-center rounded border-2 border-foreground bg-background px-2 py-1 font-mono text-[10px] font-black uppercase text-primary shadow-brutal-sm">
+          <span className="self-center rounded-full bg-muted px-2.5 py-1 font-mono text-xs font-semibold text-primary shadow-neu-inset-sm">
             Selected
           </span>
-          <label className="text-sm font-black uppercase text-muted-foreground">
+          <label className="text-sm font-semibold text-muted-foreground">
             Start ms
             <input
               name="start_ms"
               type="number"
               defaultValue={selectedClip.startMs}
-              className="pixel-input ml-2 min-h-11 w-28 px-2"
+              className="ml-2 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
             />
           </label>
-          <label className="text-sm font-black uppercase text-muted-foreground">
+          <label className="text-sm font-semibold text-muted-foreground">
             End ms
             <input
               name="end_ms"
               type="number"
               defaultValue={selectedClip.endMs}
-              className="pixel-input ml-2 min-h-11 w-28 px-2"
+              className="ml-2 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
             />
           </label>
-          <span className="rounded border-2 border-foreground bg-background px-2 py-2 font-mono text-xs font-black uppercase text-muted-foreground">
+          <span className="rounded-neu bg-muted px-2.5 py-2 font-mono text-xs font-semibold tabular-nums text-muted-foreground shadow-neu-inset-sm">
             Duration {formatMs(selectedClip.endMs - selectedClip.startMs)}
           </span>
           <ButtonLike type="submit" disabled={saving}>
@@ -1258,24 +1288,24 @@ export function TimelinePanel({
 
       <div className="hidden min-h-0 flex-1 overflow-hidden md:flex">
         <div
-          className="flex flex-shrink-0 flex-col border-r-2 border-foreground bg-surface"
+          className="flex flex-shrink-0 flex-col border-r border-hairline bg-surface"
           style={{ width: LABEL_WIDTH }}
         >
           <div
-            className="border-b-2 border-foreground bg-background"
+            className="border-b border-hairline bg-surface"
             style={{ height: RULER_HEIGHT }}
           />
           {tracks.map((track) => (
             <div
               key={track.kind}
               className={cn(
-                "flex items-center justify-between gap-2 border-b border-foreground/40 px-2",
+                "flex items-center justify-between gap-2 border-b border-hairline px-2",
                 trackToneClass(track.kind),
               )}
               style={{ height: TRACK_HEIGHT }}
             >
               <PixelIcon name={trackIconName(track.kind)} className="size-4" />
-              <span className="truncate font-mono text-[10px] font-black uppercase">
+              <span className="truncate text-xs font-semibold">
                 {track.label}
               </span>
             </div>
@@ -1313,7 +1343,7 @@ export function TimelinePanel({
                 role="list"
                 aria-label={`${track.label} timeline track`}
                 className={cn(
-                  "relative border-b border-foreground/50",
+                  "relative border-b border-hairline",
                   trackIdx % 2 === 0
                     ? "bg-background"
                     : "bg-surface-elevated/60",
@@ -1373,7 +1403,7 @@ export function TimelinePanel({
                 className="pointer-events-none absolute bottom-0 top-0 z-30 border-l-4 border-dashed border-primary"
                 style={{ left: pct(snapMarkerMs) }}
               >
-                <span className="absolute left-2 top-1 rounded border-2 border-foreground bg-primary px-1.5 py-0.5 font-mono text-[9px] font-black uppercase text-primary-foreground shadow-brutal-sm">
+                <span className="absolute left-2 top-1 rounded-full bg-primary px-2 py-0.5 font-mono text-[10px] font-semibold text-primary-foreground shadow-neu-glow">
                   Snap {formatMs(snapMarkerMs)}
                 </span>
               </div>
@@ -1381,7 +1411,7 @@ export function TimelinePanel({
 
             {dragPreview ? (
               <div
-                className="pointer-events-none absolute z-40 rounded border-2 border-foreground bg-primary/35 shadow-brutal-sm"
+                className="pointer-events-none absolute z-40 rounded-neu bg-primary/35 shadow-neu-raised-sm ring-2 ring-primary/40"
                 style={{
                   left: pct(dragPreview.startMs),
                   top: RULER_HEIGHT,
@@ -1479,7 +1509,7 @@ function trackIconName(kind: string): PixelIconName {
 function trackToneClass(kind: string) {
   if (kind === "captions") return "bg-accent text-accent-foreground";
   if (kind === "broll") return "bg-info text-ink";
-  if (kind === "audio" || kind === "music") return "bg-success text-white";
+  if (kind === "audio" || kind === "music") return "bg-success text-ink";
   return "bg-primary text-primary-foreground";
 }
 
@@ -1504,7 +1534,7 @@ const TimelineMinimap = React.memo(function TimelineMinimap({
     <button
       type="button"
       aria-label="Timeline overview. Click to seek."
-      className="relative hidden h-10 shrink-0 border-b-2 border-foreground bg-background text-left md:block"
+      className="relative hidden h-10 shrink-0 border-b border-hairline bg-surface text-left md:block"
       onPointerDown={(event) => {
         const rect = event.currentTarget.getBoundingClientRect();
         const nextMs = Math.round(
@@ -1514,15 +1544,15 @@ const TimelineMinimap = React.memo(function TimelineMinimap({
         onSeek(Math.max(0, Math.min(totalDurationMs, nextMs)));
       }}
     >
-      <span className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded border-2 border-foreground bg-surface px-2 py-0.5 font-mono text-[9px] font-black uppercase text-muted-foreground">
+      <span className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-surface px-2 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground shadow-neu-raised-sm">
         Map
       </span>
-      <div className="absolute inset-y-2 left-[4.5rem] right-3 border-2 border-foreground bg-muted">
+      <div className="absolute inset-y-2 left-[4.5rem] right-3 rounded-neu-sm bg-muted shadow-neu-inset-sm">
         {clips.map(({ clip }, index) => (
           <span
             key={`${clip.id}-${index}`}
             className={cn(
-              "absolute top-0 h-full border-r border-foreground/40 opacity-80",
+              "absolute top-0 h-full border-r border-hairline opacity-80",
               clip.colorClass,
               clip.disabled && "opacity-20",
             )}
@@ -1533,7 +1563,7 @@ const TimelineMinimap = React.memo(function TimelineMinimap({
           />
         ))}
         <span
-          className="absolute bottom-[-4px] top-[-4px] z-20 w-1 bg-danger"
+          className="absolute bottom-[-4px] top-[-4px] z-20 w-1 bg-primary"
           style={{ left: pct(playheadMs), transform: "translateX(-50%)" }}
         />
       </div>
@@ -1619,7 +1649,7 @@ const MobileTimelineView = React.memo(
           <div className="relative min-h-full" style={{ minWidth }}>
             <button
               type="button"
-              className="pixel-grid-fine sticky top-0 z-10 h-12 w-full cursor-pointer border-b border-border bg-background text-left"
+              className="sticky top-0 z-10 h-12 w-full cursor-pointer border-b border-hairline bg-surface text-left"
               aria-label="Timeline ruler. Tap to seek."
               onPointerDown={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
@@ -1631,13 +1661,13 @@ const MobileTimelineView = React.memo(
               }}
             >
               <div
-                className="absolute top-0 bottom-0 z-20 w-px bg-red-500"
+                className="absolute top-0 bottom-0 z-20 w-px bg-primary"
                 style={{ left: pct(playheadMs) }}
               />
               {mobileTracks.map((track) => (
                 <div
                   key={track.kind}
-                  className="absolute bottom-0 top-0 w-px border-l border-dashed border-border"
+                  className="absolute bottom-0 top-0 w-px border-l border-dashed border-primary"
                   style={{ left: pct(playheadMs) }}
                 />
               ))}
@@ -1646,12 +1676,12 @@ const MobileTimelineView = React.memo(
             {mobileTracks.map((track) => (
               <div
                 key={track.kind}
-                className="relative border-b border-border/60"
+                className="relative border-b border-hairline"
                 style={{ height: 60 }}
               >
                 <div
                   className={cn(
-                    "sticky left-2 top-1/2 z-20 inline-flex -translate-y-1/2 items-center gap-1 rounded border-2 border-foreground px-1.5 py-0.5 text-[9px] font-black uppercase shadow-brutal-sm select-none",
+                    "sticky left-2 top-1/2 z-20 inline-flex -translate-y-1/2 select-none items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold shadow-neu-raised-sm",
                     trackToneClass(track.kind),
                   )}
                 >
@@ -1663,7 +1693,7 @@ const MobileTimelineView = React.memo(
                 </div>
                 <div className="relative h-full w-full">
                   {track.clips.length === 0 ? (
-                    <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">
+                    <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                       Empty
                     </div>
                   ) : (
@@ -1677,11 +1707,11 @@ const MobileTimelineView = React.memo(
                           title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}`}
                           onClick={() => onClipSelect(clip.id)}
                           className={cn(
-                            "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden border-2 border-foreground px-2 text-left text-[11px] font-black leading-tight text-white shadow-brutal-sm",
+                            "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden rounded-neu px-2 text-left text-[11px] font-semibold leading-tight text-white shadow-neu-raised-sm",
                             clip.colorClass,
                             clip.disabled && "opacity-35",
                             clip.id === selectedClipId
-                              ? "ring-2 ring-primary"
+                              ? "shadow-neu-glow ring-2 ring-primary"
                               : "ring-0",
                           )}
                           style={{
@@ -1969,15 +1999,15 @@ const ClipBlock = React.memo(
         aria-pressed={selected}
         aria-label={`${clip.trackKind} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}, duration ${formatMs(widthMs)}.`}
         className={cn(
-          "group absolute bottom-1 top-1 cursor-pointer overflow-hidden rounded border-2 border-foreground",
-          "flex items-center gap-2 px-2 text-[10px] font-black leading-none text-white",
-          "shadow-brutal-sm ring-inset transition-all duration-100",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-black",
+          "group absolute bottom-1 top-1 cursor-pointer overflow-hidden rounded-neu",
+          "flex items-center gap-2 px-2 text-[10px] font-semibold leading-none text-white",
+          "shadow-neu-raised-sm ring-inset transition-all duration-100",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-background",
           clip.colorClass,
           clip.disabled && "opacity-30",
           selected
-            ? "z-30 ring-2 ring-primary shadow-brutal"
-            : "ring-0 hover:-translate-y-0.5 hover:brightness-110",
+            ? "z-30 shadow-neu-glow ring-2 ring-primary"
+            : "ring-0 hover:brightness-110",
           isOver && "z-20 ring-2 ring-primary brightness-125",
         )}
         style={{
@@ -2005,7 +2035,7 @@ const ClipBlock = React.memo(
           onPointerDown={(event) => startTrim("left", event)}
         />
         <span className="min-w-0 flex-1 truncate">{clip.label}</span>
-        <span className="hidden shrink-0 rounded border border-foreground bg-black/40 px-1 font-mono text-[9px] sm:inline">
+        <span className="hidden shrink-0 rounded-full bg-ink/40 px-1.5 font-mono text-[9px] tabular-nums sm:inline">
           {formatMs(widthMs)}
         </span>
         <TrimHandle
@@ -2058,7 +2088,7 @@ function TrimHandle({
       onPointerDown={onPointerDown}
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="h-7 w-2 border-2 border-foreground bg-white shadow-brutal-sm" />
+      <div className="h-7 w-2 rounded-full bg-white shadow-neu-raised-sm" />
     </div>
   );
 }
@@ -2075,8 +2105,8 @@ const Playhead = React.memo(function Playhead({
       className="pointer-events-none absolute top-0 z-20 flex flex-col items-center"
       style={{ left: pct, transform: "translateX(-50%)" }}
     >
-      <div className="h-3 w-3 rotate-45 border-2 border-foreground bg-danger" />
-      <div className="w-1 bg-danger" style={{ height: totalHeight - 8 }} />
+      <div className="h-3 w-3 rotate-45 rounded-sm bg-primary shadow-neu-glow" />
+      <div className="w-0.5 bg-primary" style={{ height: totalHeight - 8 }} />
     </div>
   );
 });
@@ -2099,14 +2129,14 @@ const TimelineRuler = React.memo(function TimelineRuler({
 
   return (
     <div
-      className="pixel-grid-fine relative cursor-pointer border-b-2 border-foreground bg-background"
+      className="relative cursor-pointer border-b border-hairline bg-muted shadow-neu-inset-sm"
       style={{ height: RULER_HEIGHT }}
       onPointerDown={onPointerDown}
     >
       {minorTicks.map((ms) => (
         <div
           key={`minor-${ms}`}
-          className="absolute bottom-0 h-2 w-px bg-foreground/50"
+          className="absolute bottom-0 h-2 w-px bg-hairline"
           style={{ left: pct(ms), transform: "translateX(-50%)" }}
         />
       ))}
@@ -2116,10 +2146,10 @@ const TimelineRuler = React.memo(function TimelineRuler({
           className="absolute top-0 flex flex-col items-center"
           style={{ left: pct(tick.ms), transform: "translateX(-50%)" }}
         >
-          <span className="bg-surface px-1 pt-1 font-mono text-[9px] font-black leading-none text-primary">
+          <span className="bg-muted px-1 pt-1 font-mono text-[9px] font-semibold leading-none tabular-nums text-primary">
             {tick.label}
           </span>
-          <div className="mt-0.5 h-4 w-0.5 bg-foreground" />
+          <div className="mt-0.5 h-4 w-px bg-hairline" />
         </div>
       ))}
     </div>
@@ -2146,7 +2176,7 @@ function TimelineButton({
         title={title}
         aria-label={ariaLabel}
         disabled={disabled}
-        className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border-2 border-foreground bg-surface text-muted-foreground shadow-brutal-sm transition hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-surface-elevated hover:text-foreground hover:shadow-brutal active:translate-x-0 active:translate-y-0 active:shadow-none disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:bg-surface disabled:hover:shadow-brutal-sm"
+        className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-neu bg-surface text-muted-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:text-foreground hover:shadow-neu-raised active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:shadow-neu-raised-sm"
       >
         {children}
       </button>
@@ -2167,7 +2197,7 @@ function ButtonLike({
     <button
       type={type}
       disabled={disabled}
-      className="pixel-button min-h-11 px-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60"
+      className="min-h-11 rounded-neu bg-primary px-3 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-shadow duration-200 active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-60"
     >
       {children}
     </button>

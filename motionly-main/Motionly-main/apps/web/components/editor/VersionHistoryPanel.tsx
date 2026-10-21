@@ -108,10 +108,10 @@ export function VersionHistoryPanel({
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-black uppercase tracking-tight">
+        <h2 className="text-lg font-bold tracking-tight text-foreground">
           Version history
         </h2>
-        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
           Save named, restorable copies of the complete edit manifest.
         </p>
       </div>
@@ -122,18 +122,18 @@ export function VersionHistoryPanel({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="e.g. Client review"
-          className="min-h-[40px] min-w-0 flex-1 px-3 py-2 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] dark:focus:shadow-[2px_2px_0px_#fff] transition-all"
+          className="min-h-[40px] min-w-0 flex-1 rounded-neu border border-control bg-surface px-3 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
         />
         <button
           type="button"
           disabled={busy || !activePlan}
           onClick={() => void saveSnapshot()}
-          className="inline-flex items-center justify-center gap-2 h-10 rounded border-2 border-foreground bg-primary text-primary-foreground text-xs font-bold hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_#000] dark:hover:shadow-[2px_2px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none px-4 focus:outline-none transition-all duration-[100ms]"
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus:outline-none active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm"
         >
           {busy ? (
-            <Loader2 className="size-4 animate-spin" strokeWidth={2} />
+            <Loader2 className="size-4 animate-spin" strokeWidth={1.75} />
           ) : (
-            <Save className="size-4" strokeWidth={2} />
+            <Save className="size-4" strokeWidth={1.75} />
           )}
           <span>Save</span>
         </button>
@@ -143,24 +143,24 @@ export function VersionHistoryPanel({
       <div className="space-y-2">
         {snapshots.length > 0 ? (
           <>
-            <p className="text-[10px] font-black uppercase tracking-wider text-foreground font-mono mt-4 mb-2 px-1">
+            <p className="mb-2 mt-4 px-1 text-xs font-semibold text-foreground">
               Saved versions
             </p>
             {snapshots.map((snapshot) => (
               <div
                 key={snapshot.id}
-                className="card rounded border-2 border-foreground p-3 flex items-center justify-between gap-3 bg-surface shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+                className="flex items-center justify-between gap-3 rounded-neu-md bg-surface p-3 shadow-neu-raised-sm"
               >
-                <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex min-w-0 items-center gap-2.5">
                   <History
                     className="size-4 shrink-0 text-primary"
-                    strokeWidth={2}
+                    strokeWidth={1.75}
                   />
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-bold text-foreground">
+                    <p className="truncate text-xs font-semibold text-foreground">
                       {snapshot.name}
                     </p>
-                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                    <p className="mt-0.5 font-mono text-xs text-muted-foreground">
                       Plan v{snapshot.source_plan_version} ·{" "}
                       {new Date(snapshot.created_at).toLocaleDateString()}
                     </p>
@@ -170,16 +170,16 @@ export function VersionHistoryPanel({
                   type="button"
                   disabled={busy}
                   onClick={() => setPendingRestore(snapshot)}
-                  className="flex h-8 items-center gap-1 rounded border-2 border-foreground px-3 text-xs font-bold hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[1px_1px_0px_#000] dark:hover:shadow-[1px_1px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none disabled:transform-none disabled:shadow-none bg-surface text-foreground transition-all duration-[100ms] whitespace-nowrap"
+                  className="neu-pressable flex h-8 items-center gap-1 whitespace-nowrap rounded-neu bg-surface px-3 text-xs font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised disabled:opacity-50 disabled:shadow-neu-raised-sm"
                 >
-                  <RotateCcw className="size-3" strokeWidth={2} />
+                  <RotateCcw className="size-3" strokeWidth={1.75} />
                   <span>Restore</span>
                 </button>
               </div>
             ))}
           </>
         ) : (
-          <p className="rounded border-2 border-dashed border-foreground p-5 text-center text-xs font-mono font-bold text-muted-foreground leading-relaxed">
+          <p className="rounded-neu-md bg-surface p-5 text-center text-xs font-medium leading-relaxed text-muted-foreground shadow-neu-inset-sm">
             No named versions yet.
           </p>
         )}
@@ -192,8 +192,8 @@ export function VersionHistoryPanel({
           aria-live="polite"
           className={
             isErrorMessage
-              ? "rounded border-2 border-danger bg-danger/10 p-3.5 text-xs font-bold text-danger shadow-[2px_2px_0px_#000]"
-              : "rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000]"
+              ? "rounded-neu-md bg-surface p-3.5 text-xs font-semibold text-danger shadow-neu-raised-sm ring-1 ring-danger/30"
+              : "rounded-neu-md bg-surface p-3.5 text-xs font-semibold text-foreground shadow-neu-raised-sm"
           }
         >
           {message}

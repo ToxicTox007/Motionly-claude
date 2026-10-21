@@ -13,7 +13,7 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,119}$")
 _OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_.-]*$")
 
 _WORKFLOW_TYPES = frozenset({"first_draft"})
-_WORKFLOW_VERSIONS = frozenset({"first-draft-v1", "first-draft-v2"})
+_WORKFLOW_VERSIONS = frozenset({"first-draft-v2"})
 _STEP_KINDS = frozenset(
     {
         "analyze_source",
@@ -692,18 +692,6 @@ def workflow_steps_for(
     _uuid(uploaded_video_id, "uploaded_video_id")
     if workflow_type != "first_draft":
         raise HistoryPayloadRejected("workflow type or version is not executable")
-    if workflow_version == "first-draft-v1":
-        return [
-            WorkflowStepSpec(
-                step_key="analyze-source-v1",
-                step_kind="analyze_source",
-                job_kind="visual_analysis",
-                queue_name="visual_analysis",
-                input_hash=request_hash,
-                next_run_state="proposal_ready",
-                resource_id=uploaded_video_id,
-            )
-        ]
     if workflow_version == "first-draft-v2":
         return [
             WorkflowStepSpec(

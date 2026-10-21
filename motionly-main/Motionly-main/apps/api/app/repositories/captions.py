@@ -35,6 +35,14 @@ CAPTION_TRACK_COLUMNS = (
     "language,source_track_id,review_status,created_at,updated_at"
 )
 CAPTION_SEGMENT_COLUMNS = "id,segment_index,start_ms,end_ms,text,line_count,words,highlight_words"
+# B28: embed caption_segments into the track query so a project's caption tracks
+# (and all their segments) load in ONE PostgREST query instead of N+1. Kept a
+# plain literal (not an f-string) so the schema-usage extractor can resolve it.
+CAPTION_TRACK_LIST_COLUMNS = (
+    "id,workspace_id,project_id,transcript_id,preset,schema_version,style,hide_filler_words,"
+    "language,source_track_id,review_status,created_at,updated_at,"
+    "caption_segments(id,segment_index,start_ms,end_ms,text,line_count,words,highlight_words)"
+)
 DEFAULT_CAPTION_TRACK_LIMIT = 100
 MAX_TRANSCRIPT_WORDS = 5000
 MAX_CAPTION_SEGMENTS = 1000
@@ -524,21 +532,14 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": CAPTION_TRACK_COLUMNS,
+                "select": CAPTION_TRACK_LIST_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": str(limit),
             },
         )
         self._raise_for_supabase(response)
         return [
-            self._track_from_row(
-                row,
-                segments=self._segments_for_track(
-                    UUID(str(row["id"])),
-                    project_id=project_id,
-                    workspace_id=workspace_id,
-                ),
-            )
+            self._track_from_row(row, segments=self._segments_from_embed(row))
             for row in response.json()
         ]
 
@@ -555,21 +556,14 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "select": CAPTION_TRACK_COLUMNS,
+                "select": CAPTION_TRACK_LIST_COLUMNS,
                 "order": "updated_at.desc",
                 "limit": str(limit),
             },
         )
         self._raise_for_supabase(response)
         return [
-            self._track_from_row(
-                row,
-                segments=await self._segments_for_track_async(
-                    UUID(str(row["id"])),
-                    project_id=project_id,
-                    workspace_id=workspace_id,
-                ),
-            )
+            self._track_from_row(row, segments=self._segments_from_embed(row))
             for row in response.json()
         ]
 
@@ -835,6 +829,38 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
                 confidence=row.get("confidence"),
             )
             for row in response.json()
+        ]
+
+    def _segments_from_embed(self, track_row: dict[str, object]) -> list[CaptionSegment]:
+        """Parse caption_segments embedded in a track row (B28 single query).
+
+        PostgREST returns the embed as a list; it is not guaranteed ordered, so
+        sort by segment_index to match the previous ordered query.
+        """
+        raw = track_row.get("caption_segments")
+        rows = raw if isinstance(raw, list) else []
+        ordered = sorted(
+            (row for row in rows if isinstance(row, dict)),
+            key=lambda row: int(row.get("segment_index", 0)),
+        )
+        return [
+            CaptionSegment(
+                id=UUID(str(row["id"])),
+                index=int(row["segment_index"]),
+                start_ms=int(row["start_ms"]),
+                end_ms=int(row["end_ms"]),
+                text=str(row["text"]),
+                line_count=int(row["line_count"]),
+                words=[
+                    TranscriptWord.model_validate(word)
+                    for word in row.get("words", [])
+                    if isinstance(word, dict)
+                ],
+                highlight_words=[
+                    str(word) for word in row.get("highlight_words", []) if isinstance(word, str)
+                ],
+            )
+            for row in ordered
         ]
 
     def _segments_for_track(

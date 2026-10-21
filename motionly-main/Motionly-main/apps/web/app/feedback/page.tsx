@@ -14,14 +14,14 @@ export default async function FeedbackPage({
     <main className="container-content flex min-h-screen flex-col justify-center py-12">
       <PageTitle title="Feedback" />
       <div className="mb-8 flex items-center gap-3">
-        <div className="flex size-11 items-center justify-center rounded border-2 border-foreground bg-primary text-primary-foreground shadow-brutal-sm">
+        <div className="flex size-11 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
           <PixelIcon name="info" className="size-5" />
         </div>
         <div>
-          <p className="text-sm font-black uppercase text-primary">
-            Motionly beta
-          </p>
-          <h1 className="text-3xl font-black uppercase">Feedback</h1>
+          <p className="text-sm font-semibold text-primary">Motionly beta</p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">
+            Feedback
+          </h1>
         </div>
       </div>
       {params?.sent ? (
@@ -36,10 +36,10 @@ export default async function FeedbackPage({
       ) : null}
       <form
         action={submitFeedback}
-        className="max-w-2xl space-y-4 rounded border-2 border-foreground bg-surface p-5 shadow-brutal"
+        className="max-w-2xl space-y-4 rounded-neu-lg bg-surface p-6 shadow-neu-raised"
       >
         <input type="hidden" name="pageUrl" value="/feedback" />
-        <label className="block text-sm font-semibold">
+        <label className="block text-sm font-semibold text-foreground">
           Category
           <Select name="category" className="mt-2" defaultValue="general">
             <option value="general">General</option>
@@ -49,7 +49,7 @@ export default async function FeedbackPage({
             <option value="feature_request">Feature request</option>
           </Select>
         </label>
-        <label className="block text-sm font-semibold">
+        <label className="block text-sm font-semibold text-foreground">
           Message
           <Textarea
             name="message"

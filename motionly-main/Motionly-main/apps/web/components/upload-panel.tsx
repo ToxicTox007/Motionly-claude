@@ -692,8 +692,8 @@ export function UploadPanel({
       {/* ── Drop zone ── */}
       <div
         className={cn(
-          "border-2 border-dashed border-foreground bg-surface rounded-md hover:bg-surface-elevated transition-colors text-center p-10 cursor-pointer flex flex-col items-center justify-center gap-4 min-h-[280px]",
-          "focus-within:ring-2 focus-within:ring-primary",
+          "flex min-h-[280px] cursor-pointer flex-col items-center justify-center gap-4 rounded-neu-xl bg-surface p-8 text-center shadow-neu-inset transition-shadow duration-200 sm:p-10",
+          "focus-within:ring-2 focus-within:ring-focus",
           isWorking && "opacity-80",
         )}
         aria-disabled={isWorking}
@@ -701,19 +701,25 @@ export function UploadPanel({
           event.preventDefault();
           event.dataTransfer.dropEffect = isWorking ? "none" : "copy";
           if (isWorking) return;
-          event.currentTarget.classList.add("border-primary", "bg-primary/10");
+          event.currentTarget.classList.add(
+            "shadow-neu-glow",
+            "ring-2",
+            "ring-primary/40",
+          );
         }}
         onDragLeave={(event) => {
           event.currentTarget.classList.remove(
-            "border-primary",
-            "bg-primary/10",
+            "shadow-neu-glow",
+            "ring-2",
+            "ring-primary/40",
           );
         }}
         onDrop={(event) => {
           event.preventDefault();
           event.currentTarget.classList.remove(
-            "border-primary",
-            "bg-primary/10",
+            "shadow-neu-glow",
+            "ring-2",
+            "ring-primary/40",
           );
           if (isWorking) return;
           selectFile(event.dataTransfer.files.item(0));
@@ -731,14 +737,14 @@ export function UploadPanel({
 
         {/* Phase: complete */}
         {phase === "complete" && (
-          <div className="border-2 border-foreground bg-card p-6 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] flex flex-col items-center gap-3 w-full max-w-sm">
-            <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto mb-4">
+          <div className="flex w-full max-w-sm flex-col items-center gap-3 rounded-neu-lg bg-surface p-6 shadow-neu-raised">
+            <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
               <CheckCircle2 className="size-7" aria-hidden="true" />
             </div>
-            <h2 className="text-lg font-black uppercase text-foreground">
+            <h2 className="text-lg font-bold text-foreground">
               Upload complete
             </h2>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm font-medium text-muted-foreground">
               Your video was uploaded and validated successfully.
             </p>
           </div>
@@ -746,14 +752,12 @@ export function UploadPanel({
 
         {/* Phase: failed */}
         {phase === "failed" && (
-          <div className="border-2 border-foreground bg-card p-6 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] flex flex-col items-center gap-3 w-full max-w-sm">
-            <div className="size-14 rounded-md border-2 border-foreground bg-danger text-white shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto">
+          <div className="flex w-full max-w-sm flex-col items-center gap-3 rounded-neu-lg bg-surface p-6 shadow-neu-raised">
+            <div className="mx-auto flex size-14 items-center justify-center rounded-neu bg-danger text-danger-foreground shadow-neu-raised">
               <XCircle className="size-7" aria-hidden="true" />
             </div>
-            <h2 className="text-lg font-black uppercase text-foreground">
-              Upload failed
-            </h2>
-            <p className="text-sm text-muted-foreground">
+            <h2 className="text-lg font-bold text-foreground">Upload failed</h2>
+            <p className="text-sm font-medium text-muted-foreground">
               Something went wrong. Review the details and retry.
             </p>
           </div>
@@ -762,19 +766,19 @@ export function UploadPanel({
         {/* Phase: uploading */}
         {phase === "uploading" && (
           <div className="flex w-full max-w-xs flex-col gap-3">
-            <p className="text-lg font-black uppercase text-foreground">
+            <p className="text-lg font-bold text-foreground">
               {message ?? "Uploading…"}
             </p>
             <div
-              className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
+              className="h-4 overflow-hidden rounded-full bg-surface shadow-neu-inset-sm"
               aria-label="Upload progress"
             >
               <div
-                className="bg-primary h-full transition-all"
+                className="h-full rounded-full bg-primary transition-[width] duration-[600ms]"
                 style={{ width: `${progress}%` }}
               />
             </div>
-            <p className="text-sm font-mono font-bold text-primary">
+            <p className="text-sm font-semibold tabular-nums text-primary">
               {progress}%
             </p>
           </div>
@@ -782,25 +786,26 @@ export function UploadPanel({
 
         {/* Phase: processing */}
         {phase === "processing" && (
-          <div className="flex flex-col items-center gap-3 bg-card border-2 border-foreground p-6 rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] w-full max-w-sm">
-            <div className="flex gap-1">
+          <div className="flex w-full max-w-sm flex-col items-center gap-3 rounded-neu-lg bg-surface p-6 shadow-neu-raised">
+            <div className="flex gap-1.5">
               <span
-                className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce"
+                className="size-3 rounded-full bg-primary animate-bounce"
                 style={{ animationDelay: "0ms" }}
+                aria-hidden="true"
               />
               <span
-                className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce"
+                className="size-3 rounded-full bg-primary animate-bounce"
                 style={{ animationDelay: "150ms" }}
+                aria-hidden="true"
               />
               <span
-                className="size-3.5 rounded-md border border-foreground bg-primary animate-bounce"
+                className="size-3 rounded-full bg-primary animate-bounce"
                 style={{ animationDelay: "300ms" }}
+                aria-hidden="true"
               />
             </div>
-            <p className="text-lg font-black uppercase text-foreground">
-              Processing…
-            </p>
-            <p className="text-sm font-mono text-muted-foreground">
+            <p className="text-lg font-bold text-foreground">Processing…</p>
+            <p className="text-sm font-medium text-muted-foreground">
               {message ?? "Running server media validation…"}
             </p>
           </div>
@@ -811,19 +816,19 @@ export function UploadPanel({
           phase === "preflight" ||
           phase === "canceled") && (
           <>
-            <div className="size-14 rounded-md border-2 border-foreground bg-primary text-primary-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex items-center justify-center mx-auto mb-4">
+            <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
               <UploadCloud
                 className="size-7 text-primary-foreground"
                 aria-hidden="true"
               />
             </div>
             <div>
-              <h2 className="text-lg font-black uppercase text-foreground">
+              <h2 className="text-lg font-bold text-foreground">
                 {hasExistingSource
                   ? "Replace source video"
                   : "Upload source video"}
               </h2>
-              <p className="mt-1 max-w-md text-sm text-muted-foreground">
+              <p className="mt-1 max-w-md text-sm font-medium text-muted-foreground">
                 {hasExistingSource
                   ? "Choose a new MP4, MOV, or WebM file. It will become the active source after preprocessing finishes."
                   : "Drag in an MP4, MOV, or WebM file. Preprocessing verifies duration, resolution, audio, and thumbnail."}
@@ -833,16 +838,16 @@ export function UploadPanel({
               {["MP4", "MOV", "WebM"].map((fmt) => (
                 <span
                   key={fmt}
-                  className="rounded-md border-2 border-foreground bg-muted px-3 py-1 text-xs font-mono font-bold text-foreground shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-foreground shadow-neu-raised-sm"
                 >
                   {fmt}
                 </span>
               ))}
             </div>
             {persistedSession ? (
-              <p className="max-w-md border-2 border-foreground bg-primary/10 p-3 text-sm font-mono font-bold text-foreground rounded-md">
+              <p className="max-w-md rounded-neu-md bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm">
                 Reselect{" "}
-                <span className="break-all text-primary">
+                <span className="break-all font-semibold text-primary">
                   {persistedSession.file.name}
                 </span>{" "}
                 to resume from server-confirmed progress. File bytes are not
@@ -854,7 +859,7 @@ export function UploadPanel({
                 type="button"
                 onClick={() => inputRef.current?.click()}
                 disabled={isWorking}
-                className="inline-flex h-10 items-center justify-center bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-4 text-sm font-bold uppercase tracking-wider disabled:opacity-50"
+                className="inline-flex min-h-10 items-center justify-center rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-50"
               >
                 {hasExistingSource ? "Choose replacement" : "Choose video"}
               </button>
@@ -863,12 +868,12 @@ export function UploadPanel({
                   type="button"
                   onClick={() => selectFile(null)}
                   disabled={isWorking}
-                  className="inline-flex h-10 items-center justify-center bg-background text-foreground border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[3px_3px_0px_#000] dark:hover:shadow-[3px_3px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] px-4 text-sm font-bold uppercase tracking-wider disabled:opacity-50"
+                  className="inline-flex min-h-10 items-center justify-center rounded-neu bg-surface px-4 text-sm font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:opacity-50"
                 >
                   <X
                     className="mr-2 size-4"
                     aria-hidden="true"
-                    strokeWidth={2.5}
+                    strokeWidth={1.75}
                   />
                   Clear
                 </button>
@@ -877,7 +882,7 @@ export function UploadPanel({
                 <button
                   type="button"
                   onClick={() => void cancelUpload()}
-                  className="inline-flex h-10 items-center justify-center bg-background text-danger border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] px-4 text-sm font-bold uppercase tracking-wider"
+                  className="inline-flex min-h-10 items-center justify-center rounded-neu bg-surface px-4 text-sm font-semibold text-danger shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                 >
                   Cancel saved upload
                 </button>
@@ -888,9 +893,9 @@ export function UploadPanel({
       </div>
 
       {/* ── Preflight aside ── */}
-      <aside className="border-2 border-foreground bg-surface rounded-md shadow-[4px_4px_0px_#000] dark:shadow-[4px_4px_0px_#fff] p-5">
+      <aside className="rounded-neu-xl bg-surface p-5 shadow-neu-raised">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-black uppercase text-foreground font-mono">
+          <h3 className="text-sm font-semibold text-foreground">
             New File Preflight
           </h3>
           <StatusBadge
@@ -904,7 +909,7 @@ export function UploadPanel({
         {preflight ? (
           <div className="mt-5 space-y-4">
             {/* File info card */}
-            <div className="bg-card border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] p-4 flex items-start gap-3 mb-4">
+            <div className="mb-4 flex items-start gap-3 rounded-neu-md bg-surface p-4 shadow-neu-inset-sm">
               <div className="min-w-0 flex-1">
                 <MetadataRow label="Filename" value={preflight.filename} />
               </div>
@@ -953,7 +958,7 @@ export function UploadPanel({
               />
             </div>
             {isCheckingMedia ? (
-              <div className="flex items-center gap-2 border-2 border-foreground bg-muted p-3 text-sm font-mono font-bold text-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+              <div className="flex items-center gap-2 rounded-neu-md bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm">
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                 Checking browser metadata...
               </div>
@@ -962,10 +967,10 @@ export function UploadPanel({
             {preflight.blockingWarnings.map((warning) => (
               <div
                 key={warning}
-                className="border-2 border-foreground bg-danger/10 px-3 py-2.5 text-sm text-danger rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex gap-2 items-start mb-2 font-mono font-bold"
+                className="mb-2 flex items-start gap-2 rounded-neu-md bg-surface px-3 py-2.5 text-sm font-medium text-danger shadow-neu-raised ring-1 ring-danger/30"
               >
                 <AlertTriangle
-                  className="size-4 mt-0.5 shrink-0 text-danger"
+                  className="mt-0.5 size-4 shrink-0 text-danger"
                   aria-hidden="true"
                 />
                 <span>{warning}</span>
@@ -977,19 +982,19 @@ export function UploadPanel({
               .map((warning) => (
                 <div
                   key={warning}
-                  className="border-2 border-foreground bg-amber-500/10 px-3 py-2.5 text-sm text-amber-600 dark:text-amber-400 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] flex gap-2 items-start mb-2 font-mono font-bold"
+                  className="mb-2 flex items-start gap-2 rounded-neu-md bg-surface px-3 py-2.5 text-sm font-medium text-warning shadow-neu-raised ring-1 ring-warning/30"
                 >
                   <AlertTriangle
-                    className="size-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"
+                    className="mt-0.5 size-4 shrink-0 text-warning"
                     aria-hidden="true"
                   />
                   <span>{warning}</span>
                 </div>
               ))}
             {!preflight.warnings.length && !isCheckingMedia ? (
-              <div className="flex items-center gap-2 border-2 border-foreground bg-emerald-500/10 px-3 py-2.5 text-sm font-mono font-bold text-emerald-600 dark:text-emerald-400 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+              <div className="flex items-center gap-2 rounded-neu-md bg-surface px-3 py-2.5 text-sm font-medium text-success shadow-neu-raised ring-1 ring-success/30">
                 <CheckCircle2
-                  className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                  className="size-4 shrink-0 text-success"
                   aria-hidden="true"
                 />
                 <span>
@@ -1000,16 +1005,16 @@ export function UploadPanel({
             ) : null}
             <div>
               <div
-                className="h-3 border-2 border-foreground bg-muted rounded-full overflow-hidden"
+                className="h-4 overflow-hidden rounded-full bg-surface shadow-neu-inset-sm"
                 aria-label="Upload progress"
               >
                 <div
-                  className="bg-primary h-full transition-all"
+                  className="h-full rounded-full bg-primary transition-[width] duration-[600ms]"
                   style={{ width: `${progress}%` }}
                 />
               </div>
               {progress > 0 ? (
-                <p className="mt-1 text-sm font-mono font-bold text-primary">
+                <p className="mt-1 text-sm font-semibold tabular-nums text-primary">
                   {progress}%
                 </p>
               ) : null}
@@ -1017,7 +1022,7 @@ export function UploadPanel({
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
-                className="w-full h-11 bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] font-bold uppercase tracking-wider disabled:opacity-50 mt-4 inline-flex items-center justify-center"
+                className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-neu bg-primary font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-50"
                 onClick={startUpload}
                 disabled={
                   hasBlockingPreflightIssue ||
@@ -1042,7 +1047,7 @@ export function UploadPanel({
                 <button
                   type="button"
                   onClick={cancelUpload}
-                  className="bg-background text-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] h-11 px-4 font-bold uppercase tracking-wider w-full text-center"
+                  className="inline-flex min-h-11 w-full items-center justify-center rounded-neu bg-surface px-4 text-center font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                 >
                   Cancel
                 </button>
@@ -1052,7 +1057,7 @@ export function UploadPanel({
                   type="button"
                   onClick={startUpload}
                   disabled={hasBlockingPreflightIssue || isCheckingMedia}
-                  className="bg-primary text-primary-foreground border-2 border-foreground rounded-md shadow-[3px_3px_0px_#000] dark:shadow-[3px_3px_0px_#fff] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] dark:hover:shadow-[4px_4px_0px_#fff] active:translate-x-0 active:translate-y-0 active:shadow-none transition-all duration-[100ms] h-11 px-4 font-bold uppercase tracking-wider w-full flex items-center justify-center disabled:opacity-50"
+                  className="inline-flex min-h-11 w-full items-center justify-center rounded-neu bg-primary px-4 font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-50"
                 >
                   <RotateCcw className="mr-2 size-4" aria-hidden="true" />
                   Retry
@@ -1060,19 +1065,19 @@ export function UploadPanel({
               ) : null}
             </div>
             {videoId ? (
-              <p className="text-xs font-mono text-muted-foreground mt-2">
+              <p className="mt-2 text-xs font-medium text-muted-foreground">
                 Registered upload {videoId.slice(0, 8)}.
               </p>
             ) : null}
             {message ? (
               <p
                 className={cn(
-                  "border-2 border-foreground p-3 text-sm rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] font-mono font-bold mt-2",
+                  "mt-2 rounded-neu-md bg-surface p-3 text-sm font-medium shadow-neu-inset-sm",
                   phase === "failed"
-                    ? "bg-danger/10 text-danger"
+                    ? "text-danger"
                     : phase === "complete"
-                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                      : "bg-muted text-muted-foreground",
+                      ? "text-success"
+                      : "text-muted-foreground",
                 )}
               >
                 {message}
@@ -1080,7 +1085,7 @@ export function UploadPanel({
             ) : null}
           </div>
         ) : (
-          <p className="mt-5 text-sm font-mono leading-6 text-muted-foreground">
+          <p className="mt-5 text-sm font-medium leading-relaxed text-muted-foreground">
             No file selected. Choose a source video to run upload preflight.
           </p>
         )}
@@ -1114,18 +1119,18 @@ function StatusBadge({
             : phase;
   const tone =
     label === "blocked" || phase === "failed"
-      ? "bg-danger text-white"
+      ? "text-danger"
       : label === "ready" || phase === "complete"
-        ? "bg-emerald-500 text-white"
+        ? "text-success"
         : label === "warnings"
-          ? "bg-amber-500 text-black"
+          ? "text-warning"
           : phase === "uploading" || phase === "processing" || isCheckingMedia
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-muted-foreground";
+            ? "text-primary"
+            : "text-muted-foreground";
   return (
     <span
       className={cn(
-        "px-2.5 py-0.5 font-bold font-mono border-2 border-foreground rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff] text-xs capitalize inline-flex items-center",
+        "inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold capitalize shadow-neu-inset-sm",
         tone,
       )}
     >
@@ -1136,11 +1141,9 @@ function StatusBadge({
 
 function MetadataRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 border-2 border-foreground bg-muted p-2 rounded-md shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground font-mono">
-        {label}
-      </p>
-      <p className="mt-0.5 break-all text-xs font-mono font-bold text-foreground">
+    <div className="min-w-0 rounded-neu-md bg-surface p-2 shadow-neu-inset-sm">
+      <p className="text-[10px] font-semibold text-muted-foreground">{label}</p>
+      <p className="mt-0.5 break-all text-xs font-semibold text-foreground">
         {value}
       </p>
     </div>

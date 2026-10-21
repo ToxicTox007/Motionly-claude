@@ -8,7 +8,10 @@ x-media-environment: &media-environment
   SUPABASE_URL: http://supabase-gateway:8000
   # Browsers reach Supabase on the public origin; signed links they open use it.
   SUPABASE_PUBLIC_URL: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}/supabase
-  SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
+  # S3: workers authenticate to PostgREST as the restricted motionly_worker JWT
+  # role, never with the service-role key. PostgREST switches role from the JWT's
+  # `role` claim, so this file is a drop-in replacement for the key workers read.
+  SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_worker_key
   SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
   WORKER_API_TOKEN_FILE: /run/secrets/worker_api_token
   APP_ENV: production
@@ -127,6 +130,8 @@ services:
       # The image's own init scripts create the Supabase roles and the auth and
       # storage schemas; only add the role passwords. Migrations run in db-migrate.
       - ./db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      # Realtime migrates into _realtime; it cannot create the schema itself.
+      - ./db/realtime.sql:/docker-entrypoint-initdb.d/init-scripts/98-realtime.sql:ro
     networks: [app]
     healthcheck:
       # TCP, not the socket: during first-boot init the image runs a
@@ -276,6 +281,14 @@ services:
       # CloudFront-Viewer-Address (infra/Caddyfile.origin-guard) and the web
       # server passes it on. Without it GoTrue applies no per-IP limits.
       GOTRUE_RATE_LIMIT_HEADER: X-Motionly-Viewer-IP
+      # No email: Auth's public sign-up is off. Accounts are created, already
+      # confirmed, by the API's rate-limited POST /auth/signup through the
+      # admin API, and admins hand out password-reset links (Tasks 11-12).
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_PASSWORD_MIN_LENGTH: "8"
+      # Admin-issued recovery links (Task 12) live for one hour, then GoTrue
+      # returns otp_expired. This bounds a leaked link's usefulness.
+      GOTRUE_MAILER_OTP_EXP: "3600"
       API_EXTERNAL_URL: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}/supabase
     # Auth migrates the auth schema before it serves /health.
     healthcheck:
@@ -299,7 +312,12 @@ services:
     depends_on: { postgres: { condition: service_healthy } }
     environment:
       PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production Compose}@postgres:5432/postgres
-      PGRST_DB_SCHEMAS: public,storage,graphql_public
+      # `mock_gateway` is served for the payment gateway's own role only: the
+      # gateway presents a mock_gateway_role JWT + Accept/Content-Profile:
+      # mock_gateway. anon/authenticated/service_role have every privilege on
+      # that schema revoked (supabase/migrations/202610190801), so exposing it
+      # here does not widen their reach.
+      PGRST_DB_SCHEMAS: public,storage,graphql_public,mock_gateway
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required for production Compose}
 
@@ -338,10 +356,92 @@ services:
       retries: 30
     networks: [app]
 
+  # Supabase Realtime (Elixir/Phoenix). Private channels only: clients join
+  # `workspace:<id>` / `project:<id>` topics, authorized by Row Level Security
+  # on realtime.messages (supabase/migrations/202610191101). Realtime creates
+  # its own `realtime` and `_realtime` schemas at startup by running its
+  # migrations against Postgres, so db-migrate waits for it to be healthy before
+  # attaching the channel policies. Kong routes it as realtime-dev tenant at
+  # /supabase/realtime/v1 (WebSocket and REST). No ports: reached only through
+  # the ingress like every other Supabase upstream.
+  supabase-realtime:
+    image: supabase/realtime:v2.78.10@sha256:8720d206683918b18341010107264993a07910cc80f9bcff1f7f5ab3e9bdf1c7
+    restart: unless-stopped
+    depends_on: { postgres: { condition: service_healthy } }
+    entrypoint:
+      # Realtime has no *_FILE options; read the per-process secrets from their
+      # mounted files into the environment, then hand off to the image's own
+      # entrypoint. The secret values never appear in argv or in `compose config`.
+      - /bin/sh
+      - -ec
+      - |
+        export DB_PASSWORD="$(cat /run/secrets/postgres_password)"
+        export DB_ENC_KEY="$(cat /run/secrets/realtime_db_enc_key)"
+        export API_JWT_SECRET="$(cat /run/secrets/supabase_jwt_secret)"
+        export SECRET_KEY_BASE="$(cat /run/secrets/realtime_secret_key_base)"
+        # Signs the tokens Realtime's own /metrics endpoint accepts; the
+        # release refuses to boot without it.
+        export METRICS_JWT_SECRET="$(cat /run/secrets/realtime_metrics_jwt_secret)"
+        # Hand off to the image's own entrypoint and command: it migrates,
+        # seeds the realtime-dev tenant (SEED_SELF_HOST) and applies RLIMIT_NOFILE.
+        exec /usr/bin/tini -s -g -- /app/run.sh /app/bin/server
+    environment:
+      PORT: "4000"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: supabase_admin
+      DB_NAME: postgres
+      # Realtime keeps its own state under the _realtime schema.
+      DB_AFTER_CONNECT_QUERY: "SET search_path TO _realtime"
+      APP_NAME: realtime
+      # Self-hosted single-tenant mode seeds the `realtime-dev` tenant so Kong
+      # can route to it; the janitor prunes expired realtime.messages rows.
+      SEED_SELF_HOST: "true"
+      RUN_JANITOR: "true"
+      ERL_AFLAGS: "-proto_dist inet_tcp"
+      DNS_NODES: "''"
+      RLIMIT_NOFILE: "100000"
+    secrets:
+      [
+        postgres_password,
+        supabase_jwt_secret,
+        realtime_db_enc_key,
+        realtime_secret_key_base,
+        realtime_metrics_jwt_secret,
+      ]
+    healthcheck:
+      # Realtime answers /api/ping for the seeded realtime-dev tenant (named by
+      # the Host header, as Kong sends it) once its migrations and seed have run.
+      # The image ships curl, not wget.
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--output",
+          "/dev/null",
+          "--header",
+          "Host: realtime-dev.supabase-realtime",
+          "http://127.0.0.1:4000/api/ping",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      app:
+        # Kong routes to the realtime container by this hostname (it matches the
+        # self-hosted `realtime-dev` tenant), so the declarative Kong config
+        # stays identical to Supabase's own.
+        aliases: [realtime-dev.supabase-realtime]
+
   supabase-gateway:
     image: kong:2.8.1@sha256:1b53405d8680a09d6f44494b7990bf7da2ea43f84a258c59717d4539abf09f6d
     restart: unless-stopped
-    depends_on: [supabase-auth, supabase-rest, supabase-storage]
+    depends_on:
+      [supabase-auth, supabase-rest, supabase-storage, supabase-realtime]
     environment:
       KONG_DATABASE: "off"
       KONG_DECLARATIVE_CONFIG: /kong/kong.yml
@@ -369,6 +469,10 @@ services:
       postgres: { condition: service_healthy }
       supabase-auth: { condition: service_healthy }
       supabase-storage: { condition: service_healthy }
+      # Realtime creates the `realtime` schema (incl. realtime.messages) at
+      # startup; wait for it so migration 202610191101 can attach the
+      # private-channel authorization policies to that table.
+      supabase-realtime: { condition: service_healthy }
     secrets: [postgres_password]
     volumes:
       - ../supabase/migrations:/opt/motionly-db/migrations:ro
@@ -393,6 +497,9 @@ services:
     environment:
       <<: [*media-environment, *temporal-environment]
       PROCESS_ROLE: api
+      # The shared media environment points workers at their restricted
+      # supabase_worker_key (Task 18); the API keeps the service-role key.
+      SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
       ADMIN_API_TOKEN_FILE: /run/secrets/admin_api_token
       METRICS_BEARER_TOKEN_FILE: /run/secrets/metrics_bearer_token
       TEMPORAL_CLIENT_ROLE: api
@@ -401,6 +508,7 @@ services:
       TEMPORAL_CLIENT_PRIVATE_KEY_PATH: /run/secrets/temporal_api_key
       API_PUBLIC_BASE_URL: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}/api
       API_CORS_ORIGINS: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}
+      BILLING_MODE: ${BILLING_MODE:?BILLING_MODE is required for production Compose (disabled or demo)}
       WORKER_API_BASE_URL: http://api:8000
     secrets:
       [
@@ -561,6 +669,7 @@ services:
       API_INTERNAL_URL: http://api:8000
       SUPABASE_URL: http://supabase-gateway:8000
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required for production Compose}
+      BILLING_MODE: ${BILLING_MODE:?BILLING_MODE is required for production Compose (disabled or demo)}
     depends_on: [api, supabase-gateway]
 
     networks: [app]
@@ -621,7 +730,7 @@ services:
     volumes: *media-volumes
     secrets:
       &worker-secrets [
-        supabase_service_role_key,
+        supabase_worker_key,
         supabase_jwt_secret,
         worker_api_token,
         groq_api_key,
@@ -775,8 +884,18 @@ secrets:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/temporal_db_password
   supabase_service_role_key:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/supabase_service_role_key
+  supabase_worker_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/supabase_worker_key
   supabase_jwt_secret:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/supabase_jwt_secret
+  # Realtime (Task 25): a 16-byte AES key for row encryption and a Phoenix
+  # secret-key-base. Generated per deployment like every other host secret.
+  realtime_db_enc_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/realtime_db_enc_key
+  realtime_secret_key_base:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/realtime_secret_key_base
+  realtime_metrics_jwt_secret:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/realtime_metrics_jwt_secret
   admin_api_token:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/admin_api_token
   worker_api_token:

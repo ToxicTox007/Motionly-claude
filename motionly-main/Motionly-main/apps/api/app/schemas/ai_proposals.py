@@ -139,6 +139,7 @@ class ProposalProvenance(BaseModel):
     prompt_version: str
     tool_registry_version: str = AI_TOOL_REGISTRY_VERSION
     orchestrator_version: str = AI_ORCHESTRATOR_VERSION
+    editorial_memory: dict[str, Any] | None = None
 
 
 class ProposalCostUsage(BaseModel):

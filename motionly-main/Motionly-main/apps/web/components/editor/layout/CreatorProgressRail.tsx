@@ -23,14 +23,16 @@ export function CreatorProgressRail({
 
   return (
     <nav
-      className="border-b border-foreground/40 bg-muted px-3 py-2"
+      className="mx-2 mb-1 rounded-neu-xl bg-surface px-3 py-2.5 shadow-neu-raised sm:mx-3"
       aria-label="Creator workflow"
     >
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
         <div className="min-w-0 lg:w-64">
           <div className="flex items-center justify-between gap-3 text-sm font-semibold">
             <span>Project progress</span>
-            <span className="text-muted-foreground">{flow.progressPct}%</span>
+            <span className="tabular-nums text-muted-foreground">
+              {flow.progressPct}%
+            </span>
           </div>
           {flow.workflowStatusLabel ? (
             <p
@@ -44,7 +46,7 @@ export function CreatorProgressRail({
             </p>
           ) : null}
           <div
-            className="mt-1.5 h-2 overflow-hidden rounded-full border border-foreground bg-surface"
+            className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-muted shadow-neu-inset-sm"
             role="progressbar"
             aria-label="Project progress"
             aria-valuemin={0}
@@ -52,7 +54,7 @@ export function CreatorProgressRail({
             aria-valuenow={flow.progressPct}
           >
             <div
-              className="h-full bg-primary"
+              className="h-full rounded-full bg-primary shadow-neu-glow"
               style={{ width: `${flow.progressPct}%` }}
             />
           </div>
@@ -66,10 +68,10 @@ export function CreatorProgressRail({
               aria-label={`${task.label}: ${task.detail ?? task.status}`}
               onClick={() => flow.onTaskSelect?.(task)}
               className={cn(
-                "flex min-h-10 min-w-[7rem] shrink-0 items-center gap-2 rounded border border-foreground px-2 text-left text-sm font-semibold transition-colors",
+                "flex min-h-10 min-w-[7rem] shrink-0 items-center gap-2 rounded-full px-3 text-left text-sm font-semibold transition-shadow duration-200",
                 task.key === activeTask?.key
-                  ? "bg-primary text-primary-foreground shadow-brutal-sm"
-                  : "bg-surface text-foreground hover:bg-surface-elevated",
+                  ? "bg-primary text-primary-foreground shadow-neu-glow"
+                  : "bg-surface text-foreground shadow-neu-raised-sm hover:shadow-neu-raised",
               )}
             >
               <TaskStatusIcon status={task.status} />
@@ -81,17 +83,17 @@ export function CreatorProgressRail({
           <button
             type="button"
             onClick={onAiEdit}
-            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded border-2 border-foreground bg-accent px-3 text-sm font-semibold text-accent-foreground lg:flex-none"
+            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-neu bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 hover:shadow-neu-raised-lg active:shadow-neu-pressed lg:flex-none"
           >
-            <Sparkles className="size-4" strokeWidth={2} />
+            <Sparkles className="size-4" strokeWidth={1.75} />
             Draft
           </button>
           <button
             type="button"
             onClick={onExport}
-            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded border-2 border-foreground bg-primary px-3 text-sm font-semibold text-primary-foreground lg:flex-none"
+            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-neu bg-primary px-3 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed lg:flex-none"
           >
-            <Download className="size-4" strokeWidth={2} />
+            <Download className="size-4" strokeWidth={1.75} />
             Export
           </button>
         </div>
@@ -134,7 +136,7 @@ export function CurrentTaskCard({
       </div>
       {progress !== null ? (
         <div
-          className="mt-3 h-2 overflow-hidden rounded-full border border-foreground bg-muted"
+          className="mt-3 h-2 overflow-hidden rounded-full bg-muted shadow-neu-inset-sm"
           role="progressbar"
           aria-label={`${task.label} progress`}
           aria-valuemin={0}
@@ -142,7 +144,7 @@ export function CurrentTaskCard({
           aria-valuenow={progress}
         >
           <div
-            className="h-full bg-primary"
+            className="h-full rounded-full bg-primary"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -152,7 +154,7 @@ export function CurrentTaskCard({
           {task.detail ?? task.status}
         </span>
         {task.actionLabel ? (
-          <span className="shrink-0 rounded border border-foreground bg-primary px-2 py-1 text-primary-foreground">
+          <span className="shrink-0 rounded-full bg-primary px-3 py-1 text-primary-foreground shadow-neu-raised-sm">
             {task.actionLabel}
           </span>
         ) : null}

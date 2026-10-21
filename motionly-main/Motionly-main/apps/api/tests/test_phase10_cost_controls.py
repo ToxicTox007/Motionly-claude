@@ -5,7 +5,6 @@ from uuid import uuid4
 import pytest
 
 from app.api.errors import ApiError
-from app.api.internal_jobs import EnqueuedJob, _execute_job
 from app.repositories.ai_proposals import InMemoryAIProposalRepository
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.broll import InMemoryBrollRepository
@@ -19,9 +18,11 @@ from app.schemas.plans import EditPlan, EditPlanCut, EditPlanStyle, PlanCreateRe
 from app.services.ai_proposals import build_multimodal_context, request_identity
 from app.services.billing import check_quota
 from app.services.edit_planner import PlannerProviderResult
+from app.services.job_engine import _execute_job
 from app.services.model_domain_adapters import register_runway_route
 from app.services.model_gateway import ModelGateway, OperationsGatewayTelemetry
 from app.services.operations import OperationsRepository
+from app.services.queue import EnqueuedJob
 from app.services.scale import FixtureRunwayProvider, _generate_broll
 
 

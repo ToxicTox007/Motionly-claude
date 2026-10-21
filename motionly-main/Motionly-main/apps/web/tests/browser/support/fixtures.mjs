@@ -315,3 +315,17 @@ export async function signIn(page, user, next = "/dashboard") {
   await page.getByRole("button", { name: "Log in" }).click();
   await page.waitForURL((url) => url.pathname === next);
 }
+
+/** The access token's claims, read from the Supabase session cookie. */
+export async function accessTokenClaims(context) {
+  const chunks = (await context.cookies())
+    .filter((cookie) => /^sb-motionly-auth-token(\.\d+)?$/.test(cookie.name))
+    .sort((a, b) => a.name.localeCompare(b.name, "en", { numeric: true }))
+    .map((cookie) => cookie.value)
+    .join("");
+  const json = chunks.startsWith("base64-")
+    ? Buffer.from(chunks.slice("base64-".length), "base64url").toString("utf8")
+    : decodeURIComponent(chunks);
+  const payload = JSON.parse(json).access_token.split(".")[1];
+  return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+}

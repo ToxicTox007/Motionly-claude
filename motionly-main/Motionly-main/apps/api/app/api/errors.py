@@ -45,7 +45,11 @@ async def request_validation_error_handler(
             "request_id": request.state.request_id,
             "method": request.method,
             "path": request.url.path,
-            "errors": exc.errors(),
+            # Never the submitted values: they can be passwords or tokens.
+            "errors": [
+                {key: value for key, value in error.items() if key in {"type", "loc", "msg"}}
+                for error in exc.errors()
+            ],
         },
     )
     return JSONResponse(

@@ -47,6 +47,19 @@ export type WorkflowCommand = Extract<
 
 export type WorkspaceRole = "owner" | "admin" | "member";
 export type WorkspaceMemberStatus = "active" | "invited" | "disabled";
+
+// Task 13 / B33 + B36: the pricing page reads plans from the API public
+// endpoint, typed by the generated contract instead of a hand-written copy.
+export type PlanDefinition = ApiComponents["schemas"]["PlanDefinition"];
+export type PublicPlansResponse =
+  ApiComponents["schemas"]["PublicPlansResponse"];
+export type ProjectResponse = ApiComponents["schemas"]["ProjectResponse"];
+export type ProjectLatestUpload =
+  ApiComponents["schemas"]["ProjectLatestUpload"];
+export type ProjectListResponse =
+  ApiComponents["schemas"]["ProjectListResponse"];
+export type StorageQuotaResponse = ApiComponents["schemas"]["QuotaResponse"];
+
 export type ProjectStatus = "draft" | "ready" | "failed";
 export type UploadStatus =
   | "created"
@@ -369,6 +382,7 @@ export interface VisualAnalysisStatusSummary {
     path?: string | null;
     cache_key?: string | null;
     model?: string | null;
+    provenance?: string | null;
     source?: "segmentation_matte" | "approximate_preview" | "none";
   };
 }
@@ -633,6 +647,7 @@ export interface BackgroundRemovalSettings {
 export interface SegmentationMatteRef {
   src: string;
   model?: string;
+  provenance?: string;
   bucket?: string;
   path?: string;
 }
@@ -1041,7 +1056,8 @@ export interface PlanEntitlements {
 export interface BillingPlanDefinition {
   key: BillingPlanKey;
   name: string;
-  price_cents: number;
+  /** INR paise (₹1 = 100 paise). Source: apps/api/app/config/plans.json. */
+  price_paise: number;
   currency: string;
   interval: "month";
   entitlements: PlanEntitlements;
@@ -1052,9 +1068,9 @@ export interface SubscriptionSummary {
   workspace_id: string;
   plan: BillingPlanKey;
   status: SubscriptionStatus;
-  stripe_customer_id?: string | null;
-  stripe_subscription_id?: string | null;
-  stripe_price_id?: string | null;
+  gateway_customer_id?: string | null;
+  gateway_subscription_id?: string | null;
+  gateway_price_id?: string | null;
   current_period_start?: string | null;
   current_period_end?: string | null;
   cancel_at_period_end: boolean;

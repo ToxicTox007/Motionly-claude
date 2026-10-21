@@ -19,6 +19,8 @@ name: motionly-cpu-stage
 
 x-cpu-stage-environment: &cpu-stage-environment
   APP_ENV: cpu-stage
+  # The CPU stage exercises the billing surface with no real charges.
+  BILLING_MODE: demo
   ML_EXECUTION_MODE: test_fixture
   ALLOW_FIXTURE_PROVIDERS: "true"
   VISUAL_PROVIDER: fixture
@@ -75,6 +77,11 @@ services:
   supabase-storage:
     mem_limit: 512m
 
+  supabase-realtime:
+    # Elixir BEAM VM; one tenant, no load in the CPU stage.
+    mem_limit: 512m
+    cpus: 1.0
+
   supabase-gateway:
     mem_limit: 512m
 
@@ -82,7 +89,19 @@ services:
     mem_limit: 256m
 
   api:
-    environment: *cpu-stage-environment
+    environment:
+      <<: *cpu-stage-environment
+      # Every browser test is one viewer behind the CDN simulator, and many
+      # sign up: raise the per-viewer limit (production: 5 per hour).
+      SIGNUP_RATE_LIMIT_PER_HOUR: "500"
+      SIGNUP_GLOBAL_RATE_LIMIT_PER_HOUR: "1000"
+      # Billing runs through the demo payment gateway (demo-billing profile).
+      BILLING_ENABLED: "true"
+      MOCK_GATEWAY_BASE_URL: http://payment-gateway:8010
+      MOCK_GATEWAY_PUBLIC_BASE_URL: https://localhost
+      MERCHANT_API_KEY_FILE: /run/secrets/merchant_api_key
+      MOCK_GATEWAY_WEBHOOK_SECRET_FILE: /run/secrets/mock_gateway_webhook_secret
+    secrets: [merchant_api_key, mock_gateway_webhook_secret]
     mem_limit: 1024m
 
   temporal-dispatcher:
@@ -101,6 +120,7 @@ services:
     environment:
       # A plain-HTTP loopback origin is valid only outside production.
       APP_ENV: cpu-stage
+      BILLING_MODE: demo
     mem_limit: 512m
 
   ingress:
@@ -162,6 +182,58 @@ services:
     environment: *cpu-stage-environment
     mem_limit: 2048m
 
+  # Mock payment gateway (Task 22). A separate, demo-only UPI + card gateway
+  # (prices in INR) that never moves money. It is built from the API image but
+  # runs its own process (`python -m app.mock_gateway`), owns the mock_gateway
+  # DB schema + role, and has its own webhook signing secret. It refuses to
+  # start in production unless BILLING_MODE=demo. Behind the `demo-billing`
+  # profile so the base `slim`/`full` stacks do not pay for it unless asked;
+  # Caddy routes /pay/* here (infra/Caddyfile.routes). No ports are published:
+  # it is reached only through the ingress like every other upstream.
+  payment-gateway:
+    profiles: [demo-billing]
+    image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
+    restart: unless-stopped
+    command: ["python", "-m", "app.mock_gateway"]
+    environment:
+      APP_ENV: cpu-stage
+      BILLING_MODE: demo
+      MOCK_GATEWAY_HOST: 0.0.0.0
+      MOCK_GATEWAY_PORT: "8010"
+      MOCK_GATEWAY_BASE_PATH: /pay
+      MERCHANT_API_KEY_FILE: /run/secrets/merchant_api_key
+      MOCK_GATEWAY_WEBHOOK_SECRET_FILE: /run/secrets/mock_gateway_webhook_secret
+      # Persist to the private `mock_gateway` schema through the shared PostgREST
+      # using the gateway's OWN role JWT (role claim mock_gateway_role) + the
+      # Accept/Content-Profile: mock_gateway headers the store sets. The JWT is
+      # mounted only here. Idempotency keys + webhook event ids survive restarts
+      # via their UNIQUE constraints.
+      MOCK_GATEWAY_POSTGREST_URL: http://supabase-rest:3000/rest/v1
+      MOCK_GATEWAY_DB_JWT_FILE: /run/secrets/mock_gateway_db_key
+      MOCK_GATEWAY_DB_SCHEMA: mock_gateway
+      # Deliver webhooks to the API over the private app network. Inside Docker
+      # the API is reached directly (no ingress), so there is NO /api prefix:
+      # the receiver route is /billing/webhooks/mock-gateway.
+      MOCK_GATEWAY_WEBHOOK_URL: http://api:8000/billing/webhooks/mock-gateway
+      # A short renewal period so the browser/stack checks can watch a renewal.
+      MOCK_GATEWAY_RENEWAL_PERIOD_SECONDS: "5"
+    secrets:
+      [merchant_api_key, mock_gateway_webhook_secret, mock_gateway_db_key]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; urlopen('http://127.0.0.1:8010/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks: [app]
+    mem_limit: 256m
+
   # --- full: the production CPU worker services -------------------------------
   cpu-ffmpeg-worker:
     profiles: [full]
@@ -209,3 +281,12 @@ secrets:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/edge_tls_cert
   edge_tls_key:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/edge_tls_key
+  # Mock payment gateway (Task 22, demo-billing profile).
+  merchant_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/merchant_api_key
+  mock_gateway_webhook_secret:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/mock_gateway_webhook_secret
+  # The gateway's own PostgREST role JWT (role claim mock_gateway_role), mounted
+  # only into payment-gateway — like Task 18's supabase_worker_key.
+  mock_gateway_db_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/mock_gateway_db_key

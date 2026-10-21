@@ -34,3 +34,25 @@ export function createSourceVideo() {
     remove: () => rmSync(directory, { recursive: true, force: true }),
   };
 }
+
+/**
+ * Uploads a source video through the project page and waits until the
+ * resumable session is completed. Reloading before that would abort the
+ * upload in the browser, so callers wait for this before polling the page.
+ */
+export async function uploadSourceVideo(page, path) {
+  const completed = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      /\/api\/projects\/[^/]+\/uploads\/multipart\/[^/]+\/complete$/.test(
+        new URL(response.url()).pathname,
+      ),
+    { timeout: 60_000 },
+  );
+  await page.getByLabel("Choose a video file to upload").setInputFiles(path);
+  await page.getByRole("button", { name: /^Upload$/ }).click();
+  const response = await completed;
+  if (response.status() !== 200) {
+    throw new Error(`upload completion answered ${response.status()}`);
+  }
+}

@@ -27,11 +27,13 @@ export function UploadProjectScreen(props: ProjectPhaseAuth) {
     <ProjectPhaseShell title={props.title}>
       <div className="w-full max-w-5xl">
         <div className="mb-8 text-center">
-          <div className="pixel-button mx-auto mb-4 flex size-14 items-center justify-center bg-primary/10">
+          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-neu bg-surface text-primary shadow-neu-inset-sm">
             <Film className="size-7 text-primary" aria-hidden="true" />
           </div>
-          <h1 className="text-2xl font-bold">Upload your footage</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Upload your footage
+          </h1>
+          <p className="mt-2 text-sm font-medium text-muted-foreground">
             Drop in your raw talking-head video. We&apos;ll transcribe it and
             prepare an AI edit proposal for you to review before it reaches the
             timeline.
@@ -111,7 +113,7 @@ export function ProcessingProjectScreen({
   return (
     <ProjectPhaseShell title={props.title} centered>
       <div className="flex w-full max-w-lg flex-col items-center gap-6 text-center">
-        <div className="pixel-panel flex size-16 items-center justify-center shadow-soft">
+        <div className="flex size-16 items-center justify-center rounded-neu-md bg-surface shadow-neu-raised">
           {failed ? (
             <XCircle className="size-8 text-danger" aria-hidden="true" />
           ) : (
@@ -123,19 +125,19 @@ export function ProcessingProjectScreen({
         </div>
 
         <div className="space-y-1" aria-live="polite" aria-atomic="true">
-          <h1 className="text-lg font-black uppercase tracking-wide">
+          <h1 className="text-lg font-bold tracking-tight text-foreground">
             {failed ? "Video processing failed" : "Processing video"}
           </h1>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             {pollError ?? uploadStatusMessage(status)}
           </p>
         </div>
 
-        <div className="w-full space-y-4 border border-border bg-surface p-5 text-left shadow-soft">
-          <h2 className="border-b border-border pb-2 text-xs font-black uppercase tracking-wider text-primary">
+        <div className="w-full space-y-4 rounded-neu-lg bg-surface p-5 text-left shadow-neu-raised">
+          <h2 className="border-b border-hairline pb-2 text-xs font-semibold text-primary">
             Processing stages
           </h2>
-          <div className="space-y-2.5 font-bold">
+          <div className="space-y-2.5">
             {PRODUCT_FLOW_STAGES.map((stage, index) => {
               const completed = index < activeIndex;
               const active = !failed && index === activeIndex;
@@ -143,19 +145,17 @@ export function ProcessingProjectScreen({
                 <div
                   key={stage.key}
                   className={cn(
-                    "flex items-start gap-3 border p-2 transition",
-                    active
-                      ? "border-primary bg-primary/5"
-                      : "border-transparent opacity-60",
+                    "flex items-start gap-3 rounded-neu-md p-2 transition-shadow duration-200",
+                    active ? "bg-surface shadow-neu-inset-sm" : "opacity-60",
                   )}
                 >
-                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center border border-border bg-background text-[10px] font-black">
+                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-surface text-[10px] font-bold text-foreground shadow-neu-raised-sm">
                     {completed ? "✓" : active ? "▶" : index + 1}
                   </div>
                   <div className="min-w-0">
                     <p
                       className={cn(
-                        "text-xs font-black uppercase tracking-wide",
+                        "text-xs font-semibold",
                         active ? "text-primary" : "text-foreground",
                       )}
                     >
@@ -175,7 +175,7 @@ export function ProcessingProjectScreen({
 
         {!failed ? (
           <div
-            className="pixel-progress h-2.5 w-full max-w-xs border border-border bg-background"
+            className="h-3 w-full max-w-xs overflow-hidden rounded-full bg-surface shadow-neu-inset-sm"
             role="progressbar"
             aria-label="Video processing progress"
             aria-valuemin={0}
@@ -183,7 +183,7 @@ export function ProcessingProjectScreen({
             aria-valuenow={activeIndex + 1}
           >
             <div
-              className="pixel-progress-fill h-full bg-primary transition-all duration-300"
+              className="h-full rounded-full bg-primary transition-[width] duration-300"
               style={{
                 width: `${Math.round(((activeIndex + 0.5) / PRODUCT_FLOW_STAGES.length) * 100)}%`,
               }}
@@ -192,7 +192,7 @@ export function ProcessingProjectScreen({
         ) : (
           <Link
             href="/projects"
-            className="pixel-button inline-flex min-h-11 items-center justify-center bg-surface px-4 text-sm font-black uppercase"
+            className="inline-flex min-h-11 items-center justify-center rounded-neu bg-surface px-4 text-sm font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
           >
             Back to projects
           </Link>
@@ -213,11 +213,11 @@ function ProjectPhaseShell({
 }) {
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
-      <header className="pixel-grid-fine flex min-h-12 flex-wrap items-center gap-3 border-b border-border bg-surface/95 px-4 py-2">
+      <header className="flex min-h-12 flex-wrap items-center gap-3 border-b border-hairline bg-surface px-4 py-2 shadow-neu-raised-sm">
         <div className="flex min-w-0 items-center gap-3">
           <Link
             href="/dashboard"
-            className="pixel-button flex items-center gap-1 bg-surface px-2 py-1 text-sm text-muted-foreground transition hover:border-primary/30 hover:bg-muted hover:text-foreground"
+            className="inline-flex items-center gap-1 rounded-neu bg-surface px-3 py-1.5 text-sm font-semibold text-muted-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:text-foreground hover:shadow-neu-raised active:shadow-neu-pressed"
           >
             <ChevronLeft className="size-4" aria-hidden="true" />
             Dashboard

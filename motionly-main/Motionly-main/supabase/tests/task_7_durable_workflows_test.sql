@@ -217,7 +217,7 @@ from public.motionly_start_workflow_run(
   '57000000-0000-4000-8000-000000000001',
   2,
   '87000000-0000-4000-8000-000000000001',
-  'first_draft', 'first-draft-v1', 'task7-first-draft-0001', repeat('b', 64),
+  'first_draft', 'first-draft-v2', 'task7-first-draft-0001', repeat('b', 64),
   '17000000-0000-4000-8000-000000000001', '{"locale":"en"}'::jsonb
 ) as result;
 
@@ -235,7 +235,7 @@ from public.motionly_start_workflow_run(
   '57000000-0000-4000-8000-000000000001',
   2,
   '87000000-0000-4000-8000-000000000001',
-  'first_draft', 'first-draft-v1', 'task7-first-draft-0001', repeat('b', 64),
+  'first_draft', 'first-draft-v2', 'task7-first-draft-0001', repeat('b', 64),
   '17000000-0000-4000-8000-000000000001', '{"locale":"en"}'::jsonb
 ) as result;
 
@@ -259,7 +259,7 @@ select throws_ok(
     '47000000-0000-4000-8000-000000000001',
     '57000000-0000-4000-8000-000000000001', 2,
     '87000000-0000-4000-8000-000000000001',
-    'first_draft', 'first-draft-v1', 'task7-first-draft-0001', repeat('c', 64),
+    'first_draft', 'first-draft-v2', 'task7-first-draft-0001', repeat('c', 64),
     '17000000-0000-4000-8000-000000000001', '{}'::jsonb
   )$$,
   'P0001', 'WORKFLOW_IDEMPOTENCY_CONFLICT',
@@ -272,7 +272,7 @@ select throws_ok(
     '47000000-0000-4000-8000-000000000001',
     '57000000-0000-4000-8000-000000000001', 1,
     '87000000-0000-4000-8000-000000000001',
-    'first_draft', 'first-draft-v1', 'task7-stale-source-0001', repeat('d', 64),
+    'first_draft', 'first-draft-v2', 'task7-stale-source-0001', repeat('d', 64),
     '17000000-0000-4000-8000-000000000001', '{}'::jsonb
   )$$,
   'P0001', 'WORKFLOW_SOURCE_STALE',
@@ -285,7 +285,7 @@ select throws_ok(
     '47000000-0000-4000-8000-000000000002',
     '57000000-0000-4000-8000-000000000001', 2,
     '87000000-0000-4000-8000-000000000001',
-    'first_draft', 'first-draft-v1', 'task7-cross-tenant-0001', repeat('e', 64),
+    'first_draft', 'first-draft-v2', 'task7-cross-tenant-0001', repeat('e', 64),
     '17000000-0000-4000-8000-000000000002', '{}'::jsonb
   )$$,
   'P0002', 'WORKFLOW_UPLOAD_NOT_FOUND',
@@ -308,7 +308,7 @@ select throws_ok(
     '47000000-0000-4000-8000-000000000001',
     '57000000-0000-4000-8000-000000000001', 2,
     '87000000-0000-4000-8000-000000000001',
-    'first_draft', 'first-draft-v1', 'task7-old-revision-0001', repeat('1', 64),
+    'first_draft', 'first-draft-v2', 'task7-old-revision-0001', repeat('1', 64),
     '17000000-0000-4000-8000-000000000001', '{}'::jsonb
   )$$,
   'P0001', 'WORKFLOW_SOURCE_STALE',
@@ -323,7 +323,7 @@ from public.motionly_start_workflow_run(
   '57000000-0000-4000-8000-000000000001',
   3,
   '87000000-0000-4000-8000-000000000001',
-  'first_draft', 'first-draft-v1', 'task7-first-draft-0002', repeat('2', 64),
+  'first_draft', 'first-draft-v2', 'task7-first-draft-0002', repeat('2', 64),
   '17000000-0000-4000-8000-000000000001', '{}'::jsonb
 ) as result;
 select is((select count(*)::integer from public.workflow_runs), 2, 'new media revision can start a new run');
@@ -639,7 +639,7 @@ from public.motionly_start_workflow_run(
   '47000000-0000-4000-8000-000000000001',
   '57000000-0000-4000-8000-000000000001', 3,
   '87000000-0000-4000-8000-000000000001',
-  'first_draft', 'first-draft-v1', 'task7-final-expiry-0001', repeat('a', 64),
+  'first_draft', 'first-draft-v2', 'task7-final-expiry-0001', repeat('a', 64),
   '17000000-0000-4000-8000-000000000001', '{}'::jsonb
 ) as result;
 create temporary table task7_final_begin as
@@ -702,7 +702,7 @@ from public.motionly_start_workflow_run(
   '47000000-0000-4000-8000-000000000001',
   '57000000-0000-4000-8000-000000000001', 3,
   '87000000-0000-4000-8000-000000000001',
-  'first_draft', 'first-draft-v1', 'task7-first-draft-0003', repeat('9', 64),
+  'first_draft', 'first-draft-v2', 'task7-first-draft-0003', repeat('9', 64),
   '17000000-0000-4000-8000-000000000001', '{}'::jsonb
 ) as result;
 create temporary table task7_expired_failure_begin as
@@ -841,7 +841,7 @@ select result from public.motionly_start_workflow_run(
   '47000000-0000-4000-8000-000000000001',
   '57000000-0000-4000-8000-000000000001', 3,
   '87000000-0000-4000-8000-000000000001',
-  'first_draft', 'first-draft-v1', 'task7-normalized-error-0001', repeat('8', 64),
+  'first_draft', 'first-draft-v2', 'task7-normalized-error-0001', repeat('8', 64),
   '17000000-0000-4000-8000-000000000001', '{}'::jsonb
 ) as result;
 create temporary table task7_normalized_error_begin as

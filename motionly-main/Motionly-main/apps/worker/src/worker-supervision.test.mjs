@@ -192,6 +192,40 @@ test("invalid protocol response is handled safely", async () => {
   );
 });
 
+test("log lines before a response in the same stdout chunk do not swallow the response", async () => {
+  // The visual subprocess printed debug lines on stdout; when one arrived in
+  // the same chunk as the ping reply, the reply was never parsed and the job
+  // waited for the full startup timeout.
+  let child;
+  const spawnImpl = () => {
+    child = new MockChild({
+      onWrite: (request, callback) => {
+        callback?.(null);
+        const reply = JSON.stringify(
+          request.control === "ping"
+            ? { id: request.id, result: { ok: true } }
+            : { id: request.id, result: { ok: "done" } },
+        );
+        child.stdout.emit("data", `DEBUG: one\nDEBUG: two\n${reply}\n`);
+      },
+    });
+    return child;
+  };
+
+  const result = await persistentPythonExecutor(
+    "visual",
+    "app.workers.visual_job",
+    { kind: "visual_analysis" },
+    {
+      spawnImpl,
+      heartbeatIntervalMs: 0,
+      requestTimeoutMs: 200,
+      startupTimeoutMs: 200,
+    },
+  );
+  assert.deepEqual(result, { ok: "done" });
+});
+
 test("subprocess restart backoff is applied and logged", async () => {
   const events = [];
   const delays = [];

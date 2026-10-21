@@ -9,7 +9,6 @@ from fastapi.exceptions import RequestValidationError
 from app.api.dependencies import Actor
 from app.api.errors import ApiError, request_validation_error_handler
 from app.api.plans import (
-    activate_plan,
     compile_project_timeline,
     create_plan_snapshot,
     get_plan_job_status,
@@ -18,7 +17,6 @@ from app.api.plans import (
     restore_plan_snapshot,
     update_plan_cuts,
     update_plan_manual_elements,
-    update_project_timeline,
 )
 from app.api.plans import (
     create_plan as _create_plan_api,
@@ -43,7 +41,6 @@ from app.schemas.plans import (
     PlanSnapshotCreateRequest,
     PlanSummary,
     StyleClassification,
-    TimelineUpdateRequest,
 )
 from app.schemas.uploads import UploadStatus
 from app.schemas.visual import (
@@ -70,6 +67,7 @@ from app.services.edit_planner import (
     summarize_plan,
 )
 from app.services.queue import PlanQueue
+from app.services.timeline_compiler import project_timeline_to_legacy_plan
 from app.services.transcription_provider import FixtureTranscriptionProvider
 
 
@@ -121,7 +119,7 @@ async def create_plan(
     job_id = response.job_id
     job = plan_queue.registry.jobs[job_id]
 
-    from app.api.internal_jobs import _execute_job
+    from app.services.job_engine import _execute_job
 
     result = _execute_job(job=job, request=request)
 
@@ -809,11 +807,10 @@ def test_plan_api_prefers_async_repository_methods() -> None:
         )
     )
     activated = asyncio.run(
-        activate_plan(
+        async_repository.activate_plan_async(
             project_id=project_id,
             plan_id=record.id,
-            actor=actor,
-            repository=async_repository,
+            workspace_id=workspace_id,
         )
     )
     updated = asyncio.run(
@@ -827,7 +824,7 @@ def test_plan_api_prefers_async_repository_methods() -> None:
     )
 
     assert listed.plans[0].id == record.id
-    assert activated.plan.id == record.id
+    assert activated.id == record.id
     assert updated.plan.id == record.id
     assert async_repository.async_calls == ["list", "activate", "get", "update"]
 
@@ -978,19 +975,11 @@ def test_canonical_timeline_update_projects_to_legacy_clients() -> None:
     )
     edited = timeline.model_copy(update={"clips": [clip], "duration_ms": 2000})
 
-    response = asyncio.run(
-        update_project_timeline(
-            project_id=project_id,
-            plan_id=created.plan.id,
-            payload=TimelineUpdateRequest(timeline=edited),
-            actor=Actor(user_id=user_id, workspace_id=workspace_id),
-            repository=repository,
-        )
-    )
+    projected = project_timeline_to_legacy_plan(plan=created.plan.plan, timeline=edited)
 
-    assert response.plan.plan.timeline == edited
-    assert response.plan.plan.cuts[0].start_ms == 1000
-    assert response.plan.plan.cuts[0].end_ms == 3000
+    assert projected.timeline == edited
+    assert projected.cuts[0].start_ms == 1000
+    assert projected.cuts[0].end_ms == 3000
 
 
 def test_compile_timeline_endpoint_persists_caption_layers() -> None:
@@ -1419,18 +1408,15 @@ def test_activate_plan_restores_previous_version() -> None:
         )
     )
 
-    restored = asyncio.run(
-        activate_plan(
-            project_id=project_id,
-            plan_id=first.plan.id,
-            actor=actor,
-            repository=repository,
-        )
+    restored = repository.activate_plan(
+        project_id=project_id,
+        workspace_id=workspace_id,
+        plan_id=first.plan.id,
     )
     listed = asyncio.run(list_plans(project_id=project_id, actor=actor, repository=repository))
 
     assert second.plan.is_active is True
-    assert restored.plan.id == first.plan.id
+    assert restored.id == first.plan.id
     assert listed.active_plan_id == first.plan.id
 
 
@@ -2118,7 +2104,7 @@ def test_async_planner_fast_path_and_polling() -> None:
     assert status_response.progress == 0
 
     # 4. edit_plan job handler eventually persists a plan.
-    from app.api.internal_jobs import _execute_job
+    from app.services.job_engine import _execute_job
     job = plan_queue.registry.jobs[response.job_id]
     
     execute_request = SimpleNamespace(
@@ -2281,7 +2267,7 @@ def test_async_planner_failed_job() -> None:
         )
     )
     
-    from app.api.internal_jobs import _execute_job
+    from app.services.job_engine import _execute_job
     job = plan_queue.registry.jobs[response.job_id]
     
     with pytest.raises(RuntimeError):

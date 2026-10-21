@@ -8,7 +8,9 @@ import {
   Film,
   Layers3,
   Loader2,
+  RefreshCw,
   Save,
+  Trash2,
   Users,
 } from "lucide-react";
 import type {
@@ -25,7 +27,22 @@ import {
   type PlanJobIdentity,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
+import {
+  genericInitToHelper,
+  genericRefreshToHelper,
+  putBlobWithProgress,
+  runResumableUpload,
+  type GenericMediaSession,
+  type ResumableUploadTransport,
+} from "@/lib/resumable-upload";
 import { createClient } from "@/lib/supabase/browser";
+import {
+  MANIFEST_UPDATED,
+  PANEL_PLAN,
+  PLAN_REVISION_UPDATED,
+  panelReloadForBroadcast,
+  shouldApplyRevision,
+} from "@/lib/collaboration-reload.mjs";
 import { cn } from "@/lib/utils";
 import { BrandKitPanel, type BrandKitResource } from "./BrandKitPanel";
 import { CreativeVariantsPanel } from "./CreativeVariantsPanel";
@@ -94,6 +111,9 @@ export function ScalePanel(props: ScalePanelProps) {
   const [editorialPolicy, setEditorialPolicy] =
     useState<EditorialLearningPolicy | null>(null);
   const [presenceCount, setPresenceCount] = useState(1);
+  const [onlineMembers, setOnlineMembers] = useState<
+    { userId: string; name: string }[]
+  >([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [runwayPrompt, setRunwayPrompt] = useState("");
@@ -101,7 +121,18 @@ export function ScalePanel(props: ScalePanelProps) {
   const [profileName, setProfileName] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [batchProjects, setBatchProjects] = useState(projectId);
+  const [regenerateLayers, setRegenerateLayers] = useState<
+    Record<"captions" | "broll" | "music" | "effects", boolean>
+  >({ captions: false, broll: false, music: false, effects: false });
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(
+    null,
+  );
+  const [editingTemplateName, setEditingTemplateName] = useState("");
+  const [pendingDeleteTemplateId, setPendingDeleteTemplateId] = useState<
+    string | null
+  >(null);
   const collaborationRevision = useRef(-1);
+  const trackedPlanRevision = useRef(-1);
   const [lifecycleController] = useState(() => new AbortController());
 
   useEffect(() => {
@@ -173,29 +204,92 @@ export function ScalePanel(props: ScalePanelProps) {
   }, [load]);
 
   useEffect(() => {
+    // Keep the conflict tracker aligned with whatever plan the editor shows, so
+    // a broadcast is judged "newer" only when it actually advances past it.
+    const revision = activePlan?.revision;
+    if (
+      typeof revision === "number" &&
+      revision > trackedPlanRevision.current
+    ) {
+      trackedPlanRevision.current = revision;
+    }
+  }, [activePlan]);
+
+  const refreshOnlineMembers = useCallback(
+    async (presentIds: Set<string>) => {
+      // Presence carries only user ids; names come from the workspace-scoped
+      // members directory (no PII beyond a display name).
+      try {
+        const directory = await editorApiRequest<{
+          members: { user_id: string; name: string; role: string }[];
+        }>(
+          `${env.apiBaseUrl}/team/members`,
+          auth({ workspaceId }, lifecycleController.signal),
+        );
+        const byId = new Map(directory.members.map((m) => [m.user_id, m.name]));
+        setOnlineMembers(
+          Array.from(presentIds).map((id) => ({
+            userId: id,
+            name: byId.get(id) ?? `Member ${id.slice(0, 8)}`,
+          })),
+        );
+      } catch {
+        // The indicator still shows a count even if names can't be fetched.
+        setOnlineMembers(
+          Array.from(presentIds).map((id) => ({
+            userId: id,
+            name: `Member ${id.slice(0, 8)}`,
+          })),
+        );
+      }
+    },
+    [lifecycleController, workspaceId],
+  );
+
+  useEffect(() => {
     const supabase = createClient();
-    const channel = supabase.channel(
-      `workspace:${workspaceId}:project:${projectId}:editors`,
-      {
-        config: { presence: { key: userId } },
-      },
-    );
+    // Task 25 private topic for this project's live channel; RLS
+    // (realtime.motionly_can_access_topic) authorizes only active members of
+    // the owning workspace. The browser's authenticated client supplies the JWT.
+    const channel = supabase.channel(`project:${projectId}`, {
+      config: { private: true, presence: { key: userId } },
+    });
+
+    const applyBroadcast = (message: {
+      event: string;
+      payload?: Record<string, unknown>;
+    }) => {
+      const mapped = panelReloadForBroadcast(message);
+      if (!mapped) return;
+      const tracked =
+        mapped.panel === PANEL_PLAN
+          ? trackedPlanRevision.current
+          : collaborationRevision.current;
+      if (!shouldApplyRevision(mapped.revision, tracked)) return;
+      // Advance the tracked revision so our next save sends a fresh
+      // expected_revision and does not conflict needlessly, then reload the
+      // one affected panel's data.
+      if (mapped.revision !== null) {
+        if (mapped.panel === PANEL_PLAN) {
+          trackedPlanRevision.current = mapped.revision;
+        } else {
+          collaborationRevision.current = mapped.revision;
+        }
+      }
+      void load().catch((error) => setMessage((error as Error).message));
+    };
+
     channel
       .on("presence", { event: "sync" }, () => {
-        setPresenceCount(
-          Object.values(channel.presenceState()).flat().length || 1,
-        );
+        const ids = new Set(Object.keys(channel.presenceState()));
+        setPresenceCount(ids.size || 1);
+        void refreshOnlineMembers(ids);
       })
-      .on("broadcast", { event: "manifest_updated" }, () => void load())
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "phase5_resources",
-          filter: `project_id=eq.${projectId}`,
-        },
-        () => void load(),
+      .on("broadcast", { event: MANIFEST_UPDATED }, (message) =>
+        applyBroadcast(message),
+      )
+      .on("broadcast", { event: PLAN_REVISION_UPDATED }, (message) =>
+        applyBroadcast(message),
       )
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
@@ -209,7 +303,7 @@ export function ScalePanel(props: ScalePanelProps) {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [load, projectId, userId, workspaceId]);
+  }, [load, projectId, refreshOnlineMembers, userId]);
 
   useEffect(() => {
     if (
@@ -254,6 +348,81 @@ export function ScalePanel(props: ScalePanelProps) {
     }
   }
 
+  const regenerateSelection = Object.entries(regenerateLayers)
+    .filter(([, on]) => on)
+    .map(([layer]) => layer);
+
+  async function regenerateLayersNow() {
+    // Unified regeneration (apps/api/app/api/regeneration.py): rebuild only the
+    // chosen layers (captions, B-roll, music, effects) while preserving the rest
+    // and keeping the current export. Creates a new artifact version.
+    await action(
+      () =>
+        editorApiRequest(`${env.apiBaseUrl}/projects/${projectId}/regenerate`, {
+          ...auth(props, lifecycleController.signal),
+          method: "POST",
+          body: { layers: regenerateSelection, force: true },
+          friendlyError:
+            "Those layers could not be regenerated. Pick at least one and try again.",
+        }),
+      `Regeneration queued for ${regenerateSelection.join(", ")}.`,
+    );
+    setRegenerateLayers({
+      captions: false,
+      broll: false,
+      music: false,
+      effects: false,
+    });
+  }
+
+  async function renameTemplate(template: Resource) {
+    const nextName = editingTemplateName.trim();
+    if (!nextName) return;
+    await action(
+      () =>
+        editorApiRequest(`${env.apiBaseUrl}/phase5/templates/${template.id}`, {
+          ...auth(props, lifecycleController.signal),
+          method: "PATCH",
+          body: { name: nextName },
+          friendlyError: "The template could not be renamed.",
+        }),
+      "Template renamed.",
+    );
+    setEditingTemplateId(null);
+    setEditingTemplateName("");
+  }
+
+  async function deleteTemplate(template: Resource) {
+    await action(
+      () =>
+        editorApiRequest(`${env.apiBaseUrl}/phase5/templates/${template.id}`, {
+          ...auth(props, lifecycleController.signal),
+          method: "DELETE",
+          friendlyError: "The template could not be deleted.",
+        }),
+      "Template deleted.",
+    );
+    setPendingDeleteTemplateId(null);
+  }
+
+  async function cancelBatch(batch: Resource) {
+    await action(
+      () =>
+        editorApiRequest(
+          `${env.apiBaseUrl}/phase5/batches/${batch.id}/cancel`,
+          {
+            ...auth(props, lifecycleController.signal),
+            method: "POST",
+            body: {},
+            friendlyError: "The batch could not be canceled.",
+          },
+        ),
+      "Batch canceled.",
+    );
+  }
+
+  const batches = resources.filter((item) => item.kind === "batch");
+
   async function uploadReferences(profile: Resource, files: FileList | null) {
     if (!files) return;
     const existingCount = Array.isArray(profile.payload.references)
@@ -262,36 +431,62 @@ export function ScalePanel(props: ScalePanelProps) {
     const selected = Array.from(files).slice(0, Math.max(0, 5 - existingCount));
     await action(async () => {
       for (const file of selected) {
-        const initialized = await editorApiRequest<{
-          reference_id: string;
-          signed_upload_url: string;
-          upload_headers: Record<string, string>;
-        }>(
-          `${env.apiBaseUrl}/projects/${projectId}/phase5/style-profiles/${profile.id}/references/init`,
-          {
-            ...auth(props, lifecycleController.signal),
-            method: "POST",
-            body: {
-              filename: file.name,
-              mime_type: file.type || "video/mp4",
-              file_size_bytes: file.size,
-            },
+        // One resumable, server-verified path for every media type: init →
+        // parts → confirm → complete (verified checksum/size) via the shared
+        // helper against the style-reference resumable multipart endpoints.
+        const base = `${env.apiBaseUrl}/projects/${projectId}/phase5/style-profiles/${profile.id}/references/multipart`;
+        const transport: ResumableUploadTransport = {
+          async initUpload() {
+            const initialized = await editorApiRequest<{
+              reference_id: string;
+              session: GenericMediaSession;
+            }>(`${base}/init`, {
+              ...auth(props, lifecycleController.signal),
+              method: "POST",
+              body: {
+                filename: file.name,
+                mime_type: file.type || "video/mp4",
+                file_size_bytes: file.size,
+              },
+            });
+            return genericInitToHelper(initialized.session);
           },
-        );
-        const uploaded = await fetch(initialized.signed_upload_url, {
-          method: "PUT",
-          headers: initialized.upload_headers,
-          body: file,
+          putBlob: (url, blob, headers, signal, onProgress) =>
+            putBlobWithProgress(url, blob, headers, signal, onProgress),
+          async refreshSession(sessionId) {
+            return genericRefreshToHelper(
+              await editorApiRequest<GenericMediaSession>(
+                `${base}/${sessionId}`,
+                auth(props, lifecycleController.signal),
+              ),
+            );
+          },
+          async confirmPart(sessionId, partNumber, etag) {
+            return editorApiRequest(
+              `${base}/${sessionId}/parts/${partNumber}/complete`,
+              {
+                ...auth(props, lifecycleController.signal),
+                method: "POST",
+                body: etag ? { etag } : {},
+              },
+            );
+          },
+          async completeUpload(sessionId) {
+            await editorApiRequest(`${base}/${sessionId}/complete`, {
+              ...auth(props, lifecycleController.signal),
+              method: "POST",
+              body: {},
+            });
+            return { status: "completed" } as never;
+          },
+        };
+        await runResumableUpload({
+          file,
+          transport,
+          signal: lifecycleController.signal,
+          onProgress: (progress) =>
+            setMessage(`Uploading ${file.name}… ${progress.percent}%`),
         });
-        if (!uploaded.ok) throw new Error(`Could not upload ${file.name}.`);
-        await editorApiRequest(
-          `${env.apiBaseUrl}/projects/${projectId}/phase5/style-profiles/${profile.id}/references/complete`,
-          {
-            ...auth(props, lifecycleController.signal),
-            method: "POST",
-            body: { reference_id: initialized.reference_id },
-          },
-        );
       }
     }, "Style references uploaded.");
   }
@@ -674,20 +869,72 @@ export function ScalePanel(props: ScalePanelProps) {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between gap-2 border-b-2 border-foreground pb-3">
+      <div className="flex items-center justify-between gap-2 border-b border-hairline pb-3">
         <div>
-          <h2 className="text-lg font-black uppercase tracking-tight text-foreground">
+          <h2 className="text-lg font-bold tracking-tight text-foreground">
             Intelligence & Scale
           </h2>
-          <p className="text-xs text-muted-foreground font-mono">
+          <p className="text-xs font-medium text-muted-foreground">
             Phase 5 production workflows.
           </p>
         </div>
-        <span className="flex items-center gap-1.5 text-xs font-mono font-bold bg-surface border-2 border-foreground px-2.5 py-1 rounded shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]">
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-foreground tabular-nums shadow-neu-raised-sm"
+          title={
+            onlineMembers.length
+              ? onlineMembers.map((member) => member.name).join(", ")
+              : undefined
+          }
+        >
           <Users className="size-3.5 text-primary" strokeWidth={2} />
           {presenceCount} online
         </span>
       </div>
+
+      <Section title="Regenerate layers" icon={RefreshCw}>
+        <p className="text-[11px] text-muted-foreground">
+          Rebuild only the layers you pick. Other layers and your current export
+          are preserved; this creates a new version.
+        </p>
+        <fieldset className="mt-3 grid grid-cols-2 gap-2">
+          <legend className="sr-only">Layers to regenerate</legend>
+          {(
+            [
+              ["captions", "Captions"],
+              ["broll", "B-roll"],
+              ["music", "Music"],
+              ["effects", "Effects"],
+            ] as const
+          ).map(([layer, label]) => (
+            <label
+              key={layer}
+              className="flex min-h-11 cursor-pointer items-center justify-between gap-2 rounded-neu bg-surface px-3 text-xs font-semibold text-foreground shadow-neu-raised-sm select-none"
+            >
+              {label}
+              <input
+                type="checkbox"
+                aria-label={`Regenerate ${label}`}
+                checked={regenerateLayers[layer]}
+                onChange={(event) =>
+                  setRegenerateLayers((current) => ({
+                    ...current,
+                    [layer]: event.target.checked,
+                  }))
+                }
+                className="size-4.5 accent-primary cursor-pointer"
+              />
+            </label>
+          ))}
+        </fieldset>
+        <Button
+          disabled={busy || regenerateSelection.length === 0}
+          className="mt-3 w-full text-xs gap-1.5"
+          onClick={() => void regenerateLayersNow()}
+        >
+          <RefreshCw className="size-3.5" strokeWidth={2} aria-hidden="true" />
+          Regenerate selected layers
+        </Button>
+      </Section>
 
       <BrandKitPanel
         projectId={projectId}
@@ -703,6 +950,7 @@ export function ScalePanel(props: ScalePanelProps) {
         projectId={projectId}
         workspaceId={workspaceId}
         activePlan={activePlan}
+        onPlanUpdated={onPlanUpdated}
       />
 
       <Section title="Audio intelligence" icon={Activity}>
@@ -730,7 +978,7 @@ export function ScalePanel(props: ScalePanelProps) {
         <Button
           disabled={busy}
           variant="secondary"
-          className="mt-3.5 w-full text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000] gap-1.5"
+          className="mt-3.5 w-full text-xs gap-1.5"
           onClick={() =>
             action(
               () =>
@@ -753,13 +1001,13 @@ export function ScalePanel(props: ScalePanelProps) {
       <Section title="Runway Gen-3 B-roll" icon={Film}>
         <div className="space-y-2">
           <input
-            className="min-h-[40px] w-full px-3 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+            className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
             placeholder="Describe the generated shot"
             value={runwayPrompt}
             onChange={(event) => setRunwayPrompt(event.target.value)}
           />
           <input
-            className="min-h-[40px] w-full px-3 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+            className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
             placeholder="Public prompt image URL (required by Gen-3)"
             value={runwayImage}
             onChange={(event) => setRunwayImage(event.target.value)}
@@ -767,7 +1015,7 @@ export function ScalePanel(props: ScalePanelProps) {
         </div>
         <Button
           disabled={busy || runwayPrompt.length < 3 || !runwayImage}
-          className="mt-3 w-full text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000]"
+          className="mt-3 w-full text-xs"
           onClick={() =>
             action(
               () =>
@@ -795,7 +1043,7 @@ export function ScalePanel(props: ScalePanelProps) {
       <Section title="Reference style analysis" icon={BrainCircuit}>
         <div className="flex gap-2">
           <input
-            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
             placeholder="Style profile name"
             value={profileName}
             onChange={(event) => setProfileName(event.target.value)}
@@ -819,7 +1067,7 @@ export function ScalePanel(props: ScalePanelProps) {
                 "Style profile created.",
               )
             }
-            className="text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000]"
+            className="text-xs"
           >
             Create
           </Button>
@@ -831,15 +1079,15 @@ export function ScalePanel(props: ScalePanelProps) {
           return (
             <div
               key={profile.id}
-              className="mt-3.5 border-2 border-foreground bg-surface p-4 rounded shadow-[2px_2px_0px_#000] space-y-3"
+              className="mt-3.5 rounded-neu-md bg-surface p-4 shadow-neu-raised-sm space-y-3"
             >
-              <p className="text-xs font-bold text-foreground">
+              <p className="text-xs font-semibold text-foreground">
                 {profile.name} ·{" "}
-                <span className="text-muted-foreground font-mono">
+                <span className="text-muted-foreground tabular-nums">
                   {references.length}/5 references
                 </span>{" "}
                 ·{" "}
-                <span className="badge badge-primary scale-90">
+                <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-primary shadow-neu-inset-sm">
                   {profile.status}
                 </span>
               </p>
@@ -848,7 +1096,7 @@ export function ScalePanel(props: ScalePanelProps) {
                 accept="video/*"
                 multiple
                 disabled={busy || references.length >= 5}
-                className="w-full text-xs font-mono text-muted-foreground file:mr-3 file:py-1 file:px-2.5 file:rounded file:border-2 file:border-foreground file:text-xs file:font-bold file:bg-primary file:text-primary-foreground hover:file:-translate-y-0.5 hover:file:shadow-[1px_1px_0px_#000] transition-all"
+                className="w-full text-xs font-medium text-muted-foreground file:mr-3 file:py-1 file:px-2.5 file:rounded-neu-sm file:border-0 file:text-xs file:font-semibold file:bg-primary file:text-primary-foreground file:shadow-neu-raised-sm hover:file:shadow-neu-raised transition-shadow"
                 onChange={(event) =>
                   void uploadReferences(profile, event.target.files)
                 }
@@ -875,7 +1123,7 @@ export function ScalePanel(props: ScalePanelProps) {
                       "Style analysis queued.",
                     )
                   }
-                  className="text-xs py-1.5 h-8 border-2 border-foreground hover:shadow-[1px_1px_0px_#000]"
+                  className="text-xs py-1.5 h-8"
                 >
                   Analyze
                 </Button>
@@ -888,7 +1136,7 @@ export function ScalePanel(props: ScalePanelProps) {
                         "Reference style applied.",
                       )
                     }
-                    className="text-xs py-1.5 h-8 border-2 border-foreground hover:shadow-[1px_1px_0px_#000]"
+                    className="text-xs py-1.5 h-8"
                   >
                     Apply
                   </Button>
@@ -902,7 +1150,7 @@ export function ScalePanel(props: ScalePanelProps) {
       <Section title="Template library & batch" icon={Layers3}>
         <div className="flex gap-2">
           <input
-            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
             placeholder="Template name"
             value={templateName}
             onChange={(event) => setTemplateName(event.target.value)}
@@ -934,42 +1182,138 @@ export function ScalePanel(props: ScalePanelProps) {
                 "Template saved.",
               )
             }
-            className="text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000] gap-1.5"
+            className="text-xs gap-1.5"
           >
             <Save className="size-3.5" strokeWidth={2} />
             Save
           </Button>
         </div>
-        <p className="mt-3.5 text-xs font-mono font-bold text-muted-foreground">
+        <p className="mt-3.5 text-xs font-semibold text-muted-foreground tabular-nums">
           {templates.length} saved template{templates.length === 1 ? "" : "s"}
         </p>
         <div className="space-y-2 mt-2">
           {templates.map((template) => (
             <div
               key={template.id}
-              className="flex items-center justify-between border-2 border-foreground bg-surface p-3 rounded text-xs gap-3 shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
+              className="flex flex-col gap-2 rounded-neu-md bg-surface p-3 text-xs shadow-neu-raised-sm"
             >
-              <span className="truncate font-bold text-foreground">
-                {template.name}
-              </span>
-              <Button
-                variant="secondary"
-                disabled={busy}
-                className="min-h-8 h-8 px-3 text-[10px] border-2 border-foreground hover:shadow-[1px_1px_0px_#000]"
-                onClick={() =>
-                  action(
-                    () => applySavedTemplate(template),
-                    "Template applied to timeline, captions, and effects.",
-                  )
-                }
-              >
-                Apply
-              </Button>
+              <div className="flex items-center justify-between gap-3">
+                {editingTemplateId === template.id ? (
+                  <input
+                    className="min-h-8 min-w-0 flex-1 px-2 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30"
+                    aria-label={`New name for ${template.name}`}
+                    value={editingTemplateName}
+                    autoFocus
+                    onChange={(event) =>
+                      setEditingTemplateName(event.target.value)
+                    }
+                  />
+                ) : (
+                  <span className="truncate font-bold text-foreground">
+                    {template.name}
+                  </span>
+                )}
+                <div className="flex shrink-0 gap-2">
+                  {editingTemplateId === template.id ? (
+                    <>
+                      <Button
+                        disabled={busy || !editingTemplateName.trim()}
+                        className="min-h-8 h-8 px-3 text-[10px]"
+                        onClick={() => void renameTemplate(template)}
+                      >
+                        Save name
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={busy}
+                        className="min-h-8 h-8 px-3 text-[10px]"
+                        onClick={() => {
+                          setEditingTemplateId(null);
+                          setEditingTemplateName("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        variant="secondary"
+                        disabled={busy}
+                        className="min-h-8 h-8 px-3 text-[10px]"
+                        onClick={() =>
+                          action(
+                            () => applySavedTemplate(template),
+                            "Template applied to timeline, captions, and effects.",
+                          )
+                        }
+                      >
+                        Apply
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={busy}
+                        aria-label={`Rename ${template.name}`}
+                        className="min-h-8 h-8 px-3 text-[10px]"
+                        onClick={() => {
+                          setEditingTemplateId(template.id);
+                          setEditingTemplateName(template.name);
+                        }}
+                      >
+                        Rename
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        disabled={busy}
+                        aria-label={`Delete ${template.name}`}
+                        className="min-h-8 h-8 px-3 text-[10px] text-danger gap-1"
+                        onClick={() => setPendingDeleteTemplateId(template.id)}
+                      >
+                        <Trash2
+                          className="size-3"
+                          strokeWidth={2}
+                          aria-hidden="true"
+                        />
+                        Delete
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {pendingDeleteTemplateId === template.id ? (
+                <div
+                  role="alertdialog"
+                  aria-label={`Confirm deleting template ${template.name}`}
+                  className="flex items-center justify-between gap-2 rounded-neu-md bg-surface p-2 shadow-neu-raised-sm ring-1 ring-danger/30"
+                >
+                  <span className="text-[11px] font-semibold text-danger">
+                    Delete “{template.name}” permanently?
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="danger"
+                      disabled={busy}
+                      className="min-h-8 h-8 px-3 text-[10px]"
+                      onClick={() => void deleteTemplate(template)}
+                    >
+                      Confirm delete
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={busy}
+                      className="min-h-8 h-8 px-3 text-[10px]"
+                      onClick={() => setPendingDeleteTemplateId(null)}
+                    >
+                      Keep
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
         <textarea
-          className="mt-3 min-h-[72px] w-full p-3 text-xs font-bold border-2 border-foreground bg-surface rounded focus:outline-none focus:shadow-[2px_2px_0px_#000] transition-all"
+          className="mt-3 min-h-[72px] w-full p-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
           aria-label="Batch project IDs"
           value={batchProjects}
           onChange={(event) => setBatchProjects(event.target.value)}
@@ -978,7 +1322,7 @@ export function ScalePanel(props: ScalePanelProps) {
         <Button
           disabled={busy || !batchProjects.trim()}
           variant="secondary"
-          className="mt-2 w-full text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000]"
+          className="mt-2 w-full text-xs"
           onClick={() =>
             action(
               () =>
@@ -1000,21 +1344,57 @@ export function ScalePanel(props: ScalePanelProps) {
         >
           Process video batch
         </Button>
+        {batches.length ? (
+          <div className="mt-3 space-y-2">
+            <p className="text-[10px] font-semibold tracking-wide text-muted-foreground">
+              Batches
+            </p>
+            {batches.slice(0, 6).map((batch) => {
+              const cancelable = !["completed", "partial", "canceled"].includes(
+                batch.status,
+              );
+              return (
+                <div
+                  key={batch.id}
+                  className="flex items-center justify-between gap-3 rounded-neu-md bg-surface p-3 text-xs shadow-neu-raised-sm"
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="font-semibold text-foreground">
+                      {batch.name}
+                    </span>{" "}
+                    <span className="text-muted-foreground capitalize">
+                      {batch.status}
+                    </span>
+                  </span>
+                  <Button
+                    variant="secondary"
+                    disabled={busy || !cancelable}
+                    aria-label={`Cancel batch ${batch.name}`}
+                    className="min-h-8 h-8 px-3 text-[10px]"
+                    onClick={() => void cancelBatch(batch)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
       </Section>
 
       <Section title="Collaboration & learning" icon={Users}>
         <Button
           disabled={busy || !activePlan || !collaboration}
-          className="w-full text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000] h-11"
+          className="w-full text-xs h-11"
           onClick={syncManifest}
         >
           Sync shared manifest
         </Button>
-        <p className="mt-2 text-[10px] text-muted-foreground font-mono leading-relaxed">
+        <p className="mt-2 text-[10px] font-medium text-muted-foreground leading-relaxed">
           V1 collaboration uses whole-timeline optimistic revisions. Concurrent
           conflicts reload latest state.
         </p>
-        <p className="mt-3 text-xs font-mono font-bold text-foreground">
+        <p className="mt-3 text-xs font-semibold text-foreground tabular-nums">
           {String(summary.total_events ?? 0)} edit signals ·{" "}
           {String(summary.training_example_count ?? 0)} training examples
         </p>
@@ -1022,12 +1402,12 @@ export function ScalePanel(props: ScalePanelProps) {
           {analyticsLayers.map((layer) => (
             <div
               key={String(layer.layer)}
-              className="border-2 border-foreground bg-surface p-2.5 rounded text-[10px] shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
+              className="rounded-neu-md bg-surface p-2.5 text-[10px] shadow-neu-raised-sm"
             >
-              <span className="font-bold text-foreground font-mono">
+              <span className="font-semibold text-foreground">
                 {String(layer.layer)}
               </span>
-              <span className="block text-muted-foreground mt-0.5 font-mono">
+              <span className="block text-muted-foreground mt-0.5 tabular-nums">
                 kept {String(layer.kept ?? 0)} · changed{" "}
                 {String(layer.changed ?? 0)} · rejected{" "}
                 {String(layer.rejected ?? 0)}
@@ -1037,7 +1417,7 @@ export function ScalePanel(props: ScalePanelProps) {
         </div>
         {trainingConsentReady ? (
           <>
-            <p className="mt-3 text-[10px] font-mono text-muted-foreground">
+            <p className="mt-3 text-[10px] font-medium text-muted-foreground">
               Training consent is active. A frozen dataset needs at least{" "}
               {trainingMinimumExamples} consented edit signals; promotion
               remains an explicit admin operation.
@@ -1045,7 +1425,7 @@ export function ScalePanel(props: ScalePanelProps) {
             <Button
               disabled={busy}
               variant="secondary"
-              className="mt-2 w-full text-xs font-bold border-2 border-foreground hover:shadow-[2px_2px_0px_#000]"
+              className="mt-2 w-full text-xs"
               onClick={() =>
                 action(
                   () =>
@@ -1065,9 +1445,9 @@ export function ScalePanel(props: ScalePanelProps) {
             </Button>
           </>
         ) : (
-          <p className="mt-3 rounded border-2 border-foreground bg-muted p-3 text-[10px] font-mono text-muted-foreground">
+          <p className="mt-3 rounded-neu bg-surface p-3 text-[10px] font-medium text-muted-foreground shadow-neu-inset-sm">
             Preference learning is blocked until you enable training consent in{" "}
-            <a className="font-bold text-primary underline" href="/account">
+            <a className="font-semibold text-primary underline" href="/account">
               Account settings
             </a>
             . Analytics signals never imply consent.
@@ -1079,14 +1459,14 @@ export function ScalePanel(props: ScalePanelProps) {
         {resources.slice(0, 8).map((resource) => (
           <div
             key={resource.id}
-            className="flex justify-between items-center gap-2 border-2 border-foreground bg-surface px-3 py-2 text-[10px] rounded font-mono shadow-[1px_1px_0px_#000] dark:shadow-[1px_1px_0px_#fff]"
+            className="flex justify-between items-center gap-2 rounded-neu bg-surface px-3 py-2 text-[10px] shadow-neu-raised-sm"
           >
-            <span className="truncate font-bold text-foreground">
+            <span className="truncate font-semibold text-foreground">
               {resource.name}
             </span>
             <span
               className={cn(
-                "capitalize font-black text-2xs",
+                "capitalize font-semibold text-[10px]",
                 resource.status === "failed"
                   ? "text-danger"
                   : "text-muted-foreground",
@@ -1098,7 +1478,7 @@ export function ScalePanel(props: ScalePanelProps) {
         ))}
       </div>
       {busy ? (
-        <p className="flex items-center gap-2 text-xs text-primary font-bold pl-1 font-mono">
+        <p className="flex items-center gap-2 text-xs font-semibold text-primary pl-1">
           <Loader2
             className="size-4 animate-spin text-primary"
             strokeWidth={2}
@@ -1109,7 +1489,7 @@ export function ScalePanel(props: ScalePanelProps) {
       {message ? (
         <p
           role="status"
-          className="rounded border-2 border-foreground bg-muted p-3.5 text-xs font-bold text-foreground font-mono shadow-[2px_2px_0px_#000] dark:shadow-[2px_2px_0px_#fff]"
+          className="rounded-neu bg-surface p-3.5 text-xs font-semibold text-foreground shadow-neu-inset-sm"
         >
           {message}
         </p>
@@ -1128,9 +1508,9 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border border-border bg-surface/30 rounded-xl p-4 space-y-3">
-      <h3 className="flex items-center gap-2 text-sm font-semibold">
-        <Icon className="size-4 text-primary" strokeWidth={1.5} />
+    <section className="rounded-neu-lg bg-surface p-4 space-y-3 shadow-neu-raised">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <Icon className="size-4 text-primary" strokeWidth={1.75} />
         {title}
       </h3>
       {children}
@@ -1140,11 +1520,11 @@ function Section({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border bg-surface-elevated p-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <div className="rounded-neu-md bg-surface p-3 shadow-neu-raised-sm">
+      <p className="text-[10px] font-semibold tracking-wide text-muted-foreground">
         {label}
       </p>
-      <p className="truncate text-sm font-bold mt-1">{value}</p>
+      <p className="truncate text-sm font-bold text-foreground mt-1">{value}</p>
     </div>
   );
 }
