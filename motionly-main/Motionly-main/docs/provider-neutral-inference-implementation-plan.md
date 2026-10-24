@@ -1,21 +1,38 @@
 # Motionly Provider-Neutral Inference Implementation Plan
 
-**Status:** planning only; no application code is changed by this document. Revision 2.
+**Status:** planning only; no application code is changed by this document. Revision 3.
 
 **Repository audited:** `motionly-main/Motionly-main`. Paths are relative to it unless they start with `/`.
 
-## Changelog (revision 2)
+## Changelog
+
+### Revision 3
+
+1. **Object detection, diarization and stem separation stay, as any-provider capabilities.** Task 17 is now required. It ports the three existing integrations to `generic_http`/`async_job` templates, so any provider is added through registry config only. Parity with today's behavior is required, and differential tests against the archived adapters prove it before anything is deleted.
+2. **Tier 1 grows** (Section 4.0):
+   - The minimum slices of Task 15 (`generic_http`) and Task 16B (`async_job`, blocking mode) move into Tier 1, together with Task 17.
+   - The order is 15 → 16A → 16B → 17, all before Task 19.
+   - The rest of the old Task 15 and 16B scope becomes the new Task 28 in Tier 3.
+
+   Section 4.0 explains why this cannot wait for a later tier.
+3. **Deletion order** (Task 19): the vendor-specific adapter files are deleted only after Task 17's conformance and differential tests pass. Before that, they are archived under the Git tag `archive/pre-neutral-inference`, created at the start of Task 17.
+4. **No-route fallbacks** are spelled out (Sections 3 and 4.1, Task 17): empty detections, heuristic speaker labels, no stem control.
+5. **Mapping language** (Section 2.10) is split into the Tier 1 slice that the three ports use and the Tier 3 extensions (Task 28). The slice adds three elements that parity needs: a `concat` function, a `vars` initializer, and variable segments in extraction paths.
+6. **Side effect** (Task 18): with `async_job` in Tier 1, `video.generation.*` can also be configured in Tier 1 when the provider's API fits the slice.
+7. Blocking question 2 is answered and removed.
+
+### Revision 2
+
 
 1. **Revision policy** (Tasks 4, 7, 14, 20; invariants 7–8; Sections 2.3, 2.6, 2.9): remote routes may use `revision: provider-managed` if the route opts in, and this logs a warning. Strict pinning applies only to local and self-hosted models. Licence metadata is required only for local models. Data-processor metadata is a warning in dev and required in production. Paid routes with unknown pricing need a hard cap.
 2. **Three tiers with gates** (Section 4). Dependency fixes:
    - Task 9 is split into 9A (Tier 1) and 9B (Tier 2).
    - Task 14 joins Tier 1.
-   - Task 16 is split into 16A (Tier 1) and 16B (Tier 3).
-   - Task 15 moves to Tier 3.
+   - Task 16 is split into 16A and 16B.
 
-   Reasons are in Section 4.0.
+   Revision 3 sets the current tier of Tasks 15, 16B and 17 (Section 4.0).
 3. **The legacy bridge is conditional** (Section 0.4). The default is no live users and a single clean cutover (Path B). The translator becomes Task 6L (Path A only).
-4. **Transitional work:** Task 13 is deleted and Task 17 becomes optional in Tier 3. The recommended alternative, removing the three integrations, happens in Task 19.
+4. **Transitional work:** Task 13 (the transitional adapter) is deleted.
 5. **The mapping language is capped** (new Section 2.10). Tiers 1 and 2 ship none, and every allowed function is listed.
 6. **Billing:** Task 10 records Decision B-1 (feature-keyed quotas), with a one-line impact analysis and the temporary flag `AI_QUOTA_SCOPE=provider`. Task 10 no longer adds a transcription plan quota; transcription is not plan-metered today.
 7. **Cleanup:** proof item 10 is removed. Sections 5–7 and 9 now follow the tiers and the clean-cutover default.
@@ -28,7 +45,7 @@
 **Decisions recorded from operator:**
 
 - **Live users/data (earlier answer `1a`):** this revision assumes **no live production users or data** and plans a single clean cutover (Section 0.4, Path B). If that is wrong, Path A keeps the bridge. See question 1.
-- **Object detection, diarization and stem integrations (earlier answer `2b`):** template ports are now optional (Task 17, Tier 3). The recommendation is to remove the three integrations in Tier 1 (Task 19). See question 2.
+- **Object detection, diarization and stem separation (answered in revision 3):** keep all three and convert them to any-model, any-provider capabilities with templates. This is Task 17: required, Tier 1.
 - **Secret storage and key scope (`3a`, unchanged):** global operator keys, encrypted with AES-256-GCM in Postgres under a deployment KEK. Workspace scope is prepared but disabled. Tier 1 uses secret files or a bundle; the encrypted database store is Tier 3 (Task 20).
 
 ## 0. Scope, constraints and implementation rules
@@ -74,7 +91,7 @@ The legacy bridge depends on one question: **do live production users or data ex
 - **Release N:** registry plus legacy translator (Task 6L). Old variables and old JSONB payload keys still work, with deprecation warnings.
 - **Release N+1:** production switches to the registry. Old payload keys are still read alongside the new ones (dual-read).
 - **Release N+2:** the translator, old settings and dual-read are removed.
-- **Ordering constraints:** Tasks 11–12 must land before Task 19 removes vendor wiring, so live users keep captions, voice emotion and remote embeddings. If live users depend on object detection, diarization or remote stems, do Task 17 before removing them.
+- **Ordering constraint:** Tasks 11–12 must land before Task 19 removes the vendor wiring, so live users keep captions, voice emotion and remote embeddings. Task 17 already comes before Task 19 in both paths.
 
 | | Path B (default) | Path A |
 |---|---|---|
@@ -109,16 +126,16 @@ The worktree already contains extensive unrelated modified and untracked files. 
 |---|---|---|
 | `apps/api/app/services/model_gateway_factory.py` | `OPENROUTER_BASE_URL`, `GROQ_BASE_URL`, `_HTTP_ADAPTERS = {"azure", "openai_compatible", "openrouter", "groq"}`, vendor-key construction and `_legacy_routes()` create OpenRouter planning and Groq transcription routes. | Build adapters from registry records `{id, type, base_url, auth, secret_ref}` (Task 6). Path A only: a one-release translator (Task 6L). Endpoint host comes from the configured URL, not a provider name. |
 | `apps/api/app/services/model_adapters.py` | `OpenAICompatibleAdapter` is reusable, but `JinaEmbeddingsAdapter` and `JINA_BASE_URL` hard-code a provider-specific request shape. `AzureOpenAIAdapter` uses Azure-specific transport, which is acceptable only inside the Azure adapter implementation. | Keep protocol adapters under an adapter boundary. Delete the dedicated Jina adapter in Task 19 and add a closed `embeddings_input_style` option in Task 12. |
-| `apps/api/app/services/model_domain_adapters.py` | Contains `RunwayVideoGenerationAdapter`, Jina registration, OpenRouter ZDR registration, Google Vision registration, pyannoteAI registration, LALAL registration and vendor-named route ids/provider strings. | Capability routes come from the registry. The object, diarization and stem integrations are removed (recommended, Task 19) or ported to templates (optional Task 17). Local runners remain behind a neutral local adapter (Task 14). |
+| `apps/api/app/services/model_domain_adapters.py` | Contains `RunwayVideoGenerationAdapter`, Jina registration, OpenRouter ZDR registration, Google Vision registration, pyannoteAI registration, LALAL registration and vendor-named route ids/provider strings. | Capability routes come from the registry. The object, diarization and stem integrations are ported to templates (Task 17), and their vendor registrations are deleted after that (Task 19). Local runners remain behind a neutral local adapter (Task 14). |
 | `apps/api/app/services/model_gateway.py` | Core is mostly neutral but uses coarse capability families and old operation names (`vision.prompt`, `audio.prompt`, `generation.video_submit`, etc.). Comments contain provider examples. | Preserve the gateway engine; add the fine-grained capability taxonomy and compatibility aliases. Move provider examples into docs. |
 | `apps/api/app/services/model_gateway_factory.py`, `apps/api/app/main.py`, `apps/api/app/workers/visual_job.py`, `apps/api/app/workers/matte_job.py` | API and workers construct gateways from environment-specific vendor switches. Workers construct their own gateway in separate processes. | One registry/runtime builder used by API and workers; registry version and route fingerprints keep them aligned. |
 | `apps/api/app/services/model_provider_bridges.py` | `GatewayEditPlannerProvider` subclasses the direct HTTP planner and carries endpoint/key compatibility details. | Make the bridge accept only a gateway and typed planning request. |
 | `apps/api/app/services/edit_planner.py` | Direct HTTP planner remains and calls `check_quota(provider="openrouter", category="tokens")`. | Gateway-only planning. Quota is keyed by Motionly feature/category, not route provider (Task 10, Decision B-1). |
 | `apps/api/app/services/transcription_provider.py`, `apps/api/app/main.py` | Non-production fallback uses `GROQ_TRANSCRIPTION_ENDPOINT` and Groq credentials directly. | Gateway-only transcription with fake route in CI/dev. |
 | `apps/api/app/services/remote_visual.py` | Caption, object and image-embedding enrichers call vendor-specific route registration helpers and vendor-specific route ids. | Enrichers request `vision.caption`, `vision.object_detection` and `embeddings.image`; batch limits and mappings belong to route metadata. |
-| `apps/api/app/services/google_vision.py` | Provider-specific object-localization HTTP adapter, `GOOGLE_VISION_*`, label aliases and vertex-to-box conversion. | Recommended: remove (Task 19); `vision.object_detection` stays unavailable until a route is configured. Optional: `generic_http` template (Task 17, Tier 3). |
-| `apps/api/app/services/pyannoteai_diarization.py` | Provider-specific upload reservation, signed upload, async submit/poll, 20-second minimum billing and seconds-to-milliseconds parsing. | Recommended: remove (Task 19); diarization falls back to the transcript heuristic. Optional: `async_job` template (Task 17, Tier 3). |
-| `apps/api/app/services/lalal_stems.py` | Provider-specific FLAC conversion, upload, split submit, POST polling, artifact download limits/host checks and cleanup. | Recommended: remove (Task 19); stems use the local CPU Demucs route (Task 14). Optional: `async_job` template (Task 17, Tier 3). |
+| `apps/api/app/services/google_vision.py` | Provider-specific object-localization HTTP adapter, `GOOGLE_VISION_*`, label aliases and vertex-to-box conversion. | Port to a `generic_http` template with conformance fixtures (Task 17, Tier 1). Archive the file under a Git tag, then delete it after conformance passes (Task 19). |
+| `apps/api/app/services/pyannoteai_diarization.py` | Provider-specific upload reservation, signed upload, async submit/poll, 20-second minimum billing and seconds-to-milliseconds parsing. | Port to an `async_job` template with conformance fixtures (Task 17, Tier 1). The neutral wrapper that falls back to a degraded result moves to a neutral module. Archive the file under a Git tag, then delete it after conformance passes (Task 19). |
+| `apps/api/app/services/lalal_stems.py` | Provider-specific FLAC conversion, upload, split submit, POST polling, artifact download limits/host checks and cleanup. | Port to an `async_job` template with conformance fixtures (Task 17, Tier 1). Archive the file under a Git tag, then delete it after conformance passes (Task 19). Local CPU Demucs stays available as a `local` route (Task 14). |
 | `apps/api/app/services/remote_audio_emotion.py` | OpenRouter-specific class name and route setup although prompt/schema behavior is a generic audio chat strategy. | Move to a Motionly-owned audio-emotion strategy using any route that supports `audio.emotion`. |
 | `apps/api/app/services/scale.py` | `RunwayGen3Provider`, `FixtureRunwayProvider`, `RunwayResult`, `runway_task_id`, `runway_gateway_route`, Runway cost/quotas/errors, provider-specific download names. | Generic video-generation operation records, neutral `generated` asset kind and `provider_operation_id`/`provider_route_id`/`provider_model_revision`. |
 | `apps/api/app/api/scale.py` | Endpoint function `generate_runway_broll`, Runway premium copy, `runway_not_configured`. The URL `/projects/{project_id}/phase5/generated-broll` is already neutral. | Rename the operation, use neutral copy and return `capability_unavailable`. |
@@ -240,8 +257,8 @@ Supported adapter types, with the tier that delivers them:
 2. `azure_openai` (Tier 1, existing `AzureOpenAIAdapter`): deployment-scoped URLs and Azure auth; implementation-specific behavior is isolated under the adapter.
 3. `local` (Tier 1, Task 14): an in-process or local-worker runner for CPU/GPU models, selected by route metadata.
 4. `fake` (Tier 1, Task 1): deterministic CI/dev adapter, rejected in production.
-5. `generic_http` (Tier 3, Task 15): HTTP/JSON/multipart request and response mapping, limited to the grammar in Section 2.10.
-6. `async_job` (Tier 3, Task 16B): declarative submit, poll, result/artifact and cleanup steps, limited to the grammar in Section 2.10.
+5. `generic_http` (Tier 1 slice in Task 15; Tier 3 extensions in Task 28): HTTP/JSON/multipart request and response mapping, limited to the grammar in Section 2.10.
+6. `async_job` (Tier 1 slice in Task 16B; Tier 3 extensions in Task 28): declarative submit, poll, result/artifact and cleanup steps, limited to the grammar in Section 2.10.
 7. `huggingface_endpoint` (Tier 3, Task 24): TGI/TEI/pipeline modes with typed response mappings.
 8. `aws_bedrock` (Tier 3, Task 25): IAM credential chain and SigV4; model-family request mapping is adapter/config data.
 9. `agent_pool`: reserved design type for a later outbound-only GPU agent; not built in this plan.
@@ -299,7 +316,7 @@ Secret rules:
 
 ### 2.5 Async operation model
 
-**Tier split:** Tier 1 builds the operation record and the gateway rules (Task 16A). No Tier 1 adapter can serve an async capability, so `video.generation.*`, remote async diarization and remote async stems stay unavailable until Task 16B (Tier 3) adds `async_job`.
+**Tier split:** Tier 1 builds the operation record and gateway rules (Task 16A) and the `async_job` slice (Task 16B), which runs in blocking mode for diarization and stems (Task 17). Delayed queue polling for non-blocking jobs is Tier 3 (Task 28). Until then, a Tier 1 video route can only use blocking mode (Task 18).
 
 Add an `inference_operations` record before a remote submit. It records an idempotency key, capability, original route id/revision, immutable route snapshot, provider operation id when known, and state.
 
@@ -406,23 +423,23 @@ Non-commercial licences produce a warning and an admin badge (an error with `AI_
 
 ### 2.10 Adapter and mapping scope by tier
 
-Tiers 1 and 2 ship **no mapping language**. Every capability in those tiers is served by `openai_compatible` (with the closed options below), `azure_openai`, `local` or `fake`. `generic_http` and `async_job` are Tier 3.
+Tier 1 ships a **minimal mapping slice**. It contains only what object detection, diarization and stem separation need for parity (Task 17). Planning, transcription, image generation, captions, voice emotion and embeddings need no mapping: they use `openai_compatible` with the closed options below, or `azure_openai`, `local` or `fake`. Everything beyond the slice is Tier 3 (Task 28).
 
-| Capability | `openai_compatible` alone | Needs `generic_http` | Deferred: needs `async_job` | Local option | Tier |
+| Capability | `openai_compatible` alone | Needs `generic_http` | Needs `async_job` | Local option | Tier |
 |---|---|---|---|---|---|
 | `planning.chat` | Yes: `chat/completions` | No | No | Future private endpoint | 1 |
-| `transcription.speech_to_text` | Yes: `audio/transcriptions` with `verbose_json` and word timestamps | Only for non-compatible APIs | No | Future private endpoint | 1 |
+| `transcription.speech_to_text` | Yes: `audio/transcriptions` with `verbose_json` and word timestamps | Only for non-compatible APIs (Task 28) | No | Future private endpoint | 1 |
 | `matte.segmentation` | No | No | No | MediaPipe on CPU | 1 (Task 14) |
 | `audio.sound_classification` | No | No | No | YAMNet TFLite on CPU | 1 (Task 14) |
-| `audio.stem_separation` | No | No | Remote async providers | Demucs on CPU | 1 local; 3 remote |
+| `vision.object_detection` | No: no standard request | Yes: Tier 1 slice | No | No | 1 (Tasks 15, 17) |
+| `audio.diarization` | No: no standard request | Sync APIs: Tier 1 slice | Async APIs: Tier 1 slice, blocking mode | GPU model; transcript heuristic fallback | 1 (Tasks 15, 16B, 17) |
+| `audio.stem_separation` | No | No | Yes: Tier 1 slice, blocking mode | Demucs on CPU | 1 (Tasks 14, 16B, 17) |
+| `video.generation.submit` / `.status` | No: no standard request | No | Yes: Tier 1 slice, blocking mode | No | 1 if the provider fits the slice; otherwise Tier 3 (Task 28) |
 | `image.generation` | Yes: `images/generations` | No | No | No | Route type available from Tier 1; no product caller |
-| `vision.caption` | Yes: chat with image parts and Motionly's prompt | Only for non-compatible APIs | No | GPU models only | 2 |
+| `vision.caption` | Yes: chat with image parts and Motionly's prompt | Only for non-compatible APIs (Task 28) | No | GPU models only | 2 |
 | `audio.emotion` | Yes: chat with `input_audio`; the route must use an audio-input model | No | No | GPU model only | 2 |
-| `embeddings.text` | Yes: `/embeddings` | Only for other request shapes | No | CLIP, GPU registry only | 2 |
-| `embeddings.image` | Yes, with `embeddings_input_style: typed_objects` | Only for other request shapes | No | CLIP, GPU registry only | 2 |
-| `vision.object_detection` | No: no standard request | Yes | No | No | 3 |
-| `audio.diarization` | No: no standard request | Sync APIs | Async APIs | GPU model; transcript heuristic fallback | 3 |
-| `video.generation.submit` / `.status` | No: no standard request | No | Yes | No | 3 |
+| `embeddings.text` | Yes: `/embeddings` | Only for other request shapes (Task 28) | No | CLIP, GPU registry only | 2 |
+| `embeddings.image` | Yes, with `embeddings_input_style: typed_objects` | Only for other request shapes (Task 28) | No | CLIP, GPU registry only | 2 |
 
 **Closed `openai_compatible` options.** These are data, not templates:
 
@@ -433,21 +450,22 @@ Tiers 1 and 2 ship **no mapping language**. Every capability in those tiers is s
 
 `azure_openai` adds `api_version`.
 
-**Minimal grammar (Tier 3).**
+**Tier 1 grammar slice (Tasks 15 and 16B).** This is the complete language in Tier 1; nothing else is accepted.
 
 Value forms:
 
 1. A JSON literal.
 2. `{"$ref": "<path>"}` reads a value. The allowed roots are:
-   - `input.*`: typed Motionly request fields
+   - `input.*`: typed Motionly request fields, including `input.file` (the prepared media file) and `input.images`
    - `params.*`: route parameters
-   - `vars.*`: values captured by earlier async steps
+   - `vars.*`: values set by the `vars` initializer or captured by earlier steps
    - `response.*`: the current response only
 
-   Path segments are `key`, `[n]` and `[*]`.
+   Path segments are `key`, `[n]`, `[*]` and `{vars.<name>}`, which looks up a key named by a variable (for example a status keyed by the job id).
 3. `{"$fn": "<name>", "args": [...]}` calls one of the functions below.
 4. `{"$map": {"over": "<path>", "each": <value>}}` maps over a list, bounded by the route's `limits.max_batch`. `item.*` refers to the current element.
 5. Placeholders inside request paths only, for example `/jobs/{vars.job_id}`. Values are percent-encoded. Scheme, host and port can never be templated.
+6. A `vars` block, evaluated once per call before the first step, for values that must stay the same across steps (for example one random media name used by both the upload reservation and the submit).
 
 Allowed functions (the complete list):
 
@@ -455,45 +473,64 @@ Allowed functions (the complete list):
 |---|---|
 | `base64(bytes)` | Base64-encode request bytes |
 | `data_url(bytes)` | `data:<sniffed image MIME>;base64,…`; unknown formats are rejected |
-| `uuid()` | Random opaque id for idempotency keys or neutral names |
+| `uuid()` | Random UUID for idempotency keys |
+| `concat(a, b, …)` | Join string literals and values; used only to build opaque identifiers such as `media://motionly-<uuid>` |
 | `to_int(x)` | Integer conversion; failure is a malformed response |
 | `to_float(x)` | Float conversion; failure is a malformed response |
 | `to_ms(seconds)` | Seconds to integer milliseconds |
 | `clamp01(x)` | Clamp to `[0, 1]` |
 | `default(x, fallback)` | Use `fallback` when `x` is missing or null |
 
-**`generic_http` response mapping (Task 15):**
+**`generic_http` mapping, Tier 1 slice (Task 15):** one JSON request per call, with an optional pre-request input transform.
 
-- `items`: a path to the result list.
-- `aligned_to_input`: `true|false`.
-- Per-field paths.
-- `box_format`: one of `xywh_norm`, `xyxy_norm`, `xyxy_px`, `vertices_norm`.
-- `item_error`: a path to a per-item error.
-- `error_map`: maps an HTTP status or provider code to one Motionly error class (`rejected`, `unavailable`, `auth`, `quota`, `malformed`).
-- `usage`: `count_items`, `count_ok_items` or a path.
+- `request`: method, path and JSON `body`.
+- `items`: a path to the result list. `aligned_to_input: true` requires one result per input item, and a length mismatch is a malformed response.
+- Per-field paths for the capability's output fields (for example label, score and box).
+- `box_format`: `vertices_norm` (an axis-aligned box from normalized vertices; a missing coordinate counts as 0) or `xywh_norm`.
+- `item_error`: a path to a per-item error, plus `item_error_codes`, which maps provider codes to `rejected` (not billed, no fallback) or `unavailable` (retryable, not billed). If every item fails, the call raises that class. If only some fail, those items return empty results and a warning is logged.
+- `error_map`: maps an HTTP status to one Motionly error class (`rejected`, `unavailable`, `auth`, `quota`, `malformed`).
+- `usage`: `count_items` or `count_ok_items`.
 
-**`async_job` additions (Task 16B):**
+**`async_job` mapping, Tier 1 slice (Task 16B), blocking mode only:**
 
-- `submit`: one request plus `capture`. `commit: true` marks the point after which no fallback is allowed.
-- `poll`: a request; a `status` path; a `status_map` from provider values to `running|succeeded|failed|retryable_failed`; `interval_s`, `backoff` and `max_wait_s`.
-- `result`: a mapping as above.
-- `artifacts`: `items`, `name`, `url`, `name_map`, `max_bytes`, `allowed_hosts` and `auth: none`.
-- `cleanup`: best-effort requests; failures are logged.
+- `steps`: an ordered list of requests. Each step has:
+  - `capture`: values to read into `vars`;
+  - `require`: for example that a captured URL is HTTPS;
+  - `body`: JSON, or `input.file` for a raw upload;
+  - `auth`: `adapter` (default) or `none`. With `none`, the request goes to the exact URL captured from an earlier response, which must pass `allowed_hosts` and the SSRF policy (Task 15); it is used for pre-signed upload links.
+- `commit: true` on the step after which the provider may charge. No fallback happens after a committed step.
+- `poll`: a GET or POST request; a `status` path; a `status_map` from provider values to `running`, `succeeded`, `failed` or `retryable_failed`, with `billable` and `fallback` flags; `tolerate_retryable` (keep polling on transient errors until the deadline); `interval_s`, `backoff` and `max_wait_s`.
+- `result`: a mapping, as for `generic_http`.
+- `artifacts`: `items`, `name`, `url`, `name_map`, `required`, `max_bytes`, `allowed_hosts`, `force_https`, and `auth: none`.
+- `cleanup`: best-effort requests that run after both success and failure; failures are logged and never change the result.
 
-**Not allowed:**
+**Route options used by the slice:**
+
+- `input_transform.audio`: audio-only rendition (codec, sample rate, channels), produced with ffmpeg through `media_tool_env()` from `apps/api/app/services/subprocess_env.py`.
+- `upload_filename`: the neutral filename sent with uploads.
+- `label_aliases`: data for the object-detection normalizer.
+
+**Motionly normalizers (code, not template functions):**
+
+- Object detection: lowercase labels, collapse whitespace, cut to 80 characters, apply `label_aliases`, clamp scores and boxes, sort by score, keep the top N.
+- Diarization: sort segments by start and end.
+- Stems: map artifact names to `vocals` and `no_vocals`.
+
+**Not allowed (any tier):**
 
 - Conditionals.
 - Loops other than `$map`.
-- String building other than path placeholders.
+- String building other than `concat` and path placeholders.
 - Reading environment variables or secrets. Auth is applied by the adapter, never by a template.
-- Changing the host, or contacting any second host except `artifacts.allowed_hosts`.
+- Changing the host, or contacting a second host other than a captured URL that passes `allowed_hosts` and the SSRF policy.
 
-Label aliasing, sorting and top-N are Motionly normalizers per capability, not template functions.
+**Tier 3 extensions (Task 28), and nothing else:**
 
-**Only if optional Task 17 is done**, two extensions are allowed and nothing else:
-
-- an `upload` step with `body: input.file` and per-step `auth: none` for pre-signed URLs;
-- the route option `input_transform.audio`, an audio-only FLAC rendition made through the existing media subprocess environment.
+- Multipart request bodies.
+- Additional box formats: `xyxy_norm` and `xyxy_px`.
+- `usage` taken from a response path.
+- Non-blocking async mode with delayed queue polling (needed for long video jobs).
+- Typed mappings for synchronous transcription, captions and embeddings on APIs that are not OpenAI-compatible.
 
 Any other extension requires a plan change.
 
@@ -508,49 +545,60 @@ The baseline uses remote routes where the current packaged CPU path is insuffici
 | `planning.chat` | Remote chat API; a private CPU llama.cpp-compatible endpoint can be added later | `openai_compatible` | Startup fails because required | Yes in the current packaged baseline; private CPU endpoint can remove the remote dependency later |
 | `transcription.speech_to_text` | Remote multipart STT route; current non-GPU topology already expects remote transcription | `openai_compatible` | Startup fails because required | Yes in current baseline; CPU local inference is a future adapter route |
 | `vision.caption` | Remote vision/chat route | `openai_compatible` or `generic_http` | Visual manifest marks captions unavailable/degraded; editing continues with transcript/CPU signals | Remote or a future CPU/GPU local model |
-| `vision.object_detection` | Remote mapped HTTP route | `generic_http` | Empty detections and degraded capability; no hard failure of editing | Remote today; a CPU route could be added later |
+| `vision.object_detection` | Any remote detection API through a `generic_http` template (Tier 1) | `generic_http` | Empty detections; visual analysis lists `objects: unavailable:not_configured` in `degraded_capabilities` and editing continues | Remote today; a CPU route could be added later |
 | `embeddings.text` | Remote embeddings or local CPU CLIP if the worker image is configured for it | Local CPU route is free; otherwise `openai_compatible` | B-roll ranking falls back to lexical matching | No if CPU CLIP is installed; otherwise remote |
 | `embeddings.image` | Remote image embeddings or local CPU CLIP | Same embedding-space route as text | Keyframe/stock vector enrichment is skipped | No if CPU CLIP is installed; otherwise remote |
-| `audio.diarization` | Remote async job; current local pyannote path is not part of the CPU-only image contract | `async_job` | Transcript uses the existing heuristic/single-speaker fallback and marks degraded | Remote or a future CPU local model |
+| `audio.diarization` | Any remote diarization API through a `generic_http` or `async_job` template (Tier 1); the local pyannote path is not in the CPU-only image | `async_job` (blocking) or `generic_http` | Heuristic speaker labels from the transcript (`heuristic_single_speaker_v1`), marked degraded | Remote or a future CPU local model |
 | `audio.emotion` | Remote audio-chat route; local wav2vec2 remains a GPU/local route unless separately packaged for CPU | `openai_compatible` with audio input | Empty emotion windows; transcript remains usable | Remote or local model runtime |
-| `audio.stem_separation` | Demucs can run on CPU, slower; remote async route is also supported | Local CPU `local` route is cheapest; generic async remote is fallback | Stem control disabled; core edit remains usable | No, CPU works |
+| `audio.stem_separation` | Demucs on CPU (slower), or any remote stems API through an `async_job` template (Tier 1) | Local CPU `local` route (free); `async_job` for remote | No stem control: the editor's stem action is disabled with an unavailable message, the Audio tab keeps the full mix, renders are unchanged | No, CPU works |
 | `image.generation` | Remote image API | `openai_compatible` or `generic_http` | Feature is unavailable/hidden; no current required caller fails | Remote today |
-| `video.generation.submit/status` | Remote async generation API | `async_job` | Generated B-roll control disabled with clear unavailable state | Remote today |
+| `video.generation.submit/status` | Remote async generation API through `async_job`: Tier 1 if the provider fits the blocking slice, otherwise Tier 3 (Task 28) | `async_job` | Generated B-roll control disabled with clear unavailable state | Remote today |
 | `matte.segmentation` | MediaPipe CPU route via the existing CPU vision topology | Local CPU `local` route | Matte-dependent background effects are disabled | No, CPU works |
 | `audio.sound_classification` | Existing YAMNet TFLite CPU path | Local CPU `local` route | Labels are empty and audio intelligence is degraded | No, CPU works |
 
 A no-GPU production acceptance profile must configure remote planning and transcription, and must either configure remote or CPU routes for any feature the operator wants enabled. No GPU Compose service may be required by startup validation when `GPU_WORKERS_ENABLED=false`.
 
-**Tier notes (revision 2):**
+**Tier notes (revision 3):**
 
-- **After Tier 1:** only planning, transcription and the CPU-local routes (matte, Demucs stems, YAMNet sound) can be available. Captions, voice emotion and remote embeddings return in Tier 2. Object detection, remote diarization, remote stems and video generation need Tier 3 adapters (Section 2.10).
+- **After Tier 1:**
+  - Planning and transcription are available.
+  - The CPU-local routes are available: matte, Demucs stems and YAMNet sound.
+  - Object detection, diarization and remote stems can be configured for any provider whose API fits the Tier 1 slice (Section 2.10). Video generation can too, but only in blocking mode.
+  - Captions, voice emotion and remote embeddings return in Tier 2.
 - **Embeddings without a GPU:** the cpu-vision worker image excludes torch, TensorFlow and transformers (`apps/api/pyproject.toml`, the `cpu-vision` extra). Local CLIP embeddings are therefore not available on a no-GPU deployment without a custom image, so plan on a remote embeddings route (Tier 2).
-- **Diarization without a GPU:** with the recommended removal (Task 19), diarization uses the existing transcript heuristic (`heuristic_single_speaker_v1` in `apps/api/app/services/audio_intelligence.py`) until a Tier 3 route is configured.
+- **No-route fallbacks for the three ported capabilities:** these already exist in code, and Task 17 keeps them:
+  - Visual analysis returns empty detections with `unavailable:not_configured` (`apps/api/app/services/remote_visual.py`).
+  - Diarization uses `heuristic_single_speaker_v1` (`apps/api/app/services/audio_intelligence.py`).
+  - The Audio tab already shows a hint when no stem exists (`apps/web/components/editor/tabs/audio-tab.tsx`).
+  - Task 17 adds an API check, so a stem request without a route is refused at once instead of failing later in the worker.
 
 ---
 
 ## 4. Dependency-ordered implementation plan
 
-Task numbers are kept from revision 1 so earlier references stay valid. Split tasks use letter suffixes (6L, 9A/9B, 16A/16B), and Task 13 is deleted. Each task lists its dependencies, files (actual paths, or **NEW (proposed)**), migrations, tests, rollout/back-compat, risks and acceptance criteria. A task depends only on tasks that come earlier in the execution order below, in the same tier or an earlier one.
+Task numbers are kept from revision 1 so earlier references stay valid. Split tasks use letter suffixes (6L, 9A/9B, 16A/16B). Task 13 is deleted, and Task 28 is new in revision 3. Each task lists its dependencies, files (actual paths, or **NEW (proposed)**), migrations, tests, rollout/back-compat, risks and acceptance criteria. A task depends only on tasks that come earlier in the execution order below, in the same tier or an earlier one.
 
 ### 4.0 Tiers, execution order and gates
 
 | Tier | Execution order | Exit gate |
 |---|---|---|
-| **Tier 1 — MVP** | 1 → 2 → 3 → 4 → 5 → 6 → (6L, Path A only) → 7 → 8 → 9A → 10 → 14 → 16A → 18 → 19 → 26 → 27 | Tier 1 gate, end of 4.1 |
+| **Tier 1 — MVP** | 1 → 2 → 3 → 4 → 5 → 6 → (6L, Path A only) → 7 → 8 → 9A → 10 → 14 → 15 → 16A → 16B → 17 → 18 → 19 → 26 → 27 | Tier 1 gate, end of 4.1 |
 | **Tier 2** | 9B → 11 → 12 | Tier 2 gate, end of 4.2 |
-| **Tier 3** | 15 → 16B → 20 → 21 → 22 → 23 → 24 → 25 → (17, optional) | Tier 3 gate, end of 4.3 |
+| **Tier 3** | 28 → 20 → 21 → 22 → 23 → 24 → 25 | Tier 3 gate, end of 4.3 |
 
 Changes to the requested tier lists, each made to fix a dependency:
 
 | Change | Reason |
 |---|---|
-| Task 9 split: 9A (privacy metadata) to Tier 1, 9B (UI gating) to Tier 2 | Task 27 scans `apps/web`, and the privacy page hard-codes five processor names; the page would also be wrong once Task 19 removes integrations |
+| Task 9 split: 9A (privacy metadata) to Tier 1, 9B (UI gating) to Tier 2 | Task 27 scans `apps/web`, and the privacy page hard-codes five processor names |
 | Task 14 added to Tier 1 | Task 27 needs local model ids out of code; Task 14 also keeps CPU matte, stems and sound classification available without a GPU |
-| Task 16 split: 16A (operation records, async gateway rules, migration) to Tier 1; 16B (`async_job` adapter) to Tier 3 | Task 18 needs 16A; no Tier 1 capability needs an async template adapter |
-| Task 15 moved to Tier 3 | Only object detection and non-compatible APIs need it (Section 2.10) |
+| Task 16 split: 16A (operation records, async gateway rules, migration) and 16B (`async_job` slice), both in Tier 1 | Task 18 needs 16A; Task 17 needs 16B |
+| Tasks 15 (minimum slice), 16B (minimum slice, blocking mode) and 17 (required) added to Tier 1, before Task 19 | Task 19 deletes the three vendor adapters, and Task 27 (in Tier 1) requires them gone. Task 17 must therefore pass in Tier 1, so its prerequisites 15 and 16B must be in Tier 1 too |
+| The rest of the old Tasks 15 and 16B becomes Task 28 in Tier 3 | Keeps Tier 1 to what the three ports need |
 | Task 6 keeps only the runtime; the translator becomes Task 6L | The default Path B has no translator (Section 0.4) |
-| Tasks 18, 19 and 26 no longer depend on Task 17 | Task 17 is optional and in Tier 3 |
+| Task 19 depends on Task 17 | The vendor files are deleted only after the conformance and differential tests pass |
+
+**Tier 1 scope change (revision 3).** Revision 2 said Tier 1 ships no mapping language. Tier 1 now includes the minimum `generic_http` and `async_job` slices (Section 2.10) and the three template ports, so roughly three more tasks of work. There is no smaller option: Task 27, the Tier 1 exit check, requires the vendor files to be gone, and Task 19 may delete them only after Task 17 passes. The only way to make Tier 1 smaller is to move Tasks 19 and 27 out of it.
 
 | Task | Tier | Depends on |
 |---|---|---|
@@ -566,29 +614,38 @@ Changes to the requested tier lists, each made to fix a dependency:
 | 9A | 1 | 4, 8 |
 | 10 | 1 | 6, 7, 8 |
 | 14 | 1 | 4, 6, 7 |
+| 15 | 1 | 4, 5, 7, 8 |
 | 16A | 1 | 3, 6, 7 |
+| 16B | 1 | 15, 16A |
+| 17 | 1 | 8, 14, 15, 16B |
 | 18 | 1 | 8, 10, 16A |
-| 19 | 1 | 7, 8, 10, 14, 18 |
+| 19 | 1 | 7, 8, 10, 14, 17, 18 |
 | 26 | 1 | 9A, 10, 14, 19 |
 | 27 | 1 | 2, 9A, 26 |
 | 9B | 2 | 8, 18 |
 | 11 | 2 | 6, 8, 9A, 19 |
 | 12 | 2 | 6, 8, 9A, 14, 19 |
-| 15 | 3 | 4, 5, 7, 8 |
-| 16B | 3 | 15, 16A |
+| 28 | 3 | 15, 16B |
 | 20 | 3 | 4, 5, 7, 16A |
 | 21 | 3 | 16A, 20 |
 | 22 | 3 | 8, 20, 21 |
 | 23 | 3 | 9B, 21, 22 |
 | 24 | 3 | 7, 22 |
 | 25 | 3 | 5, 7, 22 |
-| 17 (optional) | 3 | 15, 16B |
 
-**Path A ordering exception:** Tasks 11 and 12 move before Task 19 and drop their dependency on it, so live users keep those features. Task 17 also moves before Task 19 if live users depend on object detection, diarization or remote stems.
+**Path A ordering exception:** Tasks 11 and 12 move before Task 19 and drop their dependency on it, so live users keep those features.
 
 ### 4.1 Tier 1 — MVP
 
-Tier 1 delivers a file-based registry, secret references through secret files or a bundle, capability validation, `/capabilities`, gateway-only planning and transcription, and the removal of Runway. It must work with remote APIs only and no GPU.
+Tier 1 delivers:
+
+- a file-based registry, with secret references through secret files or a bundle;
+- capability validation and `/capabilities`;
+- gateway-only planning and transcription;
+- object detection, diarization and stem separation ported to any-provider templates;
+- the removal of Runway.
+
+It must work with remote APIs only and no GPU.
 
 #### 1. Establish a shared fake adapter and no-network CI contract
 
@@ -922,6 +979,38 @@ Protocol terms such as `openai_compatible` are not findings.
 
 **Acceptance criteria:** a no-GPU deployment with `cpu-local.json` starts CPU matte, Demucs stems and YAMNet sound without loading GPU-only packages; every enabled local model has a pinned revision and licence metadata; no local model id remains as a code default.
 
+#### 15. `generic_http` adapter — Tier 1 slice
+
+**Dependencies:** 4, 5, 7, 8.
+
+**Files:**
+
+- **NEW (proposed):** `apps/api/app/services/generic_http_adapter.py`.
+- **NEW (proposed):** `apps/api/app/services/inference_templates.py` (the Section 2.10 Tier 1 grammar).
+- **NEW (proposed):** `apps/api/app/services/inference_normalization.py` (the per-capability normalizers in Section 2.10).
+- `apps/api/app/services/media_url_policy.py`: reuse `safe_http_stream` and its IP rules for captured URLs.
+
+**Migration:** none.
+
+**Implementation:**
+
+- Build exactly the Tier 1 `generic_http` slice from Section 2.10: JSON request bodies, aligned results, `vertices_norm`/`xywh_norm` boxes, per-item errors, `error_map` and item-count usage.
+- The validator (Task 4) rejects unknown keys and functions before a route is activated.
+- Per-route `limits.max_batch` and `limits.max_request_bytes` are read by the callers that split batches. `GatewayObjectsEnricher` in `apps/api/app/services/remote_visual.py` already splits by count (16) and size (9 MiB) today, so these become route values instead of constructor defaults.
+
+**Tests:**
+
+- Every allowed value form and function.
+- Rejection of every disallowed construct: host change, unknown function, environment or secret access, a `$map` over more than `max_batch` items.
+- Partial and total item errors, both box formats, oversized responses and the error map.
+- Normalizer behavior.
+
+**Rollout/back-compat:** additive.
+
+**Risks:** grammar creep. Anything outside Section 2.10 belongs in Task 28 or needs a plan change.
+
+**Acceptance criteria:** a fake synchronous object-detection API is integrated with registry config and fixtures only. `vision.object_detection` becomes available, and its output matches the normalized detection schema.
+
 #### 16A. Persisted async operations and route-affine gateway rules
 
 **Dependencies:** 3, 6, 7.
@@ -963,6 +1052,127 @@ Protocol terms such as `openai_compatible` are not findings.
 
 **Acceptance criteria:** a fake async job produces a complete persisted state trace, and no retry after the send point reaches a different route.
 
+#### 16B. `async_job` adapter — Tier 1 slice, blocking mode
+
+**Dependencies:** 15, 16A.
+
+**Files:**
+
+- **NEW (proposed):** `apps/api/app/services/async_job_adapter.py`.
+- **NEW (proposed), from Task 15:** `apps/api/app/services/inference_templates.py`.
+- `apps/api/app/services/subprocess_env.py`: `media_tool_env()` for `input_transform.audio`.
+- `apps/api/app/services/media_url_policy.py`: SSRF policy for captured upload and artifact URLs.
+
+**Migration:** none; uses the Task 16A table.
+
+**Implementation:** exactly the Tier 1 `async_job` slice in Section 2.10, in blocking mode only:
+
+- The `vars` block, ordered steps, `capture` and `require`.
+- Per-step `auth: none` for pre-signed URLs.
+- `commit`, then polling with a status map, tolerance for transient errors, backoff and a deadline.
+- Artifacts with host, HTTPS and size limits.
+- `cleanup` that runs after success and after failure.
+- `input_transform.audio` and an adapter-managed temporary directory, removed on every exit path.
+
+Each call records its job in `inference_operations` (Task 16A). When a worker retries after the commit step, it resumes polling the recorded job instead of submitting again.
+
+**Tests:**
+
+- A config-only async job against the fake server.
+- A retry after commit never resubmits, and the fake confirms no second route was contacted.
+- `auth: none` steps send no adapter credentials.
+- Captured URLs pointing at a disallowed host or a private IP are refused.
+- Artifact size cap and a missing required artifact.
+- Cleanup and temp-directory removal on success, on failure and on timeout.
+
+**Rollout/back-compat:** additive.
+
+**Risks:**
+
+- Duplicate charges: covered by the commit point and Task 16A.
+- Long blocking waits hold a worker slot: `max_wait_s` limits this, and non-blocking mode is Task 28.
+
+**Acceptance criteria:** a config-only blocking async route finishes end to end against the fake with a complete operation trace. No retry after commit reaches the provider's submit endpoint twice, and no temporary file remains.
+
+#### 17. Port object detection, diarization and stem separation to templates (required)
+
+**Dependencies:** 8, 14, 15, 16B.
+
+**Goal:** all three capabilities work with any model from any provider, configured in the registry only, with no provider-specific code. Today's three integrations become documented example routes, and their behavior is kept exactly.
+
+**Step 0 — archive first.** Before any change, commit the current state of the vendor files to a branch and tag it `archive/pre-neutral-inference`. Push the tag. These files are untracked today (`git status` shows `??`):
+
+- `apps/api/app/services/google_vision.py`
+- `apps/api/app/services/pyannoteai_diarization.py`
+- `apps/api/app/services/lalal_stems.py`
+- `apps/api/tests/test_google_vision_objects.py`
+- `apps/api/tests/test_pyannoteai_diarization.py`
+- `apps/api/tests/test_lalal_stems.py`
+
+The tag is the reference implementation for the differential tests below.
+
+**Files:**
+
+- **NEW (proposed):** `docs/ai-registry/examples/object-detection.json`, `docs/ai-registry/examples/diarization.json` and `docs/ai-registry/examples/stem-separation.json`, with scenario fixtures ported from the three test files above.
+- **NEW (proposed):** `apps/api/tests/test_inference_template_conformance.py`. It finds every example and scenario by glob and contains no vendor names.
+- **NEW (proposed):** `apps/api/tests/test_inference_template_differential.py`. It runs each scenario through both the archived adapter and the template on the same mock transport and compares the results. Task 19 deletes it together with the archived adapters.
+- **NEW (proposed):** `apps/api/app/services/audio_diarization.py`, which receives the neutral wrapper (`PyannoteAIDiarizationProvider`'s degrade-instead-of-raise behavior) under a neutral name.
+- `apps/api/app/services/remote_visual.py`: the objects enricher is enabled by an `vision.object_detection` route; batch limits come from the route.
+- `apps/api/app/services/scale.py`: stem jobs use the `audio.stem_separation` route; the temp-folder prefix becomes generic.
+- `apps/api/app/api/scale.py`: `separate_audio_stems` returns `503 capability_unavailable` when no route exists. Today the job is queued and fails later in the worker with `stem_gateway_route_required`.
+- `apps/api/app/services/model_gateway.py`: `DiarizationRequest.minimum_billable_s` is replaced by route `pricing.minimum_billable_units`.
+
+**Migration:** none.
+
+**Behavior parity** (each row has at least one conformance scenario and one differential scenario):
+
+| Capability | Behavior today | Where it is kept |
+|---|---|---|
+| Objects | At most 16 images and about 9 MiB per request; the enricher splits batches | Route `limits.max_batch` and `limits.max_request_bytes` (Task 15) |
+| Objects | One response per image, in order; a length mismatch is a malformed response | `aligned_to_input: true` |
+| Objects | Per-image errors: if all images fail, codes 3, 9 and 11 mean rejected (not billed, no fallback) and other codes mean unavailable (retryable, not billed); if some fail, those images get no detections and a warning is logged | `item_error` and `item_error_codes` |
+| Objects | Only images that were annotated are billed | `usage: count_ok_items` |
+| Objects | Box from normalized vertices; a missing coordinate counts as 0; clamp to 0–1 | `box_format: vertices_norm` and the normalizer |
+| Objects | Labels lowercased and cut to 80 characters, with an alias map to COCO names; sorted by score; top N | Object-detection normalizer and `label_aliases` |
+| Diarization | Random opaque media name; no user or file name is shared | `vars` block with `concat` and `uuid()` |
+| Diarization | Reserve an upload, require an HTTPS upload URL, upload without the API key | Steps with `capture`, `require: https` and `auth: none` |
+| Diarization | Submit; from here the job is billable and must not fall back | `commit: true` |
+| Diarization | Poll: running states continue; failed and cancelled are not billed; unknown states are malformed; transient errors are tolerated; 5 s growing ×1.5 to 30 s; 900 s limit | `poll` with status map, `tolerate_retryable`, backoff and `max_wait_s` |
+| Diarization | Seconds to milliseconds; segments sorted | `to_ms` and the diarization normalizer |
+| Diarization | 20-second minimum billing | Route `pricing.minimum_billable_units` |
+| Stems | Audio-only, 44.1 kHz stereo FLAC before upload; video never leaves the worker | `input_transform.audio` |
+| Stems | Raw upload with a neutral filename | `body: input.file` and `upload_filename` |
+| Stems | Split request with the pinned model settings and an idempotency key | Route `params` and `uuid()` |
+| Stems | POST polling; status keyed by the task id; server errors retryable but no fallback | Path segment `{vars.task_id}` and status map with `fallback: false` |
+| Stems | Both tracks required and mapped to `vocals`/`no_vocals`; each under 2 GB and non-empty; provider host only; HTTPS forced; no key sent | `artifacts` with `name_map`, `required`, `max_bytes`, `allowed_hosts`, `force_https`, `auth: none` |
+| Stems | The uploaded source is always deleted at the provider afterwards, best effort | `cleanup` |
+| Stems | Local temp folder removed on any failure | Adapter-managed temp directory |
+
+**One improvement:** the stems integration creates a new idempotency key on every attempt today, so a worker retry can submit and pay twice. The ported version records the job (Task 16A), so a retry resumes polling.
+
+**No-route behavior** (each capability is `unavailable/not_configured` in `/capabilities`, and editing continues):
+
+- **Objects:** empty detections. The visual manifest lists `objects: unavailable:not_configured` in `degraded_capabilities`, as `remote_visual.py` already does.
+- **Diarization:** heuristic speaker labels from the transcript (`heuristic_single_speaker_v1` in `apps/api/app/services/audio_intelligence.py`), marked degraded.
+- **Stems:** no stem control. The stem request is refused with `capability_unavailable` (503). The Audio tab keeps its existing hint and the full mix (`apps/web/components/editor/tabs/audio-tab.tsx`), and renders are unchanged. Task 9B (Tier 2) disables the "Separate vocals and music" button in `apps/web/components/editor/ScalePanel.tsx`; until then, pressing it shows the error.
+- **Stems with Demucs:** if the CPU-local Demucs route from Task 14 is configured, it serves `audio.stem_separation` and the capability is available.
+
+**Tests:**
+
+- The conformance suite (all scenarios).
+- The differential suite against the archived adapters: same outgoing requests, typed outputs, usage, error classes and cleanup calls.
+- The no-route behavior for each capability.
+- Redaction of every secret.
+
+**Rollout/back-compat:** the example routes keep today's route ids and revision strings (`google-vision-objects-builtin-stable-2026-10-22`, `pyannoteai-precision-v3`, `lalal-andromeda-v6`), so cached visual analyses and stored stem provenance stay valid. Operators enable a capability by copying an example into their registry. Optionally, run `.github/workflows/live-provider-contracts.yml` once against the example routes before Task 19.
+
+**Risks:**
+
+- The grammar is missing something: extend the Tier 1 slice through a plan change, never with provider-specific code.
+- A URL returned by a provider points somewhere unexpected (SSRF): `allowed_hosts`, HTTPS and the private-IP policy.
+
+**Acceptance criteria:** every conformance and differential scenario passes. With only registry config, each of the three capabilities works against the fake for the example provider and for a second, differently shaped fake provider. With no route, each capability behaves as described above.
+
 #### 18. Move generated B-roll to neutral async video operations
 
 **Dependencies:** 8, 10, 16A.
@@ -989,7 +1199,7 @@ Protocol terms such as `openai_compatible` are not findings.
 - `packages/shared/src/index.ts`, `packages/shared/openapi.json`, `packages/shared/src/generated/api.ts`, regenerated with `pnpm contracts:generate`.
 - `apps/web/components/editor/ScalePanel.tsx`: copy only; gating is Task 9B.
 
-**Implementation:** submit through `video.generation.submit` and poll through `video.generation.status`, bound to the operation's route snapshot (Task 16A). No Tier 1 adapter serves these capabilities, so generated B-roll stays unavailable until Task 16B (Tier 3). The code path is exercised with the Task 1 fake async adapter.
+**Implementation:** submit through `video.generation.submit` and poll through `video.generation.status`, bound to the operation's route snapshot (Task 16A). With Task 16B in Tier 1, a video provider can be configured in Tier 1 if its API fits the slice, in blocking mode, with `max_wait_s` set for the provider's typical render time. Non-blocking delayed polling for long jobs is Task 28 (Tier 3). The code path is exercised with the Task 1 fake async adapter.
 
 **Tests:**
 
@@ -1007,16 +1217,16 @@ Protocol terms such as `openai_compatible` are not findings.
 
 **Acceptance criteria:** existing generated B-roll renders; with a fake async route, new jobs persist `provider_operation_id`, `provider_route_id` and `provider_model_revision` and never submit twice; with no route, the API returns `capability_unavailable`.
 
-#### 19. Remove Runway and the vendor wiring that Tier 1 does not rebuild
+#### 19. Remove Runway, the vendor adapters and the vendor wiring
 
-**Dependencies:** 7, 8, 10, 14, 18.
+**Dependencies:** 7, 8, 10, 14, 17, 18.
 
 **Before deleting anything:** many of these files are untracked or have uncommitted changes.
 
 - `git status` shows these as untracked: `apps/api/app/services/google_vision.py`, `pyannoteai_diarization.py`, `lalal_stems.py`, `remote_visual.py`, `remote_audio_emotion.py`, `ai_features.py`, `infra/docker-compose.remote-ai.yml`, and their tests.
 - `JinaEmbeddingsAdapter` exists only in the uncommitted changes to `apps/api/app/services/model_adapters.py`; it is not in `HEAD`.
 
-Commit them to an archive branch first. Deleting them unarchived would lose the only copy, including the reference behavior that Task 17 and Task 12 would need.
+The Git tag `archive/pre-neutral-inference` (created in Task 17, Step 0) must exist on the remote and must contain all of these files. If it does not, stop. Deleting them unarchived would lose the only copy, including the reference behavior that Task 12 needs.
 
 **Scope:**
 
@@ -1035,16 +1245,17 @@ Commit them to an archive branch first. Deleting them unarchived would lose the 
    - the CI secret in `.github/workflows/live-provider-contracts.yml`;
    - the fixtures `apps/api/tests/fixtures/providers/runway_*.json`, `fixtures/registry.json`, `tests/gpu-stage.json`, `tests/gpu-stage-allowlist.json` and `scripts/verify/evidence_report.py`;
    - the Runway cases in the API tests listed in Section 1.2.
-2. **Object detection, diarization and stem integrations — Option B, recommended (see Task 17).** Delete:
+2. **Vendor-specific adapters for object detection, diarization and stems — only after Task 17 passes.** Gate: Task 17's conformance and differential suites pass on the commit that performs the deletion, and the archive tag exists. Then delete:
    - `apps/api/app/services/google_vision.py`, `pyannoteai_diarization.py` and `lalal_stems.py`;
-   - their `register_*` functions in `model_domain_adapters.py`;
-   - their settings and production checks;
+   - their `register_*` functions in `model_domain_adapters.py`, and `_google_vision_objects_enricher` in `remote_visual.py`;
+   - their vendor settings and production checks;
    - their secrets in `infra/docker-compose.remote-ai.yml`;
-   - `apps/api/tests/test_google_vision_objects.py`, `test_pyannoteai_diarization.py` and `test_lalal_stems.py`.
+   - `apps/api/tests/test_google_vision_objects.py`, `test_pyannoteai_diarization.py` and `test_lalal_stems.py`, whose scenarios now live in Task 17's fixtures;
+   - **NEW (proposed) in Task 17:** `apps/api/tests/test_inference_template_differential.py`, because the adapters it compares against are gone.
 
-   Keep the neutral `GatewayObjectsEnricher` in `remote_visual.py` for a later route. Stems use the local Demucs route (Task 14), diarization uses the transcript heuristic in `audio_intelligence.py`, and object detection reports `unavailable`.
+   The three capabilities keep working through their template routes (Task 17), and `GatewayObjectsEnricher` stays.
 3. **Captions, voice emotion and remote embeddings wiring (rebuilt in Tier 2).** Delete:
-   - the vendor factories `_google_vision_objects_enricher`, `_openrouter_captions_enricher` and `_jina_keyframe_embeddings_enricher`, and the vendor switches in `remote_visual_enricher_versions` (`remote_visual.py`);
+   - the vendor factories `_openrouter_captions_enricher` and `_jina_keyframe_embeddings_enricher`, and the vendor switches in `remote_visual_enricher_versions` (`remote_visual.py`);
    - `ensure_openrouter_zdr_adapter`, `register_openrouter_audio_emotion_route`, `register_openrouter_vision_captions_route` and `register_jina_embedding_routes` (`model_domain_adapters.py`);
    - `JinaEmbeddingsAdapter` (`model_adapters.py`) and `apps/api/tests/test_jina_embeddings.py`;
    - `_openrouter_audio_emotion_provider` (`main.py`);
@@ -1055,21 +1266,21 @@ Commit them to an archive branch first. Deleting them unarchived would lose the 
 
 **Migration:** none beyond Task 18.
 
-**Tests:** delete the Runway, removed-integration and vendor-wiring tests, or rewrite them on fakes. Add tests that:
+**Tests:** delete the Runway and vendor-wiring tests, or rewrite them on fakes. Re-run Task 17's conformance suite after the deletion. Add tests that:
 
 - a missing embeddings route makes B-roll ranking use its lexical fallback instead of failing;
-- missing caption, emotion, object or diarization routes leave visual analysis and transcription working, with the capability marked degraded or unavailable;
-- `/capabilities` reports each removed capability as `unavailable/not_configured`.
+- missing caption or emotion routes leave visual analysis and transcription working, with the capability marked degraded;
+- `/capabilities` reports captions, voice emotion and embeddings as `unavailable/not_configured` until Tier 2.
 
-**Rollout/back-compat:** Path B: one release. Path A: Tasks 11–12 (and Task 17, if live users depend on these features) come before this task. The operator removes the old secret files and secret-store entries once the release is healthy.
+**Rollout/back-compat:** Path B: one release. Path A: Tasks 11–12 come before this task. The operator removes the old secret files and secret-store entries once the release is healthy.
 
 **Risks:**
 
-- Losing uncommitted code: archive it first.
-- Features unavailable between Tier 1 and Tier 2: acceptable only with no live users.
+- Losing uncommitted code: the archive tag is checked first.
+- Captions, voice emotion and remote embeddings are unavailable between Tier 1 and Tier 2: acceptable only with no live users.
 - A missed string in generated contracts or scripts: Task 27 catches it.
 
-**Acceptance criteria:** the files and symbols above are gone and the archive branch exists; the removed capabilities report `unavailable` without startup errors; B-roll, visual analysis and transcription still complete on fakes.
+**Acceptance criteria:** the archive tag exists on the remote; the files and symbols above are gone; Task 17's conformance suite still passes; object detection, diarization and stems work through template routes on fakes; captions, voice emotion and embeddings report `unavailable` without startup errors; B-roll, visual analysis and transcription still complete on fakes.
 
 #### 26. Configuration, Compose, CI and docs cutover
 
@@ -1084,7 +1295,7 @@ Commit them to an archive branch first. Deleting them unarchived would lose the 
 - **Env examples:** `.env.example`, `apps/api/.env.example`, `prod.env.example`, `infra/production-compose.env.example`, `infra/compose-host/host.env.example`.
 - **Compose:**
   - `infra/docker-compose.gpu.yml`: replace the four vendor secrets with one registry file and one secrets bundle.
-  - `infra/docker-compose.remote-ai.yml`: keep the topology only; drop vendor switches, prices and secrets. Start `demucs-worker` by default, because remote stems are removed; today it starts only with `--profile local-stems`.
+  - `infra/docker-compose.remote-ai.yml`: keep the topology only; drop vendor switches, prices and secrets. `demucs-worker` keeps its `local-stems` profile, and the deployment guide explains when to start it: only when the CPU-local Demucs route is configured.
   - `infra/docker-compose.cpu-stage.yml` with **NEW (proposed)** `infra/ai-registry/cpu-stage.json` (fake routes).
 - **CI and scripts:**
   - `.github/workflows/live-provider-contracts.yml`: registry-driven, with a generic secrets bundle; manual authorization stays.
@@ -1148,11 +1359,13 @@ All of these must pass before Tier 2 starts:
 
 1. **No-GPU boot:** a production-mode deployment boots with `GPU_WORKERS_ENABLED=false`, no GPU service, a registry file with `openai_compatible` routes for `planning.chat` and `transcription.speech_to_text`, and secrets from secret files or a bundle only.
 2. **End to end:** upload → transcript → plan works against the fake provider in CI, and once manually against the operator's real remote endpoints. The transcript has word timestamps.
-3. **Capabilities:** `GET /capabilities` reports planning and transcription available. CPU-local matte, stems and sound classification are available when **NEW (proposed)** `infra/ai-registry/cpu-local.json` (Task 14) is mounted. Every other capability is `unavailable`, with a reason. Controls for unavailable features may still be clickable until Task 9B; the API answers them with `capability_unavailable` (503).
-4. **Validation:** the Section 2.6 matrix passes, including a `provider-managed` remote route (warning), a local route with `latest` (error), a production remote route without data-processor metadata (error), and unknown-pricing routes with and without a hard cap.
-5. **Quotas:** planning quota is feature-keyed (Decision B-1), or `AI_QUOTA_SCOPE=provider` is set deliberately and documented.
-6. **Runway removed:** no Runway code, setting, secret, health probe, Compose entry, quota name, CI secret or UI string remains, and migrated generated B-roll rows use the neutral fields.
-7. **Neutrality:** `python scripts/verify/vendor_neutrality.py --enforce` reports zero active-source findings (Task 27), and the fake suite passes with network access blocked.
+3. **Capabilities:** `GET /capabilities` reports planning and transcription available. CPU-local matte, stems and sound classification are available when **NEW (proposed)** `infra/ai-registry/cpu-local.json` (Task 14) is mounted. Every other capability is `unavailable` with a reason until a route is configured. Controls for unavailable features may still be clickable until Task 9B; the API answers them with `capability_unavailable` (503).
+4. **Ported capabilities:** object detection, diarization and stem separation pass Task 17's conformance and differential suites. Each works from registry config alone for two differently shaped fake providers. With no route, each one uses its fallback: empty detections, heuristic speaker labels, no stem control.
+5. **Archive and deletion:** the tag `archive/pre-neutral-inference` exists on the remote, and the three vendor adapter files were deleted only after item 4 passed.
+6. **Validation:** the Section 2.6 matrix passes, including a `provider-managed` remote route (warning), a local route with `latest` (error), a production remote route without data-processor metadata (error), and unknown-pricing routes with and without a hard cap.
+7. **Quotas:** planning quota is feature-keyed (Decision B-1), or `AI_QUOTA_SCOPE=provider` is set deliberately and documented.
+8. **Runway removed:** no Runway code, setting, secret, health probe, Compose entry, quota name, CI secret or UI string remains, and migrated generated B-roll rows use the neutral fields.
+9. **Neutrality:** `python scripts/verify/vendor_neutrality.py --enforce` reports zero active-source findings (Task 27), and the fake suite passes with network access blocked.
 
 ### 4.2 Tier 2 — UI gating, captions, voice emotion and embeddings
 
@@ -1242,61 +1455,40 @@ All of these must pass before Tier 2 starts:
 
 ### 4.3 Tier 3 — generic adapters, database registry, admin tooling and more protocols
 
-#### 15. `generic_http` adapter with the capped grammar
+#### 28. `generic_http` and `async_job` — Tier 3 extensions
 
-**Dependencies:** 4, 5, 7, 8.
+**Dependencies:** 15, 16B.
 
 **Files:**
 
-- **NEW (proposed):** `apps/api/app/services/generic_http_adapter.py`.
-- **NEW (proposed):** `apps/api/app/services/inference_templates.py` (the Section 2.10 grammar).
-- **NEW (proposed):** `apps/api/app/services/inference_normalization.py` (per-capability normalizers: label aliases, clamping, sorting, top-N).
-- `apps/api/app/services/media_url_policy.py`: reuse `safe_http_stream` and its IP rules.
+- **NEW (proposed), created in Tier 1:** `apps/api/app/services/generic_http_adapter.py`, `apps/api/app/services/async_job_adapter.py`, `apps/api/app/services/inference_templates.py`.
+- Queue bridge files under `apps/worker/src/` (for example `queue-bridge.mjs`), only if delayed jobs are not already supported.
 
 **Migration:** none.
 
-**Implementation:** exactly the `generic_http` part of Section 2.10. Unknown keys or functions fail validation before activation.
+**Implementation:** exactly the Tier 3 extension list in Section 2.10:
+
+- multipart request bodies;
+- `xyxy_norm` and `xyxy_px` box formats;
+- `usage` taken from a response path;
+- non-blocking async mode, which re-enqueues delayed polls so long video jobs do not hold a worker;
+- typed mappings for synchronous transcription, captions and embeddings on APIs that are not OpenAI-compatible.
 
 **Tests:**
 
-- Config-only object detection, transcription and embeddings against the fake server.
-- Each allowed function.
-- Rejection of every disallowed construct: host change, unknown function, environment or secret access, unbounded map.
-- Partial item errors, every box format and oversized responses.
+- Each extension.
+- A long async video job in non-blocking mode resumes after a worker restart without resubmitting.
+- A config-only transcription route on a non-compatible fake API returns word timestamps.
 
-**Rollout/back-compat:** additive.
+**Rollout/back-compat:** additive. Tier 1 routes keep working unchanged.
 
-**Risks:** grammar creep. Any addition needs a plan change (Section 2.10).
+**Risks:** grammar creep. Anything outside the Section 2.10 list needs a plan change.
 
-**Acceptance criteria:** a synchronous object-detection API is integrated with registry config and fixtures only, and `vision.object_detection` becomes available.
+**Acceptance criteria:** each extension works from registry config only, against fakes, and the Tier 1 conformance suite still passes.
 
-#### 16B. `async_job` adapter
+#### 13. Deleted
 
-**Dependencies:** 15, 16A.
-
-**Files:**
-
-- **NEW (proposed):** `apps/api/app/services/async_job_adapter.py`.
-- **NEW (proposed), from Task 15:** `apps/api/app/services/inference_templates.py`.
-- Queue bridge files, only if delayed polling is missing.
-
-**Migration:** none; uses Task 16A's table.
-
-**Implementation:** exactly the `async_job` part of Section 2.10: submit with `commit`, poll with status map and backoff, artifacts with host and size limits, and best-effort cleanup.
-
-- Blocking callers (diarization, stems) wait up to `max_wait_s` and, on retry, resume from the stored operation.
-- Video generation re-enqueues delayed polls.
-
-**Tests:** a config-only async video route on the fake; a retry after commit polls and never resubmits; artifact host, private-IP and size rejection; cleanup on success and failure.
-
-**Rollout/back-compat:** additive. This makes `video.generation.*`, and remote async diarization and stems, configurable.
-
-**Risks:**
-
-- Duplicate charges: covered by Task 16A.
-- Delayed-queue load: tune the backoff.
-
-**Acceptance criteria:** a config-only async video route generates B-roll end to end on the fake, with a complete operation trace.
+The transitional adapter is removed from the plan. Path B has nothing to keep running during a transition, and Task 17 ports the three integrations directly to templates.
 
 #### 20. DB registry and AES-256-GCM encrypted global secrets
 
@@ -1466,45 +1658,12 @@ Apply RLS, service-role access and restricted worker grants, following the exist
 
 **Acceptance criteria:** a route using an IAM role passes the fake Bedrock contract and the route validator without a static API key.
 
-#### 17. (Optional) Template ports for object detection, diarization and stems
-
-**Dependencies:** 15, 16B.
-
-**Options:**
-
-- **Option A: template ports (this task).** Rebuild the three integrations as `generic_http`/`async_job` examples with conformance fixtures. Use the code archived in Task 19 and the behavior recorded in revision 1:
-  - per-image batching and per-image errors, and vertex boxes;
-  - signed upload with no API auth, and a commit point;
-  - status maps and minimum billable seconds;
-  - an audio-only FLAC transform, artifact host checks and cleanup.
-- **Option B: remove them and leave the capabilities unavailable until a route is configured.** This is recommended and is done in Task 19.
-
-**Recommendation: Option B**, because:
-
-1. The default assumption is no live users, so nobody loses a working feature.
-2. The three implementation files and their tests are untracked; they have never been in a commit on `main`.
-3. Fallbacks already exist without a GPU. Stems run on CPU Demucs (`demucs-worker`, `apps/worker/Dockerfile.python.demucs`). Diarization falls back to the transcript heuristic in `audio_intelligence.py`. Visual analysis marks objects degraded and continues (`degraded_capabilities` in `remote_visual.py`).
-4. Option A needs the two grammar extensions in Section 2.10 (upload step and audio transform). It would shape the mapping language around three specific vendors before any operator needs them.
-
-**If Option A is chosen later:**
-
-- **Files:** **NEW (proposed)** `docs/ai-registry/examples/object-detection.json`, `diarization.json`, `stem-separation.json` with scenario fixtures, and `apps/api/tests/test_inference_template_conformance.py`.
-- **Migration:** none.
-- **Tests:** the ported scenarios assert requests, typed outputs, usage, error classes, cleanup, SSRF defense and redaction.
-- **Rollout:** route ids and output schemas match revision 1.
-- **Risks:** the grammar may be insufficient. Extend generic primitives only through a plan change.
-- **Acceptance criteria:** all scenarios pass through `generic_http`/`async_job`, with no vendor-specific code.
-
-#### 13. Deleted
-
-The transitional adapter is removed from the plan. Path B has nothing to keep running during a transition, and Option B removes the integrations instead (Tasks 17 and 19).
-
 #### Tier 3 gate
 
 1. An admin can add a global secret, adapter, model and route at runtime, test it, and see the feature become available without a restart. Secrets never appear in responses or logs.
-2. `generic_http` and `async_job` pass their grammar tests. A config-only object-detection route and a config-only async video route work against fakes, and an after-send timeout never reaches a second route.
+2. The Task 28 extensions pass their grammar tests. A config-only long async video route works in non-blocking mode against fakes, and an after-send timeout never reaches a second route.
 3. Hugging Face and Bedrock routes pass the route test against fakes.
-4. If Task 17 was done, its conformance scenarios pass.
+4. Task 17's conformance suite still passes.
 5. The neutrality scan still reports zero findings, with allowlist entries for the new adapters.
 
 ---
@@ -1533,8 +1692,11 @@ All migrations are forward-only. Each one has a matching file in `supabase/tests
 ### Tier 1 release (Path B: single cutover)
 
 1. Confirm the no-live-users assumption.
-2. Archive the untracked and uncommitted code that Task 19 deletes.
-3. Write the production registry file and the secrets bundle. The registry needs planning and transcription routes with pricing, revision policy and data-processor metadata, plus `cpu-local.json` if you want the CPU-local features.
+2. Create and push the archive tag `archive/pre-neutral-inference` with the untracked and uncommitted inference code (Task 17, Step 0).
+3. Write the production registry file and the secrets bundle. The registry needs:
+   - planning and transcription routes with pricing, revision policy and data-processor metadata;
+   - `cpu-local.json` if you want the CPU-local features;
+   - routes copied from **NEW (proposed)** `docs/ai-registry/examples/` (Task 17) for object detection, diarization and remote stems, if you want them.
 4. Back up the database, then apply M1–M4.
 5. Deploy the new images with the registry and bundle, without any GPU profile.
 6. Check the Tier 1 gate.
@@ -1560,7 +1722,7 @@ Rollback: disable the database routes; the file registry keeps working.
 - **Release N:** Tier 1 code plus Task 6L. Old variables and payload keys still work. Apply M1–M3, and run the M4 backfill without dropping keys.
 - **Release N+1:** production runs on the registry, with dual-read on. Add the M4 constraints.
 - **Release N+2:** delete Task 6L, the old settings and dual-read. Task 26 completes here.
-- **Ordering:** Tasks 11–12, and Task 17 if needed, come before Task 19.
+- **Ordering:** Tasks 11–12 come before Task 19. Task 17 already does in every path.
 
 ### Rules for every path
 
@@ -1591,7 +1753,9 @@ Rollback: disable the database routes; the file registry keeps working.
 - **Adapters:** `openai_compatible` chat and transcription with word timestamps; `local` matte, Demucs and YAMNet; the fake adapter with network blocked.
 - **Secrets:** file and bundle references; redaction in logs, errors and responses.
 - **Data:** M1–M4 forward application, RLS, backfill idempotency and constraints; old generated B-roll still renders.
-- **Removal:** missing caption, emotion, embedding, object and diarization routes degrade without failing jobs; removed capabilities report `unavailable`.
+- **Templates (Tasks 15, 16B):** every allowed value form and function in the Tier 1 slice; rejection of every disallowed construct; `auth: none` steps; captured-URL SSRF checks; artifact limits; cleanup and temp-directory removal; no resubmit after commit.
+- **Ported capabilities (Task 17):** the conformance suite and the differential suite against the archived adapters for object detection, diarization and stems, covering every row of the parity table; two differently shaped fake providers per capability; the no-route fallbacks (empty detections, heuristic speaker labels, stem request refused with `capability_unavailable`).
+- **Removal:** missing caption, emotion and embedding routes degrade without failing jobs, and those capabilities report `unavailable`.
 - **Deployment:** a no-GPU Compose deployment with only the registry and bundle; Compose contract tests; `/capabilities` and `/public/data-processors` contracts.
 - **Neutrality:** scanner enforce mode.
 
@@ -1606,9 +1770,9 @@ Rollback: disable the database routes; the file registry keeps working.
 - **Database registry:** encryption round-trip, AAD, KEK rotation, RLS, policy rules on writes, reload during active calls, and workspace scope rejected while disabled.
 - **Admin API and UI:** authorization, no secret in any response or page, warnings shown.
 - **Route test:** success, `schema_invalid`, timeout, cost cap, hard-cap accounting, paid async confirmation.
-- **`generic_http` and `async_job`:** every allowed function, every disallowed construct, artifact limits, cleanup, and no resubmit after commit.
+- **Task 28 extensions:** multipart, extra box formats, usage paths, non-blocking async mode (resume after worker restart without resubmit), and typed mappings for non-compatible transcription, caption and embedding APIs.
 - **Hugging Face and Bedrock:** fakes, plus SigV4 test vectors for Bedrock.
-- **Task 17:** conformance scenarios, if done.
+- **Regression:** Task 17's conformance suite still passes.
 
 ---
 
@@ -1627,8 +1791,10 @@ Rollback: disable the database routes; the file registry keeps working.
 | Provider changes behavior or vectors under a `provider-managed` revision | Explicit opt-in and warning; `provider-managed` in cache keys; the reported model id in telemetry; pinning recommended for embeddings routes. |
 | Unknown-pricing route overspends | Hard cap in requests or units; `cost_unknown` telemetry; startup warning. |
 | Worker/API registry drift | Registry version and route catalog fingerprint in startup and heartbeat checks. |
-| Deleting untracked or uncommitted code loses it | Archive branch before Task 19. |
-| Features unavailable between tiers | Accepted under Path B; Path A puts Tasks 11–12 before Task 19. |
+| Deleting untracked or uncommitted code loses it | Archive tag `archive/pre-neutral-inference` (Task 17, Step 0); Task 19 checks the tag before deleting. |
+| A ported capability behaves differently from the archived adapter | The parity table in Task 17, with a conformance scenario and a differential scenario per row; deletion is blocked until both pass. |
+| Tier 1 grows by three tasks | Accepted, because Task 27 requires the vendor files gone and Task 19 may delete them only after Task 17 passes; Task 28 holds everything beyond the minimum slice. |
+| Captions, voice emotion and remote embeddings unavailable between tiers | Accepted under Path B; Path A puts Tasks 11–12 before Task 19. |
 | Historical migration grep noise | The immutable migration report is separate from the strict active-source proof; new coupling is never hidden in that exception. |
 | Backfill races with old writers | Path A deploys neutral readers and writers first, then backfills, then removes old writers. |
 | Overly broad inference scope | Unrelated stock, payment, storage and rendering features stay out of this change, except for their existing inference references. |
@@ -1643,11 +1809,12 @@ These are checked at every tier gate; the full list applies after Tier 3. The ti
 2. Every optional capability appears in `/capabilities` with a reason when unavailable (Tier 1), and the UI shows a clear unavailable state (Tier 2).
 3. Adapters, routes, models, revisions, prices, caps, budgets, auth and mappings are configuration: the file in Tier 1, plus the database in Tier 3.
 4. Secrets are referenced by name and never returned or logged (Tier 1). Database secrets are encrypted with AES-256-GCM (Tier 3).
-5. Async operations persist `provider_operation_id`, `provider_route_id` and `provider_model_revision`, and never resubmit after the send point. (Rules: Tier 1; adapter: Tier 3.)
+5. Async operations persist `provider_operation_id`, `provider_route_id` and `provider_model_revision`, and never resubmit after the send point. (Blocking mode: Tier 1; non-blocking mode: Tier 3.)
 6. A no-GPU deployment runs on remote and CPU routes, and a later private compatible endpoint needs only configuration. (Tier 1)
-7. Runway, Google Vision, Jina, OpenRouter, Groq, pyannoteAI and LALAL code, settings, secrets, health checks and UI strings are removed, or confined to adapter implementations, registry files and docs. No Anthropic or OpenAI SDK is imported. (Tier 1)
-8. The fake suite passes with no real keys and network access blocked. (Every tier)
-9. The active-source neutrality scan reports zero findings outside allowlisted adapter implementations, registry files and docs. Historical migrations are reported separately. (Every tier)
+7. Object detection, diarization and stem separation work with any provider from registry config only, with behavior parity to the archived adapters, and fall back as documented when no route is configured. (Tier 1)
+8. Runway, Google Vision, Jina, OpenRouter, Groq, pyannoteAI and LALAL code, settings, secrets, health checks and UI strings are removed, or confined to adapter implementations, registry files and docs. No Anthropic or OpenAI SDK is imported. (Tier 1)
+9. The fake suite passes with no real keys and network access blocked. (Every tier)
+10. The active-source neutrality scan reports zero findings outside allowlisted adapter implementations, registry files and docs. Historical migrations are reported separately. (Every tier)
 
 Release gate commands, run from the repository root:
 
@@ -1668,4 +1835,3 @@ Retain the scanner output, migration output, route catalog, `/capabilities` resp
 ## Blocking questions
 
 1. **Live users or data?** Earlier you answered `1a` (preserve existing deployments), but this revision defaults to no live production users or data and plans Path B, a single clean cutover. Which applies? Path A adds Task 6L, dual-read and three releases, and moves Tasks 11–12 before Task 19.
-2. **The three integrations:** do you confirm Option B — remove the object-detection, diarization and remote-stem integrations in Tier 1, with those capabilities unavailable until a route is configured? This replaces your earlier `2b`. If you still want templates, Task 17 stays in Tier 3, and the code must be archived before Task 19 either way.
