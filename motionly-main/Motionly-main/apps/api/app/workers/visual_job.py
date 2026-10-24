@@ -6,8 +6,10 @@ from uuid import UUID
 from app.api.errors import ApiError
 from app.core.config import get_settings
 from app.core.production import validate_production_settings
+from app.repositories.billing import SupabaseBillingRepository
 from app.repositories.uploads import SupabaseUploadRepository
 from app.repositories.visual import SupabaseVisualRepository
+from app.services.billing import PlanFeatureQuotaGuard
 from app.services.model_domain_adapters import (
     GatewayVisualIntelligenceProvider,
     bundle_revision,
@@ -16,7 +18,9 @@ from app.services.model_domain_adapters import (
 from app.services.model_gateway import ModelOperation, validate_gateway_operations
 from app.services.model_gateway_factory import model_gateway_from_settings
 from app.services.operations import MetricsRegistry, OperationsRepository
+from app.services.remote_visual import remote_visual_provider_from_settings
 from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider
+from app.workers.executor_protocol import open_protocol_channel
 
 
 def main() -> None:
@@ -51,19 +55,6 @@ def _runner():
         service_role_key=settings.supabase_service_role_key,
     )
     visual_provider_key = settings.visual_intelligence_provider.strip().lower()
-    if visual_provider_key == "fixture":
-        from app.services.visual_intelligence import FixtureVisualIntelligenceProvider
-
-        native_provider = FixtureVisualIntelligenceProvider()
-    else:
-        native_provider = LocalMLVisualIntelligenceProvider(
-            clip_model=settings.visual_clip_model,
-            blip_model=settings.visual_blip_model,
-            yolo_model=settings.visual_yolo_model,
-            clip_revision=settings.visual_clip_model_revision,
-            blip_revision=settings.visual_blip_model_revision,
-            yolo_revision=settings.visual_yolo_model_revision,
-        )
     operations = OperationsRepository(
         supabase_url=str(settings.supabase_url),
         service_role_key=settings.supabase_service_role_key,
@@ -75,15 +66,50 @@ def _runner():
     )
     if gateway is None:
         raise RuntimeError("Model gateway is required for visual inference")
+    # Per-plan quotas for the remote keyframe enrichers; the local GPU manifest
+    # route has no metered budget_feature and is unaffected.
+    gateway.set_quota_guard(
+        PlanFeatureQuotaGuard(
+            billing_repository=SupabaseBillingRepository(
+                supabase_url=str(settings.supabase_url),
+                service_role_key=settings.supabase_service_role_key,
+            ),
+            operations_repository=operations,
+            settings=settings,
+        )
+    )
+    if visual_provider_key == "fixture":
+        from app.services.visual_intelligence import FixtureVisualIntelligenceProvider
+
+        native_provider = FixtureVisualIntelligenceProvider()
+        revision = bundle_revision(
+            settings.visual_clip_model_revision,
+            settings.visual_blip_model_revision,
+            settings.visual_yolo_model_revision,
+        )
+    elif visual_provider_key == "remote":
+        # CPU signals plus remote keyframe enrichment: no GPU model is loaded.
+        native_provider = remote_visual_provider_from_settings(settings, gateway=gateway)
+        revision = bundle_revision(native_provider.model)
+    else:
+        native_provider = LocalMLVisualIntelligenceProvider(
+            clip_model=settings.visual_clip_model,
+            blip_model=settings.visual_blip_model,
+            yolo_model=settings.visual_yolo_model,
+            clip_revision=settings.visual_clip_model_revision,
+            blip_revision=settings.visual_blip_model_revision,
+            yolo_revision=settings.visual_yolo_model_revision,
+        )
+        revision = bundle_revision(
+            settings.visual_clip_model_revision,
+            settings.visual_blip_model_revision,
+            settings.visual_yolo_model_revision,
+        )
     route = register_visual_route(
         gateway,
         provider=native_provider,
         model=native_provider.model,
-        revision=bundle_revision(
-            settings.visual_clip_model_revision,
-            settings.visual_blip_model_revision,
-            settings.visual_yolo_model_revision,
-        ),
+        revision=revision,
     )
     if settings.app_env == "production":
         validate_gateway_operations(
@@ -116,6 +142,8 @@ def _runner():
 
 
 def _serve() -> None:
+    # Before the models load: only `channel` may write to the real stdout.
+    channel = open_protocol_channel()
     execute = _runner()
     print("VISUAL_DEBUG executor_ready", file=sys.stderr, flush=True)
     for line in sys.stdin:
@@ -123,7 +151,7 @@ def _serve() -> None:
         try:
             request = json.loads(line)
             if request.get("control") == "ping":
-                print(json.dumps({"id": request.get("id"), "result": {"ok": True}}), flush=True)
+                channel.send({"id": request.get("id"), "result": {"ok": True}})
                 continue
             payload = dict(request.get("payload") or {})
             print(
@@ -151,7 +179,7 @@ def _serve() -> None:
                 "error": redact_string(str(exc)),
                 "error_code": type(exc).__name__,
             }
-        print(json.dumps(response), flush=True)
+        channel.send(response)
 
 
 def _arguments() -> argparse.Namespace:

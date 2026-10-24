@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.api.errors import ApiError
+from app.services.subprocess_env import media_tool_env
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,9 @@ class FFmpegAudioExtractor:
             "wav",
             str(output_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False, env=media_tool_env()
+        )
         if result.returncode != 0:
             stderr = result.stderr.lower()
             if "does not contain any stream" in stderr or "audio" in stderr:

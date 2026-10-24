@@ -61,6 +61,9 @@ INTERNAL_WORKER: set[tuple[str, str]] = {
 }
 
 ADMIN_OPS: set[tuple[str, str]] = {
+    # Refunds target a workspace named in the body, so a workspace role is not
+    # enough: only a platform admin may issue them (audit-logged).
+    ("POST", "/billing/refunds"),
     ("GET", "/admin/ops/overview"),
     ("GET", "/admin/queues"),
     ("GET", "/admin/queues/jobs/{queue_job_id}"),
@@ -99,8 +102,6 @@ OWNER_ADMIN: set[tuple[str, str]] = {
     ("POST", "/api-keys"),
     ("GET", "/api-keys"),
     ("POST", "/api-keys/{key_id}/revoke"),
-    # Refunds: owner or admin may issue them (audit-logged).
-    ("POST", "/billing/refunds"),
     ("GET", "/phase5/brand-kits"),
     ("POST", "/phase5/brand-kits"),
     ("PATCH", "/phase5/brand-kits/{brand_kit_id}"),

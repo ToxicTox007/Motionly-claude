@@ -1,9 +1,11 @@
 -- Workers query as motionly_worker (Task 18), a role row-level security still
 -- applies to. Table privileges alone return no rows: the preprocessing worker
 -- reported upload_not_found for every upload on the CPU stack. Workers process
--- jobs for every workspace, so each RLS-protected job table in public needs a
--- policy for the role. Credential and identity tables no worker uses stay
--- denied, and storage stays scoped to the four worker buckets.
+-- jobs for every workspace, so each RLS-protected job table the worker is
+-- granted (202610230101 narrows the grants to the tables workers use) needs a
+-- policy for the role, and no other table keeps one. Credential and identity
+-- tables no worker uses stay denied, and storage stays scoped to the four
+-- worker buckets.
 begin;
 select plan(8);
 
@@ -20,18 +22,19 @@ select is(
     where n.nspname = 'public'
       and c.relkind in ('r', 'p')
       and c.relrowsecurity
-      and c.relname not in (
-        'admin_audit_events', 'password_reset_requests',
-        'workspace_api_keys', 'workspace_invitations'
-      )
-      and not exists (
+      and (
+        has_table_privilege('motionly_worker', c.oid, 'SELECT')
+        or has_table_privilege('motionly_worker', c.oid, 'INSERT')
+        or has_table_privilege('motionly_worker', c.oid, 'UPDATE')
+        or has_table_privilege('motionly_worker', c.oid, 'DELETE')
+      ) <> exists (
         select 1 from pg_policy p
         where p.polrelid = c.oid
           and p.polroles @> array['motionly_worker'::regrole::oid]
       )
   ),
   '{}'::text[],
-  'every RLS-protected job table in public has a policy for motionly_worker'
+  'exactly the RLS tables granted to motionly_worker have a worker policy'
 );
 
 select is(

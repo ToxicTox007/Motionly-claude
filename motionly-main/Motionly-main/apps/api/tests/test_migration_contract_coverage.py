@@ -9,6 +9,19 @@ MIGRATIONS = ROOT / "supabase" / "migrations"
 SQL_TESTS = ROOT / "supabase" / "tests"
 
 MIGRATION_TEST_CONTRACTS = {
+    "202610220101_remote_ai_feature_quota_categories.sql": (
+        "remote_ai_feature_quota_categories_test.sql",
+        (
+            "cost_attribution_events_category_check",
+            "vision_object_images",
+            "vision_caption_images",
+            "embedding_inputs",
+            "diarization_seconds",
+            "emotion_seconds",
+            "stem_seconds",
+            "generated_seconds",
+        ),
+    ),
     "202610200301_task18_worker_row_access.sql": (
         "task_18_worker_row_access_test.sql",
         ("motionly_worker", "password_reset_requests", "workspace_api_keys"),

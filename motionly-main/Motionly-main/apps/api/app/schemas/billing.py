@@ -78,6 +78,9 @@ class SubscriptionSummary(BaseModel):
     current_period_end: datetime | None = None
     cancel_at_period_end: bool = False
     payment_issue: bool = False
+    # Past due only: paid features stay on until then; after it, Free applies
+    # until the renewal is paid.
+    past_due_grace_ends_at: datetime | None = None
     updated_at: datetime
 
 
@@ -151,8 +154,9 @@ class PaymentHistoryResponse(BaseModel):
 
 class RefundRequest(BaseModel):
     workspace_id: UUID
-    amount_paise: int | None = None
-    reason: str | None = None
+    # Omitted = refund everything still refundable on the latest payment.
+    amount_paise: int | None = Field(default=None, gt=0)
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class RefundResponse(BaseModel):

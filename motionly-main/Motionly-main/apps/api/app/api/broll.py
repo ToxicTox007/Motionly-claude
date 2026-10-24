@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from app.api.billing import build_billing_status
+from app.api.billing import build_billing_status_async
 from app.api.dependencies import (
     Actor,
     get_actor,
@@ -56,6 +56,7 @@ from app.services.layer_job_enqueue import (
     serialize_layer_job_payload,
 )
 from app.services.object_references import ObjectReferenceService
+from app.services.offload import run_blocking
 from app.services.queue import BrollQueue, StockAssetEnrichmentQueue
 from app.services.stock_video import (
     StockVideoCandidate,
@@ -593,9 +594,8 @@ async def generate_broll(
     storage_signer = storage_signer or getattr(request.app.state, "storage_signer", StorageSigner())
     if (
         request.app.state.settings.billing_enabled
-        and not build_billing_status(
-            actor.workspace_id,
-            billing_repository,
+        and not (
+            await build_billing_status_async(actor.workspace_id, billing_repository)
         ).entitlements.broll
     ):
         raise ApiError(
@@ -679,7 +679,10 @@ async def generate_broll(
                         workspace_id=actor.workspace_id,
                         asset_id=slot.selected_asset_id,
                     )
-                    ensure_owned_stock_asset(
+                    # Streams the whole stock video into storage (minutes, worst
+                    # case): never on the event loop.
+                    await run_blocking(
+                        ensure_owned_stock_asset,
                         asset=asset,
                         repository=repository,
                         settings=request.app.state.settings,
@@ -693,7 +696,8 @@ async def generate_broll(
             )
 
     prepare_heavy_job_enqueue(request=request)
-    job = broll_queue.enqueue_broll(
+    job = await run_blocking(
+        broll_queue.enqueue_broll,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         edit_plan_id=plan.id,
@@ -762,7 +766,8 @@ async def swap_broll(
         if asset.provider in {StockProviderKey.PEXELS, StockProviderKey.PIXABAY}:
             if request_state is None:
                 raise ApiError(500, "stock_ingest_not_configured", "Stock ingest is unavailable.")
-            ensure_owned_stock_asset(
+            await run_blocking(
+                ensure_owned_stock_asset,
                 asset=asset,
                 repository=repository,
                 settings=request_state.settings,

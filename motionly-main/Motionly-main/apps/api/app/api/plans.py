@@ -50,6 +50,7 @@ from app.services.edit_planner import (
     summarize_plan,
 )
 from app.services.layer_job_enqueue import prepare_heavy_job_enqueue
+from app.services.offload import run_blocking
 from app.services.queue import PlanQueue
 from app.services.timeline_compiler import (
     compile_timeline,
@@ -284,7 +285,8 @@ async def create_plan(
         separators=(",", ":"),
     )
     prepare_heavy_job_enqueue(request=request)
-    job = plan_queue.enqueue_plan(
+    job = await run_blocking(
+        plan_queue.enqueue_plan,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         transcript_id=transcript.id,
@@ -324,7 +326,7 @@ async def get_plan_job_status(
         workspace_id=actor.workspace_id,
     )
     queue_registry = request.app.state.queue_registry
-    job = queue_registry.get_job(job_id, queue_name="planning")
+    job = await run_blocking(queue_registry.get_job, job_id, queue_name="planning")
     if job is not None and (
         job.kind != "edit_plan"
         or job.workspace_id != actor.workspace_id

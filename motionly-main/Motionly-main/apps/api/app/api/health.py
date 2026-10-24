@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.api.dependencies import Actor, get_actor
 from app.api.errors import ApiError
+from app.services.ai_features import ai_feature_report, unconfigured_features
 
 router = APIRouter(prefix="/health", tags=["health"])
 ActorDep = Annotated[Actor, Depends(get_actor)]
@@ -210,6 +211,7 @@ async def _collect_dependency_checks(request: Request) -> dict[str, DependencyHe
         "api": DependencyHealth(status="ok", message="API process is responding."),
         **checks,
     }
+    checks["ai_features"] = _ai_feature_health(settings)
     audio_ml_providers = getattr(request.app.state, "audio_ml_providers", None)
     if not audio_ml_providers:
         checks["audio_ml"] = DependencyHealth(
@@ -233,6 +235,27 @@ async def _collect_dependency_checks(request: Request) -> dict[str, DependencyHe
             metadata=states,
         )
     return checks
+
+
+def _ai_feature_health(settings) -> DependencyHealth:
+    """Provider, execution site and credential presence per AI feature (no values)."""
+    report = ai_feature_report(settings)
+    missing = unconfigured_features(report)
+    metadata: dict[str, object] = {
+        "gpu_workers": (
+            "enabled" if getattr(settings, "gpu_workers_enabled", True) else "disabled"
+        ),
+        "features": report,
+    }
+    if missing:
+        return DependencyHealth(
+            status="degraded",
+            message="Selected remote AI providers have no credentials: " + ", ".join(missing),
+            metadata=metadata,
+        )
+    return DependencyHealth(
+        status="ok", message="Every selected AI provider is configured.", metadata=metadata
+    )
 
 
 async def _probe_temporal(settings) -> DependencyHealth:

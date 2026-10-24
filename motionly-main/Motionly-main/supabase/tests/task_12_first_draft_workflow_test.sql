@@ -81,9 +81,11 @@ select ok(
 select ok(
   has_table_privilege('authenticated','public.workflow_run_artifacts','SELECT')
   and not has_table_privilege('authenticated','public.workflow_run_artifacts','INSERT')
-  and has_table_privilege('authenticated','public.workflow_run_commands','SELECT')
+  -- The command ledger (idempotency keys, request hashes) is API-only since
+  -- 202610230301; members see command outcomes through the API.
+  and not has_table_privilege('authenticated','public.workflow_run_commands','SELECT')
   and not has_table_privilege('authenticated','public.workflow_run_commands','UPDATE'),
-  'members can read but cannot mutate Task 5 ledgers'
+  'members can read artifacts but cannot read or mutate the command ledger'
 );
 select ok(
   (select proconfig @> array['search_path=public, extensions, pg_temp']

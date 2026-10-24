@@ -18,6 +18,7 @@ from app.services.model_gateway import (
     GeneratedArtifact,
     GenerationOutput,
     GenerationRequest,
+    ImageEmbeddingsRequest,
     ModelRequest,
     ModelRoute,
     ModelUsage,
@@ -48,6 +49,9 @@ class OpenAICompatibleAdapter:
     extra_headers: Mapping[str, str] = field(default_factory=dict)
     timeout_seconds: float = 60.0
     allow_insecure_http: bool = False
+    # Merged into every JSON request body (for example OpenRouter provider
+    # routing). Request fields always win over these defaults.
+    extra_body: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _validate_base_url(
@@ -181,14 +185,17 @@ class OpenAICompatibleAdapter:
             {"type": "image_url", "image_url": {"url": image_url}}
             for image_url in request.image_urls
         )
+        body: dict[str, object] = {
+            "model": route.model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": min(request.max_output_units, route.max_output_units),
+        }
+        if request.response_format is not None:
+            body["response_format"] = dict(request.response_format)
         payload, request_id = self._request_json(
             route=route,
             operation="chat/completions",
-            json={
-                "model": route.model,
-                "messages": [{"role": "user", "content": content}],
-                "max_tokens": min(request.max_output_units, route.max_output_units),
-            },
+            json=body,
         )
         return AdapterResult(
             output=VisionOutput(content=_chat_content(payload, route), raw_response=payload),
@@ -199,28 +206,31 @@ class OpenAICompatibleAdapter:
 
     def _audio(self, route: ModelRoute, request: AudioRequest) -> AdapterResult:
         encoded = _encode_audio(request.audio_path)
+        body: dict[str, object] = {
+            "model": route.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": request.prompt},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": encoded,
+                                "format": request.audio_format,
+                            },
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": min(request.max_output_units, route.max_output_units),
+        }
+        if request.response_format is not None:
+            body["response_format"] = dict(request.response_format)
         payload, request_id = self._request_json(
             route=route,
             operation="chat/completions",
-            json={
-                "model": route.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": request.prompt},
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": encoded,
-                                    "format": request.audio_format,
-                                },
-                            },
-                        ],
-                    }
-                ],
-                "max_tokens": min(request.max_output_units, route.max_output_units),
-            },
+            json=body,
         )
         return AdapterResult(
             output=AudioOutput(content=_chat_content(payload, route), raw_response=payload),
@@ -238,36 +248,12 @@ class OpenAICompatibleAdapter:
             operation="embeddings",
             json=body,
         )
-        raw_data = payload.get("data")
-        if not isinstance(raw_data, list) or len(raw_data) != len(request.inputs):
-            raise _malformed(route)
-        vectors_by_index: list[tuple[int, tuple[float, ...]]] = []
-        seen_indices: set[int] = set()
-        vector_size: int | None = None
-        for default_index, item in enumerate(raw_data):
-            if not isinstance(item, Mapping) or not isinstance(item.get("embedding"), list):
-                raise _malformed(route)
-            try:
-                vector = tuple(float(value) for value in item["embedding"])
-                index = int(item.get("index", default_index))
-            except (TypeError, ValueError) as exc:
-                raise _malformed(route) from exc
-            if (
-                not vector
-                or any(not math.isfinite(value) for value in vector)
-                or index < 0
-                or index >= len(request.inputs)
-                or index in seen_indices
-                or (request.dimensions is not None and len(vector) != request.dimensions)
-                or (vector_size is not None and len(vector) != vector_size)
-            ):
-                raise _malformed(route)
-            seen_indices.add(index)
-            vector_size = len(vector)
-            vectors_by_index.append((index, vector))
-        if seen_indices != set(range(len(request.inputs))):
-            raise _malformed(route)
-        vectors = tuple(vector for _index, vector in sorted(vectors_by_index))
+        vectors = _parse_embedding_vectors(
+            payload,
+            route=route,
+            expected_count=len(request.inputs),
+            dimensions=request.dimensions,
+        )
         return AdapterResult(
             output=EmbeddingsOutput(vectors=vectors, raw_response=payload),
             usage=_usage(payload),
@@ -335,6 +321,8 @@ class OpenAICompatibleAdapter:
     ) -> tuple[dict[str, object], str | None]:
         headers = self._headers()
         url = self._operation_url(route=route, operation=operation)
+        if json is not None and self.extra_body:
+            json = {**self.extra_body, **json}
         try:
             with httpx.Client(
                 timeout=httpx.Timeout(
@@ -401,6 +389,102 @@ class AzureOpenAIAdapter(OpenAICompatibleAdapter):
             f"{self.base_url.rstrip('/')}/openai/deployments/{deployment}/{operation.lstrip('/')}"
             f"?api-version={quote(self.api_version, safe='-.')}"
         )
+
+
+JINA_BASE_URL = "https://api.jina.ai/v1"
+
+# Signatures for the image formats Jina accepts as data URLs.
+_IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+@dataclass(frozen=True)
+class JinaEmbeddingsAdapter(OpenAICompatibleAdapter):
+    """Jina multimodal embeddings (``POST /v1/embeddings``) for text and images.
+
+    Text inputs are sent as ``{"text": ...}`` and images as ``{"image": data-URL}``
+    so both land in one shared vector space. Vectors are L2-normalized floats.
+    """
+
+    base_url: str = JINA_BASE_URL
+    dimensions: int | None = 1024
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.dimensions is not None and self.dimensions < 1:
+            raise ValueError("Jina embedding dimensions must be positive")
+
+    def invoke(self, *, route: ModelRoute, request: ModelRequest) -> AdapterResult:
+        if isinstance(request, EmbeddingsRequest):
+            inputs: list[dict[str, str]] = [{"text": text} for text in request.inputs]
+            dimensions = request.dimensions or self.dimensions
+        elif isinstance(request, ImageEmbeddingsRequest):
+            inputs = [{"image": _image_data_url(image, route)} for image in request.images]
+            dimensions = self.dimensions
+        else:
+            raise TypeError(f"Jina adapter does not support {type(request).__name__}")
+        body: dict[str, object] = {
+            "model": route.model,
+            "input": inputs,
+            "normalized": True,
+            "embedding_type": "float",
+        }
+        if dimensions is not None:
+            body["dimensions"] = dimensions
+        payload, request_id = self._request_json(
+            route=route,
+            operation="embeddings",
+            json=body,
+        )
+        vectors = _parse_embedding_vectors(
+            payload,
+            route=route,
+            expected_count=len(inputs),
+            dimensions=dimensions,
+        )
+        return AdapterResult(
+            output=EmbeddingsOutput(vectors=vectors, raw_response=_without_vectors(payload)),
+            usage=_usage(payload),
+            # Billing is settled from the deterministic preflight estimate: Jina
+            # counts image tokens by tile, which a preflight cannot know exactly.
+            usage_reported=False,
+            provider_request_id=request_id,
+        )
+
+
+def _image_mime_type(image: bytes) -> str | None:
+    for signature, content_type in _IMAGE_SIGNATURES:
+        if image.startswith(signature):
+            return content_type
+    if image.startswith(b"RIFF") and image[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _image_data_url(image: bytes, route: ModelRoute) -> str:
+    mime = _image_mime_type(image)
+    if mime is None:
+        raise ProviderCallFailure(
+            provider=route.provider,
+            error_info=ProviderErrorInfo(
+                "provider_request_rejected",
+                False,
+                fallback_eligible=False,
+                circuit_worthy=False,
+                billable=False,
+            ),
+            message="Embedding images must be JPEG, PNG, GIF, or WebP.",
+        )
+    return f"data:{mime};base64,{base64.b64encode(image).decode('ascii')}"
+
+
+def _without_vectors(payload: Mapping[str, object]) -> dict[str, object]:
+    """Keep provider metadata (model, usage) without duplicating large vectors."""
+    return {key: value for key, value in payload.items() if key != "data"}
 
 
 def _validate_base_url(value: str, *, allow_insecure_http: bool) -> None:
@@ -522,6 +606,46 @@ def _encode_audio(path: Path) -> str:
             provider="model_gateway",
             error_info=ProviderErrorInfo("provider_request_rejected", False),
         ) from exc
+
+
+def _parse_embedding_vectors(
+    payload: Mapping[str, object],
+    *,
+    route: ModelRoute,
+    expected_count: int,
+    dimensions: int | None,
+) -> tuple[tuple[float, ...], ...]:
+    """Validate an OpenAI-style ``data`` list and return vectors in input order."""
+    raw_data = payload.get("data")
+    if not isinstance(raw_data, list) or len(raw_data) != expected_count:
+        raise _malformed(route)
+    vectors_by_index: list[tuple[int, tuple[float, ...]]] = []
+    seen_indices: set[int] = set()
+    vector_size: int | None = None
+    for default_index, item in enumerate(raw_data):
+        if not isinstance(item, Mapping) or not isinstance(item.get("embedding"), list):
+            raise _malformed(route)
+        try:
+            vector = tuple(float(value) for value in item["embedding"])
+            index = int(item.get("index", default_index))
+        except (TypeError, ValueError) as exc:
+            raise _malformed(route) from exc
+        if (
+            not vector
+            or any(not math.isfinite(value) for value in vector)
+            or index < 0
+            or index >= expected_count
+            or index in seen_indices
+            or (dimensions is not None and len(vector) != dimensions)
+            or (vector_size is not None and len(vector) != vector_size)
+        ):
+            raise _malformed(route)
+        seen_indices.add(index)
+        vector_size = len(vector)
+        vectors_by_index.append((index, vector))
+    if seen_indices != set(range(expected_count)):
+        raise _malformed(route)
+    return tuple(vector for _index, vector in sorted(vectors_by_index))
 
 
 def _malformed(route: ModelRoute) -> ProviderCallFailure:

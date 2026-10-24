@@ -1075,6 +1075,8 @@ export interface SubscriptionSummary {
   current_period_end?: string | null;
   cancel_at_period_end: boolean;
   payment_issue: boolean;
+  /** Past due only: paid features stay on until this time, then Free applies. */
+  past_due_grace_ends_at?: string | null;
   updated_at: string;
 }
 

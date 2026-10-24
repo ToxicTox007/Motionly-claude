@@ -7,6 +7,7 @@ from typing import Any
 
 from app.api.errors import ApiError
 from app.schemas.renders import CutSegment, RenderSpecs
+from app.services.subprocess_env import media_tool_env
 
 AudioSource = str | Path
 
@@ -157,6 +158,7 @@ class FFmpegCaptionRenderer:
                     text=True,
                     check=False,
                     timeout=FFMPEG_RENDER_TIMEOUT_SECONDS,
+                    env=media_tool_env(),
                 )
             except subprocess.TimeoutExpired as exc:
                 output_path.unlink(missing_ok=True)
@@ -176,6 +178,7 @@ class FFmpegCaptionRenderer:
                 command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=media_tool_env(),
             )
             deadline = time.monotonic() + FFMPEG_RENDER_TIMEOUT_SECONDS
             try:

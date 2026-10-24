@@ -1,6 +1,8 @@
 export type AdminIdentity = {
   userId: string;
   workspaceId: string;
+  /** Workspace role; only owner/admin of an ADMIN_WORKSPACE_IDS workspace qualify. */
+  role?: string;
 };
 
 export type AdminAllowlists = {

@@ -77,7 +77,7 @@ test("a missing or unparseable date renders as an em dash", () => {
   assert.notEqual(formatDate("2026-10-20T00:00:00Z"), "—");
 });
 
-test("an empty refund amount means refund the full plan price", () => {
+test("an empty refund amount means refund the remaining captured amount", () => {
   const result = validateRefundRupees("");
   assert.equal(result.ok, true);
   assert.equal(result.amountPaise, null);
@@ -111,4 +111,16 @@ test("a non-positive or malformed refund amount is rejected", () => {
     ok: false,
     error: "refund_amount_invalid",
   });
+});
+
+test("the past-due banner states when paid features stop", async () => {
+  const { pastDueGraceMessage } = await import("../lib/payment-history.mjs");
+  const now = new Date("2026-10-20T00:00:00Z");
+  assert.match(
+    pastDueGraceMessage("2026-10-27T00:00:00Z", now),
+    /^Paid features stay on until /,
+  );
+  for (const ended of ["2026-10-19T00:00:00Z", null, undefined, "not-a-date"]) {
+    assert.match(pastDueGraceMessage(ended, now), /^Paid features are paused/);
+  }
 });

@@ -14,10 +14,12 @@ from app.api.errors import ApiError
 from app.repositories.scale import ScaleResourceRecord
 from app.schemas.broll import StockOrientation, StockProviderKey
 from app.schemas.scale import ScaleResourceStatus
+from app.services.lalal_stems import LALAL_TEMP_PREFIX
 from app.services.local_storage import create_object_storage
-from app.services.media_probe import probe_video
+from app.services.media_probe import probe_duration_seconds, probe_video
 from app.services.media_url_policy import MediaUrlPolicyError, safe_http_stream
 from app.services.model_gateway import (
+    FeatureQuotaExceeded,
     GenerationOperationOutput,
     GenerationOutput,
     ModelCallContext,
@@ -32,6 +34,7 @@ from app.services.provider_resilience import (
     classify_provider_exception,
     classify_provider_status,
 )
+from app.services.subprocess_env import ml_tool_env
 from app.services.worker_media import materialize_upload_source
 
 
@@ -49,7 +52,9 @@ class DemucsStemSeparator:
             str(output_root),
             str(source_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=1800, check=False, env=ml_tool_env()
+        )
         if result.returncode != 0:
             shutil.rmtree(output_root, ignore_errors=True)
             raise ApiError(
@@ -392,15 +397,35 @@ def _separate_stems(
     source = materialize_upload_source(upload=upload, storage=storage)
     model = str(record.payload.get("model") or settings.demucs_model)
     if model_gateway is not None and stem_gateway_route is not None:
-        separated = model_gateway.invoke(
-            StemSeparationRequest(source_path=source, model=model),
-            context=ModelCallContext(
-                workspace_id=record.workspace_id,
-                project_id=record.project_id,
-                required_route_id=stem_gateway_route.route_id,
-                required_model_revision=stem_gateway_route.model_revision,
-            ),
-        )
+        duration_s = None
+        if (
+            stem_gateway_route.input_cost_per_million_usd > 0
+            or stem_gateway_route.budget_feature is not None
+        ):
+            # Remote stems are priced and quota-metered per second of audio:
+            # reserve from the real duration, and refuse sources whose length
+            # cannot be measured.
+            duration_s = probe_duration_seconds(source)
+            if duration_s is None:
+                raise ApiError(
+                    422,
+                    "stem_source_duration_unknown",
+                    "The source length could not be measured for stem separation.",
+                )
+        try:
+            separated = model_gateway.invoke(
+                StemSeparationRequest(source_path=source, model=model, duration_s=duration_s),
+                context=ModelCallContext(
+                    workspace_id=record.workspace_id,
+                    project_id=record.project_id,
+                    required_route_id=stem_gateway_route.route_id,
+                    required_model_revision=stem_gateway_route.model_revision,
+                ),
+            )
+        except FeatureQuotaExceeded as exc:
+            # Stems are user-requested, so a used-up quota fails visibly (402)
+            # instead of degrading like the analysis features.
+            raise ApiError(402, "audio_stems_quota_exceeded", str(exc)) from exc
         if not isinstance(separated.output, StemSeparationOutput):
             raise TypeError("stem separation route returned the wrong typed output")
         stems = dict(separated.output.stems)
@@ -414,7 +439,12 @@ def _separate_stems(
     else:
         stems = stem_separator.separate(source_path=source, model=model)
         provenance = None
-    result: dict[str, Any] = {"provider": "demucs", "model": model, "active": "vocals"}
+    result: dict[str, Any] = {
+        # Demucs and the fixture separator keep the historical "demucs" label.
+        "provider": getattr(stem_separator, "provider_name", "demucs"),
+        "model": getattr(stem_separator, "model", None) or model,
+        "active": "vocals",
+    }
     if provenance is None:
         # Non-production stems are produced by the labelled FixtureStemSeparator
         # (fixtures/registry.json id "stem-separation", label "Test stems"); mark
@@ -448,7 +478,7 @@ def _remove_stem_temp_directory(stems: dict[str, Path]) -> None:
     first_stem = next(iter(stems.values())).resolve()
     for parent in first_stem.parents:
         if parent.parent == temp_root and parent.name.startswith(
-            ("motionly-demucs-", "motionly-fixture-stems-")
+            ("motionly-demucs-", "motionly-fixture-stems-", LALAL_TEMP_PREFIX)
         ):
             shutil.rmtree(parent, ignore_errors=True)
             return

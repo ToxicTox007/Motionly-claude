@@ -22,6 +22,10 @@ def visual_provider_identity(settings: object) -> tuple[str, str]:
     provider = str(getattr(settings, "visual_intelligence_provider", "local_ml"))
     if provider == "fixture":
         return provider, "fixture-visual-v1"
+    if provider.strip().lower() == "remote":
+        from app.services.remote_visual import remote_visual_identity
+
+        return "remote", remote_visual_identity(settings)
     return provider, "|".join(
         f"{getattr(settings, model_name, 'unknown')}@"
         f"{getattr(settings, revision_name, 'unknown')}"

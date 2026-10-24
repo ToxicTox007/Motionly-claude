@@ -11514,6 +11514,7 @@
           "amount_paise": {
             "anyOf": [
               {
+                "exclusiveMinimum": 0.0,
                 "type": "integer"
               },
               {
@@ -11525,6 +11526,7 @@
           "reason": {
             "anyOf": [
               {
+                "maxLength": 500,
                 "type": "string"
               },
               {
@@ -14347,6 +14349,18 @@
               }
             ],
             "title": "Gateway Subscription Id"
+          },
+          "past_due_grace_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Past Due Grace Ends At"
           },
           "payment_issue": {
             "default": false,
@@ -20418,9 +20432,25 @@
     },
     "/billing/refunds": {
       "post": {
-        "description": "Issue a refund for a workspace. Owner/admin only; audit-logged.",
+        "description": "Refund a workspace's most recent captured payment. Platform admin only.\n\nThe target workspace comes from the request body, so a role in the\ncaller's own workspace is not sufficient authority: ``require_admin`` gates\nthe route. The amount defaults to (and may not exceed) what was captured on\nthat gateway order minus refunds already recorded. The gateway performs the\nrefund first; the ledger row is keyed by the gateway refund id so the\nmatching ``payment.refunded`` webhook cannot double-count it. Audit-logged.",
         "operationId": "issue_refund_billing_refunds_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
           {
             "in": "header",
             "name": "authorization",

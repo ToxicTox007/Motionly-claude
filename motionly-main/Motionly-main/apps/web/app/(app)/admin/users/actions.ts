@@ -114,8 +114,10 @@ export type RefundResult = { ok: true } | { ok: false; error: string };
 
 // Issue a refund for a workspace (admin surface, Task 23). The amount is
 // entered in whole rupees and validated here before it is sent; an empty
-// amount refunds the full plan price (the API default). The API is owner/admin
-// gated and audit-logs the refund (billing.refund). Mirrors the pure
+// amount refunds what is still refundable on the latest payment (the API
+// default). The API is platform-admin gated (require_admin), caps the amount at
+// the captured payment, refunds through the gateway, and audit-logs the refund
+// (billing.refund). Mirrors the pure
 // validateRefundRupees helper so the client dialog and this action agree.
 export async function issueRefund(
   workspaceId: string,

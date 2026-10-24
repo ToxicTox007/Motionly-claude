@@ -20,6 +20,7 @@ from app.services.layer_job_enqueue import (
     prepare_heavy_job_enqueue,
     serialize_layer_job_payload,
 )
+from app.services.offload import run_blocking
 from app.services.queue import RegenerationQueue
 from app.services.regeneration import (
     affected_layers_for_request,
@@ -69,7 +70,8 @@ async def regenerate_project_layers(
         cache_key=build_regeneration_cache_key(payload),
         settings_summary=summary,
     )
-    job = regeneration_queue.enqueue_regeneration(
+    job = await run_blocking(
+        regeneration_queue.enqueue_regeneration,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         control_settings_id=controls.id,

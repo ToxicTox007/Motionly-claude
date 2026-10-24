@@ -18,6 +18,7 @@
 10. [Ongoing Release Flow](#10-ongoing-release-flow)
 11. [Environment Variables Reference](#11-environment-variables-reference)
 12. [Minimal / Budget Setup (No GPU)](#12-minimal--budget-setup-no-gpu)
+13. [GPU-free Remote AI Mode](#13-gpu-free-remote-ai-mode)
 
 ---
 
@@ -540,6 +541,134 @@ If you want to run it cheaply without GPU (no background removal, no visual AI a
 **Estimated cost: ~$200–400/month** (m7i.2xlarge ~$300/mo + Groq/OpenRouter usage)
 
 **GPU production cost: ~$1,500–2,500/month** (g6.12xlarge ~$2,000/mo in Mumbai + AI API usage)
+
+> [!NOTE]
+> To keep visual analysis, background removal and audio intelligence without a GPU, use [Section 13](#13-gpu-free-remote-ai-mode) instead: GPU work goes to remote APIs and CPU work stays local.
+
+---
+
+## 13. GPU-free Remote AI Mode
+
+Every feature that needs a GPU calls a remote API; everything that runs on a CPU stays local. Each feature has its own switch, and the defaults (no switch set) are the GPU topology above, unchanged.
+
+### 13.1 Feature switches
+
+| Feature | Switch | GPU value (default) | GPU-free value | Runs on | Key |
+|---|---|---|---|---|---|
+| Visual analysis (frames, scenes, faces, colours, motion) | `VISUAL_PROVIDER` | `local_ml` | `remote` | `cpu-vision-worker` (OpenCV + MediaPipe) | — |
+| Keyframe objects | `VISUAL_OBJECTS_PROVIDER` | part of `local_ml` | `google_vision` (or `disabled`) | Google Cloud Vision | `google_vision_api_key` |
+| Keyframe captions | `VISUAL_CAPTIONS_PROVIDER` | part of `local_ml` | `openrouter` (or `disabled`) | OpenRouter, zero-data-retention endpoints only | `openrouter_api_key` |
+| Keyframe embeddings | `VISUAL_EMBEDDINGS_PROVIDER` | part of `local_ml` | `jina` (or `disabled`) | Jina AI | `jina_api_key` |
+| B-roll embeddings | `EMBEDDINGS_PROVIDER` | `local_clip` | `jina` (required when keyframe embeddings use Jina) | Jina AI | `jina_api_key` |
+| Background matte | `MATTE_PROVIDER` | `local_ml` | `local_cpu` | `cpu-vision-worker` (MediaPipe selfie segmenter) | — |
+| Speaker diarization | `AUDIO_DIARIZATION_PROVIDER` | empty (= `local_ml`) | `pyannoteai` | pyannoteAI | `pyannoteai_api_key` |
+| Voice emotion | `AUDIO_EMOTION_PROVIDER` | empty (= `local_ml`) | `openrouter_audio` | OpenRouter, zero-data-retention endpoints only | `openrouter_api_key` |
+| Sound classification | `AUDIO_SOUND_PROVIDER` | empty (= `local_ml`) | `yamnet_tflite` | `cpu-vision-worker` (YAMNet TFLite) | — |
+| Stem separation | `STEM_SEPARATION_PROVIDER` | `demucs` | `lalal` | LALAL.AI | `lalal_license_key` |
+| Rendering | `FFMPEG_GPU_ENABLED` (API) | `true` sends renders to `gpu-ffmpeg-worker` | `false` (libx264 on `cpu-ffmpeg-worker`) | — | — |
+| GPU workers present | `GPU_WORKERS_ENABLED` | `true` | `false` | — | — |
+
+Only scene keyframes (at most `VISUAL_REMOTE_MAX_KEYFRAMES`, default 24 per video) go to the vision and embedding APIs; the video never leaves the deployment. With `GPU_WORKERS_ENABLED=false` the GPU capacity observer, its maintenance job and GPU model prefetch are off, and production start-up refuses any switch that still needs a GPU worker.
+
+Transcription (Groq) and planning (OpenRouter) are already remote and do not change.
+
+### 13.2 Accounts, keys and prices
+
+Create these accounts (OpenRouter and Groq are already required):
+
+| Vendor | Used for | Sign-up | Pricing |
+|---|---|---|---|
+| Google Cloud | Object localization | console.cloud.google.com → project with billing → enable **Cloud Vision API** → API key restricted to that API | cloud.google.com/vision/pricing (Object Localization) |
+| Jina AI | Image and text embeddings (`jina-clip-v2`, 1024 dimensions) | jina.ai → API key | jina.ai/embeddings (Pricing) |
+| OpenRouter | Captions and voice emotion (`google/gemini-3.5-flash-lite`) | existing key | the model's page on openrouter.ai |
+| pyannoteAI | Diarization (`precision-3`) | dashboard.pyannote.ai → API key | pyannote.ai/pricing |
+| LALAL.AI | Stems | lalal.ai/api → API license key | lalal.ai/pricing and lalal.ai/api |
+
+Write each key to a file in `SECRETS_DIR` (mode `0444`, directory `0700`): `google_vision_api_key`, `jina_api_key`, `pyannoteai_api_key`, `lalal_license_key` ([docs/security/secrets.md](motionly-main/Motionly-main/docs/security/secrets.md)).
+
+Every remote call reserves budget from the prices below, so they must match your contract. Production refuses zero prices, and the overlay refuses to start without them. Convert to the setting's unit:
+
+| Setting | Unit |
+|---|---|
+| `GOOGLE_VISION_COST_PER_IMAGE_USD` | USD per image (Google prices per 1,000) |
+| `VISUAL_CAPTION_INPUT_COST_PER_MILLION_USD`, `VISUAL_CAPTION_OUTPUT_COST_PER_MILLION_USD` | USD per million input / output tokens of the caption model |
+| `JINA_TEXT_COST_PER_MILLION_TOKENS_USD` | USD per million text tokens (charged per UTF-8 byte, an upper bound) |
+| `JINA_IMAGE_COST_PER_IMAGE_USD` | USD per embedded image |
+| `PYANNOTEAI_COST_PER_HOUR_USD` | USD per hour of audio (pyannoteAI prices in EUR; convert) |
+| `AUDIO_EMOTION_INPUT_COST_PER_MILLION_USD`, `AUDIO_EMOTION_OUTPUT_COST_PER_MILLION_USD` | USD per million audio-input / output tokens of the emotion model |
+| `LALAL_COST_PER_MINUTE_USD` | USD per minute of source audio |
+
+### 13.3 Bring-up
+
+1. **Image.** The supply-chain workflow builds the `cpu-vision-worker` component. To build it yourself:
+   `docker build -f apps/worker/Dockerfile.python --build-arg API_EXTRAS=cpu-vision --build-arg CPU_VISION_ENABLED=true -t <registry>/cpu-vision-worker .`
+   It bakes in the YAMNet, selfie-segmenter and BlazeFace models, each checked against a pinned SHA-256. Set `MOTIONLY_CPU_VISION_WORKER_IMAGE=<name>@sha256:<digest>`.
+2. **Database.** Migration `202610220101_remote_ai_feature_quota_categories.sql` must be applied (`db-migrate` runs it on start). Without it, quota usage rows are rejected.
+3. **Inputs.** Add the image, the nine prices and any switch overrides to the Compose env file (template: `infra/production-compose.env.example`), and the four secret files to `SECRETS_DIR`.
+4. **Start**, without `--profile gpu`:
+   ```bash
+   docker compose --project-name motionly --env-file compose.env \
+     -f infra/docker-compose.gpu.yml -f infra/docker-compose.remote-ai.yml up -d --wait
+   ```
+   No GPU service and no `demucs-worker` start. `cpu-vision-worker` serves `visual_analysis,transcription,matte_extraction,audio_demucs`.
+5. **Check.** `GET /api/health/dependencies` (authenticated) has an `ai_features` entry: every feature should show `execution` `cpu_worker` or `remote`, `configured: true`, and `gpu_workers: disabled`. The response never contains key values. Worker heartbeats from `cpu-vision-worker` list `cpu_vision_queues: [visual_analysis, matte_extraction]`.
+
+> [!IMPORTANT]
+> The signed release flow (`scripts/deploy/apply_release.sh`) deploys only `infra/docker-compose.gpu.yml` and refuses `MOTIONLY_COMPOSE_OVERLAY` outside rehearsal. The release manifest does not carry the cpu-vision image, and the agent does not copy the four new keys from SSM. Until those are added, run this mode with operator-run Compose as above.
+
+### 13.4 Cost controls and failure behaviour
+
+| Control | Setting | Scope |
+|---|---|---|
+| Monthly budget | `MODEL_GATEWAY_MONTHLY_BUDGET_USD` | per workspace, all features |
+| Request budget | `MODEL_GATEWAY_REQUEST_BUDGET_USD` | per call |
+| Monthly cap per feature | `MODEL_GATEWAY_FEATURE_BUDGETS_USD`, e.g. `{"vision_captions":20,"audio_stems":15}` | whole deployment |
+| Plan quota per feature | `QUOTA_<FEATURE>_<PLAN>_LIMIT_<UNIT>` | per workspace, per billing period |
+
+Plan quota defaults (free / creator / pro / agency):
+
+| Feature | Unit | Defaults |
+|---|---|---|
+| `VISION_OBJECTS`, `VISION_CAPTIONS` | images | 120 / 1,000 / 3,000 / 7,500 |
+| `EMBEDDINGS` | inputs | 1,000 / 8,000 / 24,000 / 60,000 |
+| `AUDIO_DIARIZATION`, `AUDIO_EMOTION` | seconds | 1,800 / 14,400 / 43,200 / 108,000 |
+| `AUDIO_STEMS` | seconds | 600 / 3,600 / 10,800 / 36,000 |
+
+Example: `QUOTA_VISION_CAPTIONS_FREE_LIMIT_IMAGES=60`. Only remote calls count. Usage is recorded once per successful call in `cost_attribution_events`. If the quota cannot be checked, the paid call is refused.
+
+When a provider fails, its circuit is open, or a budget or quota runs out:
+
+- **Visual analysis** completes and lists the missing part in `summary.degraded_capabilities` (for example `objects: unavailable:quota_exceeded`). The other capabilities still run.
+- **Diarization, voice emotion, sound** keep the transcript-based estimate and record `ml_status`.
+- **B-roll** ranks a slot by keywords when its query embedding is refused, and does not cache that slot set.
+- **Stems** fail visibly so the user can retry: HTTP 402 `audio_stems_quota_exceeded` when the quota is used up, and a failed job for provider errors or budgets.
+
+### 13.5 Switching a feature back to the GPU
+
+General rules:
+
+- Set `GPU_WORKERS_ENABLED=true` as soon as any GPU service runs; production refuses local GPU switches while it is `false`.
+- Set switches in the Compose env file; the overlay passes them to the API and every worker, so they always agree.
+- Remove a queue from `CPU_VISION_WORKER_QUEUES` when a GPU worker takes it over. A cpu-vision worker subscribed to `visual_analysis` or `matte_extraction` refuses to start if the matching switch is a GPU value.
+- `--profile gpu` still starts every GPU service at once.
+
+| Feature | Set | Start | Notes |
+|---|---|---|---|
+| Visual analysis | `VISUAL_PROVIDER=local_ml`, `EMBEDDINGS_PROVIDER=local_clip`, `CPU_VISION_WORKER_QUEUES=transcription,matte_extraction,audio_demucs` | `--profile gpu-inference` (serves `GPU_INFERENCE_WORKER_QUEUES`, default `visual_analysis`) | Switch embeddings together: local manifests carry 512-dimension CLIP vectors, which B-roll would otherwise compare with 1024-dimension Jina vectors. The visual cache identity changes, so new analyses are not served from remote-mode cache entries. |
+| Matte | `MATTE_PROVIDER=local_ml`, drop `matte_extraction` from `CPU_VISION_WORKER_QUEUES` | `--profile gpu-matte` | |
+| Diarization / voice emotion / sound | `AUDIO_DIARIZATION_PROVIDER`, `AUDIO_EMOTION_PROVIDER`, `AUDIO_SOUND_PROVIDER` = `local_ml` (or empty); drop `transcription` from `CPU_VISION_WORKER_QUEUES`; `GPU_INFERENCE_WORKER_QUEUES=visual_analysis,transcription` | `--profile gpu-inference` | The local models run inside transcription jobs, so the transcription queue moves with them. Diarization also needs `PYANNOTE_AUTH_TOKEN`. |
+| Stems | `STEM_SEPARATION_PROVIDER=demucs`, drop `audio_demucs` from `CPU_VISION_WORKER_QUEUES` | `--profile local-stems` (Demucs runs on CPU) | |
+| B-roll embeddings only | `EMBEDDINGS_PROVIDER=local_clip`, and `VISUAL_EMBEDDINGS_PROVIDER=disabled` while visual analysis stays remote | — | CLIP runs inside the process that ranks B-roll (`planning-worker`), which needs `torch`; see the known issues. |
+| Rendering | `FFMPEG_GPU_ENABLED=true` on the API | `--profile gpu-render` | |
+
+To go fully back to the original topology, drop the overlay file and start with `--profile gpu`.
+
+### 13.6 Known issues
+
+- **MediaPipe legacy API (pre-existing).** The locked `mediapipe==0.10.35` no longer ships `mp.solutions`. The GPU visual provider (`LocalMLVisualIntelligenceProvider._load_models`) and the GPU matte loader still call `mp.solutions.face_detection` / `selfie_segmentation`, so they would fail to load on the GPU image too. The CPU path uses the MediaPipe Tasks API and is not affected. Fix the GPU path before switching visual analysis or matte back.
+- **Local CLIP on the planning worker (pre-existing, from the lock files).** `torch` and `transformers` are only in `requirements-ml.lock`, while `planning-worker` (which runs B-roll generation) uses the `cpu-worker` image. With `EMBEDDINGS_PROVIDER=local_clip`, production has no fallback, so B-roll embeddings would fail there. Not tested at runtime.
+- **Not verified against live vendors.** All provider integrations were tested against recorded API shapes, not live accounts. Run one analysis per feature after adding keys. LALAL.AI download links are upgraded to HTTPS; whether its download host serves HTTPS was not confirmed.
+- **Privacy page.** `apps/web/app/privacy/page.tsx` lists the providers above, what each receives and its retention. Confirm Jina AI's and LALAL.AI's retention terms before publishing.
 
 ---
 

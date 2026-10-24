@@ -134,6 +134,38 @@ export async function seedPaymentCharge(
   return row;
 }
 
+/**
+ * Seed a refund adjustment as the payment.refunded webhook records it (keyed by
+ * the gateway refund id). Refunds themselves are platform-admin only.
+ */
+export async function seedPaymentRefund(
+  stack,
+  workspaceId,
+  { amountPaise = 49900, orderId = null } = {},
+) {
+  const refundId = `rfnd_${randomBytes(8).toString("hex")}`;
+  const response = await stack.admin.post(
+    "/supabase/rest/v1/billing_adjustments",
+    {
+      headers: { prefer: "return=representation" },
+      data: {
+        workspace_id: workspaceId,
+        gateway_event_id: `refund_${refundId}`,
+        adjustment_type: "refund",
+        amount_paise: -Math.abs(amountPaise),
+        currency: "inr",
+        metadata: {
+          refund_id: refundId,
+          ...(orderId ? { order_id: orderId } : {}),
+        },
+      },
+    },
+  );
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const [row] = await response.json();
+  return row;
+}
+
 /** Every billing adjustment (charges + refunds) for a workspace, newest first. */
 export async function listBillingAdjustments(stack, workspaceId) {
   const response = await stack.admin.get(

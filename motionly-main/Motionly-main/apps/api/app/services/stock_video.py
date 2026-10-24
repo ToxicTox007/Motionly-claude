@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,47 @@ from app.services.storage import StorageSigner
 EMBEDDING_DOWNLOAD_TIMEOUT_SECONDS = 6.0
 EMBEDDING_DOWNLOAD_MAX_ATTEMPTS = 2
 EMBEDDING_DOWNLOAD_MAX_BYTES = 8 * 1024 * 1024
+# The workspace copy of a stock clip is fetched again at render time, where
+# media downloads are capped at 512 MiB (worker_media.MAX_SOURCE_BYTES), so a
+# larger clip could never render anyway. STOCK_ASSET_MAX_BYTES can lower it.
+DEFAULT_STOCK_ASSET_MAX_BYTES = 512 * 1024 * 1024
+
+
+class StockAssetTooLarge(Exception):
+    """A provider asset exceeded the stock-ingest byte cap."""
+
+
+def stock_asset_max_bytes() -> int:
+    try:
+        value = int(os.getenv("STOCK_ASSET_MAX_BYTES", str(DEFAULT_STOCK_ASSET_MAX_BYTES)))
+    except ValueError:
+        return DEFAULT_STOCK_ASSET_MAX_BYTES
+    return max(1, min(DEFAULT_STOCK_ASSET_MAX_BYTES, value))
+
+
+def _reject_declared_oversize(content_length: str | None, max_bytes: int) -> None:
+    try:
+        declared = int(content_length) if content_length is not None else None
+    except ValueError:
+        declared = None
+    if declared is not None and declared > max_bytes:
+        raise StockAssetTooLarge(f"declared {declared} bytes > {max_bytes}")
+
+
+def _bounded_chunks(chunks, max_bytes: int):
+    """Yield chunks, stopping the copy once more than ``max_bytes`` arrive.
+
+    Content-Length is optional (and can understate the body), so the bytes
+    actually streamed are what count.
+    """
+    received = 0
+    for chunk in chunks:
+        received += len(chunk)
+        if received > max_bytes:
+            raise StockAssetTooLarge(f"streamed more than {max_bytes} bytes")
+        yield chunk
+
+
 _ALLOWED_THUMBNAIL_CONTENT_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
 COMPATIBLE_CLIP_MODEL_VERSION = "compatible-hash-clip-v1"
 logger = logging.getLogger(__name__)
@@ -55,27 +97,55 @@ def ensure_owned_stock_asset(*, asset, repository, settings, storage_signer: Sto
         ) as source:
             source.raise_for_status()
             content_type = source.headers.get("content-type", "video/mp4")
+            max_bytes = stock_asset_max_bytes()
+            _reject_declared_oversize(source.headers.get("content-length"), max_bytes)
+            chunks = _bounded_chunks(source.iter_bytes(chunk_size=1024 * 1024), max_bytes)
             if storage_signer.supabase_url and storage_signer.service_role_key:
                 encoded_path = quote(path, safe="/")
-                uploaded = httpx.post(
-                    f"{storage_signer.supabase_url}/storage/v1/object/{bucket}/{encoded_path}",
-                    headers={
-                        "apikey": storage_signer.service_role_key,
-                        "authorization": f"Bearer {storage_signer.service_role_key}",
-                        "content-type": content_type,
-                        "x-upsert": "true",
-                    },
-                    content=source.iter_bytes(chunk_size=1024 * 1024),
-                    timeout=300,
+                object_url = (
+                    f"{storage_signer.supabase_url}/storage/v1/object/{bucket}/{encoded_path}"
                 )
+                storage_headers = {
+                    "apikey": storage_signer.service_role_key,
+                    "authorization": f"Bearer {storage_signer.service_role_key}",
+                }
+                try:
+                    uploaded = httpx.post(
+                        object_url,
+                        headers={
+                            **storage_headers,
+                            "content-type": content_type,
+                            "x-upsert": "true",
+                        },
+                        content=chunks,
+                        timeout=300,
+                    )
+                except StockAssetTooLarge:
+                    # The upload was cut off mid-stream; make sure no partial
+                    # object is left behind (best effort).
+                    try:
+                        httpx.delete(object_url, headers=storage_headers, timeout=30)
+                    except httpx.HTTPError:
+                        logger.warning("stock_asset_partial_cleanup_failed")
+                    raise
                 if uploaded.status_code >= 400:
                     raise ApiError(502, "stock_asset_ingest_failed", "Stock video copy failed.")
             else:
                 target = Path(settings.media_work_dir).expanduser().resolve() / bucket / path
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with target.open("wb") as output:
-                    for chunk in source.iter_bytes(chunk_size=1024 * 1024):
-                        output.write(chunk)
+                try:
+                    with target.open("wb") as output:
+                        for chunk in chunks:
+                            output.write(chunk)
+                except BaseException:
+                    target.unlink(missing_ok=True)
+                    raise
+    except StockAssetTooLarge as exc:
+        raise ApiError(
+            422,
+            "stock_asset_too_large",
+            "This stock video is too large to use. Pick another clip.",
+        ) from exc
     except (httpx.HTTPError, MediaUrlPolicyError) as exc:
         raise ApiError(502, "stock_asset_ingest_failed", "Stock video copy failed.") from exc
     signed = storage_signer.create_signed_download(

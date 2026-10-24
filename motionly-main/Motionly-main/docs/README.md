@@ -34,6 +34,7 @@ This directory is the canonical home for maintained Motionly documentation. Link
 
 - [Data handling](security/data-handling.md) — external providers and internal storage.
 - [Runtime secrets](security/secrets.md) — secret-file names, permissions, and `/run/secrets` behavior.
+- [Dependency advisories](security/dependency-advisories.md) — pinned fixes and known unpatched advisories.
 - [Edit-plan integrity](security/edit-plan-integrity.md)
 - [Phase 0 tenancy matrix](security/phase-0-tenancy-matrix.md)
 - [Prelaunch review](prelaunch-review.md)

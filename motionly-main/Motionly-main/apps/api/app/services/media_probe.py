@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 from app.schemas.uploads import VideoMetadata
+from app.services.subprocess_env import media_tool_env
 
 
 class MediaProbeError(Exception):
@@ -26,6 +27,7 @@ def probe_video(path: Path) -> VideoMetadata:
             capture_output=True,
             text=True,
             timeout=30,
+            env=media_tool_env(),
         )
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise MediaProbeError("Unable to inspect uploaded video.") from exc
@@ -71,6 +73,38 @@ def probe_video(path: Path) -> VideoMetadata:
         rotation_degrees=rotation,
         warnings=warnings,
     )
+
+
+def probe_duration_seconds(path: Path) -> float | None:
+    """Container duration in seconds, or None when ffprobe cannot read it."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=media_tool_env(),
+        )
+        duration = float(json.loads(result.stdout).get("format", {}).get("duration") or 0)
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ):
+        return None
+    return duration if duration > 0 else None
 
 
 def _duration_ms(payload: dict[str, object]) -> int | None:

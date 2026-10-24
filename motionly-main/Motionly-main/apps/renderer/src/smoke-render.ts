@@ -57,7 +57,8 @@ async function main() {
   const server = createRangeServer(sourcePath);
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
   const { port } = server.address() as AddressInfo;
-  const sourceUrl = `http://127.0.0.1:${port}/source.mp4`;
+  // The render CLI only accepts the worker's loopback media proxy paths.
+  const sourceUrl = `http://127.0.0.1:${port}/media/1`;
 
   await writeFile(
     propsPath,

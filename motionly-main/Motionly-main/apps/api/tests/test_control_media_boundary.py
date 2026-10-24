@@ -66,14 +66,17 @@ def test_workers_never_route_domain_compute_through_internal_api() -> None:
 def test_heavy_endpoints_enqueue_worker_jobs() -> None:
     api_dir = ROOT / "apps/api/app/api"
     required = {
-        "plans.py": "enqueue_plan(",
-        "broll.py": "enqueue_broll(",
-        "music.py": "enqueue_music_selection(",
-        "effects.py": "enqueue_effects_config(",
-        "captions.py": "enqueue_caption_generation(",
+        "plans.py": "enqueue_plan",
+        "broll.py": "enqueue_broll",
+        "music.py": "enqueue_music_selection",
+        "effects.py": "enqueue_effects_config",
+        "captions.py": "enqueue_caption_generation",
     }
-    for filename, call in required.items():
-        assert call in (api_dir / filename).read_text()
+    for filename, method in required.items():
+        source = (api_dir / filename).read_text()
+        # Called directly, or handed to run_blocking so the BullMQ bridge
+        # round-trip stays off the event loop.
+        assert f"{method}(" in source or f".{method},\n" in source, (filename, method)
 
 
 def test_heavy_endpoints_require_worker_queue_before_enqueue() -> None:

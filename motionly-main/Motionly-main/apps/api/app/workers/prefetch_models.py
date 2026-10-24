@@ -21,8 +21,11 @@ def main() -> None:
     failures: list[str] = []
     attempted = 0
     tmp_cleanup = cleanup_worker_tmp()
+    # GPU-free deployments (GPU_WORKERS_ENABLED=false) never load the GPU-worker
+    # models, so they are not downloaded; Demucs runs on CPU and still is.
+    gpu_models = bool(getattr(settings, "gpu_workers_enabled", True))
 
-    if importlib.util.find_spec("huggingface_hub"):
+    if gpu_models and importlib.util.find_spec("huggingface_hub"):
         from huggingface_hub import snapshot_download
 
         models = [
@@ -43,7 +46,7 @@ def main() -> None:
             except Exception as exc:  # worker logs retain the exact provider failure
                 failures.append(f"{model}@{revision}: {exc}")
 
-    if importlib.util.find_spec("ultralytics"):
+    if gpu_models and importlib.util.find_spec("ultralytics"):
         attempted += 1
         try:
             from ultralytics import YOLO
@@ -52,7 +55,7 @@ def main() -> None:
         except Exception as exc:
             failures.append(f"{settings.visual_yolo_model}: {exc}")
 
-    if importlib.util.find_spec("tensorflow_hub"):
+    if gpu_models and importlib.util.find_spec("tensorflow_hub"):
         attempted += 1
         try:
             import tensorflow_hub as hub

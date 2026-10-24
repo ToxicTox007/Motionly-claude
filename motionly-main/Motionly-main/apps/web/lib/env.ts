@@ -56,6 +56,10 @@ export const env = {
   get billingEnabled(): boolean {
     return getPublicConfig().billingEnabled;
   },
+  /** Server only: "demo" when the billing surface is the no-charge demo gateway. */
+  get billingMode(): "disabled" | "demo" {
+    return getServerConfig().billingMode;
+  },
   /** Local development only; the config refuses it anywhere else. */
   get skipAuthMiddleware(): boolean {
     return !inBrowser() && getServerConfig().skipAuthMiddleware;

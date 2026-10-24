@@ -32,6 +32,8 @@ To rotate the origin secret: write the old value to `edge-origin-verify-previous
 
 The local-audit Compose overlay additionally requires `local_audit_external_authorization`. It authorizes only a named sandbox run and must never be reused for a release deployment.
 
+The GPU-free remote AI overlay (`infra/docker-compose.remote-ai.yml`) additionally requires `jina_api_key`, `lalal_license_key`, `pyannoteai_api_key` and `google_vision_api_key`. They are mounted into the API and every worker, because each process validates the provider switches at start-up. A feature switched back to its local provider ignores its key, but the file must still exist (it may be empty).
+
 ## Temporal certificates
 
 Temporal PEM values are retrieved from SSM Parameter Store as single-line base64 values, decoded directly into protected files, and never placed in Compose environment values or command arguments. Certificate identities and authorization roles are defined in [Temporal mTLS/authZ staged canary](../ops/temporal-mtls-canary.md).

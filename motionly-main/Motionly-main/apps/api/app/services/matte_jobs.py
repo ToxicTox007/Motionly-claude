@@ -18,6 +18,7 @@ from app.services.model_gateway import (
 )
 from app.services.queue import MatteQueue
 from app.services.segmentation_matte import generate_selfie_segmentation_matte
+from app.services.subprocess_env import media_tool_env
 from app.services.worker_media import materialize_upload_source
 
 logger = logging.getLogger(__name__)
@@ -323,7 +324,7 @@ def run_matte_for_upload(
                         "yuv420p",
                         str(local_matte),
                     ],
-                    check=True,
+                    check=True, env=media_tool_env(),
                 )
                 matte_model = FIXTURE_MATTE_MODEL
                 matte_provenance = FIXTURE_MATTE_LABEL

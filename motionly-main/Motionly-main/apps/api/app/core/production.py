@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+
+from app.services.ai_features import gpu_worker_switches
 from app.services.model_gateway import (
     ModelCapability,
     ModelOperation,
@@ -126,7 +129,7 @@ def validate_production_settings(settings: object) -> None:
             edit_planner_provider_key,
             {"openrouter", "openai_compatible"},
         ),
-        "VISUAL_PROVIDER": (visual_provider_key, {"local_ml"}),
+        "VISUAL_PROVIDER": (visual_provider_key, {"local_ml", "remote"}),
         "AUDIO_ML_PROVIDER": (
             audio_ml_provider_key,
             {"local_ml", "local", "full", "disabled", "none", "off"},
@@ -146,8 +149,11 @@ def validate_production_settings(settings: object) -> None:
 
     if settings.allow_fixture_providers:
         raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
-    if settings.stem_separation_provider != "demucs":
-        raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
+    _validate_stem_separation_provider(settings)
+    _validate_embeddings_provider(settings)
+    _validate_audio_feature_providers(settings)
+    _validate_vision_providers(settings)
+    _validate_gpu_free_deployment(settings)
     explicit_gateway_routes = bool(str(getattr(settings, "model_gateway_routes", "") or "").strip())
     if not explicit_gateway_routes and not settings.groq_api_key:
         raise RuntimeError("GROQ_API_KEY is required for the legacy transcription route")
@@ -277,6 +283,151 @@ def validate_production_settings(settings: object) -> None:
 
     if settings.force_local_media_storage:
         raise RuntimeError("FORCE_LOCAL_MEDIA_STORAGE must be false in production")
+
+
+def _validate_vision_providers(settings: object) -> None:
+    """GPU-free matte and visual analysis: pinned CPU models and priced remote routes."""
+    matte = str(getattr(settings, "matte_provider", "local_ml") or "").strip().lower()
+    if matte == "local_cpu" and not _is_sha256(getattr(settings, "matte_cpu_model_sha256", "")):
+        raise RuntimeError("MATTE_CPU_MODEL_SHA256 must be a SHA-256 hex digest in production")
+    visual = str(getattr(settings, "visual_intelligence_provider", "") or "").strip().lower()
+    if visual != "remote":
+        return
+    if not _is_sha256(getattr(settings, "visual_cpu_face_model_sha256", "")):
+        raise RuntimeError(
+            "VISUAL_CPU_FACE_MODEL_SHA256 must be a SHA-256 hex digest in production"
+        )
+    objects = str(getattr(settings, "visual_objects_provider", "disabled") or "").strip().lower()
+    if objects == "google_vision":
+        if not getattr(settings, "google_vision_api_key", None):
+            raise RuntimeError(
+                "GOOGLE_VISION_API_KEY is required when VISUAL_PROVIDER=remote and "
+                "VISUAL_OBJECTS_PROVIDER=google_vision"
+            )
+        if float(getattr(settings, "google_vision_cost_per_image_usd", 0.0)) <= 0:
+            raise RuntimeError("GOOGLE_VISION_COST_PER_IMAGE_USD must be positive in production")
+        if not is_immutable_model_revision(
+            str(getattr(settings, "google_vision_objects_model_revision", ""))
+        ):
+            raise RuntimeError(
+                "GOOGLE_VISION_OBJECTS_MODEL_REVISION must be an immutable model revision"
+            )
+    captions = str(getattr(settings, "visual_captions_provider", "disabled") or "").strip().lower()
+    if captions == "openrouter":
+        if not getattr(settings, "openrouter_api_key", None):
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is required when VISUAL_PROVIDER=remote and "
+                "VISUAL_CAPTIONS_PROVIDER=openrouter"
+            )
+        if (
+            float(getattr(settings, "visual_caption_input_cost_per_million_usd", 0.0)) <= 0
+            or float(getattr(settings, "visual_caption_output_cost_per_million_usd", 0.0)) <= 0
+        ):
+            raise RuntimeError(
+                "VISUAL_CAPTION_INPUT_COST_PER_MILLION_USD and "
+                "VISUAL_CAPTION_OUTPUT_COST_PER_MILLION_USD must be positive in production"
+            )
+        if not is_immutable_model_revision(
+            str(getattr(settings, "visual_caption_model_revision", "")),
+            model=str(getattr(settings, "visual_caption_model", "")),
+        ):
+            raise RuntimeError("VISUAL_CAPTION_MODEL_REVISION must be an immutable model revision")
+    embeddings = (
+        str(getattr(settings, "visual_embeddings_provider", "disabled") or "").strip().lower()
+    )
+    if embeddings == "jina" and (
+        str(getattr(settings, "embeddings_provider", "local_clip")).strip().lower() != "jina"
+    ):
+        # Keyframe vectors are only useful in the same space as the stock-video
+        # vectors they are compared with; key and prices are validated there.
+        raise RuntimeError(
+            "VISUAL_EMBEDDINGS_PROVIDER=jina requires EMBEDDINGS_PROVIDER=jina so keyframe "
+            "and B-roll vectors share one embedding space"
+        )
+
+
+def _is_sha256(value: object) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", str(value or "").strip().lower()))
+
+
+def _validate_audio_feature_providers(settings: object) -> None:
+    diarization = str(getattr(settings, "audio_diarization_provider", "") or "").strip().lower()
+    if diarization == "pyannoteai":
+        if not getattr(settings, "pyannoteai_api_key", None):
+            raise RuntimeError(
+                "PYANNOTEAI_API_KEY is required when AUDIO_DIARIZATION_PROVIDER=pyannoteai"
+            )
+        if float(getattr(settings, "pyannoteai_cost_per_hour_usd", 0.0)) <= 0:
+            raise RuntimeError("PYANNOTEAI_COST_PER_HOUR_USD must be positive in production")
+    emotion = str(getattr(settings, "audio_emotion_provider", "") or "").strip().lower()
+    if emotion == "openrouter_audio":
+        if not getattr(settings, "openrouter_api_key", None):
+            raise RuntimeError(
+                "OPENROUTER_API_KEY is required when AUDIO_EMOTION_PROVIDER=openrouter_audio"
+            )
+        if (
+            float(getattr(settings, "audio_emotion_input_cost_per_million_usd", 0.0)) <= 0
+            or float(getattr(settings, "audio_emotion_output_cost_per_million_usd", 0.0)) <= 0
+        ):
+            raise RuntimeError(
+                "AUDIO_EMOTION_INPUT_COST_PER_MILLION_USD and "
+                "AUDIO_EMOTION_OUTPUT_COST_PER_MILLION_USD must be positive in production"
+            )
+        if not is_immutable_model_revision(
+            str(getattr(settings, "audio_emotion_model_revision", "")),
+            model=str(getattr(settings, "audio_emotion_model", "")),
+        ):
+            raise RuntimeError("AUDIO_EMOTION_MODEL_REVISION must be an immutable model revision")
+
+
+def _validate_gpu_free_deployment(settings: object) -> None:
+    """GPU_WORKERS_ENABLED=false: no feature may wait on a GPU worker that never runs."""
+    if bool(getattr(settings, "gpu_workers_enabled", True)):
+        return
+    offenders = gpu_worker_switches(settings)
+    if offenders:
+        raise RuntimeError(
+            "GPU_WORKERS_ENABLED=false needs a CPU or remote provider for every feature; "
+            "these still need a GPU worker: " + ", ".join(offenders)
+        )
+
+
+def _validate_stem_separation_provider(settings: object) -> None:
+    provider = str(getattr(settings, "stem_separation_provider", "")).strip().lower()
+    if provider not in {"demucs", "lalal"}:
+        raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs or lalal in production")
+    if provider != "lalal":
+        return
+    if not getattr(settings, "lalal_license_key", None):
+        raise RuntimeError("LALAL_LICENSE_KEY is required when STEM_SEPARATION_PROVIDER=lalal")
+    if float(getattr(settings, "lalal_cost_per_minute_usd", 0.0)) <= 0:
+        raise RuntimeError("LALAL_COST_PER_MINUTE_USD must be positive in production")
+
+
+def _validate_embeddings_provider(settings: object) -> None:
+    provider = str(getattr(settings, "embeddings_provider", "local_clip")).strip().lower()
+    if provider not in {"local_clip", "jina"}:
+        raise RuntimeError(
+            f"EMBEDDINGS_PROVIDER has unsupported production value {provider!r}; "
+            "expected one of jina, local_clip"
+        )
+    if provider != "jina":
+        return
+    if not getattr(settings, "jina_api_key", None):
+        raise RuntimeError("JINA_API_KEY is required when EMBEDDINGS_PROVIDER=jina")
+    if (
+        float(getattr(settings, "jina_text_cost_per_million_tokens_usd", 0.0)) <= 0
+        or float(getattr(settings, "jina_image_cost_per_image_usd", 0.0)) <= 0
+    ):
+        raise RuntimeError(
+            "JINA_TEXT_COST_PER_MILLION_TOKENS_USD and JINA_IMAGE_COST_PER_IMAGE_USD "
+            "must be positive in production"
+        )
+    if not is_immutable_model_revision(
+        str(getattr(settings, "jina_embeddings_model_revision", "")),
+        model=str(getattr(settings, "jina_embeddings_model", "")),
+    ):
+        raise RuntimeError("JINA_EMBEDDINGS_MODEL_REVISION must be an immutable model revision")
 
 
 def _require_billing_mode(settings: object) -> None:

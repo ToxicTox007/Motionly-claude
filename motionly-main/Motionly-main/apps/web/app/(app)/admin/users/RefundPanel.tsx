@@ -8,7 +8,8 @@ import { issueRefund } from "./actions";
 const DEMO_NOTICE = "Demo payment — no money is charged";
 
 // Admin refund surface (Task 23). An admin enters the target workspace, an
-// optional amount in rupees (empty = full plan price), and an optional reason,
+// optional amount in rupees (empty = everything still refundable on the
+// workspace's latest payment), and an optional reason,
 // then confirms in a focus-trapped dialog before the refund is sent. The amount
 // is validated client-side with the same pure helper the server action uses;
 // the API audit-logs the refund. 'Demo payment — no money is charged' is shown
@@ -58,7 +59,7 @@ export function RefundPanel({ demoMode }: { demoMode: boolean }) {
   const amountLabel =
     validated.ok && validated.amountPaise != null
       ? formatInr(validated.amountPaise)
-      : "the full plan price";
+      : "the remaining amount of the latest payment";
 
   return (
     <section
@@ -70,8 +71,9 @@ export function RefundPanel({ demoMode }: { demoMode: boolean }) {
         Issue a refund
       </h2>
       <p className="mb-3 text-sm font-medium text-muted-foreground leading-relaxed">
-        Refund a workspace&apos;s payment. Leave the amount blank to refund the
-        full plan price. {demoMode ? `${DEMO_NOTICE}.` : null}
+        Refund a workspace&apos;s latest payment. Leave the amount blank to
+        refund everything still refundable on it.{" "}
+        {demoMode ? `${DEMO_NOTICE}.` : null}
       </p>
 
       <div aria-live="polite" role="status">
@@ -120,13 +122,13 @@ export function RefundPanel({ demoMode }: { demoMode: boolean }) {
             inputMode="decimal"
             value={amount}
             onChange={(event) => setAmount(event.target.value)}
-            placeholder="Full price"
+            placeholder="Remaining"
             aria-describedby="refund-amount-hint"
             className="mt-1.5 min-h-11 w-32 rounded-neu border border-control bg-surface px-4 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
           />
           <span id="refund-amount-hint" className="sr-only">
-            Enter a positive amount in rupees, or leave blank to refund the full
-            plan price.
+            Enter a positive amount in rupees, or leave blank to refund the
+            remaining amount of the latest payment.
           </span>
         </div>
         <div className="flex-1 min-w-[12rem]">

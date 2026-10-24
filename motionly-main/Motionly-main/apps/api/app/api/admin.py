@@ -20,12 +20,17 @@ from app.schemas.admin import (
     RenderJobAdminDetailResponse,
 )
 from app.schemas.renders import RenderJobStatus
+from app.services.offload import run_blocking
 from app.services.queue import EnqueuedJob, QueueRegistry
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
 RenderRepositoryDep = Annotated[InMemoryRenderRepository, Depends(get_render_repository)]
+
+# ADMIN_WORKSPACE_IDS designates an operator workspace. Only the people who run
+# that workspace are platform admins; an ordinary member invited to it is not.
+ADMIN_WORKSPACE_ROLES = frozenset({"owner", "admin"})
 
 
 async def require_admin(
@@ -36,9 +41,15 @@ async def require_admin(
     settings = request.app.state.settings
     if constant_time_token_matches(x_motionly_admin_token, settings.admin_api_token):
         return actor
+    # API keys automate one workspace; they are never a platform admin identity.
+    if getattr(actor, "kind", "user") != "user":
+        raise ApiError(403, "admin_access_denied", "Admin access is required.")
     if str(actor.user_id).lower() in settings.admin_user_id_list:
         return actor
-    if str(actor.workspace_id).lower() in settings.admin_workspace_id_list:
+    if (
+        str(actor.workspace_id).lower() in settings.admin_workspace_id_list
+        and actor.role in ADMIN_WORKSPACE_ROLES
+    ):
         return actor
     raise ApiError(403, "admin_access_denied", "Admin access is required.")
 
@@ -57,7 +68,7 @@ async def ops_overview(
     completed = len([job for job in recent_renders if job.status == RenderJobStatus.COMPLETE])
     settings = request.app.state.settings
     operations_repository = getattr(request.app.state, "operations_repository", None)
-    queue_snapshots = _queue_snapshots(request.app.state.queue_registry)
+    queue_snapshots = await run_blocking(_queue_snapshots, request.app.state.queue_registry)
     operations_dashboard = _operations_dashboard(
         request=request,
         queue_snapshots=queue_snapshots,
@@ -131,13 +142,12 @@ async def list_queues(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> QueueListResponse:
     registry: QueueRegistry = request.app.state.queue_registry
-    jobs = sorted(
-        registry.jobs.values(),
-        key=lambda job: job.enqueued_at,
-        reverse=True,
-    )
+    # The BullMQ registry reads jobs and snapshots through its blocking bridge.
+    all_jobs = await run_blocking(lambda: list(registry.jobs.values()))
+    jobs = sorted(all_jobs, key=lambda job: job.enqueued_at, reverse=True)
+    snapshots = await run_blocking(_queue_snapshots, registry)
     return QueueListResponse(
-        queues=_queue_snapshots(registry),
+        queues=snapshots,
         jobs=[_queue_job_response(job) for job in jobs[:limit]],
         total_jobs=len(jobs),
         limit=limit,
@@ -151,7 +161,8 @@ async def inspect_queue_job(
     _actor: AdminActorDep,
 ) -> QueueActionResponse:
     registry: QueueRegistry = request.app.state.queue_registry
-    return QueueActionResponse(job=_queue_job_response(_queue_job_or_404(registry, queue_job_id)))
+    job = await run_blocking(_queue_job_or_404, registry, queue_job_id)
+    return QueueActionResponse(job=_queue_job_response(job))
 
 
 @router.post("/queues/jobs/{queue_job_id}/retry", response_model=QueueActionResponse)
@@ -161,8 +172,9 @@ async def retry_queue_job(
     _actor: AdminActorDep,
 ) -> QueueActionResponse:
     registry: QueueRegistry = request.app.state.queue_registry
-    _queue_job_or_404(registry, queue_job_id)
-    return QueueActionResponse(job=_queue_job_response(registry.retry(queue_job_id)))
+    await run_blocking(_queue_job_or_404, registry, queue_job_id)
+    job = await run_blocking(registry.retry, queue_job_id)
+    return QueueActionResponse(job=_queue_job_response(job))
 
 
 @router.post("/queues/jobs/{queue_job_id}/cancel", response_model=QueueActionResponse)
@@ -172,8 +184,9 @@ async def cancel_queue_job(
     _actor: AdminActorDep,
 ) -> QueueActionResponse:
     registry: QueueRegistry = request.app.state.queue_registry
-    _queue_job_or_404(registry, queue_job_id)
-    return QueueActionResponse(job=_queue_job_response(registry.cancel(queue_job_id)))
+    await run_blocking(_queue_job_or_404, registry, queue_job_id)
+    job = await run_blocking(registry.cancel, queue_job_id)
+    return QueueActionResponse(job=_queue_job_response(job))
 
 
 @router.post("/queues/stuck/dead-letter", response_model=QueueBulkActionResponse)
@@ -183,7 +196,9 @@ async def dead_letter_stuck_queue_jobs(
     _actor: AdminActorDep,
 ) -> QueueBulkActionResponse:
     registry: QueueRegistry = request.app.state.queue_registry
-    jobs = registry.mark_stuck_as_dead_letter(timeout_seconds=payload.timeout_seconds)
+    jobs = await run_blocking(
+        registry.mark_stuck_as_dead_letter, timeout_seconds=payload.timeout_seconds
+    )
     return QueueBulkActionResponse(jobs=[_queue_job_response(job) for job in jobs])
 
 

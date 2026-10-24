@@ -1,0 +1,153 @@
+# GPU-free remote AI overlay. Apply on top of the production topology and do
+# NOT pass `--profile gpu`:
+#
+#   docker compose --project-name motionly --env-file <compose.env> \
+#     -f infra/docker-compose.gpu.yml -f infra/docker-compose.remote-ai.yml \
+#     up -d --wait
+#
+# Every feature that needs a GPU goes to a remote API; everything that runs on a
+# CPU stays local:
+#
+#   visual analysis   CPU signals (OpenCV, MediaPipe faces, colours) on
+#                     cpu-vision-worker; keyframes only go to Google Cloud Vision
+#                     (objects), OpenRouter (captions) and Jina (embeddings)
+#   B-roll embeddings Jina (same space as the keyframe embeddings)
+#   matte             MediaPipe selfie segmenter on CPU (cpu-vision-worker)
+#   transcription     Groq, as in the base topology; it runs on cpu-vision-worker
+#                     with pyannoteAI diarization, OpenRouter voice emotion and
+#                     YAMNet (TFLite, CPU) sound classification
+#   stems             LALAL.AI (cpu-vision-worker); demucs-worker does not start
+#   rendering         libx264 on cpu-ffmpeg-worker (render_gpu is not served)
+#
+# Inputs (fail closed when missing):
+#   MOTIONLY_CPU_VISION_WORKER_IMAGE  digest-pinned image built from
+#       apps/worker/Dockerfile.python with API_EXTRAS=cpu-vision and
+#       CPU_VISION_ENABLED=true (CI component cpu-vision-worker). The image sets
+#       CPU_VISION_ENABLED itself, so a wrong image refuses the GPU queues.
+#   The per-unit prices below (read them from each vendor's pricing page; the
+#       app refuses zero prices in production).
+#   Secret files in SECRETS_DIR: jina_api_key, lalal_license_key,
+#       pyannoteai_api_key, google_vision_api_key (docs/security/secrets.md).
+#
+# Each feature can go back to the GPU on its own: set its switch below (for
+# example VISUAL_PROVIDER=local_ml), GPU_WORKERS_ENABLED=true, move its queue
+# with CPU_VISION_WORKER_QUEUES / GPU_INFERENCE_WORKER_QUEUES, and start the
+# matching profile: gpu-inference (visual_analysis, transcription), gpu-matte,
+# gpu-render, or local-stems (Demucs). `--profile gpu` still starts every GPU
+# service. DEPLOYMENT-GUIDE.md has the per-feature checklist.
+#
+# The signed release path (scripts/deploy/apply_release.sh) deploys only
+# docker-compose.gpu.yml and refuses overlays outside rehearsal; this overlay is
+# for operator-run Compose deployments.
+
+x-remote-ai-environment: &remote-ai-environment
+  # No GPU worker runs: the GPU capacity observer, its maintenance job and GPU
+  # model prefetch are off, and production refuses any switch that still needs
+  # a GPU worker (app.core.production._validate_gpu_free_deployment).
+  GPU_WORKERS_ENABLED: ${GPU_WORKERS_ENABLED:-false}
+  VISUAL_PROVIDER: ${VISUAL_PROVIDER:-remote}
+  VISUAL_OBJECTS_PROVIDER: ${VISUAL_OBJECTS_PROVIDER:-google_vision}
+  VISUAL_CAPTIONS_PROVIDER: ${VISUAL_CAPTIONS_PROVIDER:-openrouter}
+  VISUAL_EMBEDDINGS_PROVIDER: ${VISUAL_EMBEDDINGS_PROVIDER:-jina}
+  EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-jina}
+  MATTE_PROVIDER: ${MATTE_PROVIDER:-local_cpu}
+  AUDIO_DIARIZATION_PROVIDER: ${AUDIO_DIARIZATION_PROVIDER:-pyannoteai}
+  AUDIO_EMOTION_PROVIDER: ${AUDIO_EMOTION_PROVIDER:-openrouter_audio}
+  AUDIO_SOUND_PROVIDER: ${AUDIO_SOUND_PROVIDER:-yamnet_tflite}
+  STEM_SEPARATION_PROVIDER: ${STEM_SEPARATION_PROVIDER:-lalal}
+  # Optional deployment-wide monthly USD caps per feature (JSON); empty = none.
+  MODEL_GATEWAY_FEATURE_BUDGETS_USD: ${MODEL_GATEWAY_FEATURE_BUDGETS_USD:-}
+  GOOGLE_VISION_COST_PER_IMAGE_USD: ${GOOGLE_VISION_COST_PER_IMAGE_USD:?GOOGLE_VISION_COST_PER_IMAGE_USD is required (Cloud Vision object localization price per image)}
+  VISUAL_CAPTION_INPUT_COST_PER_MILLION_USD: ${VISUAL_CAPTION_INPUT_COST_PER_MILLION_USD:?VISUAL_CAPTION_INPUT_COST_PER_MILLION_USD is required (caption model input price)}
+  VISUAL_CAPTION_OUTPUT_COST_PER_MILLION_USD: ${VISUAL_CAPTION_OUTPUT_COST_PER_MILLION_USD:?VISUAL_CAPTION_OUTPUT_COST_PER_MILLION_USD is required (caption model output price)}
+  JINA_TEXT_COST_PER_MILLION_TOKENS_USD: ${JINA_TEXT_COST_PER_MILLION_TOKENS_USD:?JINA_TEXT_COST_PER_MILLION_TOKENS_USD is required (Jina text embedding price)}
+  JINA_IMAGE_COST_PER_IMAGE_USD: ${JINA_IMAGE_COST_PER_IMAGE_USD:?JINA_IMAGE_COST_PER_IMAGE_USD is required (Jina image embedding price per image)}
+  PYANNOTEAI_COST_PER_HOUR_USD: ${PYANNOTEAI_COST_PER_HOUR_USD:?PYANNOTEAI_COST_PER_HOUR_USD is required (pyannoteAI diarization price per hour)}
+  AUDIO_EMOTION_INPUT_COST_PER_MILLION_USD: ${AUDIO_EMOTION_INPUT_COST_PER_MILLION_USD:?AUDIO_EMOTION_INPUT_COST_PER_MILLION_USD is required (emotion model audio input price)}
+  AUDIO_EMOTION_OUTPUT_COST_PER_MILLION_USD: ${AUDIO_EMOTION_OUTPUT_COST_PER_MILLION_USD:?AUDIO_EMOTION_OUTPUT_COST_PER_MILLION_USD is required (emotion model output price)}
+  LALAL_COST_PER_MINUTE_USD: ${LALAL_COST_PER_MINUTE_USD:?LALAL_COST_PER_MINUTE_USD is required (LALAL.AI price per minute)}
+  JINA_API_KEY_FILE: /run/secrets/jina_api_key
+  LALAL_LICENSE_KEY_FILE: /run/secrets/lalal_license_key
+  PYANNOTEAI_API_KEY_FILE: /run/secrets/pyannoteai_api_key
+  GOOGLE_VISION_API_KEY_FILE: /run/secrets/google_vision_api_key
+
+# Every process that reads the switches validates them at start-up, so each one
+# mounts the provider keys (OpenRouter and Groq come from the base topology).
+x-remote-ai-secrets: &remote-ai-secrets
+  [jina_api_key, lalal_license_key, pyannoteai_api_key, google_vision_api_key]
+
+services:
+  # The API, and every worker that runs Python jobs, must agree on the switches:
+  # visual cache identities, embedding spaces and quotas depend on them. The
+  # orchestration roles (temporal-*, workflow-reconciler) read none of them.
+  api:
+    environment:
+      <<: *remote-ai-environment
+      # Renders stay on the CPU render queue (libx264).
+      FFMPEG_GPU_ENABLED: "false"
+    secrets: *remote-ai-secrets
+
+  cpu-ffmpeg-worker:
+    environment: *remote-ai-environment
+    secrets: *remote-ai-secrets
+
+  provider-worker:
+    environment: *remote-ai-environment
+    secrets: *remote-ai-secrets
+
+  planning-worker:
+    environment: *remote-ai-environment
+    secrets: *remote-ai-secrets
+
+  remotion-worker:
+    environment: *remote-ai-environment
+    secrets: *remote-ai-secrets
+
+  # Serves every queue the GPU services and demucs-worker serve in the base
+  # topology, with the CPU and remote providers above.
+  cpu-vision-worker:
+    extends: { file: docker-compose.gpu.yml, service: cpu-ffmpeg-worker }
+    image: ${MOTIONLY_CPU_VISION_WORKER_IMAGE:?MOTIONLY_CPU_VISION_WORKER_IMAGE must be a digest-pinned GHCR cpu-vision worker image}
+    environment:
+      <<: *remote-ai-environment
+      WORKER_QUEUES: ${CPU_VISION_WORKER_QUEUES:-visual_analysis,transcription,matte_extraction,audio_demucs}
+      WORKER_CONCURRENCY: "1"
+      VISUAL_ANALYSIS_WORKER_CONCURRENCY: "1"
+      MATTE_WORKER_CONCURRENCY: "1"
+    secrets: *remote-ai-secrets
+
+  # --- switch-back services: off unless their profile is started ------------
+  # They get the same switches, so a feature moved back agrees with the API.
+  gpu-inference-worker:
+    profiles: !override [gpu, gpu-inference]
+    environment:
+      <<: *remote-ai-environment
+      # Transcription stays on cpu-vision-worker unless moved back here.
+      WORKER_QUEUES: ${GPU_INFERENCE_WORKER_QUEUES:-visual_analysis}
+    secrets: *remote-ai-secrets
+
+  matte-worker:
+    profiles: !override [gpu, gpu-matte]
+    environment: *remote-ai-environment
+    secrets: *remote-ai-secrets
+
+  gpu-ffmpeg-worker:
+    profiles: !override [gpu, gpu-render]
+    environment: *remote-ai-environment
+    secrets: *remote-ai-secrets
+
+  demucs-worker:
+    # Stems go to LALAL.AI; Demucs (CPU) comes back with --profile local-stems.
+    profiles: [local-stems]
+    environment: *remote-ai-environment
+    secrets: *remote-ai-secrets
+
+secrets:
+  jina_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/jina_api_key
+  lalal_license_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/lalal_license_key
+  pyannoteai_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/pyannoteai_api_key
+  google_vision_api_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/google_vision_api_key

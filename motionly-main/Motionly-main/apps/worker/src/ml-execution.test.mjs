@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   maintenanceRepeatJobs,
   mlExecutionPlan,
+  mlJobAllowed,
   workerHeartbeatPayload,
 } from "./ml-execution.mjs";
 
@@ -150,6 +151,12 @@ test("the GPU autoscaler is scheduled only when the GPU stage is enabled", () =>
 
   assert.deepEqual(names({}), ["daily-retention", "gpu-autoscaling"]);
   assert.deepEqual(names(cpuStage), ["daily-retention"]);
+  // GPU-free (remote AI) deployments have no GPU workers to observe.
+  assert.deepEqual(names({ GPU_WORKERS_ENABLED: "false" }), ["daily-retention"]);
+  assert.deepEqual(names({ GPU_WORKERS_ENABLED: "true" }), [
+    "daily-retention",
+    "gpu-autoscaling",
+  ]);
   assert.deepEqual(maintenanceRepeatJobs({ RETENTION_CRON: "5 4 * * *" })[0], {
     name: "daily-retention",
     data: { kind: "retention", queue_name: "maintenance" },
@@ -201,6 +208,112 @@ test("render media allows fixture references only outside production", async () 
       APP_ENV: "production",
       ALLOW_FIXTURE_PROVIDERS: "true",
     }),
+    false,
+  );
+});
+
+const cpuVisionMatte = {
+  APP_ENV: "production",
+  CPU_VISION_ENABLED: "true",
+  MATTE_PROVIDER: "local_cpu",
+};
+
+test("a cpu-vision worker serves matte_extraction on CPU without the GPU image", () => {
+  const plan = mlExecutionPlan(["matte_extraction"], cpuVisionMatte);
+
+  assert.equal(plan.mode, "gpu");
+  assert.equal(plan.role, "cpu");
+  assert.deepEqual(plan.cpuVisionQueues, ["matte_extraction"]);
+  assert.deepEqual(plan.fixtureCapabilities, []);
+  assert.equal(mlJobAllowed("matte_extraction", cpuVisionMatte), true);
+});
+
+test("CPU matte needs both the cpu-vision image and the matte switch", () => {
+  for (const environment of [
+    { APP_ENV: "production", MATTE_PROVIDER: "local_cpu" },
+    { APP_ENV: "production", CPU_VISION_ENABLED: "true" },
+    { ...cpuVisionMatte, MATTE_PROVIDER: "local_ml" },
+  ]) {
+    assert.throws(
+      () => mlExecutionPlan(["matte_extraction"], environment),
+      /visual_analysis and matte_extraction must run with ML_WORKER_ENABLED=true/,
+      JSON.stringify(environment),
+    );
+    assert.equal(mlJobAllowed("matte_extraction", environment), false);
+  }
+});
+
+test("a CPU matte switch does not let other ML queues run without a GPU", () => {
+  assert.throws(
+    () => mlExecutionPlan(["visual_analysis", "matte_extraction"], cpuVisionMatte),
+    /GPU queues here: visual_analysis/,
+  );
+  assert.equal(mlJobAllowed("visual_analysis", cpuVisionMatte), false);
+});
+
+test("GPU and test_fixture workers keep their existing ML job permissions", () => {
+  const gpu = { APP_ENV: "production", ML_WORKER_ENABLED: "true" };
+  assert.equal(mlJobAllowed("visual_analysis", gpu), true);
+  assert.equal(mlJobAllowed("matte_extraction", gpu), true);
+  assert.deepEqual(
+    mlExecutionPlan(["visual_analysis", "matte_extraction"], gpu).cpuVisionQueues,
+    [],
+  );
+  assert.equal(mlJobAllowed("matte_extraction", cpuStage), true);
+  assert.equal(mlJobAllowed("matte_extraction", { APP_ENV: "production" }), false);
+});
+
+test("cpu-vision heartbeats report the CPU-served queues", () => {
+  const payload = workerHeartbeatPayload(["matte_extraction", "transcription"], {
+    ...cpuVisionMatte,
+    HOSTNAME: "cpu-vision-1",
+  });
+
+  assert.equal(payload.worker_role, "cpu");
+  assert.deepEqual(payload.metadata.cpu_vision_queues, ["matte_extraction"]);
+  assert.equal(payload.metadata.ml_execution_mode, "gpu");
+  // GPU workers keep the exact pre-existing metadata keys.
+  const gpu = workerHeartbeatPayload(["matte_extraction"], { ML_WORKER_ENABLED: "true" });
+  assert.equal("cpu_vision_queues" in gpu.metadata, false);
+});
+
+test("a cpu-vision worker passes the startup check for CPU matte", () => {
+  const result = spawnSync(process.execPath, ["src/worker.mjs", "--check"], {
+    cwd: workerDirectory,
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH || "",
+      REDIS_URL: "redis://127.0.0.1:6379/0",
+      SUPABASE_URL: "https://supabase.example.invalid",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+      WORKER_QUEUES: "matte_extraction",
+      ...cpuVisionMatte,
+      APP_ENV: "cpu-stage",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test("a cpu-vision worker serves visual_analysis when VISUAL_PROVIDER=remote", () => {
+  const environment = {
+    APP_ENV: "production",
+    CPU_VISION_ENABLED: "true",
+    VISUAL_PROVIDER: "remote",
+    MATTE_PROVIDER: "local_cpu",
+  };
+
+  const plan = mlExecutionPlan(["visual_analysis", "matte_extraction"], environment);
+
+  assert.deepEqual(plan.cpuVisionQueues, ["visual_analysis", "matte_extraction"]);
+  assert.equal(plan.role, "cpu");
+  assert.equal(mlJobAllowed("visual_analysis", environment), true);
+  assert.equal(
+    mlJobAllowed("visual_analysis", { ...environment, CPU_VISION_ENABLED: "false" }),
+    false,
+  );
+  assert.equal(
+    mlJobAllowed("visual_analysis", { ...environment, VISUAL_PROVIDER: "local_ml" }),
     false,
   );
 });

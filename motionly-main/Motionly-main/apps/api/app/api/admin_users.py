@@ -16,6 +16,7 @@ through the Supabase client. Links expire after one hour
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 
@@ -34,6 +35,7 @@ from app.schemas.auth import (
     AdminUserRecord,
     AdminUserSearchResponse,
 )
+from app.services import membership_cache
 from app.services.admin_user_directory import (
     ACTION_LINK_CREATED,
     ACTION_REQUEST_DISMISSED,
@@ -42,6 +44,7 @@ from app.services.admin_user_directory import (
     AdminUserDirectory,
 )
 from app.services.auth_admin import AuthAdminClient, AuthAdminError, AuthUserRecord
+from app.services.offload import run_blocking
 from app.services.signup_policy import normalize_email
 
 logger = get_logger(__name__)
@@ -213,6 +216,13 @@ async def _set_ban(
         if exc.code == "user_not_found":
             raise ApiError(404, "user_not_found", "No such user.") from exc
         raise ApiError(502, "ban_failed", "Could not update that user.") from exc
+    # The membership check refuses banned users (motionly_workspace_member_role),
+    # but a role cached before the ban would keep admitting them for up to the
+    # cache TTL. Drop the user's cached roles in every workspace now.
+    try:
+        await run_blocking(membership_cache.invalidate_user, UUID(user_id))
+    except Exception:  # noqa: BLE001 - the ban itself succeeded; the TTL bounds staleness
+        logger.warning("membership_cache_invalidation_failed", extra={"user_id": user_id})
     await directory.record_audit_event(
         actor_user_id=str(actor.user_id),
         action=ACTION_USER_BANNED if banned else ACTION_USER_UNBANNED,

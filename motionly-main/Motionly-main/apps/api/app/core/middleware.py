@@ -8,11 +8,13 @@ from uuid import uuid4
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
+from app.api.errors import ApiError
 from app.core.config import LOCAL_AUTH_BYPASS_ENVS, env_flag_enabled
 from app.core.logging import get_logger
 from app.repositories.api_keys import KEY_SCHEME_PREFIX as API_KEY_SCHEME_PREFIX
 from app.repositories.api_keys import key_fingerprint as _api_key_fingerprint
 from app.services.auth import verify_supabase_jwt, verify_supabase_token_with_auth_api
+from app.services.offload import run_blocking
 from app.services.request_counters import RequestCounters, current_request_counters
 from app.services.tracing import current_trace_id
 
@@ -174,7 +176,7 @@ async def rate_limit_middleware(
     settings = request.app.state.settings
     limiter: InMemoryRateLimiter | RedisRateLimiter = request.app.state.rate_limiter
     client_host = request.client.host if request.client else "anonymous"
-    actor_key = _verified_identity(request) or f"ip:{client_host}"
+    actor_key = await _resolve_rate_limit_identity(request) or f"ip:{client_host}"
     key = f"{actor_key}:{request.url.path}"
     allowed, remaining = await limiter.allow(key=key, limit=settings.rate_limit_per_minute)
     if not allowed:
@@ -197,6 +199,18 @@ async def rate_limit_middleware(
 
 
 def _verified_identity(request: Request) -> str | None:
+    """Rate-limit identity from the request's credentials, verified locally.
+
+    Never touches the network; tokens that need the Supabase Auth API (an
+    asymmetric signing algorithm) yield ``None`` here and are resolved by
+    :func:`_resolve_rate_limit_identity`.
+    """
+    identity, _ = _local_identity(request)
+    return identity
+
+
+def _local_identity(request: Request) -> tuple[str | None, str | None]:
+    """``(identity, None)``, or ``(None, token)`` when only Auth can verify it."""
     settings = request.app.state.settings
     authorization = request.headers.get("authorization")
     if (
@@ -209,27 +223,54 @@ def _verified_identity(request: Request) -> str | None:
         # fingerprint is a stable, 1:1 stand-in for the key id, so the limiter
         # keys on it without a database lookup in the hot path (Task 24).
         if token.startswith(API_KEY_SCHEME_PREFIX):
-            return f"apikey:{_api_key_fingerprint(token)}"
+            return f"apikey:{_api_key_fingerprint(token)}", None
         try:
             verified = verify_supabase_jwt(token=token, jwt_secret=settings.supabase_jwt_secret)
+        except ApiError as exc:
+            # Only a token signed with an algorithm we cannot verify locally is
+            # worth asking Auth about (the same rule get_actor applies). Expired,
+            # forged or malformed tokens are rejected here, so garbage bearer
+            # tokens cannot make every request call out to Auth.
+            if (
+                exc.code == "auth_token_invalid"
+                and "algorithm" in exc.message.lower()
+                and settings.supabase_url
+                and settings.supabase_service_role_key
+            ):
+                return None, token
+            return None, None
         except Exception:
-            if not settings.supabase_url or not settings.supabase_service_role_key:
-                return None
-            try:
-                verified = verify_supabase_token_with_auth_api(
-                    token=token,
-                    supabase_url=str(settings.supabase_url),
-                    service_role_key=settings.supabase_service_role_key,
-                )
-            except Exception:
-                return None
-        request_state = getattr(request, "state", None)
-        if request_state is not None:
-            request_state.verified_supabase_token = verified
-        return f"user:{verified.user_id}"
+            return None, None
+        _remember_verified_token(request, verified)
+        return f"user:{verified.user_id}", None
     if env_flag_enabled(os.getenv("SKIP_API_AUTH")) and settings.app_env in LOCAL_AUTH_BYPASS_ENVS:
-        return "user:local-development"
-    return None
+        return "user:local-development", None
+    return None, None
+
+
+async def _resolve_rate_limit_identity(request: Request) -> str | None:
+    identity, remote_token = _local_identity(request)
+    if remote_token is None:
+        return identity
+    settings = request.app.state.settings
+    try:
+        # Synchronous HTTP to Supabase Auth (10s timeout): off the event loop.
+        verified = await run_blocking(
+            verify_supabase_token_with_auth_api,
+            token=remote_token,
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+        )
+    except Exception:
+        return None
+    _remember_verified_token(request, verified)
+    return f"user:{verified.user_id}"
+
+
+def _remember_verified_token(request: Request, verified: object) -> None:
+    request_state = getattr(request, "state", None)
+    if request_state is not None:
+        request_state.verified_supabase_token = verified
 
 
 API_CONTENT_SECURITY_POLICY = "; ".join(

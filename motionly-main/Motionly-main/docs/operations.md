@@ -81,9 +81,17 @@ password must pass the same policy as sign-up. Setting it then signs the user ou
 sessions. Links expire after one hour (`GOTRUE_MAILER_OTP_EXP=3600`), are single-use, and issuing a
 new link invalidates the previous one. Admins can also ban/unban a user and dismiss a request; every
 such action is written to the `admin_audit_events` table (actor, action, target, redacted details —
-never a token or link).
+never a token or link). A ban takes effect on the user's next request, not when their access token
+expires: the API's membership check (`motionly_workspace_member_role`), browser row-level security
+and Realtime channel access (`is_workspace_member`) all refuse banned or deleted users, and the ban
+drops the user's cached workspace roles. API keys a banned, removed or demoted (below owner/admin)
+user created stop working, as do all keys of a workspace whose plan loses API access; they are
+refused, not revoked, so restoring the user or plan restores them. An already-joined Realtime
+channel and already-issued signed media URLs (at most five minutes) are not cut off.
 
-Admin access is granted through `ADMIN_USER_IDS` (a comma-separated list of auth user UUIDs). To
+Admin access is granted through `ADMIN_USER_IDS` (a comma-separated list of auth user UUIDs). An
+`ADMIN_WORKSPACE_IDS` entry makes the **owners and admins** of that workspace platform admins; its
+plain members are not, and API keys never are. To
 find the first admin's UUID, run the CLI against the configured GoTrue:
 
 ```

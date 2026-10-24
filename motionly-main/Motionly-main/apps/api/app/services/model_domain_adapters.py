@@ -6,6 +6,10 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from pathlib import Path
 
+from app.services.audio_ml_providers import emotion_insights
+from app.services.google_vision import GOOGLE_VISION_ENDPOINT_HOST
+from app.services.lalal_stems import LALAL_ENDPOINT_HOST, LalalStemSeparator
+from app.services.model_adapters import OpenAICompatibleAdapter
 from app.services.model_gateway import (
     AdapterResult,
     AudioIntelligenceOutput,
@@ -30,8 +34,14 @@ from app.services.model_gateway import (
     VideoGenerationSubmitRequest,
     VisualManifestOutput,
     VisualManifestRequest,
+    stem_duration_units,
 )
+from app.services.model_gateway_factory import OPENROUTER_BASE_URL
 from app.services.provider_resilience import ProviderCallFailure, ProviderErrorInfo
+from app.services.pyannoteai_diarization import (
+    PYANNOTEAI_ENDPOINT_HOST,
+    pyannoteai_model_revision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +144,7 @@ class LocalAudioIntelligenceAdapter:
         emotion = self.providers.get("emotion")
         if emotion is not None and hasattr(emotion, "classify_windows"):
             try:
-                insights["emotion_windows"] = emotion.classify_windows(
-                    audio_path=request.audio_path
-                )
+                insights.update(emotion_insights(emotion, audio_path=request.audio_path))
             except Exception as exc:
                 logger.error(
                     "audio_ml_provider_failed",
@@ -339,9 +347,14 @@ class LocalStemSeparationAdapter:
             source_path=request.source_path,
             model=request.model,
         )
+        input_units = (
+            stem_duration_units(request.duration_s)
+            if request.duration_s is not None
+            else max(1, request.source_path.stat().st_size // 1024)
+        )
         return AdapterResult(
             output=StemSeparationOutput(stems=dict(stems)),
-            usage=ModelUsage(input_units=max(1, request.source_path.stat().st_size // 1024)),
+            usage=ModelUsage(input_units=input_units),
         )
 
 
@@ -500,18 +513,68 @@ def register_clip_routes(
     return primary, fallback
 
 
+JINA_ENDPOINT_HOST = "api.jina.ai"
+
+
+def register_jina_embedding_routes(
+    gateway: ModelGateway,
+    *,
+    adapter: object,
+    model: str,
+    revision: str,
+    text_cost_per_million_tokens_usd: float,
+    image_cost_per_image_usd: float,
+) -> tuple[ModelRoute, ModelRoute]:
+    """Register Jina text and image embedding routes (one shared vector space).
+
+    Costs are deterministic: text is charged per UTF-8 byte of input at the
+    per-million rate (an upper bound on tokens), and images per image. The
+    gateway counts image embeddings in output units, one per image.
+    """
+    adapter_name = "jina-embeddings-adapter"
+    common = {
+        "capability": ModelCapability.EMBEDDINGS,
+        "adapter": adapter_name,
+        "provider": "jina",
+        "model": model,
+        "model_revision": revision,
+        "priority": 10,
+        "endpoint_host": JINA_ENDPOINT_HOST,
+        "requires_live_effects_gate": True,
+        "budget_feature": "embeddings",
+    }
+    text_route = ModelRoute(
+        route_id="jina-embeddings-text",
+        operations=(ModelOperation.EMBEDDINGS_TEXT,),
+        input_cost_per_million_usd=text_cost_per_million_tokens_usd,
+        **common,
+    )
+    image_route = ModelRoute(
+        route_id="jina-embeddings-image",
+        operations=(ModelOperation.EMBEDDINGS_IMAGE,),
+        output_cost_per_million_usd=image_cost_per_image_usd * 1_000_000,
+        **common,
+    )
+    gateway.register_adapter(adapter_name, adapter)  # type: ignore[arg-type]
+    gateway.register_route(text_route)
+    gateway.register_route(image_route)
+    return text_route, image_route
+
+
 def register_matte_route(
     gateway: ModelGateway,
     *,
     provider_models: Mapping[str, object],
     revision: str,
+    provider: str = "local_mediapipe",
+    model: str = "mediapipe-selfie-segmentation",
 ) -> ModelRoute:
     route = ModelRoute(
         route_id="local-matte-segmentation",
         capability=ModelCapability.VISION,
         adapter="local-matte-segmentation-adapter",
-        provider="local_mediapipe",
-        model="mediapipe-selfie-segmentation",
+        provider=provider,
+        model=model,
         model_revision=revision,
         operations=(ModelOperation.VISION_MATTE_SEGMENTATION,),
         priority=10,
@@ -543,6 +606,180 @@ def register_stem_route(
     return route
 
 
+def register_lalal_stem_route(
+    gateway: ModelGateway,
+    *,
+    separator: LalalStemSeparator,
+    cost_per_minute_usd: float,
+) -> ModelRoute:
+    """Register the LALAL.AI stems route, priced per second of source audio."""
+    route = ModelRoute(
+        route_id="lalal-stem-separation",
+        capability=ModelCapability.AUDIO,
+        adapter="lalal-stem-separation-adapter",
+        provider="lalal",
+        model=separator.model,
+        model_revision=separator.model_revision,
+        operations=(ModelOperation.AUDIO_STEM_SEPARATION,),
+        priority=10,
+        # Input units are whole seconds (StemSeparationRequest.duration_s).
+        input_cost_per_million_usd=cost_per_minute_usd / 60 * 1_000_000,
+        endpoint_host=LALAL_ENDPOINT_HOST,
+        requires_live_effects_gate=True,
+        budget_feature="audio_stems",
+    )
+    gateway.register_adapter(route.adapter, LocalStemSeparationAdapter(separator))
+    gateway.register_route(route)
+    return route
+
+
+def register_pyannoteai_diarization_route(
+    gateway: ModelGateway,
+    *,
+    adapter: object,
+    model: str,
+    cost_per_hour_usd: float,
+) -> ModelRoute:
+    """Register the pyannoteAI diarization route, priced per second of audio."""
+    route = ModelRoute(
+        route_id="pyannoteai-diarization",
+        capability=ModelCapability.AUDIO,
+        adapter="pyannoteai-diarization-adapter",
+        provider="pyannoteai",
+        model=model,
+        model_revision=pyannoteai_model_revision(model),
+        operations=(ModelOperation.AUDIO_DIARIZATION,),
+        priority=10,
+        # Input units are billable seconds (DiarizationRequest).
+        input_cost_per_million_usd=cost_per_hour_usd / 3600 * 1_000_000,
+        endpoint_host=PYANNOTEAI_ENDPOINT_HOST,
+        requires_live_effects_gate=True,
+        budget_feature="audio_diarization",
+    )
+    gateway.register_adapter(route.adapter, adapter)  # type: ignore[arg-type]
+    gateway.register_route(route)
+    return route
+
+
+OPENROUTER_ZDR_ADAPTER = "openrouter-zdr-media-adapter"
+OPENROUTER_ENDPOINT_HOST = "openrouter.ai"
+# OpenRouter provider routing for user media: only zero-data-retention endpoints
+# that do not collect prompts. Planning keeps its own unrestricted adapter.
+OPENROUTER_ZDR_ROUTING: Mapping[str, object] = {
+    "provider": {"zdr": True, "data_collection": "deny"}
+}
+OPENROUTER_AUDIO_EMOTION_ROUTE_ID = "openrouter-audio-emotion"
+
+
+def ensure_openrouter_zdr_adapter(gateway: ModelGateway, *, api_key: str) -> str:
+    """Register (once per gateway) the OpenRouter adapter used for media prompts."""
+    if not gateway.has_adapter(OPENROUTER_ZDR_ADAPTER):
+        gateway.register_adapter(
+            OPENROUTER_ZDR_ADAPTER,
+            OpenAICompatibleAdapter(
+                base_url=OPENROUTER_BASE_URL,
+                api_key=api_key,
+                extra_body=OPENROUTER_ZDR_ROUTING,
+            ),
+        )
+    return OPENROUTER_ZDR_ADAPTER
+
+
+def register_openrouter_audio_emotion_route(
+    gateway: ModelGateway,
+    *,
+    api_key: str,
+    model: str,
+    revision: str,
+    input_cost_per_million_usd: float,
+    output_cost_per_million_usd: float,
+) -> ModelRoute:
+    """Register the voice-emotion route on an audio-capable OpenRouter model."""
+    route = ModelRoute(
+        route_id=OPENROUTER_AUDIO_EMOTION_ROUTE_ID,
+        capability=ModelCapability.AUDIO,
+        adapter=ensure_openrouter_zdr_adapter(gateway, api_key=api_key),
+        provider="openrouter",
+        model=model,
+        model_revision=revision,
+        operations=(ModelOperation.AUDIO_PROMPT,),
+        priority=10,
+        input_cost_per_million_usd=input_cost_per_million_usd,
+        output_cost_per_million_usd=output_cost_per_million_usd,
+        max_output_units=1024,
+        endpoint_host=OPENROUTER_ENDPOINT_HOST,
+        requires_live_effects_gate=True,
+        budget_feature="audio_emotion",
+    )
+    gateway.register_route(route)
+    return route
+
+
+OPENROUTER_VISION_CAPTIONS_ROUTE_ID = "openrouter-vision-captions"
+
+
+def register_openrouter_vision_captions_route(
+    gateway: ModelGateway,
+    *,
+    api_key: str,
+    model: str,
+    revision: str,
+    input_cost_per_million_usd: float,
+    output_cost_per_million_usd: float,
+) -> ModelRoute:
+    """Register keyframe captions on a vision model behind OpenRouter's ZDR routing."""
+    route = ModelRoute(
+        route_id=OPENROUTER_VISION_CAPTIONS_ROUTE_ID,
+        capability=ModelCapability.VISION,
+        adapter=ensure_openrouter_zdr_adapter(gateway, api_key=api_key),
+        provider="openrouter",
+        model=model,
+        model_revision=revision,
+        operations=(ModelOperation.VISION_PROMPT,),
+        priority=10,
+        input_cost_per_million_usd=input_cost_per_million_usd,
+        output_cost_per_million_usd=output_cost_per_million_usd,
+        max_output_units=1024,
+        endpoint_host=OPENROUTER_ENDPOINT_HOST,
+        requires_live_effects_gate=True,
+        budget_feature="vision_captions",
+    )
+    gateway.register_route(route)
+    return route
+
+
+GOOGLE_VISION_OBJECTS_ROUTE_ID = "google-vision-objects"
+
+
+def register_google_vision_objects_route(
+    gateway: ModelGateway,
+    *,
+    adapter: object,
+    model: str,
+    revision: str,
+    cost_per_image_usd: float,
+) -> ModelRoute:
+    """Register Cloud Vision object localisation, priced per annotated image."""
+    route = ModelRoute(
+        route_id=GOOGLE_VISION_OBJECTS_ROUTE_ID,
+        capability=ModelCapability.VISION,
+        adapter="google-vision-objects-adapter",
+        provider="google_vision",
+        model=f"google-vision-object-localization:{model}",
+        model_revision=revision,
+        operations=(ModelOperation.VISION_OBJECT_DETECTION,),
+        priority=10,
+        # Input units are images (ObjectDetectionRequest).
+        input_cost_per_million_usd=cost_per_image_usd * 1_000_000,
+        endpoint_host=GOOGLE_VISION_ENDPOINT_HOST,
+        requires_live_effects_gate=True,
+        budget_feature="vision_objects",
+    )
+    gateway.register_adapter(route.adapter, adapter)  # type: ignore[arg-type]
+    gateway.register_route(route)
+    return route
+
+
 def register_runway_route(
     gateway: ModelGateway,
     *,
@@ -568,6 +805,7 @@ def register_runway_route(
         fixed_cost_usd=fixed_cost_usd,
         endpoint_host=endpoint_host,
         requires_live_effects_gate=requires_live_effects_gate,
+        budget_feature="generation",
     )
     gateway.register_adapter(route.adapter, RunwayVideoGenerationAdapter(provider))
     gateway.register_route(route)

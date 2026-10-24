@@ -16,9 +16,34 @@ _JSON_KEY_RE = re.compile(
 _HEADER_AUTH_RE = re.compile(r'(?i)(["\']authorization["\']\s*:\s*)(["\'])[^\2]*?\2')
 
 
+# Credentials that appear bare in free text (exception messages, response
+# bodies, URLs). Applied before the generic rules below so they cannot be
+# half-redacted. Mirrored in the worker (apps/worker/src/log-redaction.mjs).
+# A JWT: Supabase access tokens, the anon/service-role/worker keys.
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*")
+# Motionly API keys (mtly_ + 43 chars) and Supabase secret keys.
+_MOTIONLY_KEY_RE = re.compile(r"\bmtly_[A-Za-z0-9_-]{16,}")
+_SUPABASE_SECRET_RE = re.compile(r"\bsb_secret_[A-Za-z0-9_-]{8,}")
+# Passwords in connection URLs: redis://:pw@host, postgres://user:pw@host.
+_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@]*):[^\s@/]+@")
+_AWS_ACCESS_KEY_RE = re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")
+_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
+    re.DOTALL,
+)
+
+
 def redact_string(text: str) -> str:
     if not isinstance(text, str):
         return text
+
+    # 0. Bare credential shapes, wherever they appear.
+    text = _PRIVATE_KEY_RE.sub("[REDACTED_PRIVATE_KEY]", text)
+    text = _JWT_RE.sub("[REDACTED_JWT]", text)
+    text = _MOTIONLY_KEY_RE.sub("[REDACTED_API_KEY]", text)
+    text = _SUPABASE_SECRET_RE.sub("[REDACTED_SUPABASE_KEY]", text)
+    text = _URL_USERINFO_RE.sub(r"\1:[REDACTED]@", text)
+    text = _AWS_ACCESS_KEY_RE.sub("[REDACTED_AWS_KEY]", text)
 
     # 1. Redact Authorization Bearer tokens
     text = _BEARER_RE.sub(r"\1[REDACTED]", text)

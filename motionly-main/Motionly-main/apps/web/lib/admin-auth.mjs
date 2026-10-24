@@ -7,8 +7,13 @@ function parseAllowlist(value) {
   );
 }
 
+// ADMIN_WORKSPACE_IDS designates an operator workspace: only the people who
+// run it (owner/admin) are platform admins, never an ordinary member invited
+// to it. Mirrors ADMIN_WORKSPACE_ROLES in apps/api/app/api/admin.py.
+const ADMIN_WORKSPACE_ROLES = new Set(["owner", "admin"]);
+
 export function isAdminIdentityAllowed(
-  { userId, workspaceId },
+  { userId, workspaceId, role },
   { adminUserIds, adminWorkspaceIds },
 ) {
   const normalizedUserId = String(userId ?? "")
@@ -17,9 +22,13 @@ export function isAdminIdentityAllowed(
   const normalizedWorkspaceId = String(workspaceId ?? "")
     .trim()
     .toLowerCase();
-  return (
+  const normalizedRole = String(role ?? "")
+    .trim()
+    .toLowerCase();
+  return Boolean(
     (normalizedUserId && parseAllowlist(adminUserIds).has(normalizedUserId)) ||
     (normalizedWorkspaceId &&
-      parseAllowlist(adminWorkspaceIds).has(normalizedWorkspaceId))
+      ADMIN_WORKSPACE_ROLES.has(normalizedRole) &&
+      parseAllowlist(adminWorkspaceIds).has(normalizedWorkspaceId)),
   );
 }

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import re
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -40,14 +42,76 @@ class ModelOperation(StrEnum):
     VISION_PROMPT = "vision.prompt"
     VISION_VIDEO_MANIFEST = "vision.video_manifest"
     VISION_MATTE_SEGMENTATION = "vision.matte_segmentation"
+    VISION_OBJECT_DETECTION = "vision.object_detection"
     AUDIO_PROMPT = "audio.prompt"
     AUDIO_INTELLIGENCE = "audio.intelligence"
     AUDIO_STEM_SEPARATION = "audio.stem_separation"
+    AUDIO_DIARIZATION = "audio.diarization"
     EMBEDDINGS_TEXT = "embeddings.text"
     EMBEDDINGS_IMAGE = "embeddings.image"
     GENERATION_IMAGE = "generation.image"
     GENERATION_VIDEO_SUBMIT = "generation.video_submit"
     GENERATION_VIDEO_POLL = "generation.video_poll"
+
+
+# Deployment-wide monthly spend caps are keyed by these feature names
+# (MODEL_GATEWAY_FEATURE_BUDGETS_USD). A route opts in with ``budget_feature``;
+# routes without one are limited only by the workspace monthly budget.
+BUDGET_FEATURES = frozenset(
+    {
+        "planning",
+        "transcription",
+        "generation",
+        "embeddings",
+        "vision_objects",
+        "vision_captions",
+        "audio_diarization",
+        "audio_emotion",
+        "audio_stems",
+    }
+)
+
+# Custom MODEL_GATEWAY_ROUTES entries default to these features when they do
+# not name one. Vision and audio cover several features, so they must be explicit.
+DEFAULT_BUDGET_FEATURE_BY_CAPABILITY = {
+    "planning": "planning",
+    "transcription": "transcription",
+    "generation": "generation",
+    "embeddings": "embeddings",
+}
+
+
+def parse_feature_budgets(value: str | None) -> dict[str, float]:
+    """Parse MODEL_GATEWAY_FEATURE_BUDGETS_USD (a JSON object of feature -> USD)."""
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("MODEL_GATEWAY_FEATURE_BUDGETS_USD must be valid JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(
+            "MODEL_GATEWAY_FEATURE_BUDGETS_USD must be a JSON object of feature to USD"
+        )
+    budgets: dict[str, float] = {}
+    for feature, amount in payload.items():
+        if feature not in BUDGET_FEATURES:
+            raise ValueError(
+                f"MODEL_GATEWAY_FEATURE_BUDGETS_USD has unknown feature {feature!r}; "
+                f"expected one of {', '.join(sorted(BUDGET_FEATURES))}"
+            )
+        if isinstance(amount, bool) or not isinstance(amount, int | float):
+            raise ValueError(
+                f"MODEL_GATEWAY_FEATURE_BUDGETS_USD[{feature!r}] must be a number"
+            )
+        if not math.isfinite(float(amount)) or float(amount) <= 0:
+            raise ValueError(
+                f"MODEL_GATEWAY_FEATURE_BUDGETS_USD[{feature!r}] must be positive; "
+                "omit a feature to leave it uncapped"
+            )
+        budgets[str(feature)] = float(amount)
+    return budgets
 
 
 @dataclass(frozen=True)
@@ -95,6 +159,8 @@ class VisionRequest:
     prompt: str
     image_urls: tuple[str, ...]
     max_output_units: int = 2048
+    # Optional structured-output contract (OpenAI-style response_format).
+    response_format: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not self.prompt or not self.image_urls:
@@ -107,12 +173,20 @@ class AudioRequest:
     audio_path: Path
     audio_format: str = "wav"
     max_output_units: int = 2048
+    # Optional structured-output contract (OpenAI-style response_format).
+    response_format: Mapping[str, object] | None = None
+    # Seconds of audio in the clip; meters per-second feature quotas (never sent).
+    duration_s: float | None = None
 
     def __post_init__(self) -> None:
         if not self.prompt or not self.audio_format:
             raise ValueError("audio requests require a prompt and audio format")
         if self.max_output_units < 1:
             raise ValueError("max_output_units must be positive")
+        if self.duration_s is not None and not (
+            math.isfinite(self.duration_s) and self.duration_s >= 0
+        ):
+            raise ValueError("audio duration_s must be a finite, non-negative number")
 
 
 @dataclass(frozen=True)
@@ -211,10 +285,48 @@ class MatteSegmentationRequest:
 class StemSeparationRequest:
     source_path: Path
     model: str
+    # Source duration, set when the route is priced per second of audio.
+    duration_s: float | None = None
 
     def __post_init__(self) -> None:
         if not self.model.strip():
             raise ValueError("stem separation model cannot be empty")
+        if self.duration_s is not None and not (
+            math.isfinite(self.duration_s) and self.duration_s > 0
+        ):
+            raise ValueError("stem separation duration_s must be positive")
+
+
+@dataclass(frozen=True)
+class DiarizationRequest:
+    """Speaker diarization of a mono speech track."""
+
+    audio_path: Path
+    duration_s: float
+    # Providers that bill a per-job minimum (pyannoteAI: 20 s) reserve at least this.
+    minimum_billable_s: int = 0
+
+    def __post_init__(self) -> None:
+        if not str(self.audio_path):
+            raise ValueError("diarization audio_path cannot be empty")
+        if not (math.isfinite(self.duration_s) and self.duration_s > 0):
+            raise ValueError("diarization duration_s must be positive")
+        if self.minimum_billable_s < 0:
+            raise ValueError("diarization minimum_billable_s cannot be negative")
+
+
+@dataclass(frozen=True)
+class ObjectDetectionRequest:
+    """Object localisation for a batch of encoded images (priced per image)."""
+
+    images: tuple[bytes, ...]
+    max_results: int = 24
+
+    def __post_init__(self) -> None:
+        if not self.images or any(not image for image in self.images):
+            raise ValueError("object detection requests cannot be empty")
+        if self.max_results < 1:
+            raise ValueError("object detection max_results must be positive")
 
 
 type ModelRequest = (
@@ -231,6 +343,8 @@ type ModelRequest = (
     | VideoGenerationPollRequest
     | MatteSegmentationRequest
     | StemSeparationRequest
+    | DiarizationRequest
+    | ObjectDetectionRequest
 )
 
 
@@ -366,6 +480,55 @@ class StemSeparationOutput:
             raise ValueError("stem separation output cannot be empty")
 
 
+@dataclass(frozen=True)
+class DiarizationSegmentOutput:
+    speaker: str
+    start_ms: int
+    end_ms: int
+
+    def __post_init__(self) -> None:
+        if not self.speaker.strip():
+            raise ValueError("diarization speaker cannot be empty")
+        if self.start_ms < 0 or self.end_ms < self.start_ms:
+            raise ValueError("diarization segment bounds are invalid")
+
+
+@dataclass(frozen=True)
+class DiarizationOutput:
+    segments: tuple[DiarizationSegmentOutput, ...]
+    raw_response: Mapping[str, object]
+
+    @property
+    def speaker_count(self) -> int:
+        return len({segment.speaker for segment in self.segments})
+
+
+@dataclass(frozen=True)
+class DetectedObjectOutput:
+    """One localised object; the box is normalised to [0, 1] image coordinates."""
+
+    label: str
+    confidence: float
+    x: float
+    y: float
+    width: float
+    height: float
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("detected object label cannot be empty")
+        values = (self.confidence, self.x, self.y, self.width, self.height)
+        if any(not (math.isfinite(value) and 0 <= value <= 1) for value in values):
+            raise ValueError("detected object scores and boxes must be within [0, 1]")
+
+
+@dataclass(frozen=True)
+class ObjectDetectionOutput:
+    # One tuple of detections per request image, in request order.
+    detections: tuple[tuple[DetectedObjectOutput, ...], ...]
+    raw_response: Mapping[str, object] = field(default_factory=dict)
+
+
 type ModelOutput = (
     PlanningOutput
     | TranscriptionOutput
@@ -378,6 +541,8 @@ type ModelOutput = (
     | GenerationOperationOutput
     | MatteSegmentationOutput
     | StemSeparationOutput
+    | DiarizationOutput
+    | ObjectDetectionOutput
 )
 
 
@@ -423,6 +588,8 @@ class ModelRoute:
     # Native routes leave it unset and never cross the live-effects boundary.
     endpoint_host: str | None = None
     requires_live_effects_gate: bool = False
+    # Optional deployment-wide monthly cap (see BUDGET_FEATURES).
+    budget_feature: str | None = None
 
     def __post_init__(self) -> None:
         required = {
@@ -461,6 +628,11 @@ class ModelRoute:
             raise ValueError("explicitly free model routes cannot declare positive costs")
         if self.max_output_units < 1:
             raise ValueError("model route max_output_units must be positive")
+        if self.budget_feature is not None and self.budget_feature not in BUDGET_FEATURES:
+            raise ValueError(
+                f"model route budget_feature {self.budget_feature!r} is unknown; "
+                f"expected one of {', '.join(sorted(BUDGET_FEATURES))}"
+            )
 
     @property
     def circuit_key(self) -> str:
@@ -477,6 +649,39 @@ class ModelCallContext:
     required_route_id: str | None = None
     required_model_revision: str | None = None
     operation: ModelOperation | None = None
+
+
+# The context of the gateway call whose adapter is currently running. Composite
+# local adapters (audio intelligence, visual manifest) call providers that may
+# make nested remote gateway calls; those inherit the outer workspace/project so
+# budgets, quotas and telemetry stay attributed to the right tenant.
+_ACTIVE_CALL_CONTEXT: ContextVar[ModelCallContext | None] = ContextVar(
+    "motionly_active_model_call_context", default=None
+)
+
+
+def inherited_call_context(
+    *,
+    workspace_id: object | None = None,
+    project_id: object | None = None,
+) -> ModelCallContext:
+    """A fresh call context for a nested gateway call.
+
+    Explicit ids win; otherwise the ids of the enclosing gateway call are used.
+    """
+    active = _ACTIVE_CALL_CONTEXT.get()
+    return ModelCallContext(
+        workspace_id=(
+            workspace_id
+            if workspace_id is not None
+            else (active.workspace_id if active is not None else None)
+        ),
+        project_id=(
+            project_id
+            if project_id is not None
+            else (active.project_id if active is not None else None)
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -546,6 +751,46 @@ class ModelProvidersExhausted(ModelGatewayError):
         super().__init__(f"All configured model routes failed for {capability.value}.")
         self.capability = capability
         self.failures = tuple(dict(item) for item in failures)
+
+
+class FeatureQuotaError(ModelGatewayError):
+    """A per-plan feature quota refused the call before any provider was contacted."""
+
+    code = "quota_error"
+
+    def __init__(self, message: str, *, feature: str | None = None) -> None:
+        super().__init__(message)
+        self.feature = feature
+
+
+class FeatureQuotaExceeded(FeatureQuotaError):
+    code = "quota_exceeded"
+
+
+class FeatureQuotaCheckFailed(FeatureQuotaError):
+    """The quota could not be evaluated; paid calls are refused rather than unmetered."""
+
+    code = "quota_check_failed"
+
+
+QUOTA_FAILURE_CODES = frozenset({FeatureQuotaExceeded.code, FeatureQuotaCheckFailed.code})
+
+
+class FeatureQuotaGuard(Protocol):
+    """Per-plan usage quotas for metered remote features (see app.services.billing)."""
+
+    def applies(self, *, route: ModelRoute, context: ModelCallContext) -> bool: ...
+
+    def check(self, *, route: ModelRoute, context: ModelCallContext, quantity: float) -> None: ...
+
+    def record(
+        self,
+        *,
+        route: ModelRoute,
+        context: ModelCallContext,
+        quantity: float,
+        actual_cost_usd: float,
+    ) -> None: ...
 
 
 class ModelAdapter(Protocol):
@@ -972,9 +1217,12 @@ class ModelGateway:
         live_effects_gate: ModelLiveEffectsGate | None = None,
         monthly_budget_usd: float = 100.0,
         request_budget_usd: float = 5.0,
+        feature_budgets_usd: Mapping[str, float] | None = None,
+        quota_guard: FeatureQuotaGuard | None = None,
     ) -> None:
         self._adapters = dict(adapters)
         self._registration_lock = threading.Lock()
+        self._quota_guard = quota_guard
         self._routes = tuple(
             sorted((route for route in routes if route.enabled), key=lambda route: route.priority)
         )
@@ -984,6 +1232,16 @@ class ModelGateway:
         self._live_effects_gate = live_effects_gate
         self._monthly_budget_usd = max(0.0, monthly_budget_usd)
         self._request_budget_usd = max(0.0, request_budget_usd)
+        self._feature_budgets_usd = dict(feature_budgets_usd or {})
+        unknown_features = sorted(set(self._feature_budgets_usd) - BUDGET_FEATURES)
+        if unknown_features:
+            raise ValueError(
+                "feature budgets reference unknown features: " + ", ".join(unknown_features)
+            )
+        if any(amount <= 0 for amount in self._feature_budgets_usd.values()):
+            raise ValueError(
+                "feature budgets must be positive; omit a feature to leave it uncapped"
+            )
         route_ids = [route.route_id for route in self._routes]
         duplicate_route_ids = sorted(
             route_id for route_id in set(route_ids) if route_ids.count(route_id) > 1
@@ -1003,6 +1261,97 @@ class ModelGateway:
     @property
     def routes(self) -> tuple[ModelRoute, ...]:
         return self._routes
+
+    @property
+    def feature_budgets_usd(self) -> dict[str, float]:
+        return dict(self._feature_budgets_usd)
+
+    @property
+    def quota_guard(self) -> FeatureQuotaGuard | None:
+        return self._quota_guard
+
+    def set_quota_guard(self, guard: FeatureQuotaGuard | None) -> None:
+        """Attach per-plan feature quotas once the billing repositories exist."""
+        self._quota_guard = guard
+
+    def check_feature_quota(
+        self,
+        *,
+        route_id: str,
+        context: ModelCallContext | None,
+        quantity: float,
+    ) -> None:
+        """Refuse up front when a job of several calls would not fit its quota.
+
+        Each call is still checked and recorded on its own; this only avoids paying
+        for the first calls of a job whose remaining calls would be refused.
+        """
+        route = next((item for item in self._routes if item.route_id == route_id), None)
+        context = context or ModelCallContext()
+        if route is None or not self._quota_applies(route, context):
+            return
+        self._enforce_quota(route=route, context=context, quantity=quantity)
+
+    def _quota_applies(self, route: ModelRoute, context: ModelCallContext) -> bool:
+        guard = self._quota_guard
+        return guard is not None and bool(guard.applies(route=route, context=context))
+
+    def _enforce_quota(
+        self, *, route: ModelRoute, context: ModelCallContext, quantity: float
+    ) -> None:
+        guard = self._quota_guard
+        if guard is None:
+            return
+        try:
+            guard.check(route=route, context=context, quantity=quantity)
+        except FeatureQuotaError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "model_feature_quota_check_failed",
+                extra={
+                    "route_id": route.route_id,
+                    "feature": route.budget_feature,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise FeatureQuotaCheckFailed(
+                "The feature quota could not be checked.", feature=route.budget_feature
+            ) from exc
+
+    def _record_quota_usage(
+        self,
+        *,
+        route: ModelRoute,
+        context: ModelCallContext,
+        quantity: float,
+        actual_cost_usd: float,
+    ) -> None:
+        guard = self._quota_guard
+        if guard is None:
+            return
+        try:
+            guard.record(
+                route=route,
+                context=context,
+                quantity=quantity,
+                actual_cost_usd=actual_cost_usd,
+            )
+        except Exception as exc:
+            # The provider call already succeeded and was paid for; losing the
+            # usage row under-counts the quota but must not fail the job.
+            logger.warning(
+                "model_feature_quota_record_failed",
+                extra={
+                    "route_id": route.route_id,
+                    "feature": route.budget_feature,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
+    def has_adapter(self, name: str) -> bool:
+        with self._registration_lock:
+            return name in self._adapters
 
     def register_adapter(self, name: str, adapter: ModelAdapter) -> None:
         if not name.strip():
@@ -1110,21 +1459,61 @@ class ModelGateway:
                 )
                 continue
 
-            scope = budget_scope(context.workspace_id)
+            quota_units: float | None = None
+            if self._quota_applies(route, context):
+                quota_units = feature_quota_units(request)
+                try:
+                    self._enforce_quota(route=route, context=context, quantity=quota_units)
+                except FeatureQuotaError as exc:
+                    failures.append({"route_id": route.route_id, "code": exc.code})
+                    self._record_attempt(
+                        context=context,
+                        route=route,
+                        success=False,
+                        latency_ms=0,
+                        error_code=exc.code,
+                        fallback_count=fallback_count,
+                        estimated_cost_usd=estimated_cost,
+                        actual_cost_usd=0.0,
+                        usage=ModelUsage(),
+                    )
+                    continue
+
+            reservations: list[BudgetReservation] = []
+            budget_error_code = ModelBudgetExceeded.code
             try:
-                reservation = self._budget_ledger.reserve(
-                    scope=scope,
-                    amount_usd=estimated_cost,
-                    limit_usd=self._monthly_budget_usd,
+                reservations.append(
+                    self._budget_ledger.reserve(
+                        scope=budget_scope(context.workspace_id),
+                        amount_usd=estimated_cost,
+                        limit_usd=self._monthly_budget_usd,
+                    )
                 )
+                feature_limit = (
+                    self._feature_budgets_usd.get(route.budget_feature)
+                    if route.budget_feature is not None
+                    else None
+                )
+                # Zero-cost attempts cannot consume a dollar cap.
+                if feature_limit is not None and estimated_cost > 0:
+                    budget_error_code = "model_feature_budget_exceeded"
+                    reservations.append(
+                        self._budget_ledger.reserve(
+                            scope=feature_budget_scope(str(route.budget_feature)),
+                            amount_usd=estimated_cost,
+                            limit_usd=feature_limit,
+                        )
+                    )
             except ModelBudgetExceeded:
+                for reservation in reservations:
+                    self._budget_ledger.release(reservation)
                 failures.append({"route_id": route.route_id, "code": ModelBudgetExceeded.code})
                 self._record_attempt(
                     context=context,
                     route=route,
                     success=False,
                     latency_ms=0,
-                    error_code=ModelBudgetExceeded.code,
+                    error_code=budget_error_code,
                     fallback_count=fallback_count,
                     estimated_cost_usd=estimated_cost,
                     actual_cost_usd=0.0,
@@ -1133,6 +1522,7 @@ class ModelGateway:
                 continue
 
             started = time.perf_counter()
+            active_token = _ACTIVE_CALL_CONTEXT.set(context)
             try:
                 adapter_result = self._adapters[route.adapter].invoke(route=route, request=request)
             except Exception as exc:
@@ -1146,7 +1536,7 @@ class ModelGateway:
                 )
                 # Remote attempts may be billable; local preflight rejections are not.
                 failed_cost = estimated_cost if error_info.billable else 0.0
-                self._budget_ledger.commit(reservation, actual_usd=failed_cost)
+                self._settle(reservations, actual_usd=failed_cost)
                 request_spend += failed_cost
                 failures.append({"route_id": route.route_id, "code": error_info.code})
                 self._record_attempt(
@@ -1165,6 +1555,8 @@ class ModelGateway:
                 ):
                     break
                 continue
+            finally:
+                _ACTIVE_CALL_CONTEXT.reset(active_token)
 
             latency_ms = round((time.perf_counter() - started) * 1000)
             actual_cost = (
@@ -1175,7 +1567,7 @@ class ModelGateway:
                 else estimated_cost
             )
             try:
-                self._budget_ledger.commit(reservation, actual_usd=actual_cost)
+                self._settle(reservations, actual_usd=actual_cost)
             except ModelBudgetExceeded:
                 self._record_attempt(
                     context=context,
@@ -1202,6 +1594,13 @@ class ModelGateway:
                 actual_cost_usd=actual_cost,
                 usage=adapter_result.usage,
             )
+            if quota_units is not None:
+                self._record_quota_usage(
+                    route=route,
+                    context=context,
+                    quantity=quota_units,
+                    actual_cost_usd=actual_cost,
+                )
             metadata = ModelInvocationMetadata(
                 request_id=context.request_id,
                 capability=capability,
@@ -1221,7 +1620,29 @@ class ModelGateway:
 
         if failures and all(item["code"] == ModelBudgetExceeded.code for item in failures):
             raise ModelBudgetExceeded("No configured model route fits the dollar budget.")
+        if failures and all(item["code"] in QUOTA_FAILURE_CODES for item in failures):
+            feature = next(
+                (route.budget_feature for route in routes if route.budget_feature), None
+            )
+            if all(item["code"] == FeatureQuotaExceeded.code for item in failures):
+                raise FeatureQuotaExceeded(
+                    "The workspace plan's quota for this feature is used up.", feature=feature
+                )
+            raise FeatureQuotaCheckFailed(
+                "The feature quota could not be checked.", feature=feature
+            )
         raise ModelProvidersExhausted(capability, failures)
+
+    def _settle(self, reservations: Sequence[BudgetReservation], *, actual_usd: float) -> None:
+        """Commit every reservation, then surface the first overrun (if any)."""
+        overrun: ModelBudgetExceeded | None = None
+        for reservation in reservations:
+            try:
+                self._budget_ledger.commit(reservation, actual_usd=actual_usd)
+            except ModelBudgetExceeded as exc:
+                overrun = overrun or exc
+        if overrun is not None:
+            raise overrun
 
     def _record_attempt(self, **values: object) -> None:
         self._telemetry.record_attempt(**values)  # type: ignore[arg-type]
@@ -1242,6 +1663,8 @@ def capability_for_request(request: ModelRequest) -> ModelCapability:
         VideoGenerationPollRequest: ModelCapability.GENERATION,
         MatteSegmentationRequest: ModelCapability.VISION,
         StemSeparationRequest: ModelCapability.AUDIO,
+        DiarizationRequest: ModelCapability.AUDIO,
+        ObjectDetectionRequest: ModelCapability.VISION,
     }
     for request_type, capability in mapping.items():
         if isinstance(request, request_type):
@@ -1264,6 +1687,8 @@ def operation_for_request(request: ModelRequest) -> ModelOperation:
         VideoGenerationPollRequest: ModelOperation.GENERATION_VIDEO_POLL,
         MatteSegmentationRequest: ModelOperation.VISION_MATTE_SEGMENTATION,
         StemSeparationRequest: ModelOperation.AUDIO_STEM_SEPARATION,
+        DiarizationRequest: ModelOperation.AUDIO_DIARIZATION,
+        ObjectDetectionRequest: ModelOperation.VISION_OBJECT_DETECTION,
     }
     for request_type, operation in mapping.items():
         if isinstance(request, request_type):
@@ -1275,6 +1700,25 @@ def operation_for_capability_route(route: ModelRoute, context: ModelCallContext)
     if context.operation is not None:
         return context.operation.value
     return route.capability.value
+
+
+def feature_quota_units(request: ModelRequest) -> float:
+    """Units a per-plan feature quota counts for one request.
+
+    Images for vision, inputs for embeddings, and seconds of audio for audio
+    features, so plan limits read the same way whatever the vendor bills by.
+    """
+    if isinstance(request, ObjectDetectionRequest | ImageEmbeddingsRequest):
+        return float(len(request.images))
+    if isinstance(request, VisionRequest):
+        return float(len(request.image_urls))
+    if isinstance(request, EmbeddingsRequest):
+        return float(len(request.inputs))
+    if isinstance(request, DiarizationRequest):
+        return float(request.duration_s)
+    if isinstance(request, StemSeparationRequest | AudioRequest):
+        return float(request.duration_s or 0.0)
+    return float(estimate_input_units(request))
 
 
 def estimate_input_units(request: ModelRequest) -> int:
@@ -1309,8 +1753,25 @@ def estimate_input_units(request: ModelRequest) -> int:
     if isinstance(request, MatteSegmentationRequest):
         return max(1, request.source_path.stat().st_size // 1024)
     if isinstance(request, StemSeparationRequest):
+        if request.duration_s is not None:
+            return stem_duration_units(request.duration_s)
         return max(1, request.source_path.stat().st_size // 1024)
+    if isinstance(request, DiarizationRequest):
+        return diarization_billable_seconds(request)
+    if isinstance(request, ObjectDetectionRequest):
+        # Billed per image: one input unit per image.
+        return len(request.images)
     return 1
+
+
+def diarization_billable_seconds(request: DiarizationRequest) -> int:
+    """Whole seconds of audio (rounded up), never below the provider's job minimum."""
+    return max(1, request.minimum_billable_s, math.ceil(request.duration_s))
+
+
+def stem_duration_units(duration_s: float) -> int:
+    """Whole seconds of audio, rounded up (the per-second pricing unit)."""
+    return max(1, math.ceil(duration_s))
 
 
 def request_max_output_units(request: ModelRequest) -> int:
@@ -1340,6 +1801,12 @@ def budget_scope(workspace_id: object | None, *, now: datetime | None = None) ->
     current = now or datetime.now(UTC)
     owner = str(workspace_id) if workspace_id is not None else "unattributed"
     return f"{owner}:{current.year:04d}-{current.month:02d}"
+
+
+def feature_budget_scope(feature: str, *, now: datetime | None = None) -> str:
+    """Deployment-wide monthly scope for one budget feature (all workspaces)."""
+    current = now or datetime.now(UTC)
+    return f"feature:{feature}:{current.year:04d}-{current.month:02d}"
 
 
 def provider_failure(code: str, *, retryable: bool = False) -> ProviderCallFailure:

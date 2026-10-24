@@ -509,6 +509,7 @@ services:
       API_PUBLIC_BASE_URL: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}/api
       API_CORS_ORIGINS: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}
       BILLING_MODE: ${BILLING_MODE:?BILLING_MODE is required for production Compose (disabled or demo)}
+      BILLING_PAST_DUE_GRACE_DAYS: ${BILLING_PAST_DUE_GRACE_DAYS:-7}
       WORKER_API_BASE_URL: http://api:8000
     secrets:
       [

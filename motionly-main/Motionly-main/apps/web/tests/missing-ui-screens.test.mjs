@@ -62,7 +62,7 @@ test("the admin refund action posts to POST /billing/refunds with validation", a
   // Amount is validated with the shared pure helper before sending.
   assert.match(actions, /validateRefundRupees/);
   assert.match(actions, /refund_workspace_required/);
-  // Empty amount omits amount_paise so the API refunds the full plan price.
+  // Empty amount omits amount_paise so the API refunds the remaining amount.
   assert.match(actions, /amount\.amountPaise != null/);
   assert.match(actions, /\{ amount_paise: amount\.amountPaise \}/);
 });
@@ -128,4 +128,19 @@ test("the owner can transfer ownership via POST /team/transfer-ownership, owner-
   // The confirmation dialog names the new owner.
   assert.match(client, /will become the workspace owner/);
   assert.match(client, /confirmLabel: `Make \$\{member\.name\} owner`/);
+});
+
+test("the refund panel's demo notice follows BILLING_MODE, not BILLING_ENABLED", async () => {
+  const page = await source("app/(app)/admin/users/page.tsx");
+  assert.match(
+    page,
+    /<RefundPanel demoMode=\{env\.billingMode === "demo"\} \/>/,
+  );
+  assert.doesNotMatch(page, /demoMode=\{env\.billingEnabled\}/);
+  const envSource = await source("lib/env.ts");
+  // Server-only accessor: billingMode never joins the browser's public config.
+  assert.match(
+    envSource,
+    /get billingMode\(\)[^}]*getServerConfig\(\)\.billingMode/s,
+  );
 });

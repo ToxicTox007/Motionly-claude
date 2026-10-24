@@ -450,3 +450,48 @@ def test_every_admin_route_requires_the_admin_authorization_dependency(monkeypat
             assert require_admin in dependencies, f"{route.path} was not protected"
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("role", "allowed"),
+    [("owner", True), ("admin", True), ("member", False)],
+)
+def test_admin_workspace_allowlist_admits_only_its_owners_and_admins(role, allowed) -> None:
+    _repository, _project_id, workspace_id, user_id = make_render_repository()
+    request = make_admin_request(workspace_id)
+    actor = Actor(user_id=user_id, workspace_id=workspace_id, role=role)
+
+    if allowed:
+        assert (
+            asyncio.run(require_admin(request=request, actor=actor, x_motionly_admin_token=None))
+            == actor
+        )
+        return
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(require_admin(request=request, actor=actor, x_motionly_admin_token=None))
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "admin_access_denied"
+
+
+def test_api_keys_are_never_platform_admins() -> None:
+    _repository, _project_id, workspace_id, user_id = make_render_repository()
+    request = make_admin_request(workspace_id)
+    request.app.state.settings.admin_user_id_list = {str(user_id)}
+    actor = Actor(user_id=user_id, workspace_id=workspace_id, role="owner", kind="api_key")
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(require_admin(request=request, actor=actor, x_motionly_admin_token=None))
+    assert exc_info.value.code == "admin_access_denied"
+
+
+def test_allowlisted_user_is_admin_whatever_their_workspace_role() -> None:
+    _repository, _project_id, workspace_id, user_id = make_render_repository()
+    request = make_admin_request(workspace_id)
+    request.app.state.settings.admin_workspace_id_list = set()
+    request.app.state.settings.admin_user_id_list = {str(user_id)}
+    actor = Actor(user_id=user_id, workspace_id=workspace_id, role="member")
+
+    assert (
+        asyncio.run(require_admin(request=request, actor=actor, x_motionly_admin_token=None))
+        == actor
+    )

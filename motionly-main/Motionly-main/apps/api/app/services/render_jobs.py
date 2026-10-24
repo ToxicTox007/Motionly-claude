@@ -22,6 +22,7 @@ from app.services.media_url_policy import (
     validate_outbound_media_url,
     validate_render_media_manifest,
 )
+from app.services.subprocess_env import media_tool_env
 from app.services.worker_media import materialize_worker_object
 
 
@@ -471,6 +472,7 @@ def _validate_caption_payload(manifest: dict, *, ass_path: Path | None) -> None:
         text=True,
         check=False,
         timeout=20,
+        env=media_tool_env(),
     )
     if result.returncode != 0:
         raise ApiError(
@@ -1206,7 +1208,9 @@ def _run_fixture_ffmpeg(command: list[str], *, output_path: Path) -> None:
             "ffmpeg_unavailable",
             "FFmpeg is not available in the render environment.",
         )
-    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=60)
+    result = subprocess.run(
+        command, capture_output=True, text=True, check=False, timeout=60, env=media_tool_env()
+    )
     if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
         raise ApiError(
             502,

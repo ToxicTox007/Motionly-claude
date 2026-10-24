@@ -28,7 +28,9 @@ from app.services.broll_intelligence import (
     apply_stage4_broll_rules,
     broll_slot_metadata,
     latest_visual_manifest_for_broll,
+    manifest_embeddings_match,
     visual_manifest_cache_signature,
+    without_scene_embeddings,
 )
 from app.services.caption_chunking import chunk_caption_words
 from app.services.caption_presets import CAPTION_SCHEMA_VERSION, get_caption_preset
@@ -43,6 +45,7 @@ from app.services.effects import (
     render_time_impact,
 )
 from app.services.matte_jobs import enqueue_matte_for_upload
+from app.services.model_gateway import FeatureQuotaError
 from app.services.music import MusicTrackCandidate, catalog_rights_snapshot, rights_fingerprint
 from app.services.regeneration import (
     affected_layers_for_request,
@@ -109,6 +112,15 @@ def execute_broll_generation(
     source_requests = desired_requests(plan.plan, payload.density)
     if not source_requests:
         raise ApiError(422, "broll_requests_empty", "The active edit plan has no B-roll requests.")
+    if not manifest_embeddings_match(
+        visual_manifest, getattr(embedding_provider, "preferred_model_revision", None)
+    ):
+        # The scene vectors (and any the planner copied from them) were made by a
+        # different embedding model; embed each slot's query with the active one.
+        visual_manifest = without_scene_embeddings(visual_manifest)
+        source_requests = [
+            request.model_copy(update={"semantic_embedding": []}) for request in source_requests
+        ]
     duration_ms = (
         visual_manifest.duration_ms
         if visual_manifest and visual_manifest.duration_ms
@@ -180,26 +192,35 @@ def execute_broll_generation(
     for broll_request in requests:
         query = keyword_query(broll_request, plan.style.value)
         used_gateway_embedding = not bool(broll_request.semantic_embedding)
-        slot_embedding = (
-            broll_request.semantic_embedding
-            if broll_request.semantic_embedding
-            else query_embedding(
-                semantic_query=broll_request.semantic_query or query,
-                clip_model_name=clip_model_name,
-                embedding_provider=embedding_provider,
-                workspace_id=workspace_id,
-                project_id=project_id,
-            )
-        )
+        embedding_quota_refused = False
+        if broll_request.semantic_embedding:
+            slot_embedding = broll_request.semantic_embedding
+        else:
+            try:
+                slot_embedding = query_embedding(
+                    semantic_query=broll_request.semantic_query or query,
+                    clip_model_name=clip_model_name,
+                    embedding_provider=embedding_provider,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                )
+            except FeatureQuotaError:
+                # The plan's embeddings quota is used up: rank this slot lexically
+                # and keep the slot set out of the cache so it is redone later.
+                slot_embedding = []
+                embedding_quota_refused = True
         selected_embedding_revision = getattr(
             embedding_provider,
             "model_version",
             clip_model_name,
         )
         embedding_fallback_used = bool(
-            used_gateway_embedding
-            and preferred_embedding_revision
-            and selected_embedding_revision != preferred_embedding_revision
+            embedding_quota_refused
+            or (
+                used_gateway_embedding
+                and preferred_embedding_revision
+                and selected_embedding_revision != preferred_embedding_revision
+            )
         )
         slot_duration_ms = broll_request.end_ms - broll_request.start_ms
         ranked_assets = []
@@ -396,7 +417,12 @@ def execute_broll_generation(
                     ),
                     "embedding_model_revision": selected_embedding_revision,
                     "embedding_fallback_used": embedding_fallback_used,
-                },
+                }
+                | (
+                    {"embedding_unavailable": "quota_exceeded"}
+                    if embedding_quota_refused
+                    else {}
+                ),
             }
         )
 

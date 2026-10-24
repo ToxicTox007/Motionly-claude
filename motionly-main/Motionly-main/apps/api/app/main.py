@@ -91,26 +91,35 @@ from app.repositories.workflows import (
     SupabaseWorkflowRepository,
 )
 from app.services.admin_user_directory import AdminUserDirectory
+from app.services.ai_features import audio_feature_provider as _audio_feature_provider
 from app.services.analytics_recovery import AnalyticsRecoveryQueue
 from app.services.audio_ml_providers import (
     PyannoteSpeakerDiarizationProvider,
     Wav2VecEmotionProvider,
     YamnetSoundClassifier,
+    YamnetTFLiteSoundClassifier,
 )
 from app.services.auth_admin import AuthAdminClient
+from app.services.billing import PlanFeatureQuotaGuard
 from app.services.collaboration import (
     notifier_from_settings as collaboration_notifier_from_settings,
 )
 from app.services.compute_backend import compute_backend_from_settings
 from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.generic_media_upload import GenericMediaUploadSessionService
+from app.services.lalal_stems import LalalStemSeparator
 from app.services.local_storage import create_object_storage
+from app.services.model_adapters import JinaEmbeddingsAdapter
 from app.services.model_domain_adapters import (
     GatewayAudioIntelligenceProvider,
     GatewayVisualIntelligenceProvider,
     bundle_revision,
     register_audio_route,
     register_clip_routes,
+    register_jina_embedding_routes,
+    register_lalal_stem_route,
+    register_openrouter_audio_emotion_route,
+    register_pyannoteai_diarization_route,
     register_runway_route,
     register_stem_route,
     register_visual_route,
@@ -130,6 +139,10 @@ from app.services.music import LicensedCatalogMusicProvider
 from app.services.object_references import ObjectReferenceService
 from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.payment_gateway import build_gateway
+from app.services.pyannoteai_diarization import (
+    PyannoteAIDiarizationAdapter,
+    PyannoteAIDiarizationProvider,
+)
 from app.services.queue import (
     BrollQueue,
     BullMQQueueRegistry,
@@ -146,6 +159,7 @@ from app.services.queue import (
     TranscriptionQueue,
     VisualQueue,
 )
+from app.services.remote_audio_emotion import OpenRouterAudioEmotionProvider
 from app.services.scale import (
     DemucsStemSeparator,
     FixtureRunwayProvider,
@@ -356,6 +370,16 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryBillingRepository()
     )
+    if app.state.model_gateway is not None:
+        # Per-plan quotas for remote AI features; routes without a metered
+        # budget_feature (every local GPU/CPU route) are unaffected.
+        app.state.model_gateway.set_quota_guard(
+            PlanFeatureQuotaGuard(
+                billing_repository=app.state.billing_repository,
+                operations_repository=app.state.operations_repository,
+                settings=settings,
+            )
+        )
     app.state.api_key_repository = (
         SupabaseApiKeyRepository(
             supabase_url=str(settings.supabase_url),
@@ -501,9 +525,12 @@ def create_app() -> FastAPI:
     else:
         app.state.queue_registry = QueueRegistry()
     # The GPU capacity observer belongs to the GPU stage; CPU-stage
-    # (test_fixture) deployments have no GPU workers to observe.
+    # (test_fixture) and GPU-free (GPU_WORKERS_ENABLED=false) deployments have
+    # no GPU workers to observe.
     app.state.gpu_scaling_service = (
-        compute_backend_from_settings(settings) if settings.gpu_stage == "enabled" else None
+        compute_backend_from_settings(settings)
+        if settings.gpu_stage == "enabled" and settings.gpu_workers_enabled
+        else None
     )
     app.state.preprocess_queue = PreprocessQueue(app.state.queue_registry)
     app.state.transcription_queue = TranscriptionQueue(app.state.queue_registry)
@@ -514,21 +541,42 @@ def create_app() -> FastAPI:
     app.state.stock_asset_enrichment_queue = StockAssetEnrichmentQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)
     app.state.scale_queue = ScaleQueue(app.state.queue_registry)
-    app.state.stem_separator = (
-        FixtureStemSeparator()
-        if settings.process_role == "api"
-        or settings.stem_separation_provider == "fixture"
+    stem_provider_key = settings.stem_separation_provider.strip().lower()
+    use_fixture_stems = (
+        settings.process_role == "api"
+        or stem_provider_key == "fixture"
         or (settings.app_env != "production" and settings.allow_fixture_providers)
-        else DemucsStemSeparator()
     )
+    if use_fixture_stems:
+        app.state.stem_separator = FixtureStemSeparator()
+    elif stem_provider_key == "lalal":
+        if not settings.lalal_license_key:
+            raise RuntimeError(
+                "LALAL_LICENSE_KEY is required when STEM_SEPARATION_PROVIDER=lalal"
+            )
+        app.state.stem_separator = LalalStemSeparator(
+            license_key=settings.lalal_license_key,
+            splitter=settings.lalal_splitter,
+            poll_interval_seconds=settings.lalal_poll_interval_seconds,
+            timeout_seconds=settings.lalal_timeout_seconds,
+        )
+    else:
+        app.state.stem_separator = DemucsStemSeparator()
     app.state.stem_gateway_route = None
     if app.state.model_gateway is not None and settings.process_role != "api":
-        app.state.stem_gateway_route = register_stem_route(
-            app.state.model_gateway,
-            separator=app.state.stem_separator,
-            model=settings.demucs_model,
-            revision=settings.demucs_model_revision,
-        )
+        if isinstance(app.state.stem_separator, LalalStemSeparator):
+            app.state.stem_gateway_route = register_lalal_stem_route(
+                app.state.model_gateway,
+                separator=app.state.stem_separator,
+                cost_per_minute_usd=settings.lalal_cost_per_minute_usd,
+            )
+        else:
+            app.state.stem_gateway_route = register_stem_route(
+                app.state.model_gateway,
+                separator=app.state.stem_separator,
+                model=settings.demucs_model,
+                revision=settings.demucs_model_revision,
+            )
     app.state.runway_provider = (
         RunwayGen3Provider(api_key=settings.runway_api_key, model=settings.runway_model)
         if settings.runway_api_key
@@ -584,7 +632,11 @@ def create_app() -> FastAPI:
     app.state.audio_ml_providers = (
         {}
         if settings.process_role == "api"
-        else _audio_ml_providers(provider_key=audio_ml_provider_key, settings=settings)
+        else _audio_ml_providers(
+            provider_key=audio_ml_provider_key,
+            settings=settings,
+            model_gateway=app.state.model_gateway,
+        )
     )
     app.state.audio_intelligence_provider = None
     if app.state.model_gateway is not None and app.state.audio_ml_providers:
@@ -595,6 +647,7 @@ def create_app() -> FastAPI:
                 settings.pyannote_model_revision,
                 settings.wav2vec_emotion_model_revision,
                 settings.yamnet_model_url,
+                *_remote_audio_revisions(app.state.audio_ml_providers),
             ),
         )
         app.state.audio_intelligence_provider = GatewayAudioIntelligenceProvider(
@@ -674,7 +727,25 @@ def create_app() -> FastAPI:
             route=visual_route,
         )
     app.state.embedding_gateway_provider = None
-    if app.state.model_gateway is not None:
+    embeddings_provider_key = str(
+        getattr(settings, "embeddings_provider", "local_clip")
+    ).strip().lower()
+    if app.state.model_gateway is not None and embeddings_provider_key == "jina":
+        if not settings.jina_api_key:
+            raise RuntimeError("JINA_API_KEY is required when EMBEDDINGS_PROVIDER=jina")
+        # Remote embeddings degrade to lexical ranking on failure; no hash fallback.
+        register_jina_embedding_routes(
+            app.state.model_gateway,
+            adapter=JinaEmbeddingsAdapter(
+                api_key=settings.jina_api_key,
+                dimensions=settings.jina_embeddings_dimensions,
+            ),
+            model=settings.jina_embeddings_model,
+            revision=settings.jina_embeddings_model_revision,
+            text_cost_per_million_tokens_usd=settings.jina_text_cost_per_million_tokens_usd,
+            image_cost_per_image_usd=settings.jina_image_cost_per_image_usd,
+        )
+    elif app.state.model_gateway is not None:
         register_clip_routes(
             app.state.model_gateway,
             primary_provider=CompatibleClipEmbeddingProvider(
@@ -690,8 +761,11 @@ def create_app() -> FastAPI:
                 else None
             ),
         )
+    if app.state.model_gateway is not None:
         from app.services.model_domain_adapters import GatewayClipEmbeddingProvider
 
+        # Built after route registration: its cache version hashes the routes, so
+        # switching providers invalidates cached stock-asset embeddings.
         app.state.embedding_gateway_provider = GatewayClipEmbeddingProvider(
             gateway=app.state.model_gateway
         )
@@ -811,20 +885,108 @@ def _validate_production_settings(settings) -> None:
     validate_production_settings(settings)
 
 
-def _audio_ml_providers(*, provider_key: str, settings) -> dict[str, object]:
-    if provider_key in {"disabled", "none", "off"}:
-        return {}
-    if provider_key not in {"local_ml", "local", "full"}:
-        raise RuntimeError("AUDIO_ML_PROVIDER must be one of local_ml, disabled")
+def _remote_audio_revisions(providers: dict[str, object]) -> list[str]:
+    """Non-default audio providers that must change the audio route bundle revision.
 
-    providers: dict[str, object] = {
-        "emotion": Wav2VecEmotionProvider(
+    Remote providers and CPU replacements (``switch_revision``) both change what
+    the local audio route produces; the default local GPU models do not appear
+    here, so the default bundle revision is unchanged.
+    """
+    return [
+        f"{name}:{getattr(provider, 'model_revision', '')}"
+        for name, provider in providers.items()
+        if getattr(provider, "remote", False) or getattr(provider, "switch_revision", False)
+    ]
+
+
+def _pyannoteai_diarization_provider(settings, model_gateway) -> PyannoteAIDiarizationProvider:
+    if model_gateway is None:
+        raise RuntimeError("AUDIO_DIARIZATION_PROVIDER=pyannoteai requires the model gateway")
+    if not settings.pyannoteai_api_key:
+        raise RuntimeError(
+            "PYANNOTEAI_API_KEY is required when AUDIO_DIARIZATION_PROVIDER=pyannoteai"
+        )
+    route = register_pyannoteai_diarization_route(
+        model_gateway,
+        adapter=PyannoteAIDiarizationAdapter(
+            api_key=settings.pyannoteai_api_key,
+            poll_interval_seconds=settings.pyannoteai_poll_interval_seconds,
+            timeout_seconds=settings.pyannoteai_timeout_seconds,
+        ),
+        model=settings.pyannoteai_model,
+        cost_per_hour_usd=settings.pyannoteai_cost_per_hour_usd,
+    )
+    return PyannoteAIDiarizationProvider(
+        gateway=model_gateway,
+        model=route.model,
+        model_revision=route.model_revision,
+    )
+
+
+def _openrouter_audio_emotion_provider(settings, model_gateway) -> OpenRouterAudioEmotionProvider:
+    if model_gateway is None:
+        raise RuntimeError(
+            "AUDIO_EMOTION_PROVIDER=openrouter_audio requires the model gateway"
+        )
+    if not settings.openrouter_api_key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is required when AUDIO_EMOTION_PROVIDER=openrouter_audio"
+        )
+    route = register_openrouter_audio_emotion_route(
+        model_gateway,
+        api_key=settings.openrouter_api_key,
+        model=settings.audio_emotion_model,
+        revision=settings.audio_emotion_model_revision,
+        input_cost_per_million_usd=settings.audio_emotion_input_cost_per_million_usd,
+        output_cost_per_million_usd=settings.audio_emotion_output_cost_per_million_usd,
+    )
+    return OpenRouterAudioEmotionProvider(
+        gateway=model_gateway,
+        route_id=route.route_id,
+        model=route.model,
+        model_revision=route.model_revision,
+        window_ms=settings.audio_emotion_window_ms,
+        chunk_seconds=settings.audio_emotion_chunk_seconds,
+    )
+
+
+def _audio_ml_providers(*, provider_key: str, settings, model_gateway=None) -> dict[str, object]:
+    group_disabled = provider_key in {"disabled", "none", "off"}
+    if not group_disabled and provider_key not in {"local_ml", "local", "full"}:
+        raise RuntimeError("AUDIO_ML_PROVIDER must be one of local_ml, disabled")
+    diarization_key = _audio_feature_provider(
+        settings.audio_diarization_provider,
+        group_disabled=group_disabled,
+    )
+    emotion_key = _audio_feature_provider(
+        settings.audio_emotion_provider,
+        group_disabled=group_disabled,
+    )
+    sound_key = _audio_feature_provider(
+        settings.audio_sound_provider,
+        group_disabled=group_disabled,
+    )
+
+    providers: dict[str, object] = {}
+    if emotion_key == "openrouter_audio":
+        providers["emotion"] = _openrouter_audio_emotion_provider(settings, model_gateway)
+    elif emotion_key == "local_ml":
+        providers["emotion"] = Wav2VecEmotionProvider(
             model=settings.wav2vec_emotion_model,
             revision=settings.wav2vec_emotion_model_revision,
-        ),
-        "sound": YamnetSoundClassifier(model_url=settings.yamnet_model_url),
-    }
-    if settings.pyannote_auth_token:
+        )
+    if sound_key == "yamnet_tflite":
+        providers["sound"] = YamnetTFLiteSoundClassifier(
+            model_path=settings.yamnet_tflite_model_path,
+            model_sha256=settings.yamnet_tflite_model_sha256,
+        )
+    elif sound_key == "local_ml":
+        providers["sound"] = YamnetSoundClassifier(model_url=settings.yamnet_model_url)
+    if diarization_key == "pyannoteai":
+        providers["speaker_diarization"] = _pyannoteai_diarization_provider(
+            settings, model_gateway
+        )
+    elif diarization_key == "local_ml" and settings.pyannote_auth_token:
         providers["speaker_diarization"] = PyannoteSpeakerDiarizationProvider(
             model=settings.pyannote_model,
             auth_token=settings.pyannote_auth_token,

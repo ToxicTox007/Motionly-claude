@@ -357,7 +357,7 @@ export interface components {
     "StyleTrainRequest": { force?: boolean; };
     "SubjectTrackPoint": { timestamp_ms: number; x: number; y: number; width: number; height: number; confidence: number; source: "face" | "object"; };
     "SubscriptionStatus": "none" | "trialing" | "active" | "past_due" | "canceled" | "unpaid" | "incomplete";
-    "SubscriptionSummary": { workspace_id: string; plan: components["schemas"]["BillingPlanKey"]; status: components["schemas"]["SubscriptionStatus"]; gateway_customer_id?: string | null; gateway_subscription_id?: string | null; gateway_price_id?: string | null; current_period_start?: string | null; current_period_end?: string | null; cancel_at_period_end?: boolean; payment_issue?: boolean; updated_at: string; };
+    "SubscriptionSummary": { workspace_id: string; plan: components["schemas"]["BillingPlanKey"]; status: components["schemas"]["SubscriptionStatus"]; gateway_customer_id?: string | null; gateway_subscription_id?: string | null; gateway_price_id?: string | null; current_period_start?: string | null; current_period_end?: string | null; cancel_at_period_end?: boolean; payment_issue?: boolean; past_due_grace_ends_at?: string | null; updated_at: string; };
     "SubtitleFormat": "srt" | "vtt";
     "TimelineAudioLayer": { source_stems?: { [key: string]: unknown; } | null; music?: { [key: string]: unknown; } | null; sfx?: Array<{ [key: string]: unknown; }>; };
     "TimelineBrollLayer": { id: string; start_ms: number; end_ms: number; src?: string; source_start_ms?: number | null; source_end_ms?: number | null; metadata?: { [key: string]: unknown; }; };

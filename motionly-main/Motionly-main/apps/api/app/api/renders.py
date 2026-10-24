@@ -323,6 +323,112 @@ def apply_motion_design_export_settings(
     return updated, motion_design
 
 
+async def _inflight_duplicate(
+    repository: InMemoryRenderRepository,
+    *,
+    workspace_id: UUID,
+    project_id: UUID,
+    props_hash: str,
+) -> RenderJobRecord | None:
+    """The oldest queued or running render of exactly these props, if any."""
+    jobs = await _repository_call(
+        repository,
+        "list_inflight_duplicate_jobs_async",
+        "list_inflight_duplicate_jobs",
+        workspace_id=workspace_id,
+        project_id=project_id,
+        props_hash=props_hash,
+        limit=1,
+    )
+    return jobs[0] if jobs else None
+
+
+async def _cancel_duplicate(repository: InMemoryRenderRepository, job: RenderJobRecord) -> None:
+    try:
+        await _repository_call(
+            repository,
+            "transition_job_async",
+            "transition_job",
+            job=job,
+            status=RenderJobStatus.CANCELED,
+            progress_pct=job.progress_pct,
+            message="Render not started: an identical render is already in progress.",
+            event_type="cancelled",
+            error_code="render_duplicate",
+            error_message="An identical render is already in progress.",
+            require_active=True,
+        )
+    except ApiError as exc:
+        if exc.code != "render_not_cancelable":
+            raise
+
+
+async def _render_target_result(
+    repository: InMemoryRenderRepository,
+    job: RenderJobRecord,
+    *,
+    project_id: UUID,
+    publish: bool,
+) -> RenderCreateResponse | RenderJobRecord:
+    """The create response for an already-queued render (nothing is re-queued)."""
+    if not publish:
+        return job
+    return RenderCreateResponse(
+        job=job.to_response(await _events_for_job(repository, job.id)),
+        job_id=job.id,
+        queue_job_id=RenderQueue.job_id_for_render(
+            render_job_id=job.id,
+            project_id=project_id,
+            workspace_id=job.workspace_id,
+            priority=_render_queue_priority(job),
+        ),
+        status=job.status,
+    )
+
+
+async def _confirm_render_slot(
+    *,
+    job: RenderJobRecord,
+    actor: object,
+    repository: InMemoryRenderRepository,
+    billing_repository: object,
+    billing_enabled: bool,
+) -> None:
+    """Re-check the render limit now that ``job`` exists, before it is queued.
+
+    Two requests can both pass the up-front check and then both create a
+    render. Once created, each render is visible to every request, and renders
+    are ranked oldest first, so exactly the renders that fit keep their slot.
+    A render that lost the race is canceled (never queued) and the request
+    gets the same 402 as the up-front check.
+    """
+    try:
+        await enforce_render_entitlement(
+            workspace_id=actor.workspace_id,
+            repository=billing_repository,
+            render_repository=repository,
+            billing_enabled=billing_enabled,
+            render_job_id=job.id,
+        )
+    except ApiError as exc:
+        if exc.code != "render_limit_exceeded":
+            raise
+        await _repository_call(
+            repository,
+            "transition_job_async",
+            "transition_job",
+            job=job,
+            status=RenderJobStatus.CANCELED,
+            progress_pct=job.progress_pct,
+            message="Render not started: the monthly render limit was reached.",
+            event_type="cancelled",
+            error_code="render_limit_exceeded",
+            error_message=exc.message,
+            require_active=True,
+        )
+        raise
+
+
 @router.post(
     "/projects/{project_id}/renders",
     response_model=RenderCreateResponse,
@@ -370,12 +476,16 @@ async def _create_render_target(
     timeline_revision_id: UUID | None = None,
     publish: bool = True,
 ) -> RenderCreateResponse | RenderJobRecord:
-    billing_status = enforce_render_entitlement(
+    billing_enabled = bool(getattr(request.app.state.settings, "billing_enabled", True))
+    billing_status = await enforce_render_entitlement(
         workspace_id=actor.workspace_id,
         repository=billing_repository,
-        billing_enabled=bool(getattr(request.app.state.settings, "billing_enabled", True)),
+        render_repository=repository,
+        billing_enabled=billing_enabled,
     )
-    upload = repository.get_active_upload(project_id=project_id, workspace_id=actor.workspace_id)
+    upload = await run_blocking(
+        repository.get_active_upload, project_id=project_id, workspace_id=actor.workspace_id
+    )
     if upload.source_object_reference_id is None:
         reference_service = getattr(
             request.app.state,
@@ -431,13 +541,15 @@ async def _create_render_target(
 
     track = None
     if payload.caption_track_id:
-        track = repository.get_caption_track(
+        track = await run_blocking(
+            repository.get_caption_track,
             project_id=project_id,
             caption_track_id=payload.caption_track_id,
             workspace_id=actor.workspace_id,
         )
     elif effective_include_captions:
-        track = repository.latest_caption_track(
+        track = await run_blocking(
+            repository.latest_caption_track,
             project_id=project_id,
             workspace_id=actor.workspace_id,
         )
@@ -448,7 +560,8 @@ async def _create_render_target(
             raise ApiError(
                 503, "localized_publishing_unavailable", "Localized publishing is unavailable."
             )
-        localized_package = localized_repository.get_package(
+        localized_package = await run_blocking(
+            localized_repository.get_package,
             package_id=payload.localized_publish_package_id,
             workspace_id=actor.workspace_id,
             project_id=project_id,
@@ -462,7 +575,8 @@ async def _create_render_target(
                 "localized_publish_review_required",
                 "Review and approve the localized publish package before rendering.",
             )
-        track = repository.get_caption_track(
+        track = await run_blocking(
+            repository.get_caption_track,
             project_id=project_id,
             caption_track_id=localized_package.caption_track_id,
             workspace_id=actor.workspace_id,
@@ -476,7 +590,8 @@ async def _create_render_target(
     )
     caption_words = [word for segment in caption_segments for word in segment.words]
     if not caption_words:
-        transcript = repository.caption_repository.latest_transcript(
+        transcript = await run_blocking(
+            repository.caption_repository.latest_transcript,
             project_id=project_id,
             workspace_id=actor.workspace_id,
         )
@@ -484,23 +599,19 @@ async def _create_render_target(
 
     edit_plan_record = None
     if payload.edit_plan_id:
-        edit_plan_record = plan_repository.get_plan(
+        edit_plan_record = await run_blocking(
+            plan_repository.get_plan,
             project_id=project_id,
             workspace_id=actor.workspace_id,
             plan_id=payload.edit_plan_id,
         )
     else:
-        edit_plan_record = next(
-            (
-                plan
-                for plan in plan_repository.list_plans(
-                    project_id=project_id,
-                    workspace_id=actor.workspace_id,
-                )
-                if plan.is_active
-            ),
-            None,
+        plans = await run_blocking(
+            plan_repository.list_plans,
+            project_id=project_id,
+            workspace_id=actor.workspace_id,
         )
+        edit_plan_record = next((plan for plan in plans if plan.is_active), None)
 
     effective_duration_preset = (
         requested_duration_preset
@@ -579,7 +690,9 @@ async def _create_render_target(
         effects=edit_plan_record.plan.effects if edit_plan_record else [],
     )
     broll_slots = (
-        broll_repository.list_slots(project_id=project_id, workspace_id=actor.workspace_id)
+        await run_blocking(
+            broll_repository.list_slots, project_id=project_id, workspace_id=actor.workspace_id
+        )
         if broll_repository
         else []
     )
@@ -593,7 +706,8 @@ async def _create_render_target(
             or not broll_repository
         ):
             continue
-        asset = broll_repository.get_asset(
+        asset = await run_blocking(
+            broll_repository.get_asset,
             project_id=project_id,
             workspace_id=actor.workspace_id,
             asset_id=slot.selected_asset_id,
@@ -659,7 +773,8 @@ async def _create_render_target(
     music_selection = None
     music_props = None
     if music_repository:
-        music_selection = music_repository.latest_selection(
+        music_selection = await run_blocking(
+            music_repository.latest_selection,
             project_id=project_id,
             workspace_id=actor.workspace_id,
         )
@@ -688,7 +803,8 @@ async def _create_render_target(
             "rights": getattr(music_selection, "rights_snapshot", {}),
         }
         if music_selection.music_track_id and music_repository:
-            music_track = music_repository.get_track(
+            music_track = await run_blocking(
+                music_repository.get_track,
                 project_id=project_id,
                 workspace_id=actor.workspace_id,
                 track_id=music_selection.music_track_id,
@@ -715,7 +831,8 @@ async def _create_render_target(
     motion_design_manifest = None
     visual_record = None
     if effects_repository:
-        effects_config = effects_repository.latest_config(
+        effects_config = await run_blocking(
+            effects_repository.latest_config,
             project_id=project_id,
             workspace_id=actor.workspace_id,
         )
@@ -724,7 +841,8 @@ async def _create_render_target(
     if effects_config:
         visual_repository = getattr(request.app.state, "visual_repository", None)
         visual_record = (
-            visual_repository.latest_ready_for_upload(
+            await run_blocking(
+                visual_repository.latest_ready_for_upload,
                 uploaded_video_id=upload.id,
                 project_id=project_id,
                 workspace_id=actor.workspace_id,
@@ -864,7 +982,8 @@ async def _create_render_target(
     if effects_props and effects_props.get("background_removal", {}).get("enabled"):
         visual_repository = getattr(request.app.state, "visual_repository", None)
         matte_record = (
-            visual_repository.latest_matte_for_upload(
+            await run_blocking(
+                visual_repository.latest_matte_for_upload,
                 workspace_id=actor.workspace_id,
                 project_id=project_id,
                 uploaded_video_id=upload.id,
@@ -920,7 +1039,9 @@ async def _create_render_target(
         or getattr(settings, "app_env", "local") != "production"
     )
     try:
-        validate_render_media_manifest(
+        # Resolves DNS for every external media URL: keep it off the event loop.
+        await run_blocking(
+            validate_render_media_manifest,
             render_props,
             allow_fixture=allow_fixture_media,
             resolve_dns=True,
@@ -1115,15 +1236,57 @@ async def _create_render_target(
                 "workflow_render_lineage_missing",
                 "Workflow render persistence requires immutable approval lineage.",
             )
-        job = repository.ensure_workflow_draft_render(
+        job = await run_blocking(
+            repository.ensure_workflow_draft_render,
             workflow_repository=workflow_repository,
             **job_values,
         )
     else:
-        job = repository.create_render_job(**job_values)
+        # An identical render that is still queued or running is returned
+        # instead of a second one (client retries, double clicks), unless the
+        # caller explicitly asks for a fresh render with force=true.
+        dedupe = not payload.force
+        existing = (
+            await _inflight_duplicate(
+                repository,
+                workspace_id=actor.workspace_id,
+                project_id=project_id,
+                props_hash=props_hash,
+            )
+            if dedupe
+            else None
+        )
+        if existing is not None:
+            return await _render_target_result(
+                repository, existing, project_id=project_id, publish=publish
+            )
+        job = await run_blocking(repository.create_render_job, **job_values)
+        if dedupe:
+            # A concurrent identical request may have created its render
+            # first; the oldest one is kept and this one is never queued.
+            winner = await _inflight_duplicate(
+                repository,
+                workspace_id=actor.workspace_id,
+                project_id=project_id,
+                props_hash=props_hash,
+            )
+            if winner is not None and winner.id != job.id:
+                await _cancel_duplicate(repository, job)
+                return await _render_target_result(
+                    repository, winner, project_id=project_id, publish=publish
+                )
+        await _confirm_render_slot(
+            job=job,
+            actor=actor,
+            repository=repository,
+            billing_repository=billing_repository,
+            billing_enabled=billing_enabled,
+        )
     if not publish:
         return job
-    queue_job = render_queue.enqueue_render(
+    # The BullMQ bridge is a blocking subprocess round-trip (up to its timeout).
+    queue_job = await run_blocking(
+        render_queue.enqueue_render,
         render_job_id=job.id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -1133,7 +1296,7 @@ async def _create_render_target(
     )
 
     return RenderCreateResponse(
-        job=job.to_response(repository.events_for_job(job.id)),
+        job=job.to_response(await run_blocking(repository.events_for_job, job.id)),
         job_id=job.id,
         queue_job_id=queue_job.id,
         status=job.status,
@@ -1156,6 +1319,16 @@ async def create_bulk_render(
     render_queue: RenderQueueDep,
     broll_repository: BrollRepositoryDep = None,  # type: ignore[assignment]
 ) -> RenderBulkCreateResponse:
+    # Refuse the whole batch up front if it cannot fit, rather than creating
+    # the first few targets and failing part-way. Each target is then checked
+    # (and confirmed after creation) again by create_render.
+    await enforce_render_entitlement(
+        workspace_id=actor.workspace_id,
+        repository=billing_repository,
+        render_repository=repository,
+        billing_enabled=bool(getattr(request.app.state.settings, "billing_enabled", True)),
+        requested=len(payload.export_targets),
+    )
     responses: list[RenderCreateResponse] = []
     for export_options in payload.export_targets:
         response = await create_render(
@@ -1252,17 +1425,15 @@ def retime_caption_segments_for_keep_segments(
 ) -> list[CaptionSegment]:
     retimed: list[CaptionSegment] = []
     for output_start, keep in _keep_segments_with_output_starts(keep_segments):
-        first_segment_for_keep = True
         for segment in segments:
             overlap_start = max(segment.start_ms, keep.start_ms)
             overlap_end = min(segment.end_ms, keep.end_ms)
             if overlap_end <= overlap_start:
                 continue
-            next_start = (
-                output_start
-                if first_segment_for_keep
-                else output_start + (overlap_start - keep.start_ms)
-            )
+            # Same mapping as the segment's words (retime_word_for_overlap) and
+            # timeline_compiler._caption_layers: a caption keeps its offset
+            # within the kept section, so it never appears before its words.
+            next_start = output_start + (overlap_start - keep.start_ms)
             next_end = output_start + (overlap_end - keep.start_ms)
             words = [
                 retimed_word
@@ -1287,7 +1458,6 @@ def retime_caption_segments_for_keep_segments(
                     }
                 )
             )
-            first_segment_for_keep = False
     return retimed
 
 
@@ -1524,13 +1694,14 @@ async def cancel_render(
     }:
         raise ApiError(409, "render_not_cancelable", "This render can no longer be canceled.")
     try:
-        render_queue.cancel(
+        await run_blocking(
+            render_queue.cancel,
             RenderQueue.job_id_for_render(
                 render_job_id=job.id,
                 project_id=project_id,
                 workspace_id=actor.workspace_id,
                 priority=_render_queue_priority(job),
-            )
+            ),
         )
     except Exception:
         # Best effort: queued jobs are removed from the queue when possible, and running jobs
@@ -1547,6 +1718,10 @@ async def cancel_render(
         event_type="cancelled",
         error_code="render_cancelled",
         error_message="Render canceled.",
+        # The worker may finish (or fail) the render between the status check
+        # above and this write; only cancel a render that is still active, so a
+        # completed export is never overwritten (409 instead).
+        require_active=True,
     )
     return job.to_response(await _events_for_job(repository, job.id))
 
@@ -1562,13 +1737,26 @@ async def retry_render(
     actor: ActorDep,
     repository: RenderRepositoryDep,
     render_queue: RenderQueueDep,
+    request: Request = None,  # type: ignore[assignment]
+    billing_repository: BillingRepositoryDep = None,  # type: ignore[assignment]
 ) -> RenderCreateResponse:
-    job = repository.retry_project_render_job(
+    if billing_repository is not None and request is not None:
+        # A failed or canceled render gave its slot back; retrying takes one
+        # again, so it is subject to the same monthly limit as a new render.
+        await enforce_render_entitlement(
+            workspace_id=actor.workspace_id,
+            repository=billing_repository,
+            render_repository=repository,
+            billing_enabled=bool(getattr(request.app.state.settings, "billing_enabled", True)),
+        )
+    job = await run_blocking(
+        repository.retry_project_render_job,
         project_id=project_id,
         render_job_id=render_job_id,
         workspace_id=actor.workspace_id,
     )
-    queue_job = render_queue.enqueue_render(
+    queue_job = await run_blocking(
+        render_queue.enqueue_render,
         render_job_id=job.id,
         project_id=project_id,
         workspace_id=actor.workspace_id,
@@ -1577,7 +1765,7 @@ async def retry_render(
         priority=_render_queue_priority(job),
     )
     return RenderCreateResponse(
-        job=job.to_response(repository.events_for_job(job.id)),
+        job=job.to_response(await run_blocking(repository.events_for_job, job.id)),
         job_id=job.id,
         queue_job_id=queue_job.id,
         status=job.status,

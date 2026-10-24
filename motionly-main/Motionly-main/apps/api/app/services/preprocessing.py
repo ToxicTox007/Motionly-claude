@@ -4,6 +4,7 @@ from pathlib import Path
 from app.api.errors import ApiError
 from app.schemas.uploads import VideoMetadata
 from app.services.media_probe import MediaProbeError, probe_video
+from app.services.subprocess_env import media_tool_env
 from app.services.upload_validation import assert_video_render_ready
 
 
@@ -53,6 +54,8 @@ class VideoPreprocessor:
             "scale=720:-2",
             str(output_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=60)
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False, timeout=60, env=media_tool_env()
+        )
         if result.returncode != 0:
             raise ApiError(502, "thumbnail_generation_failed", "Thumbnail could not be generated.")

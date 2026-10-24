@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     ml_execution_mode: Literal["gpu", "test_fixture"] = Field(
         default="gpu", alias="ML_EXECUTION_MODE"
     )
+    # false: a GPU-free deployment (infra/docker-compose.remote-ai.yml). No GPU
+    # worker exists, so the GPU capacity observer, its maintenance job and GPU
+    # model prefetch are off, and production requires every feature to select a
+    # CPU or remote provider. true (default): today's GPU topology.
+    gpu_workers_enabled: bool = Field(default=True, alias="GPU_WORKERS_ENABLED")
     ffmpeg_gpu_encoder: str = Field(default="h264_nvenc", alias="FFMPEG_GPU_ENCODER")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     temporal_address: str | None = Field(default=None, alias="TEMPORAL_ADDRESS")
@@ -237,6 +242,23 @@ class Settings(BaseSettings):
     export_share_resolve_global_rate_limit_per_hour: int = Field(
         default=6000, ge=1, alias="EXPORT_SHARE_RESOLVE_GLOBAL_RATE_LIMIT_PER_HOUR"
     )
+    # POST /feedback (unauthenticated launch feedback form): submissions per
+    # viewer address, and by everyone together, per hour.
+    feedback_rate_limit_per_hour: int = Field(
+        default=10, ge=1, alias="FEEDBACK_RATE_LIMIT_PER_HOUR"
+    )
+    feedback_global_rate_limit_per_hour: int = Field(
+        default=500, ge=1, alias="FEEDBACK_GLOBAL_RATE_LIMIT_PER_HOUR"
+    )
+    # POST /public/reviews/*: share-link resolves, comments and decisions per
+    # viewer address, and by everyone together, per hour. Every attempt
+    # counts, refused ones included, so the limit also bounds token probing.
+    public_review_rate_limit_per_hour: int = Field(
+        default=240, ge=1, alias="PUBLIC_REVIEW_RATE_LIMIT_PER_HOUR"
+    )
+    public_review_global_rate_limit_per_hour: int = Field(
+        default=10000, ge=1, alias="PUBLIC_REVIEW_GLOBAL_RATE_LIMIT_PER_HOUR"
+    )
     # POST /auth/signup: attempts per viewer address, and by everyone together,
     # per hour. Every attempt counts, refused ones included.
     signup_rate_limit_per_hour: int = Field(default=5, ge=1, alias="SIGNUP_RATE_LIMIT_PER_HOUR")
@@ -276,6 +298,49 @@ class Settings(BaseSettings):
         alias="PYANNOTE_MODEL_REVISION",
     )
     pyannote_auth_token: str | None = Field(default=None, alias="PYANNOTE_AUTH_TOKEN")
+    # Per-feature audio switches. Empty inherits AUDIO_ML_PROVIDER (local_ml unless
+    # it is disabled); an explicit value wins over the group default.
+    audio_diarization_provider: Literal["", "local_ml", "pyannoteai", "disabled"] = Field(
+        default="", alias="AUDIO_DIARIZATION_PROVIDER"
+    )
+    pyannoteai_api_key: str | None = Field(default=None, alias="PYANNOTEAI_API_KEY")
+    pyannoteai_model: Literal["precision-3", "precision-2", "community-1"] = Field(
+        default="precision-3", alias="PYANNOTEAI_MODEL"
+    )
+    pyannoteai_cost_per_hour_usd: float = Field(
+        default=0.0, ge=0, alias="PYANNOTEAI_COST_PER_HOUR_USD"
+    )
+    pyannoteai_poll_interval_seconds: float = Field(
+        default=5.0, ge=1, le=60, alias="PYANNOTEAI_POLL_INTERVAL_SECONDS"
+    )
+    pyannoteai_timeout_seconds: int = Field(
+        default=900, ge=60, alias="PYANNOTEAI_TIMEOUT_SECONDS"
+    )
+    # Voice emotion: local_ml (wav2vec2 on the ML worker) or openrouter_audio (an
+    # audio-capable model on OpenRouter, zero-data-retention endpoints only).
+    audio_emotion_provider: Literal["", "local_ml", "openrouter_audio", "disabled"] = Field(
+        default="", alias="AUDIO_EMOTION_PROVIDER"
+    )
+    audio_emotion_model: str = Field(
+        default="google/gemini-3.5-flash-lite", alias="AUDIO_EMOTION_MODEL"
+    )
+    audio_emotion_model_revision: str = Field(
+        default="google/gemini-3.5-flash-lite-2026-07-21",
+        alias="AUDIO_EMOTION_MODEL_REVISION",
+    )
+    # Audio input is billed per token; set this to the model's audio-input price.
+    audio_emotion_input_cost_per_million_usd: float = Field(
+        default=0.0, ge=0, alias="AUDIO_EMOTION_INPUT_COST_PER_MILLION_USD"
+    )
+    audio_emotion_output_cost_per_million_usd: float = Field(
+        default=0.0, ge=0, alias="AUDIO_EMOTION_OUTPUT_COST_PER_MILLION_USD"
+    )
+    audio_emotion_window_ms: int = Field(
+        default=5000, ge=1000, le=30000, alias="AUDIO_EMOTION_WINDOW_MS"
+    )
+    audio_emotion_chunk_seconds: int = Field(
+        default=60, ge=10, le=300, alias="AUDIO_EMOTION_CHUNK_SECONDS"
+    )
     wav2vec_emotion_model: str = Field(
         default="superb/wav2vec2-base-superb-er",
         alias="WAV2VEC_EMOTION_MODEL",
@@ -287,6 +352,34 @@ class Settings(BaseSettings):
     yamnet_model_url: str = Field(
         default="https://tfhub.dev/google/yamnet/1",
         alias="YAMNET_MODEL_URL",
+    )
+    # Sound events: local_ml (TF Hub YAMNet on the ML worker), yamnet_tflite (CPU
+    # YAMNet via MediaPipe in the cpu-vision image), or disabled. Empty follows
+    # AUDIO_ML_PROVIDER.
+    audio_sound_provider: Literal["", "local_ml", "yamnet_tflite", "disabled"] = Field(
+        default="", alias="AUDIO_SOUND_PROVIDER"
+    )
+    yamnet_tflite_model_path: str = Field(
+        default="/opt/motionly/models/yamnet.tflite", alias="YAMNET_TFLITE_MODEL_PATH"
+    )
+    yamnet_tflite_model_sha256: str = Field(
+        default="4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+        alias="YAMNET_TFLITE_MODEL_SHA256",
+    )
+    # Set by the cpu-vision worker image (Dockerfile.python CPU_VISION_ENABLED=true).
+    cpu_vision_enabled: bool = Field(default=False, alias="CPU_VISION_ENABLED")
+    # Background matte: local_ml (MediaPipe on the GPU/ML worker) or local_cpu
+    # (MediaPipe Tasks selfie segmenter on the cpu-vision worker; no GPU).
+    matte_provider: Literal["local_ml", "local_cpu"] = Field(
+        default="local_ml", alias="MATTE_PROVIDER"
+    )
+    matte_cpu_model_path: str = Field(
+        default="/opt/motionly/models/selfie_segmenter_landscape.tflite",
+        alias="MATTE_CPU_MODEL_PATH",
+    )
+    matte_cpu_model_sha256: str = Field(
+        default="490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+        alias="MATTE_CPU_MODEL_SHA256",
     )
     visual_intelligence_provider: str = Field(default="local_ml", alias="VISUAL_PROVIDER")
     visual_clip_model: str = Field(
@@ -315,6 +408,84 @@ class Settings(BaseSettings):
     )
     visual_sample_fps: float = Field(default=2.0, alias="VISUAL_SAMPLE_FPS")
     visual_scene_threshold: float = Field(default=0.42, alias="VISUAL_SCENE_THRESHOLD")
+    # VISUAL_PROVIDER=remote: CPU signals on the cpu-vision worker plus remote
+    # keyframe enrichment. Face detection uses this pinned BlazeFace model.
+    visual_cpu_face_model_path: str = Field(
+        default="/opt/motionly/models/blaze_face_full_range.tflite",
+        alias="VISUAL_CPU_FACE_MODEL_PATH",
+    )
+    visual_cpu_face_model_sha256: str = Field(
+        default="3698b18f063835bc609069ef052228fbe86d9c9a6dc8dcb7c7c2d69aed2b181b",
+        alias="VISUAL_CPU_FACE_MODEL_SHA256",
+    )
+    # Upper bound on keyframes (one per scene) sent to paid remote APIs per video.
+    visual_remote_max_keyframes: int = Field(
+        default=24, ge=1, le=120, alias="VISUAL_REMOTE_MAX_KEYFRAMES"
+    )
+    # Keyframe object detection when VISUAL_PROVIDER=remote: google_vision or disabled.
+    visual_objects_provider: Literal["google_vision", "disabled"] = Field(
+        default="google_vision", alias="VISUAL_OBJECTS_PROVIDER"
+    )
+    google_vision_api_key: str | None = Field(default=None, alias="GOOGLE_VISION_API_KEY")
+    google_vision_objects_model: Literal["builtin/stable", "builtin/latest"] = Field(
+        default="builtin/stable", alias="GOOGLE_VISION_OBJECTS_MODEL"
+    )
+    # Google does not version its built-in models. The date records when the
+    # stable model was validated; bump it to invalidate cached manifests.
+    google_vision_objects_model_revision: str = Field(
+        default="google-vision-objects-builtin-stable-2026-10-22",
+        alias="GOOGLE_VISION_OBJECTS_MODEL_REVISION",
+    )
+    google_vision_cost_per_image_usd: float = Field(
+        default=0.0, ge=0, alias="GOOGLE_VISION_COST_PER_IMAGE_USD"
+    )
+    # Keyframe captions when VISUAL_PROVIDER=remote: openrouter (a vision model on
+    # zero-data-retention endpoints; reuses OPENROUTER_API_KEY) or disabled.
+    visual_captions_provider: Literal["openrouter", "disabled"] = Field(
+        default="openrouter", alias="VISUAL_CAPTIONS_PROVIDER"
+    )
+    visual_caption_model: str = Field(
+        default="google/gemini-3.5-flash-lite", alias="VISUAL_CAPTION_MODEL"
+    )
+    visual_caption_model_revision: str = Field(
+        default="google/gemini-3.5-flash-lite-2026-07-21",
+        alias="VISUAL_CAPTION_MODEL_REVISION",
+    )
+    visual_caption_input_cost_per_million_usd: float = Field(
+        default=0.0, ge=0, alias="VISUAL_CAPTION_INPUT_COST_PER_MILLION_USD"
+    )
+    visual_caption_output_cost_per_million_usd: float = Field(
+        default=0.0, ge=0, alias="VISUAL_CAPTION_OUTPUT_COST_PER_MILLION_USD"
+    )
+    visual_caption_max_images_per_request: int = Field(
+        default=8, ge=1, le=16, alias="VISUAL_CAPTION_MAX_IMAGES_PER_REQUEST"
+    )
+    # Keyframe embeddings when VISUAL_PROVIDER=remote: jina (the same Jina routes
+    # as B-roll ranking, so keyframe and stock vectors share one space) or disabled.
+    visual_embeddings_provider: Literal["jina", "disabled"] = Field(
+        default="jina", alias="VISUAL_EMBEDDINGS_PROVIDER"
+    )
+    # local_clip: CLIP on the ML workers (default). jina: Jina embeddings API.
+    embeddings_provider: Literal["local_clip", "jina"] = Field(
+        default="local_clip", alias="EMBEDDINGS_PROVIDER"
+    )
+    jina_api_key: str | None = Field(default=None, alias="JINA_API_KEY")
+    jina_embeddings_model: str = Field(default="jina-clip-v2", alias="JINA_EMBEDDINGS_MODEL")
+    jina_embeddings_model_revision: str = Field(
+        default="jina-clip-v2-2024-11-05", alias="JINA_EMBEDDINGS_MODEL_REVISION"
+    )
+    # B-roll requests hold at most 1024-dimensional vectors (jina-clip-v2's maximum).
+    jina_embeddings_dimensions: int = Field(
+        default=1024, ge=32, le=1024, alias="JINA_EMBEDDINGS_DIMENSIONS"
+    )
+    # Explicit prices (production requires both to be positive). Text is charged
+    # per UTF-8 byte at this per-million rate, an upper bound on tokens.
+    jina_text_cost_per_million_tokens_usd: float = Field(
+        default=0.0, ge=0, alias="JINA_TEXT_COST_PER_MILLION_TOKENS_USD"
+    )
+    jina_image_cost_per_image_usd: float = Field(
+        default=0.0, ge=0, alias="JINA_IMAGE_COST_PER_IMAGE_USD"
+    )
     allow_fixture_providers: bool = Field(default=False, alias="ALLOW_FIXTURE_PROVIDERS")
     music_provider: str = Field(default="licensed_catalog", alias="MUSIC_PROVIDER")
     licensed_music_catalog_table: str = Field(
@@ -351,6 +522,11 @@ class Settings(BaseSettings):
     )
     model_gateway_request_budget_usd: float = Field(
         default=5.0, ge=0, alias="MODEL_GATEWAY_REQUEST_BUDGET_USD"
+    )
+    # JSON object of budget feature -> deployment-wide monthly USD cap, e.g.
+    # {"vision_captions": 20, "audio_stems": 15}. Omitted features are uncapped.
+    model_gateway_feature_budgets_usd: str = Field(
+        default="", alias="MODEL_GATEWAY_FEATURE_BUDGETS_USD"
     )
     model_gateway_failure_threshold: int = Field(
         default=3, ge=1, alias="MODEL_GATEWAY_FAILURE_THRESHOLD"
@@ -397,6 +573,19 @@ class Settings(BaseSettings):
     )
     remotion_enabled: bool = Field(default=False, alias="REMOTION_ENABLED")
     stem_separation_provider: str = Field(default="demucs", alias="STEM_SEPARATION_PROVIDER")
+    # STEM_SEPARATION_PROVIDER=lalal: LALAL.AI v1 API. The splitter is pinned so
+    # the route revision is immutable (andromeda is LALAL's newest vocal model).
+    lalal_license_key: str | None = Field(default=None, alias="LALAL_LICENSE_KEY")
+    lalal_splitter: Literal["andromeda", "perseus", "orion", "phoenix"] = Field(
+        default="andromeda", alias="LALAL_SPLITTER"
+    )
+    lalal_cost_per_minute_usd: float = Field(
+        default=0.0, ge=0, alias="LALAL_COST_PER_MINUTE_USD"
+    )
+    lalal_poll_interval_seconds: float = Field(
+        default=5.0, ge=1, le=60, alias="LALAL_POLL_INTERVAL_SECONDS"
+    )
+    lalal_timeout_seconds: int = Field(default=1800, ge=60, alias="LALAL_TIMEOUT_SECONDS")
     demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
     demucs_model_revision: str = Field(default="demucs==4.1.0", alias="DEMUCS_MODEL_REVISION")
     quota_runway_free_limit_seconds: float = Field(
@@ -431,6 +620,129 @@ class Settings(BaseSettings):
     quota_openrouter_agency_limit_tokens: float = Field(
         default=10000000.0,
         alias="QUOTA_OPENROUTER_AGENCY_LIMIT_TOKENS",
+    )
+
+    # Per-plan quotas for the remote AI features (metered by the model gateway;
+    # local GPU/CPU routes are never metered). See app.services.billing.FEATURE_QUOTAS.
+    quota_vision_objects_free_limit_images: float = Field(
+        default=120.0,
+        ge=0,
+        alias="QUOTA_VISION_OBJECTS_FREE_LIMIT_IMAGES",
+    )
+    quota_vision_objects_creator_limit_images: float = Field(
+        default=1000.0,
+        ge=0,
+        alias="QUOTA_VISION_OBJECTS_CREATOR_LIMIT_IMAGES",
+    )
+    quota_vision_objects_pro_limit_images: float = Field(
+        default=3000.0,
+        ge=0,
+        alias="QUOTA_VISION_OBJECTS_PRO_LIMIT_IMAGES",
+    )
+    quota_vision_objects_agency_limit_images: float = Field(
+        default=7500.0,
+        ge=0,
+        alias="QUOTA_VISION_OBJECTS_AGENCY_LIMIT_IMAGES",
+    )
+    quota_vision_captions_free_limit_images: float = Field(
+        default=120.0,
+        ge=0,
+        alias="QUOTA_VISION_CAPTIONS_FREE_LIMIT_IMAGES",
+    )
+    quota_vision_captions_creator_limit_images: float = Field(
+        default=1000.0,
+        ge=0,
+        alias="QUOTA_VISION_CAPTIONS_CREATOR_LIMIT_IMAGES",
+    )
+    quota_vision_captions_pro_limit_images: float = Field(
+        default=3000.0,
+        ge=0,
+        alias="QUOTA_VISION_CAPTIONS_PRO_LIMIT_IMAGES",
+    )
+    quota_vision_captions_agency_limit_images: float = Field(
+        default=7500.0,
+        ge=0,
+        alias="QUOTA_VISION_CAPTIONS_AGENCY_LIMIT_IMAGES",
+    )
+    quota_embeddings_free_limit_inputs: float = Field(
+        default=1000.0,
+        ge=0,
+        alias="QUOTA_EMBEDDINGS_FREE_LIMIT_INPUTS",
+    )
+    quota_embeddings_creator_limit_inputs: float = Field(
+        default=8000.0,
+        ge=0,
+        alias="QUOTA_EMBEDDINGS_CREATOR_LIMIT_INPUTS",
+    )
+    quota_embeddings_pro_limit_inputs: float = Field(
+        default=24000.0,
+        ge=0,
+        alias="QUOTA_EMBEDDINGS_PRO_LIMIT_INPUTS",
+    )
+    quota_embeddings_agency_limit_inputs: float = Field(
+        default=60000.0,
+        ge=0,
+        alias="QUOTA_EMBEDDINGS_AGENCY_LIMIT_INPUTS",
+    )
+    quota_audio_diarization_free_limit_seconds: float = Field(
+        default=1800.0,
+        ge=0,
+        alias="QUOTA_AUDIO_DIARIZATION_FREE_LIMIT_SECONDS",
+    )
+    quota_audio_diarization_creator_limit_seconds: float = Field(
+        default=14400.0,
+        ge=0,
+        alias="QUOTA_AUDIO_DIARIZATION_CREATOR_LIMIT_SECONDS",
+    )
+    quota_audio_diarization_pro_limit_seconds: float = Field(
+        default=43200.0,
+        ge=0,
+        alias="QUOTA_AUDIO_DIARIZATION_PRO_LIMIT_SECONDS",
+    )
+    quota_audio_diarization_agency_limit_seconds: float = Field(
+        default=108000.0,
+        ge=0,
+        alias="QUOTA_AUDIO_DIARIZATION_AGENCY_LIMIT_SECONDS",
+    )
+    quota_audio_emotion_free_limit_seconds: float = Field(
+        default=1800.0,
+        ge=0,
+        alias="QUOTA_AUDIO_EMOTION_FREE_LIMIT_SECONDS",
+    )
+    quota_audio_emotion_creator_limit_seconds: float = Field(
+        default=14400.0,
+        ge=0,
+        alias="QUOTA_AUDIO_EMOTION_CREATOR_LIMIT_SECONDS",
+    )
+    quota_audio_emotion_pro_limit_seconds: float = Field(
+        default=43200.0,
+        ge=0,
+        alias="QUOTA_AUDIO_EMOTION_PRO_LIMIT_SECONDS",
+    )
+    quota_audio_emotion_agency_limit_seconds: float = Field(
+        default=108000.0,
+        ge=0,
+        alias="QUOTA_AUDIO_EMOTION_AGENCY_LIMIT_SECONDS",
+    )
+    quota_audio_stems_free_limit_seconds: float = Field(
+        default=600.0,
+        ge=0,
+        alias="QUOTA_AUDIO_STEMS_FREE_LIMIT_SECONDS",
+    )
+    quota_audio_stems_creator_limit_seconds: float = Field(
+        default=3600.0,
+        ge=0,
+        alias="QUOTA_AUDIO_STEMS_CREATOR_LIMIT_SECONDS",
+    )
+    quota_audio_stems_pro_limit_seconds: float = Field(
+        default=10800.0,
+        ge=0,
+        alias="QUOTA_AUDIO_STEMS_PRO_LIMIT_SECONDS",
+    )
+    quota_audio_stems_agency_limit_seconds: float = Field(
+        default=36000.0,
+        ge=0,
+        alias="QUOTA_AUDIO_STEMS_AGENCY_LIMIT_SECONDS",
     )
 
     max_paid_provider_attempts: int = Field(default=1, alias="MAX_PAID_PROVIDER_ATTEMPTS")
@@ -606,6 +918,10 @@ def get_settings() -> Settings:
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
         "RUNWAY_API_KEY",
+        "JINA_API_KEY",
+        "LALAL_LICENSE_KEY",
+        "PYANNOTEAI_API_KEY",
+        "GOOGLE_VISION_API_KEY",
         "MERCHANT_API_KEY",
         "MOCK_GATEWAY_WEBHOOK_SECRET",
     ):

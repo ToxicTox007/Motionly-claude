@@ -8,12 +8,14 @@ from app.core.config import get_settings
 from app.core.production import validate_production_settings
 from app.repositories.uploads import SupabaseUploadRepository
 from app.repositories.visual import SupabaseVisualRepository
+from app.services.cpu_vision import SELFIE_SEGMENTER_LANDSCAPE, load_cpu_matte_models
 from app.services.matte_jobs import run_matte_for_upload
 from app.services.model_domain_adapters import register_matte_route
 from app.services.model_gateway import ModelOperation, validate_gateway_operations
 from app.services.model_gateway_factory import model_gateway_from_settings
 from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider
+from app.workers.executor_protocol import open_protocol_channel
 
 
 def main() -> None:
@@ -48,8 +50,22 @@ def _runner():
         service_role_key=settings.supabase_service_role_key,
     )
     visual_provider_key = settings.visual_intelligence_provider.strip().lower()
+    matte_provider_key = str(getattr(settings, "matte_provider", "local_ml")).strip().lower()
+    matte_revision = "mediapipe-selfie-segmentation-v1"
+    matte_route_identity: dict[str, str] = {}
     if visual_provider_key == "fixture":
         provider_models = {}
+    elif matte_provider_key == "local_cpu":
+        # MediaPipe Tasks on CPU: no torch/transformers model is loaded.
+        provider_models = load_cpu_matte_models(
+            model_path=settings.matte_cpu_model_path,
+            model_sha256=settings.matte_cpu_model_sha256,
+        )
+        matte_revision = f"sha256:{settings.matte_cpu_model_sha256.strip().lower()}"
+        matte_route_identity = {
+            "provider": "local_mediapipe_cpu",
+            "model": SELFIE_SEGMENTER_LANDSCAPE.name,
+        }
     else:
         provider = LocalMLVisualIntelligenceProvider(
             clip_model=settings.visual_clip_model,
@@ -72,7 +88,8 @@ def _runner():
         matte_route = register_matte_route(
             gateway,
             provider_models=provider_models,
-            revision="mediapipe-selfie-segmentation-v1",
+            revision=matte_revision,
+            **matte_route_identity,
         )
     if settings.app_env == "production":
         validate_gateway_operations(
@@ -109,13 +126,15 @@ def _runner():
 
 
 def _serve() -> None:
+    # Before the models load: only `channel` may write to the real stdout.
+    channel = open_protocol_channel()
     execute = _runner()
     for line in sys.stdin:
         request: dict[str, object] = {}
         try:
             request = json.loads(line)
             if request.get("control") == "ping":
-                print(json.dumps({"id": request.get("id"), "result": {"ok": True}}), flush=True)
+                channel.send({"id": request.get("id"), "result": {"ok": True}})
                 continue
             response = {
                 "id": request.get("id"),
@@ -131,7 +150,7 @@ def _serve() -> None:
                 "error": redact_string(str(exc)),
                 "error_code": type(exc).__name__,
             }
-        print(json.dumps(response), flush=True)
+        channel.send(response)
 
 
 def _arguments() -> argparse.Namespace:

@@ -10,6 +10,8 @@ from app.core.local_audit import (
 )
 from app.services.model_adapters import AzureOpenAIAdapter, OpenAICompatibleAdapter
 from app.services.model_gateway import (
+    BUDGET_FEATURES,
+    DEFAULT_BUDGET_FEATURE_BY_CAPABILITY,
     InMemoryBudgetLedger,
     InMemoryCircuitStore,
     ModelCapability,
@@ -20,6 +22,7 @@ from app.services.model_gateway import (
     OperationsGatewayTelemetry,
     RedisBudgetLedger,
     RedisCircuitStore,
+    parse_feature_budgets,
 )
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -120,6 +123,9 @@ def model_gateway_from_settings(
         request_budget_usd=float(
             getattr(settings, "model_gateway_request_budget_usd", 5.0)
         ),
+        feature_budgets_usd=parse_feature_budgets(
+            getattr(settings, "model_gateway_feature_budgets_usd", "")
+        ),
     )
 
 
@@ -182,6 +188,7 @@ def _legacy_routes(settings: object, *, adapters: Mapping[str, object]) -> list[
                         getattr(settings, "edit_planner_output_cost_per_million_usd", 2.0)
                     )
                 ),
+                budget_feature="planning",
             )
         )
 
@@ -209,6 +216,7 @@ def _legacy_routes(settings: object, *, adapters: Mapping[str, object]) -> list[
                     getattr(settings, "transcription_estimated_cost_per_request_usd", 0.25)
                 ),
                 max_output_units=1,
+                budget_feature="transcription",
             )
         )
     return routes
@@ -249,6 +257,16 @@ def _parse_routes(value: str) -> list[ModelRoute]:
                         f"for {capability.value}"
                     )
                 operations = (supported_operation,)
+            raw_feature = item.get("budget_feature")
+            if raw_feature is not None and (
+                not isinstance(raw_feature, str) or raw_feature not in BUDGET_FEATURES
+            ):
+                raise ValueError(
+                    f"budget_feature must be one of {', '.join(sorted(BUDGET_FEATURES))}"
+                )
+            budget_feature = raw_feature or DEFAULT_BUDGET_FEATURE_BY_CAPABILITY.get(
+                capability.value
+            )
             route = ModelRoute(
                 route_id=route_id,
                 capability=capability,
@@ -268,6 +286,7 @@ def _parse_routes(value: str) -> list[ModelRoute]:
                 explicitly_free=bool(item.get("explicitly_free", False)),
                 max_output_units=int(item.get("max_output_units", 4096)),
                 enabled=bool(item.get("enabled", True)),
+                budget_feature=budget_feature,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"MODEL_GATEWAY_ROUTES item {index} is invalid: {exc}") from exc

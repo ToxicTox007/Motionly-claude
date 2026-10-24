@@ -36,6 +36,18 @@ EXPORT_COLUMNS = (
     "storage_bucket,storage_path,format,width,height,fps,duration_ms,file_size_bytes,thumbnail_url,"
     "settings_summary,restored_from_export_id,created_at"
 )
+# Terminal states that give a render's monthly slot back (nothing was delivered).
+RENDER_SLOT_RELEASED_STATUSES = frozenset({RenderJobStatus.FAILED, RenderJobStatus.CANCELED})
+# The same states as stored in render_jobs.status (the enum has no legacy aliases
+# for these two).
+_RENDER_SLOT_RELEASED_DB_STATUSES = "(failed,canceled)"
+# A render in one of these states is finished; nothing may move it again
+# except an explicit retry of a failed/canceled render.
+RENDER_TERMINAL_STATUSES = frozenset(
+    {RenderJobStatus.COMPLETE, RenderJobStatus.FAILED, RenderJobStatus.CANCELED}
+)
+# Terminal states as stored, including the legacy 'succeeded' alias of complete.
+_RENDER_TERMINAL_DB_STATUSES = "(complete,succeeded,failed,canceled)"
 
 
 @dataclass
@@ -368,7 +380,34 @@ class InMemoryRenderRepository:
         error_code: str | None = None,
         error_message: str | None = None,
         metadata: dict[str, object] | None = None,
+        require_active: bool = False,
     ) -> RenderJobRecord:
+        """Move ``job`` to ``status`` and record the event.
+
+        ``require_active=True`` makes this a conditional write: it only applies
+        while the stored job is still queued or running, and raises 409
+        ``render_not_cancelable`` otherwise (e.g. the worker completed it
+        concurrently). Callers that race the worker, like user cancel, use it.
+        """
+        if require_active:
+            with self._lock:
+                stored = self.render_jobs.get(job.id, job)
+                if stored.status in RENDER_TERMINAL_STATUSES:
+                    raise ApiError(
+                        409,
+                        "render_not_cancelable",
+                        "This render can no longer be canceled.",
+                    )
+                return self.transition_job(
+                    job=stored,
+                    status=status,
+                    progress_pct=progress_pct,
+                    message=message,
+                    event_type=event_type,
+                    error_code=error_code,
+                    error_message=error_message,
+                    metadata=metadata,
+                )
         if status == RenderJobStatus.COMPLETE and job.workflow_run_id is not None:
             workflow_repository = self.workflow_repository
             get_workflow = getattr(workflow_repository, "get_workflow", None)
@@ -454,6 +493,57 @@ class InMemoryRenderRepository:
             reverse=True,
         )[:limit]
 
+    def list_inflight_duplicate_jobs(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        props_hash: str,
+        limit: int = 10,
+    ) -> list[RenderJobRecord]:
+        """Queued or running (non-workflow) renders of exactly these render props.
+
+        Oldest first by ``(created_at, id)``, so concurrent requests agree on
+        which of several identical renders is the one to keep.
+        """
+        with self._lock:
+            jobs = [
+                job
+                for job in self.render_jobs.values()
+                if job.workspace_id == workspace_id
+                and job.project_id == project_id
+                and job.props_hash == props_hash
+                and job.workflow_run_id is None
+                and job.status not in RENDER_TERMINAL_STATUSES
+            ]
+        jobs.sort(key=lambda job: (job.created_at, str(job.id)))
+        return jobs[:limit]
+
+    def list_render_slot_jobs(
+        self,
+        *,
+        workspace_id: UUID,
+        period_start: datetime,
+        period_end: datetime,
+        limit: int,
+    ) -> list[tuple[UUID, RenderJobStatus]]:
+        """Renders created in the period that still hold a monthly render slot.
+
+        Every render that has not failed or been canceled holds a slot from the
+        moment it is created, whichever engine completes it. Oldest first by
+        ``(created_at, id)`` so concurrent requests agree on who came first.
+        """
+        with self._lock:
+            jobs = [
+                job
+                for job in self.render_jobs.values()
+                if job.workspace_id == workspace_id
+                and period_start <= job.created_at < period_end
+                and job.status not in RENDER_SLOT_RELEASED_STATUSES
+            ]
+        jobs.sort(key=lambda job: (job.created_at, str(job.id)))
+        return [(job.id, job.status) for job in jobs[:limit]]
+
     def list_recent_render_jobs(self, *, limit: int = 25) -> list[RenderJobRecord]:
         return sorted(
             self.render_jobs.values(),
@@ -530,6 +620,9 @@ class InMemoryRenderRepository:
                 progress_pct=job.progress_pct,
                 message="Render canceled by admin.",
                 event_type="admin_cancel",
+                # The in-process lock does not cover other API processes or the
+                # worker; the conditional write does (Supabase inherits this).
+                require_active=True,
             )
 
     def events_for_job(
@@ -1053,41 +1146,76 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         self._raise_for_supabase(response)
         return self._event_from_row(response.json()[0])
 
+    def _transition_request(
+        self, values: dict[str, object]
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """PATCH ``(params, payload)`` for one transition.
+
+        A conditional (``require_active``) transition only matches a row that is
+        still queued or running, so a concurrent terminal write by the worker
+        wins; it also leaves worker-owned columns (artifact, logs, timings)
+        untouched instead of writing back this request's stale copy of them.
+        """
+        job = values["job"]
+        status = values["status"]
+        payload: dict[str, object] = {
+            "status": status.value,
+            "progress_pct": values["progress_pct"],
+            "error_code": values.get("error_code"),
+            "error_message": values.get("error_message"),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        params: dict[str, object] = {"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS}
+        if values.get("require_active"):
+            params["status"] = f"not.in.{_RENDER_TERMINAL_DB_STATUSES}"
+        else:
+            payload["artifact_path"] = getattr(job, "artifact_path", None)
+            payload["benchmark_ms"] = getattr(job, "benchmark_ms", None)
+            payload["logs"] = getattr(job, "logs", [])
+        return params, payload
+
+    def _transition_compat_payload(
+        self, *, job: RenderJobRecord, values: dict[str, object], payload: dict[str, object]
+    ) -> dict[str, object]:
+        compat = self._compat_render_job_update_payload(job=job, values=payload)
+        if values.get("require_active"):
+            # The legacy schema keeps logs (with the manifest) in one column;
+            # a conditional transition must not overwrite it.
+            compat.pop("logs", None)
+        return compat
+
+    def _transitioned_row(self, response: httpx.Response) -> RenderJobRecord:
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if not rows:
+            # Conditional transition matched nothing: the job reached a
+            # terminal state first (or was deleted).
+            raise ApiError(
+                409,
+                "render_not_cancelable",
+                "This render can no longer be canceled.",
+            )
+        return self._job_from_row(rows[0])
+
     def transition_job(self, **values: object) -> RenderJobRecord:
         job = values["job"]
         status = values["status"]
-        progress_pct = values["progress_pct"]
-        payload = {
-            "status": status.value,
-            "progress_pct": progress_pct,
-            "error_code": values.get("error_code"),
-            "error_message": values.get("error_message"),
-            "artifact_path": getattr(job, "artifact_path", None),
-            "benchmark_ms": getattr(job, "benchmark_ms", None),
-            "logs": getattr(job, "logs", []),
-            "updated_at": datetime.now(UTC).isoformat(),
-        }
-        response = self.client.request(
-            "PATCH",
-            "/render_jobs",
-            params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
-            json=payload,
-        )
+        params, payload = self._transition_request(values)
+        response = self.client.request("PATCH", "/render_jobs", params=params, json=payload)
         if self._is_missing_column_error(response):
             response = self.client.request(
                 "PATCH",
                 "/render_jobs",
-                params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
-                json=self._compat_render_job_update_payload(job=job, values=payload),
+                params=params,
+                json=self._transition_compat_payload(job=job, values=values, payload=payload),
             )
-        self._raise_for_supabase(response)
-        updated = self._job_from_row(response.json()[0])
+        updated = self._transitioned_row(response)
         self.add_event(
             job=updated,
             event_type=values.get("event_type") or status.value,
             from_status=job.status,
             to_status=status,
-            progress_pct=progress_pct,
+            progress_pct=values["progress_pct"],
             message=values["message"],
             error_code=values.get("error_code"),
             metadata=values.get("metadata"),
@@ -1097,38 +1225,24 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
     async def transition_job_async(self, **values: object) -> RenderJobRecord:
         job = values["job"]
         status = values["status"]
-        progress_pct = values["progress_pct"]
-        payload = {
-            "status": status.value,
-            "progress_pct": progress_pct,
-            "error_code": values.get("error_code"),
-            "error_message": values.get("error_message"),
-            "artifact_path": getattr(job, "artifact_path", None),
-            "benchmark_ms": getattr(job, "benchmark_ms", None),
-            "logs": getattr(job, "logs", []),
-            "updated_at": datetime.now(UTC).isoformat(),
-        }
+        params, payload = self._transition_request(values)
         response = await self.client.async_request(
-            "PATCH",
-            "/render_jobs",
-            params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
-            json=payload,
+            "PATCH", "/render_jobs", params=params, json=payload
         )
         if self._is_missing_column_error(response):
             response = await self.client.async_request(
                 "PATCH",
                 "/render_jobs",
-                params={"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS},
-                json=self._compat_render_job_update_payload(job=job, values=payload),
+                params=params,
+                json=self._transition_compat_payload(job=job, values=values, payload=payload),
             )
-        self._raise_for_supabase(response)
-        updated = self._job_from_row(response.json()[0])
+        updated = self._transitioned_row(response)
         await self.add_event_async(
             job=updated,
             event_type=values.get("event_type") or status.value,
             from_status=job.status,
             to_status=status,
-            progress_pct=progress_pct,
+            progress_pct=values["progress_pct"],
             message=values["message"],
             error_code=values.get("error_code"),
             metadata=values.get("metadata"),
@@ -1266,6 +1380,133 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
         )
         self._raise_for_supabase(response)
         return [self._job_from_row(row) for row in response.json()]
+
+    def _inflight_duplicate_params(
+        self, *, workspace_id: UUID, project_id: UUID, props_hash: str, limit: int
+    ) -> dict[str, object]:
+        return {
+            "workspace_id": f"eq.{workspace_id}",
+            "project_id": f"eq.{project_id}",
+            "props_hash": f"eq.{props_hash}",
+            "workflow_run_id": "is.null",
+            "status": f"not.in.{_RENDER_TERMINAL_DB_STATUSES}",
+            "select": RENDER_JOB_COLUMNS,
+            "order": "created_at.asc,id.asc",
+            "limit": str(max(1, limit)),
+        }
+
+    def list_inflight_duplicate_jobs(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        props_hash: str,
+        limit: int = 10,
+    ) -> list[RenderJobRecord]:
+        response = self.client.request(
+            "GET",
+            "/render_jobs",
+            params=self._inflight_duplicate_params(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                props_hash=props_hash,
+                limit=limit,
+            ),
+        )
+        if self._is_missing_column_error(response):
+            return []  # legacy schema without props_hash: no de-duplication
+        self._raise_for_supabase(response)
+        return [self._job_from_row(row) for row in response.json()]
+
+    async def list_inflight_duplicate_jobs_async(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        props_hash: str,
+        limit: int = 10,
+    ) -> list[RenderJobRecord]:
+        response = await self.client.async_request(
+            "GET",
+            "/render_jobs",
+            params=self._inflight_duplicate_params(
+                workspace_id=workspace_id,
+                project_id=project_id,
+                props_hash=props_hash,
+                limit=limit,
+            ),
+        )
+        if self._is_missing_column_error(response):
+            return []
+        self._raise_for_supabase(response)
+        return [self._job_from_row(row) for row in response.json()]
+
+    def _render_slot_params(
+        self,
+        *,
+        workspace_id: UUID,
+        period_start: datetime,
+        period_end: datetime,
+        limit: int,
+    ) -> dict[str, object]:
+        return {
+            "workspace_id": f"eq.{workspace_id}",
+            "created_at": [f"gte.{period_start.isoformat()}", f"lt.{period_end.isoformat()}"],
+            "status": f"not.in.{_RENDER_SLOT_RELEASED_DB_STATUSES}",
+            "select": "id,status,progress_pct",
+            "order": "created_at.asc,id.asc",
+            "limit": str(max(1, limit)),
+        }
+
+    def _render_slot_rows(self, response: httpx.Response) -> list[tuple[UUID, RenderJobStatus]]:
+        self._raise_for_supabase(response)
+        return [
+            (
+                UUID(str(row["id"])),
+                self._app_status(row["status"], progress_pct=row.get("progress_pct")),
+            )
+            for row in response.json()
+        ]
+
+    def list_render_slot_jobs(
+        self,
+        *,
+        workspace_id: UUID,
+        period_start: datetime,
+        period_end: datetime,
+        limit: int,
+    ) -> list[tuple[UUID, RenderJobStatus]]:
+        response = self.client.request(
+            "GET",
+            "/render_jobs",
+            params=self._render_slot_params(
+                workspace_id=workspace_id,
+                period_start=period_start,
+                period_end=period_end,
+                limit=limit,
+            ),
+        )
+        return self._render_slot_rows(response)
+
+    async def list_render_slot_jobs_async(
+        self,
+        *,
+        workspace_id: UUID,
+        period_start: datetime,
+        period_end: datetime,
+        limit: int,
+    ) -> list[tuple[UUID, RenderJobStatus]]:
+        response = await self.client.async_request(
+            "GET",
+            "/render_jobs",
+            params=self._render_slot_params(
+                workspace_id=workspace_id,
+                period_start=period_start,
+                period_end=period_end,
+                limit=limit,
+            ),
+        )
+        return self._render_slot_rows(response)
 
     def get_render_job(
         self,
