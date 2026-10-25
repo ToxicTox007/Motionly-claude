@@ -12,6 +12,7 @@ from app.schemas.plans import (
     CaptionHighlight,
     EditPlan,
     EditPlanCut,
+    ModelChoiceResult,
 )
 from app.schemas.request_body import JsonStringBodyMixin
 
@@ -140,6 +141,10 @@ class ProposalProvenance(BaseModel):
     tool_registry_version: str = AI_TOOL_REGISTRY_VERSION
     orchestrator_version: str = AI_ORCHESTRATOR_VERSION
     editorial_memory: dict[str, Any] | None = None
+    # The user's model-choice provenance for this proposal's plan (plan Section
+    # 2.11 / Task 31): display-only option ids, choice source and fallback
+    # reason. Never a base URL, secret or provider model id.
+    model_choice: ModelChoiceResult | None = None
 
 
 class ProposalCostUsage(BaseModel):

@@ -12,6 +12,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import re
 import stat
 import sys
 import tarfile
@@ -23,6 +24,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE: Final = ROOT / "infra" / "docker-compose.gpu.yml"
+# The GPU-free remote-AI overlay rides in the same bundle so the signed release
+# path can deploy it for a CPU-only production host. It declares no relative
+# bind mounts of its own today, but its sources are collected the same way the
+# production topology's are, so any it adds later ship automatically.
+REMOTE_AI_OVERLAY: Final = ROOT / "infra" / "docker-compose.remote-ai.yml"
 
 
 @dataclass(frozen=True)
@@ -68,12 +74,40 @@ def _mount_source(volume: object) -> str | None:
     if isinstance(volume, dict):
         source = volume.get("source") if volume.get("type", "bind") == "bind" else None
     elif isinstance(volume, str):
-        source = volume.split(":", 1)[0]
+        source = _short_syntax_source(volume)
     else:
         source = None
+    source = _default_relative_path(source) if isinstance(source, str) else source
     if isinstance(source, str) and source.startswith(("./", "../")):
         return source
     return None
+
+
+def _short_syntax_source(volume: str) -> str:
+    """The SOURCE field of a ``SOURCE:TARGET[:MODE]`` short-syntax volume.
+
+    A leading ``${VAR:-default}`` interpolation contains its own colon, so the
+    source is taken up to the first colon that falls outside a ``${...}`` group
+    rather than the first colon overall.
+    """
+    if volume.startswith("${"):
+        end = volume.find("}")
+        if end != -1:
+            return volume[: end + 1]
+    return volume.split(":", 1)[0]
+
+
+def _default_relative_path(source: str) -> str:
+    """Resolve a ``${VAR:-./path}`` mount source to its static default path.
+
+    The production topology mounts the inference registry as
+    ``${AI_REGISTRY_DIR:-./ai-registry}`` so an operator can point it elsewhere;
+    the deterministic release bundle carries the shipped default so the registry
+    (and the GPU-free overlay that depends on it) deploys from the archive. A
+    bare host path or any other form is returned unchanged.
+    """
+    match = re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-(\.\.?/[^}]*)\}", source)
+    return match.group(1) if match else source
 
 
 def compose_bind_mount_sources(compose_file: Path = COMPOSE_FILE) -> list[Path]:
@@ -97,10 +131,21 @@ def compose_bind_mount_sources(compose_file: Path = COMPOSE_FILE) -> list[Path]:
     return sorted(sources, key=lambda path: _relative_to_root(path))
 
 
-def collect_bundle_files(compose_file: Path = COMPOSE_FILE) -> list[BundleFile]:
+def collect_bundle_files(
+    compose_file: Path = COMPOSE_FILE, overlay_file: Path | None = REMOTE_AI_OVERLAY
+) -> list[BundleFile]:
     files: list[BundleFile] = []
     seen: set[str] = set()
-    for source in compose_bind_mount_sources(compose_file):
+    sources = list(compose_bind_mount_sources(compose_file))
+    if overlay_file is not None:
+        _relative_to_root(overlay_file.resolve())
+        if not overlay_file.is_file():
+            raise ValueError(f"GPU-free overlay does not exist: {overlay_file}")
+        # The overlay file and any relative bind mounts it declares (none today).
+        for source in compose_bind_mount_sources(overlay_file):
+            if source not in sources:
+                sources.append(source)
+    for source in sorted(sources, key=lambda path: _relative_to_root(path)):
         candidates = [source] if source.is_file() else sorted(source.rglob("*"))
         for candidate in candidates:
             if candidate.is_dir():

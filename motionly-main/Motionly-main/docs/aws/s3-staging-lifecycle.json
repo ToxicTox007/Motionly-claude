@@ -1,0 +1,17 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-bda-staging-objects-after-1-day",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "bda/"
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}

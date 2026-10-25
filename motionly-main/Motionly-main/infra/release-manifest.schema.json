@@ -45,7 +45,8 @@
         "MOTIONLY_PROVIDER_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" },
         "MOTIONLY_PLANNING_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" },
         "MOTIONLY_REMOTION_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" },
-        "MOTIONLY_TEMPORAL_SERVER_IMAGE": { "$ref": "#/$defs/digestImage" }
+        "MOTIONLY_TEMPORAL_SERVER_IMAGE": { "$ref": "#/$defs/digestImage" },
+        "MOTIONLY_CPU_VISION_WORKER_IMAGE": { "$ref": "#/$defs/digestImage" }
       }
     },
     "sboms": {
@@ -67,7 +68,8 @@
         "gpu-worker": { "$ref": "#/$defs/sbomArtifact" },
         "demucs-worker": { "$ref": "#/$defs/sbomArtifact" },
         "remotion-worker": { "$ref": "#/$defs/sbomArtifact" },
-        "temporal-server": { "$ref": "#/$defs/sbomArtifact" }
+        "temporal-server": { "$ref": "#/$defs/sbomArtifact" },
+        "cpu-vision-worker": { "$ref": "#/$defs/sbomArtifact" }
       }
     },
     "bundle": {

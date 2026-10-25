@@ -40,9 +40,13 @@
 # gpu-render, or local-stems (Demucs). `--profile gpu` still starts every GPU
 # service. DEPLOYMENT-GUIDE.md has the per-feature checklist.
 #
-# The signed release path (scripts/deploy/apply_release.sh) deploys only
-# docker-compose.gpu.yml and refuses overlays outside rehearsal; this overlay is
-# for operator-run Compose deployments.
+# The signed release path (scripts/deploy/apply_release.sh) deploys this overlay
+# when the host sets MOTIONLY_CPU_TOPOLOGY=gpu-free (requires
+# MOTIONLY_COMPUTE_PROFILE=cpu, the overlay in the release bundle and
+# MOTIONLY_CPU_VISION_WORKER_IMAGE in the signed manifest). With the default
+# MOTIONLY_CPU_TOPOLOGY=base the agent deploys only docker-compose.gpu.yml,
+# exactly as before, and it still refuses MOTIONLY_COMPOSE_OVERLAY outside
+# rehearsal. Operator-run Compose (below) remains supported as a fallback.
 
 x-remote-ai-environment: &remote-ai-environment
   # No GPU worker runs: the GPU capacity observer, its maintenance job and GPU
@@ -103,6 +107,10 @@ services:
   cpu-vision-worker:
     extends: { file: docker-compose.gpu.yml, service: cpu-ffmpeg-worker }
     image: ${MOTIONLY_CPU_VISION_WORKER_IMAGE:?MOTIONLY_CPU_VISION_WORKER_IMAGE must be a digest-pinned GHCR cpu-vision worker image}
+    # cpu-vision-worker calls the Bedrock transcription, diarization, detection,
+    # caption and stem routes, so it mounts the AWS static keys on top of the
+    # media-worker secrets it inherits from cpu-ffmpeg-worker (extends appends).
+    secrets: [aws_inference_access_key_id, aws_inference_secret_access_key]
     environment:
       <<: *remote-ai-environment
       WORKER_QUEUES: ${CPU_VISION_WORKER_QUEUES:-visual_analysis,transcription,matte_extraction,audio_demucs}

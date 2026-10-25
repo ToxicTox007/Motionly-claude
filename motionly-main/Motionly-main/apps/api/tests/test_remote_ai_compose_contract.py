@@ -99,7 +99,16 @@ def test_every_app_service_gets_the_same_switches_and_provider_keys() -> None:
             assert environment[key] == value, (name, key)
         # Remote object detection, diarization and stems are registry routes now
         # (plan Task 17), so the overlay mounts no per-service vendor secret.
-        assert "secrets" not in service, name
+        # The one exception is cpu-vision-worker: it calls Bedrock routes, so it
+        # mounts exactly the two AWS static-key secrets on top of the media
+        # secrets it inherits from cpu-ffmpeg-worker (docs/aws, S3 isolation).
+        if name == "cpu-vision-worker":
+            assert service["secrets"] == [
+                "aws_inference_access_key_id",
+                "aws_inference_secret_access_key",
+            ], name
+        else:
+            assert "secrets" not in service, name
     # Orchestration roles read none of the provider switches.
     assert not ORCHESTRATION & set(services)
 

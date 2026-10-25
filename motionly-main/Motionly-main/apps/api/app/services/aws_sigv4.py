@@ -237,3 +237,97 @@ def sign_request(
         canonical_request=canonical.canonical_request,
         string_to_sign=string_to_sign,
     )
+
+
+# ---------------------------------------------------------------------------
+# SigV4 query-string (presigned URL) authentication.
+# ---------------------------------------------------------------------------
+# The constant payload string used by presigned URLs: the body content is not
+# known when the URL is minted, so the hash is replaced by this literal.
+UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
+
+
+def presign_url(
+    *,
+    credentials: SigV4Credentials,
+    method: str,
+    host: str,
+    path: str,
+    region: str,
+    service: str,
+    amz_date: str,
+    expires_s: int,
+    query: Mapping[str, str] | None = None,
+) -> str:
+    """Build a SigV4 query-string (presigned) URL and return it as ``https://``.
+
+    This is the "Authenticating Requests: Using Query Parameters" flow. Unlike
+    :func:`sign_request` (which signs ``Authorization`` as a header), the auth
+    information rides in the query string so the URL is self-contained:
+
+    * ``X-Amz-Algorithm``   = ``AWS4-HMAC-SHA256``
+    * ``X-Amz-Credential``  = ``<access-key>/<scope>``
+    * ``X-Amz-Date``        = ``amz_date``
+    * ``X-Amz-Expires``     = ``expires_s``
+    * ``X-Amz-SignedHeaders`` = ``host`` (only the host header is signed)
+    * ``X-Amz-Security-Token`` = session token, when temporary credentials are
+      used (signed, per the S3 presign spec)
+
+    The canonical request uses the constant ``UNSIGNED-PAYLOAD`` in place of a
+    body hash, and the canonical query string contains every ``X-Amz-*``
+    parameter except ``X-Amz-Signature``. The result is verified against AWS's
+    published S3 presign worked example in ``tests/test_aws_sigv4.py``.
+
+    This function is pure: it reads no environment and makes no network call.
+    ``amz_date`` is the ISO basic timestamp ``YYYYMMDDThhmmssZ``; the date stamp
+    is its first eight characters. Any caller-supplied ``query`` entries are
+    merged into the signed query string (``X-Amz-Signature`` is always excluded).
+    """
+    date_stamp = amz_date[:8]
+    scope = credential_scope(date_stamp=date_stamp, region=region, service=service)
+
+    # Only the host header participates in a presigned URL signature.
+    signed_headers = "host"
+
+    presign_query: dict[str, str] = dict(query or {})
+    presign_query["X-Amz-Algorithm"] = SIGV4_ALGORITHM
+    presign_query["X-Amz-Credential"] = f"{credentials.access_key_id}/{scope}"
+    presign_query["X-Amz-Date"] = amz_date
+    presign_query["X-Amz-Expires"] = str(int(expires_s))
+    presign_query["X-Amz-SignedHeaders"] = signed_headers
+    if credentials.session_token:
+        presign_query["X-Amz-Security-Token"] = credentials.session_token
+    # X-Amz-Signature is never part of the canonical query string.
+    presign_query.pop("X-Amz-Signature", None)
+
+    canonical_query = canonical_query_string(presign_query)
+    canonical_request = "\n".join(
+        [
+            method.upper(),
+            canonical_uri(path),
+            canonical_query,
+            f"host:{host}\n",
+            signed_headers,
+            UNSIGNED_PAYLOAD,
+        ]
+    )
+    hashed_canonical_request = hashlib.sha256(
+        canonical_request.encode("utf-8")
+    ).hexdigest()
+    string_to_sign = build_string_to_sign(
+        amz_date=amz_date,
+        scope=scope,
+        hashed_canonical_request=hashed_canonical_request,
+    )
+    signing_key = derive_signing_key(
+        secret_access_key=credentials.secret_access_key,
+        date_stamp=date_stamp,
+        region=region,
+        service=service,
+    )
+    signature = calculate_signature(
+        signing_key=signing_key, string_to_sign=string_to_sign
+    )
+    # The signature is appended last; it is not part of the signed query string.
+    final_query = f"{canonical_query}&X-Amz-Signature={signature}"
+    return f"https://{host}{canonical_uri(path)}?{final_query}"

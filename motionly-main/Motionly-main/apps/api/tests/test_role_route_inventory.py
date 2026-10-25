@@ -136,6 +136,9 @@ OWNER_ADMIN: set[tuple[str, str]] = {
     ("POST", "/team/invitations/{invitation_id}/revoke"),
     ("PATCH", "/team/members/{user_id}/role"),
     ("DELETE", "/team/members/{user_id}"),
+    # Model choice (Task 30): setting the workspace default/allow-list/lock is an
+    # owner-or-admin write; viewing and per-project overrides are any-member.
+    ("PUT", "/workspaces/current/model-settings"),
 }
 
 # Everything else: any active member (owner/admin/member) may edit and render.
@@ -299,6 +302,15 @@ ANY_MEMBER: set[tuple[str, str]] = {
     # The per-project "personalized from N edits" indicator is a read-only,
     # per-user self-service surface (Task 29).
     ("GET", "/editorial-learning/projects/{project_id}/memory"),
+    # Model choice (Task 30): reading options and settings, and setting or
+    # clearing a per-project override, are any-member actions. The workspace
+    # default/allow-list/lock write (PUT /workspaces/current/model-settings) is
+    # owner+admin above.
+    ("GET", "/model-options"),
+    ("GET", "/workspaces/current/model-settings"),
+    ("GET", "/projects/{project_id}/model-settings"),
+    ("PUT", "/projects/{project_id}/model-settings"),
+    ("DELETE", "/projects/{project_id}/model-settings"),
 }
 
 CLASSIFICATION: dict[tuple[str, str], str] = {}

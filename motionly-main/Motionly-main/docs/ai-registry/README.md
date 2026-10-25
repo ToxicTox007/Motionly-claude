@@ -184,3 +184,95 @@ credential chain, so no AI secret ref — `config` carries `region` and `api`).
    ```
 
 No code change is needed: the registry is the only source of routes.
+
+## Amazon Bedrock on a CPU-only deployment
+
+Amazon Bedrock serves four Motionly capabilities without any GPU on the Motionly
+host — every model runs inside AWS. The complete, production-valid example is
+[`examples/aws-bedrock-cpu.json`](examples/aws-bedrock-cpu.json); merge it with
+`infra/ai-registry/cpu-local.json` so stem separation stays on the CPU Demucs
+local route (Bedrock has no stem model):
+
+```bash
+export AI_REGISTRY_FILE=/path/aws-bedrock-cpu.json,../../infra/ai-registry/cpu-local.json
+export GPU_WORKERS_ENABLED=false
+```
+
+> **Deployable registry and credentials (AWS deployment).** The shipped,
+> self-contained production registry is
+> [`infra/ai-registry/registry.json`](../../infra/ai-registry/registry.json), and the
+> operator guide for filling and deploying it is [`docs/aws`](../aws/README.md). Its
+> Bedrock adapters authenticate with the `aws_access_key` auth type, not the IAM
+> credential chain: credentials come from a dedicated, narrowly scoped IAM user's static
+> access key mounted as the two secret files `aws_inference_access_key_id` and
+> `aws_inference_secret_access_key` (referenced as
+> `file:aws_inference_access_key_id` / `file:aws_inference_secret_access_key`); only the
+> API and the inference workers mount them. It routes video generation to **Luma Ray 2**
+> in `us-west-2` (async invoke), because the
+> [`examples/aws-bedrock-cpu.json`](examples/aws-bedrock-cpu.json) example is a **schema
+> example only** — its Nova Reel and Claude model ids are not deployable today (Nova Reel
+> reached end of life on 2026-09-30 and now fails with `ResourceNotFoundException`). Use
+> `infra/ai-registry/registry.json` for a real AWS deployment.
+
+### Which capability uses which Bedrock API
+
+| Capability                       | Bedrock API (`config.api`) | Model family            |
+| -------------------------------- | -------------------------- | ----------------------- |
+| `planning.chat`                  | `converse`                 | any Converse chat model |
+| `vision.object_detection`        | `converse`                 | Amazon Nova Lite        |
+| `transcription.speech_to_text`   | `data_automation`          | Bedrock Data Automation |
+| `audio.diarization`              | `data_automation`          | Bedrock Data Automation |
+| `video.generation.submit/status` | `async_invoke`             | Amazon Nova Reel        |
+
+The one video route serves both the submit and the route-affine poll
+(`video.generation.status`), so no second route is needed. Stem separation
+(`audio.stem_separation`) stays on the cpu-local Demucs route.
+
+### Bedrock Data Automation (transcription and diarization)
+
+Create a Bedrock Data Automation **project** and a **profile** in the audio
+region (the example uses `ap-south-1`). The runner stages the audio in S3,
+invokes the job asynchronously (an idempotent `clientToken`), polls to
+completion and reads the structured output back from S3. **Diarization requires
+speaker labeling to be enabled on the BDA project**; the registry rejects an
+`audio.diarization` Bedrock route that has no `data_automation_project_arn`, and
+a job that returns no speaker labels fails as a malformed response (enable
+speaker labeling and retry).
+
+### S3 buckets and regions
+
+Both the `data_automation` and `async_invoke` apis need an S3 bucket you own
+(`config.s3_bucket`, `config.s3_prefix`, `config.s3_region`). Bucket names must
+be 3–63 characters of `[a-z0-9-]` with no dots (so the virtual-hosted TLS
+certificate always matches). **Nova Reel writes its output to a bucket in
+`us-east-1`**, so the video route's region and output bucket are both
+`us-east-1`. Keep the BDA staging bucket in the same region as the BDA project.
+Staged BDA inputs/outputs are best-effort deleted after each job (`cleanup`).
+
+### IAM actions needed
+
+The runtime resolves credentials from the IAM credential chain (no static key is
+stored as an AI secret). The role needs:
+
+- `bedrock:InvokeModel` — Converse planning and object detection.
+- `bedrock:InvokeDataAutomationAsync`, `bedrock:GetDataAutomationStatus` —
+  transcription and diarization.
+- `bedrock:InvokeModel` for `StartAsyncInvoke` plus `bedrock:GetAsyncInvoke` —
+  Nova Reel video generation.
+- `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` scoped to
+  the staging/output prefixes above.
+
+### Container credentials note
+
+The EC2 launch template sets the IMDS hop limit to 1, so containers cannot reach
+the instance's IMDSv2 credentials. The deployment must therefore provide
+credentials to the container another way — ECS task-role credentials
+(`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) or injected `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY` (and `AWS_SESSION_TOKEN` for temporary credentials). The
+IAM chain reads env vars first, then the ECS endpoint, then IMDSv2.
+
+### Presigned URL expiry
+
+A finished Nova Reel MP4 is served through a short-lived SigV4 presigned `https://`
+URL (`config.presign_expires_s`, default 900 s). Download the artifact before it
+expires; the caller streams it over HTTPS from the public S3 host.

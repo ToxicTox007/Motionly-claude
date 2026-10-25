@@ -1,0 +1,435 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "bedrock-converse",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": {
+        "type": "aws_access_key",
+        "access_key_id_ref": "file:aws_inference_access_key_id",
+        "secret_ref": "file:aws_inference_secret_access_key"
+      },
+      "timeout_s": 60,
+      "config": { "region": "ap-south-1", "api": "converse" },
+      "data_processor": {
+        "display_name": "Amazon Bedrock (Converse)",
+        "purpose": "Serves planning chat, object detection and image captions through the Bedrock Converse API using cross-region (APAC) inference profiles from the source region ap-south-1 (Nova Pro for planning, Nova Lite for vision). Requests and results may be processed in any APAC region of the profile (ap-northeast-1, ap-northeast-2, ap-northeast-3, ap-south-1, ap-southeast-1, ap-southeast-2). Data sent between regions stays on the AWS network and is encrypted in transit; CloudTrail in ap-south-1 records the region that processed each request. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["text", "image"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "bedrock-embeddings",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": {
+        "type": "aws_access_key",
+        "access_key_id_ref": "file:aws_inference_access_key_id",
+        "secret_ref": "file:aws_inference_secret_access_key"
+      },
+      "timeout_s": 60,
+      "config": {
+        "region": "ap-south-1",
+        "api": "invoke_model",
+        "embedding_family": "titan"
+      },
+      "data_processor": {
+        "display_name": "Amazon Bedrock (Titan Text Embeddings, InvokeModel)",
+        "purpose": "Produces text embeddings through the Bedrock InvokeModel API in ap-south-1 (Amazon Titan Text Embeddings V2). This is an in-region call: requests, results and your data are processed and stored only in ap-south-1 and do not leave that region. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["text"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "bedrock-data-automation",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": {
+        "type": "aws_access_key",
+        "access_key_id_ref": "file:aws_inference_access_key_id",
+        "secret_ref": "file:aws_inference_secret_access_key"
+      },
+      "timeout_s": 900,
+      "config": {
+        "region": "ap-south-1",
+        "api": "data_automation",
+        "s3_bucket": "<STAGING_BUCKET>",
+        "s3_prefix": "bda",
+        "s3_region": "ap-south-1",
+        "data_automation_profile_arn": "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "data_automation_project_arn": "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:data-automation-project/<BDA_PROJECT_ID>",
+        "data_automation_stage": "LIVE",
+        "max_wait_s": 900,
+        "poll_interval_s": 5,
+        "cleanup": true
+      },
+      "data_processor": {
+        "display_name": "Amazon Bedrock Data Automation",
+        "purpose": "Transcribes and diarizes audio through Bedrock Data Automation using the cross-region (APAC) data-automation profile from the source region ap-south-1. Requests and results may be processed in any APAC region of the profile (ap-northeast-1, ap-northeast-2, ap-northeast-3, ap-south-1, ap-south-2, ap-southeast-1, ap-southeast-2, ap-southeast-4); per the AWS cross-region inference documentation your data is only stored in the source region ap-south-1 while requests and results may move within the geography. The audio is staged in an S3 bucket you own in ap-south-1 under the bda/ prefix, processed asynchronously, and the structured output is read back and deleted. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["audio"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "bedrock-video",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": {
+        "type": "aws_access_key",
+        "access_key_id_ref": "file:aws_inference_access_key_id",
+        "secret_ref": "file:aws_inference_secret_access_key"
+      },
+      "timeout_s": 900,
+      "config": {
+        "region": "us-west-2",
+        "api": "async_invoke",
+        "s3_bucket": "<VIDEO_OUTPUT_BUCKET>",
+        "s3_prefix": "video",
+        "s3_region": "us-west-2",
+        "video_family": "luma_ray",
+        "video_resolution": "720p",
+        "presign_expires_s": 900
+      },
+      "data_processor": {
+        "display_name": "Amazon Bedrock (Luma Ray 2, async-invoke)",
+        "purpose": "Generates text-to-video clips with Luma Ray 2 through the Bedrock asynchronous invoke API in us-west-2. This is an in-region call: requests, results and your data are processed and stored only in us-west-2. The finished MP4 is written to an S3 bucket you own in us-west-2 under the video/ prefix and served through a short-lived presigned URL. Luma Ray 2 is billed through AWS Marketplace. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["text", "video"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "local-cpu-matte",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-cpu-sound",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-cpu-stems",
+      "type": "local",
+      "network": "private"
+    }
+  ],
+  "models": [
+    {
+      "id": "bedrock-planning-model",
+      "model_id": "apac.amazon.nova-pro-v1:0",
+      "revision": "nova-pro-v1-apac-2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "bedrock-vision-model",
+      "model_id": "apac.amazon.nova-lite-v1:0",
+      "revision": "nova-lite-v1-apac-2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["vision.object_detection", "vision.caption"]
+    },
+    {
+      "id": "bedrock-embeddings-model",
+      "model_id": "amazon.titan-embed-text-v2:0",
+      "revision": "titan-embed-text-v2-2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["embeddings.text"]
+    },
+    {
+      "id": "bedrock-audio-model",
+      "model_id": "amazon.bedrock-data-automation-audio",
+      "revision": "bda-audio-apac-2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["transcription.speech_to_text", "audio.diarization"]
+    },
+    {
+      "id": "bedrock-video-model",
+      "model_id": "luma.ray-v2:0",
+      "revision": "luma-ray-v2-2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["video.generation.submit", "video.generation.status"]
+    },
+    {
+      "id": "mediapipe-selfie-segmenter",
+      "model_id": "mediapipe-selfie-segmentation",
+      "revision": "sha256:490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "weights_file",
+      "source_url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite",
+      "capabilities": ["matte.segmentation"],
+      "weights_sha256": "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "yamnet-tflite-sound",
+      "model_id": "yamnet-tflite",
+      "revision": "sha256:4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "weights_file",
+      "source_url": "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/latest/yamnet.tflite",
+      "capabilities": ["audio.sound_classification"],
+      "weights_sha256": "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "demucs-htdemucs",
+      "model_id": "htdemucs",
+      "revision": "demucs==4.1.0",
+      "licence": "MIT",
+      "commercial_use": true,
+      "source_type": "python_package",
+      "source_url": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
+      "capabilities": ["audio.stem_separation"],
+      "verified_at": "2026-10-24"
+    }
+  ],
+  "routes": [
+    {
+      "id": "bedrock-planning-chat",
+      "capability": "planning.chat",
+      "adapter_id": "bedrock-converse",
+      "model_id": "apac.amazon.nova-pro-v1:0",
+      "model_ref": "bedrock-planning-model",
+      "model_revision": "nova-pro-v1-apac-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": {
+        "status": "priced",
+        "input_per_million_usd": "FILL FROM AWS PRICING PAGE",
+        "output_per_million_usd": "FILL FROM AWS PRICING PAGE"
+      },
+      "budget": {
+        "feature": "planning",
+        "monthly_usd": 20,
+        "hard_cap": {
+          "max_requests_per_day": 50,
+          "max_requests_per_month": 500
+        }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-transcription",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "bedrock-data-automation",
+      "model_id": "amazon.bedrock-data-automation-audio",
+      "model_ref": "bedrock-audio-model",
+      "model_revision": "bda-audio-apac-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": "FILL FROM AWS PRICING PAGE"
+      },
+      "budget": {
+        "feature": "transcription",
+        "monthly_usd": 15,
+        "hard_cap": {
+          "max_units_per_day": 1800,
+          "max_units_per_month": 18000
+        }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-diarization",
+      "capability": "audio.diarization",
+      "adapter_id": "bedrock-data-automation",
+      "model_id": "amazon.bedrock-data-automation-audio",
+      "model_ref": "bedrock-audio-model",
+      "model_revision": "bda-audio-apac-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": "FILL FROM AWS PRICING PAGE"
+      },
+      "budget": {
+        "feature": "audio_diarization",
+        "monthly_usd": 15,
+        "hard_cap": {
+          "max_units_per_day": 1800,
+          "max_units_per_month": 18000
+        }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-object-detection",
+      "capability": "vision.object_detection",
+      "adapter_id": "bedrock-converse",
+      "model_id": "apac.amazon.nova-lite-v1:0",
+      "model_ref": "bedrock-vision-model",
+      "model_revision": "nova-lite-v1-apac-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": {
+        "status": "priced",
+        "input_per_million_usd": "FILL FROM AWS PRICING PAGE",
+        "output_per_million_usd": "FILL FROM AWS PRICING PAGE"
+      },
+      "budget": {
+        "feature": "vision_objects",
+        "monthly_usd": 10,
+        "hard_cap": {
+          "max_requests_per_day": 200,
+          "max_requests_per_month": 2000
+        }
+      },
+      "limits": { "max_batch": 8, "max_request_bytes": 9437184 },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-caption",
+      "capability": "vision.caption",
+      "adapter_id": "bedrock-converse",
+      "model_id": "apac.amazon.nova-lite-v1:0",
+      "model_ref": "bedrock-vision-model",
+      "model_revision": "nova-lite-v1-apac-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": {
+        "status": "priced",
+        "input_per_million_usd": "FILL FROM AWS PRICING PAGE",
+        "output_per_million_usd": "FILL FROM AWS PRICING PAGE"
+      },
+      "budget": {
+        "feature": "vision_captions",
+        "monthly_usd": 10,
+        "hard_cap": {
+          "max_requests_per_day": 200,
+          "max_requests_per_month": 2000
+        }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-embeddings-text",
+      "capability": "embeddings.text",
+      "adapter_id": "bedrock-embeddings",
+      "model_id": "amazon.titan-embed-text-v2:0",
+      "model_ref": "bedrock-embeddings-model",
+      "model_revision": "titan-embed-text-v2-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": {
+        "status": "priced",
+        "input_per_million_usd": "FILL FROM AWS PRICING PAGE"
+      },
+      "budget": {
+        "feature": "embeddings",
+        "monthly_usd": 10,
+        "hard_cap": {
+          "max_requests_per_day": 500,
+          "max_requests_per_month": 5000
+        }
+      },
+      "embedding_space": "titan-embed-text-v2",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-video-generation",
+      "capability": "video.generation.submit",
+      "adapter_id": "bedrock-video",
+      "model_id": "luma.ray-v2:0",
+      "model_ref": "bedrock-video-model",
+      "model_revision": "luma-ray-v2-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "timeout_s": 900,
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": "FILL FROM AWS PRICING PAGE"
+      },
+      "budget": {
+        "feature": "video_generation",
+        "monthly_usd": 20,
+        "hard_cap": {
+          "max_requests_per_day": 3,
+          "max_requests_per_month": 20
+        }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "local-matte-segmentation",
+      "capability": "matte.segmentation",
+      "adapter_id": "local-cpu-matte",
+      "model_id": "mediapipe-selfie-segmentation",
+      "model_ref": "mediapipe-selfie-segmenter",
+      "model_revision": "sha256:490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "cpu",
+      "requires_gpu": false,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "mediapipe_selfie_matte",
+        "model_path": "/opt/motionly/models/selfie_segmenter_landscape.tflite",
+        "weights_sha256": "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e"
+      }
+    },
+    {
+      "id": "local-sound-classification",
+      "capability": "audio.sound_classification",
+      "adapter_id": "local-cpu-sound",
+      "model_id": "yamnet-tflite",
+      "model_ref": "yamnet-tflite-sound",
+      "model_revision": "sha256:4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "cpu",
+      "requires_gpu": false,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "yamnet_sound",
+        "model_path": "/opt/motionly/models/yamnet.tflite",
+        "weights_sha256": "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf"
+      }
+    },
+    {
+      "id": "local-stem-separation",
+      "capability": "audio.stem_separation",
+      "adapter_id": "local-cpu-stems",
+      "model_id": "htdemucs",
+      "model_ref": "demucs-htdemucs",
+      "model_revision": "demucs==4.1.0",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "cpu",
+      "requires_gpu": false,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "demucs_stems",
+        "model_name": "htdemucs"
+      }
+    }
+  ]
+}

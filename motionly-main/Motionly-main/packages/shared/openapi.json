@@ -5085,6 +5085,16 @@
             "title": "Model",
             "type": "string"
           },
+          "model_choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelChoiceResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "model_name": {
             "default": "",
             "title": "Model Name",
@@ -7857,6 +7867,51 @@
           "created_at"
         ],
         "title": "MemberResponse",
+        "type": "object"
+      },
+      "ModelChoiceResult": {
+        "description": "The user's model-choice provenance for an AI result (plan Section 2.11).\n\nDisplay-only: it carries the opaque option ids (registry route ids), where\nthe effective choice came from and, when a fallback happened, why. It never\ncarries a base URL, secret or provider model id \u2014 those stay operator-only\n(served by the admin surfaces), so a client can show \"served <option>\n(fell back: <reason>)\" without learning any infrastructure detail.",
+        "properties": {
+          "choice_source": {
+            "description": "Where the effective choice came from: project, workspace or operator.",
+            "title": "Choice Source",
+            "type": "string"
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the served option differs from the request (e.g. plan_not_allowed); null when the request was served as asked.",
+            "title": "Fallback Reason"
+          },
+          "requested_option_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The user's highest-priority requested option id, when one was set.",
+            "title": "Requested Option Id"
+          },
+          "served_option_id": {
+            "description": "The option id (registry route id) that actually served the call.",
+            "title": "Served Option Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "served_option_id",
+          "choice_source"
+        ],
+        "title": "ModelChoiceResult",
         "type": "object"
       },
       "ModelOption": {
@@ -10830,6 +10885,16 @@
               }
             ],
             "title": "Model"
+          },
+          "model_choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelChoiceResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "model_revision": {
             "anyOf": [

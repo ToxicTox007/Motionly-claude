@@ -15,6 +15,7 @@ from app.schemas.plans import (
     EditPlanResponse,
     EditPlanStatus,
     EditPlanStyle,
+    ModelChoiceResult,
     PlanSnapshotResponse,
     PlanSummary,
 )
@@ -62,6 +63,7 @@ class EditPlanRecord:
     prompt_version: str = EDIT_PLAN_PROMPT_VERSION
     retry_count: int = 0
     fallback_reason: str | None = None
+    model_choice: ModelChoiceResult | None = None
     latency_ms: int | None = None
     cost_estimate_usd: float | None = None
     validation_errors: list[str] = field(default_factory=list)
@@ -91,6 +93,7 @@ class EditPlanRecord:
             prompt_version=self.prompt_version,
             retry_count=self.retry_count,
             fallback_reason=self.fallback_reason,
+            model_choice=self.model_choice,
             cache_key=self.cache_key,
             schema_hash=self.schema_hash,
             latency_ms=self.latency_ms,

@@ -1,0 +1,17 @@
+{
+  "audio": {
+    "extraction": {
+      "category": {
+        "state": "ENABLED",
+        "types": ["TRANSCRIPT"],
+        "typeConfiguration": {
+          "transcript": {
+            "speakerLabeling": {
+              "state": "ENABLED"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -30,3 +30,14 @@ https://tfhub.dev/google/yamnet/1
 ```
 
 The `Supply chain` workflow generates SPDX SBOM artifacts, runs CodeQL, Trivy, and license checks, and signs commit-addressed GHCR images with Cosign on push events.
+
+## GPU-free remote-AI image (optional)
+
+The signed release manifest also binds one optional pair: the
+`MOTIONLY_CPU_VISION_WORKER_IMAGE` image and the `cpu-vision-worker` SBOM, built
+from `apps/worker/Dockerfile.python` with `API_EXTRAS=cpu-vision` and
+`CPU_VISION_ENABLED=true`. They travel together or not at all; a manifest that
+omits both still validates, so existing releases are unaffected. A CPU-only
+production host uses this image for the GPU-free overlay
+(`infra/docker-compose.remote-ai.yml`), which the release bundle carries
+alongside `infra/docker-compose.gpu.yml`.

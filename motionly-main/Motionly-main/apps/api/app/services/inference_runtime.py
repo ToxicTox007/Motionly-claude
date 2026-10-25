@@ -741,7 +741,7 @@ def _build_one_adapter(
     if adapter_type == "huggingface_endpoint":
         return _build_huggingface_endpoint(record, resolver, transport)
     if adapter_type == "aws_bedrock":
-        return _build_aws_bedrock(record, settings, transport)
+        return _build_aws_bedrock(record, settings, transport, resolver)
     if adapter_type == "fake":
         return _build_fake(app_env)
     if adapter_type == "local":
@@ -933,13 +933,21 @@ def _build_huggingface_endpoint(
 
 
 def _build_aws_bedrock(
-    record: AdapterRecord, settings: object, transport: object | None
+    record: AdapterRecord,
+    settings: object,
+    transport: object | None,
+    resolver: SecretResolver,
 ):
     """Build an ``aws_bedrock`` adapter (plan Task 25).
 
-    No AI secret is resolved: credentials come from the IAM chain (env/ECS/IMDS)
-    read through the process environment. The config block mirrors
-    ``BedrockConfig``; an invalid config drops the adapter's routes.
+    No AI secret is resolved for the IAM-chain path: credentials come from the
+    IAM chain (env/ECS/IMDS) read through the process environment. For the
+    ``aws_access_key`` auth path (S1) a static-key source is built from the two
+    secret refs via the shared ``resolver`` and passed to the factory; it is
+    resolved **lazily** on the first signed request, never here, so a
+    non-credentialed container still builds the full runtime without dropping a
+    Bedrock route. The config block mirrors ``BedrockConfig``; an invalid config
+    drops the adapter's routes.
     """
     import os
 
@@ -947,6 +955,7 @@ def _build_aws_bedrock(
         BedrockConfig,
         BedrockConfigError,
         aws_bedrock_factory,
+        build_static_key_source,
     )
 
     config = dict(record.config)
@@ -960,6 +969,29 @@ def _build_aws_bedrock(
         kwargs["timeout_s"] = float(config["timeout_s"])  # type: ignore[arg-type]
     if record.extra_headers:
         kwargs["extra_headers"] = dict(record.extra_headers)
+    # Additive config keys for the data_automation / async_invoke apis (spec
+    # item E). Each is forwarded only when present so ``converse`` /
+    # ``invoke_model`` records keep their defaults.
+    for key in (
+        "s3_bucket",
+        "s3_prefix",
+        "s3_region",
+        "data_automation_profile_arn",
+        "data_automation_project_arn",
+        "data_automation_stage",
+        "video_family",
+        "video_resolution",
+    ):
+        if config.get(key) is not None:
+            kwargs[key] = config[key]
+    if config.get("max_wait_s") is not None:
+        kwargs["max_wait_s"] = float(config["max_wait_s"])  # type: ignore[arg-type]
+    if config.get("poll_interval_s") is not None:
+        kwargs["poll_interval_s"] = float(config["poll_interval_s"])  # type: ignore[arg-type]
+    if config.get("presign_expires_s") is not None:
+        kwargs["presign_expires_s"] = int(config["presign_expires_s"])  # type: ignore[arg-type]
+    if config.get("cleanup") is not None:
+        kwargs["cleanup"] = bool(config["cleanup"])
     try:
         bedrock_config = BedrockConfig(**kwargs)  # type: ignore[arg-type]
     except BedrockConfigError as exc:
@@ -969,12 +1001,23 @@ def _build_aws_bedrock(
     env = getattr(settings, "aws_credential_env", None)
     if not isinstance(env, Mapping):
         env = dict(os.environ)
+    # ``aws_access_key`` auth (S1): build a lazy static-key source from the two
+    # secret refs. It is resolved on the first signed request, never here, so a
+    # container without the secret files still builds every Bedrock route.
+    static_key_source = None
+    if record.auth.type == "aws_access_key":
+        static_key_source = build_static_key_source(
+            resolver,
+            access_key_id_ref=record.auth.access_key_id_ref or "",
+            secret_ref=record.auth.secret_ref or "",
+        )
     return aws_bedrock_factory(
         config=bedrock_config,
         env=env,
         provider=record.id,
         bedrock_transport=transport,  # type: ignore[arg-type]
         credential_transport=transport,  # type: ignore[arg-type]
+        static_key_source=static_key_source,
     )
 
 

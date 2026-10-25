@@ -227,6 +227,10 @@ def write_cpu_stage_inputs(stack_path: Path, env_file: Path, secrets_dir: Path) 
         # generic secrets bundle the base topology mounts is an empty JSON
         # object. No vendor-named provider key is written.
         "ai_secrets_bundle",
+        # Bedrock static keys (docs/aws): the CPU stage uses no Bedrock route, so
+        # the API and inference workers mount empty key files.
+        "aws_inference_access_key_id",
+        "aws_inference_secret_access_key",
         "edge_origin_verify_previous",
     ):
         _write_private(secrets_dir / name, "", SECRET_FILE_MODE)
@@ -279,6 +283,10 @@ def main() -> int:
         "admin_api_token": "release-integration-admin-token",
         "worker_api_token": "release-integration-worker-token",
         "azure_openai_api_key": "",
+        # Bedrock static keys (docs/aws): empty for the release integration run;
+        # no Bedrock route is exercised.
+        "aws_inference_access_key_id": "",
+        "aws_inference_secret_access_key": "",
         "metrics_bearer_token": "release-integration-metrics-token",
         "edge_origin_verify": "release-integration-origin-verify-0123456789",
         "edge_origin_verify_previous": "",

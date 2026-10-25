@@ -38,6 +38,13 @@ IMAGE_COMPONENT_BY_VARIABLE: Final = {
     "MOTIONLY_REMOTION_WORKER_IMAGE": "remotion-worker",
     "MOTIONLY_TEMPORAL_SERVER_IMAGE": "temporal-server",
 }
+# The GPU-free remote-AI overlay (infra/docker-compose.remote-ai.yml) adds one
+# optional CPU vision worker image and its SBOM. A manifest may carry the pair
+# or omit it, but never a half of it; everything else stays required.
+OPTIONAL_IMAGE_COMPONENT_BY_VARIABLE: Final = {
+    "MOTIONLY_CPU_VISION_WORKER_IMAGE": "cpu-vision-worker",
+}
+OPTIONAL_BUILD_COMPONENTS: Final = ("cpu-vision-worker",)
 # GHCR, or the loopback registry of the local release rehearsal
 # (scripts/release/rehearse_release.py), which only a rehearsal host accepts.
 DIGEST_IMAGE_RE: Final = re.compile(
@@ -82,18 +89,36 @@ def _validate_common(manifest: dict[str, object]) -> None:
         raise ValueError(f"release manifest compose_file must be {COMPOSE_FILE}")
 
     images = manifest.get("images")
-    if not isinstance(images, dict) or set(images) != set(IMAGE_COMPONENT_BY_VARIABLE):
+    if not isinstance(images, dict):
+        raise ValueError("release manifest must define exactly every Compose image variable")
+    required_images = set(IMAGE_COMPONENT_BY_VARIABLE)
+    optional_images = set(OPTIONAL_IMAGE_COMPONENT_BY_VARIABLE)
+    extra_images = set(images) - required_images
+    if not required_images <= set(images) or not extra_images <= optional_images:
         raise ValueError("release manifest must define exactly every Compose image variable")
     for variable, image in images.items():
         if not isinstance(image, str) or not DIGEST_IMAGE_RE.fullmatch(image):
             raise ValueError(f"{variable} must be a digest-pinned GHCR image")
 
     sboms = manifest.get("sboms")
-    if not isinstance(sboms, dict) or set(sboms) != set(BUILD_COMPONENTS):
+    if not isinstance(sboms, dict):
+        raise ValueError("release manifest must define an SBOM for every built component")
+    required_sboms = set(BUILD_COMPONENTS)
+    optional_sboms = set(OPTIONAL_BUILD_COMPONENTS)
+    extra_sboms = set(sboms) - required_sboms
+    if not required_sboms <= set(sboms) or not extra_sboms <= optional_sboms:
         raise ValueError("release manifest must define an SBOM for every built component")
     for component, artifact in sboms.items():
         if not isinstance(artifact, str) or not SBOM_ARTIFACT_RE.fullmatch(artifact):
             raise ValueError(f"{component} SBOM must be a local SPDX JSON artifact name")
+
+    # The optional CPU-vision image and its SBOM travel together or not at all.
+    has_optional_image = bool(extra_images)
+    has_optional_sbom = bool(extra_sboms)
+    if has_optional_image != has_optional_sbom:
+        raise ValueError(
+            "release manifest optional cpu-vision-worker image and SBOM must be present together"
+        )
 
 
 def _validate_file_entries(entries: object) -> list[dict[str, object]]:

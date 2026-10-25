@@ -1,0 +1,115 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeNovaInferenceProfilesApSouth1",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:inference-profile/apac.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:inference-profile/apac.amazon.nova-lite-v1:0"
+      ]
+    },
+    {
+      "Sid": "InvokeNovaFoundationModelsInDestinationRegions",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:aws:bedrock:ap-northeast-1::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:ap-northeast-2::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:ap-northeast-3::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:ap-south-1::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:ap-southeast-1::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:ap-northeast-1::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:ap-northeast-2::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:ap-northeast-3::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:ap-south-1::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:ap-southeast-1::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:ap-southeast-2::foundation-model/amazon.nova-lite-v1:0"
+      ],
+      "Condition": {
+        "StringLike": {
+          "bedrock:InferenceProfileArn": [
+            "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:inference-profile/apac.amazon.nova-pro-v1:0",
+            "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:inference-profile/apac.amazon.nova-lite-v1:0"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "InvokeTitanEmbeddingsApSouth1",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:ap-south-1::foundation-model/amazon.titan-embed-text-v2:0"
+    },
+    {
+      "Sid": "InvokeLumaRayVideoUsWest2",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:us-west-2::foundation-model/luma.ray-v2:0"
+    },
+    {
+      "Sid": "ReadAsyncInvokeStatusUsWest2",
+      "Effect": "Allow",
+      "Action": "bedrock:GetAsyncInvoke",
+      "Resource": "arn:aws:bedrock:us-west-2:<ACCOUNT_ID>:async-invoke/*"
+    },
+    {
+      "Sid": "InvokeDataAutomationApacProfileAndProject",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeDataAutomationAsync",
+      "Resource": [
+        "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-northeast-2:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-northeast-3:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-south-2:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-southeast-1:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-southeast-2:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-southeast-4:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
+        "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:data-automation-project/<BDA_PROJECT_ID>"
+      ]
+    },
+    {
+      "Sid": "ReadDataAutomationStatusApSouth1",
+      "Effect": "Allow",
+      "Action": "bedrock:GetDataAutomationStatus",
+      "Resource": "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:data-automation-invocation/*"
+    },
+    {
+      "Sid": "StagingBucketObjectAccessBdaPrefix",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::<STAGING_BUCKET>/bda/*"
+    },
+    {
+      "Sid": "StagingBucketListBdaPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<STAGING_BUCKET>",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "bda/*"
+        }
+      }
+    },
+    {
+      "Sid": "VideoOutputBucketObjectAccessVideoPrefix",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::<VIDEO_OUTPUT_BUCKET>/video/*"
+    },
+    {
+      "Sid": "VideoOutputBucketListVideoPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<VIDEO_OUTPUT_BUCKET>",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "video/*"
+        }
+      }
+    }
+  ]
+}

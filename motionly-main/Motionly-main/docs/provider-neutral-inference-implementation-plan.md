@@ -1,10 +1,24 @@
 # Motionly Provider-Neutral Inference Implementation Plan
 
-**Status:** Tier 1 is complete; its gate passes (live runs deferred by revision 5). Tiers 2 and 3 are in progress. This document changes no application code itself. Revision 4.
+**Status:** Tier 1 is complete; its gate passes (live runs deferred by revision 5). Tier 2 is complete in code (Tasks 9B, 11, 12, 29, 30, 31, 32, 33); its gate is met for every item that runs without Docker/Supabase/live providers, with `AI_QUOTA_SCOPE`'s removal date recorded (item 3). Tier 3 is complete in code (Tasks 28, 20, 21, 22, 23, 24, 25); its gate items that need a running stack, a database, a browser or live/fake-provider route tests (Tier 3 gate items 1–3) are verified by in-repo fake-driven tests but not by a live stack run here. This document changes no application code itself. Revision 6.
 
 **Repository audited:** `motionly-main/Motionly-main`. Paths are relative to it unless they start with `/`.
 
 ## Changelog
+
+### Revision 7
+
+1. **Static IAM-user keys for the `aws_bedrock` adapter (2026-10-25).** A new `aws_access_key` auth type lets an `aws_bedrock` adapter sign with a narrowly scoped IAM user's access key id + secret key (`access_key_id_ref` / `secret_ref`, each a `file:`/`bundle:` ref), resolved lazily at call time; `aws_bedrock` still accepts `auth: none` (the IAM credential chain). See the Task 25 Amendment below.
+
+### Revision 6
+
+Tier 2 and Tier 3 implementation landed on 2026-10-25, in four parallel stages plus an integration pass.
+
+1. **Tier 2 model choice end to end.** `model_choice` is now surfaced to clients on AI-result responses without leaking operator detail: a display-only `ModelChoiceResult` (`requested_option_id`, `served_option_id`, `choice_source`, `fallback_reason`) was added to `EditPlanResponse` and to `ProposalProvenance`, read through `from_payload()` which drops any base URL, secret ref or provider model id (Task 31; `apps/api/tests/test_plan_model_choice.py`, 5 tests). The model picker UI (workspace "AI models" settings and an in-editor project picker with a fallback notice) was added, accessible and neutral (Task 32; `apps/web/tests/task32-model-picker.test.mjs`).
+2. **Tier 3 non-blocking video.** The inference polling engine and `async_job` adapter now drive video generation in non-blocking mode: one submit, re-enqueued delayed polls, resume after a worker restart without resubmitting, and an after-send timeout that never contacts a second route (Task 28; `apps/api/tests/test_video_generation_nonblocking.py` and the end-to-end `test_generated_broll_operations.py::test_non_blocking_video_route_submits_once_and_renders`).
+3. **Tier 3 admin AI UI.** `apps/web/app/(app)/admin/ai/` adds the admin configuration surface — capability matrix, route health/circuit panel, keyboard-operable priority/fallback reorder, warning badges, route test with explicit paid-async confirmation, and write-only secret forms that never hold a value in browser state (Task 23; `apps/web/tests/task23-admin-ai.test.mjs`).
+4. **Stale tests and bookkeeping closed.** The six model-choice routes are classified in the role inventory and the stale sound-classification test was rewritten to a registry-driven assertion (Task 33; `apps/api/tests/test_role_route_inventory.py`, `test_cpu_vision_image.py`). `AI_QUOTA_SCOPE`'s removal date is recorded (Tier 2 gate item 3 and Section 4.1 Task 10). The OpenAPI contract was regenerated and `--check` passes; `pnpm -r typecheck` is clean.
+5. **Integration fix.** One knip dead-code finding (`fetchProjectModelSettings` and its orphaned `ProjectModelSettings` type in `apps/web/lib/model-options.ts`, never called by the picker) was removed. A `test_worker_db_grants` regression was fixed without widening worker grants: the polling engine's resolver attribute `_resolve` made the name-based worker call graph reach `app/api/export_shares.py:_resolve` (and through it the review and export-share tables), so it was renamed `_resolve_poll_target` in `apps/api/app/services/inference_polling.py`. The test passes again.
 
 ### Revision 5
 
@@ -44,6 +58,7 @@ Operator decisions of 2026-10-25.
    - The rest of the old Task 15 and 16B scope becomes the new Task 28 in Tier 3.
 
    Section 4.0 explains why this cannot wait for a later tier.
+
 3. **Deletion order** (Task 19): the vendor-specific adapter files are deleted only after Task 17's conformance and differential tests pass. Before that, they are archived under the Git tag `archive/pre-neutral-inference`, created at the start of Task 17.
 4. **No-route fallbacks** are spelled out (Sections 3 and 4.1, Task 17): empty detections, heuristic speaker labels, no stem control.
 5. **Mapping language** (Section 2.10) is split into the Tier 1 slice that the three ports use and the Tier 3 extensions (Task 28). The slice adds three elements that parity needs: a `concat` function, a `vars` initializer, and variable segments in extraction paths.
@@ -52,7 +67,6 @@ Operator decisions of 2026-10-25.
 
 ### Revision 2
 
-
 1. **Revision policy** (Tasks 4, 7, 14, 20; invariants 7–8; Sections 2.3, 2.6, 2.9): remote routes may use `revision: provider-managed` if the route opts in, and this logs a warning. Strict pinning applies only to local and self-hosted models. Licence metadata is required only for local models. Data-processor metadata is a warning in dev and required in production. Paid routes with unknown pricing need a hard cap.
 2. **Three tiers with gates** (Section 4). Dependency fixes:
    - Task 9 is split into 9A (Tier 1) and 9B (Tier 2).
@@ -60,6 +74,7 @@ Operator decisions of 2026-10-25.
    - Task 16 is split into 16A and 16B.
 
    Revision 3 sets the current tier of Tasks 15, 16B and 17 (Section 4.0).
+
 3. **The legacy bridge is conditional** (Section 0.4). The default is no live users and a single clean cutover (Path B). The translator becomes Task 6L (Path A only).
 4. **Transitional work:** Task 13 (the transitional adapter) is deleted.
 5. **The mapping language is capped** (new Section 2.10). Tiers 1 and 2 ship none, and every allowed function is listed.
@@ -124,11 +139,11 @@ The legacy bridge depends on one question: **do live production users or data ex
 - **Release N+2:** the translator, old settings and dual-read are removed.
 - **Ordering constraint:** Tasks 11–12 must land before Task 19 removes the vendor wiring, so live users keep captions, voice emotion and remote embeddings. Task 17 already comes before Task 19 in both paths.
 
-| | Path B (confirmed) | Path A (contingency) |
-|---|---|---|
-| Releases | 1 | 3 (N, N+1, N+2) |
-| Work this path drops from the plan | Task 6L translator and converter; old-versus-new parity tests; dual-read of old payload keys; staged enum and constraint rollout; deprecation warnings; Path A ordering constraints; mapping of old quota setting names | Nothing. It adds the items on the left and removes them again in Release N+2 |
-| What it finally removes from the codebase | Vendor settings, wiring, secrets and old payload keys, all in one release | The same, plus Task 6L, in Release N+2 |
+|                                           | Path B (confirmed)                                                                                                                                                                                                      | Path A (contingency)                                                         |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Releases                                  | 1                                                                                                                                                                                                                       | 3 (N, N+1, N+2)                                                              |
+| Work this path drops from the plan        | Task 6L translator and converter; old-versus-new parity tests; dual-read of old payload keys; staged enum and constraint rollout; deprecation warnings; Path A ordering constraints; mapping of old quota setting names | Nothing. It adds the items on the left and removes them again in Release N+2 |
+| What it finally removes from the codebase | Vendor settings, wiring, secrets and old payload keys, all in one release                                                                                                                                               | The same, plus Task 6L, in Release N+2                                       |
 
 Both paths end in the same final state.
 
@@ -153,45 +168,45 @@ The worktree already contains extensive unrelated modified and untracked files. 
 
 ### 1.2 Vendor coupling audit
 
-| Actual file | Finding | Planned replacement |
-|---|---|---|
-| `apps/api/app/services/model_gateway_factory.py` | `OPENROUTER_BASE_URL`, `GROQ_BASE_URL`, `_HTTP_ADAPTERS = {"azure", "openai_compatible", "openrouter", "groq"}`, vendor-key construction and `_legacy_routes()` create OpenRouter planning and Groq transcription routes. | Build adapters from registry records `{id, type, base_url, auth, secret_ref}` (Task 6). Path A only: a one-release translator (Task 6L). Endpoint host comes from the configured URL, not a provider name. |
-| `apps/api/app/services/model_adapters.py` | `OpenAICompatibleAdapter` is reusable, but `JinaEmbeddingsAdapter` and `JINA_BASE_URL` hard-code a provider-specific request shape. `AzureOpenAIAdapter` uses Azure-specific transport, which is acceptable only inside the Azure adapter implementation. | Keep protocol adapters under an adapter boundary. Delete the dedicated Jina adapter in Task 19 and add a closed `embeddings_input_style` option in Task 12. |
-| `apps/api/app/services/model_domain_adapters.py` | Contains `RunwayVideoGenerationAdapter`, Jina registration, OpenRouter ZDR registration, Google Vision registration, pyannoteAI registration, LALAL registration and vendor-named route ids/provider strings. | Capability routes come from the registry. The object, diarization and stem integrations are ported to templates (Task 17), and their vendor registrations are deleted after that (Task 19). Local runners remain behind a neutral local adapter (Task 14). |
-| `apps/api/app/services/model_gateway.py` | Core is mostly neutral but uses coarse capability families and old operation names (`vision.prompt`, `audio.prompt`, `generation.video_submit`, etc.). Comments contain provider examples. | Preserve the gateway engine; add the fine-grained capability taxonomy and compatibility aliases. Move provider examples into docs. |
-| `apps/api/app/services/model_gateway_factory.py`, `apps/api/app/main.py`, `apps/api/app/workers/visual_job.py`, `apps/api/app/workers/matte_job.py` | API and workers construct gateways from environment-specific vendor switches. Workers construct their own gateway in separate processes. | One registry/runtime builder used by API and workers; registry version and route fingerprints keep them aligned. |
-| `apps/api/app/services/model_provider_bridges.py` | `GatewayEditPlannerProvider` subclasses the direct HTTP planner and carries endpoint/key compatibility details. | Make the bridge accept only a gateway and typed planning request. |
-| `apps/api/app/services/edit_planner.py` | Direct HTTP planner remains and calls `check_quota(provider="openrouter", category="tokens")`. | Gateway-only planning. Quota is keyed by Motionly feature/category, not route provider (Task 10, Decision B-1). |
-| `apps/api/app/services/transcription_provider.py`, `apps/api/app/main.py` | Non-production fallback uses `GROQ_TRANSCRIPTION_ENDPOINT` and Groq credentials directly. | Gateway-only transcription with fake route in CI/dev. |
-| `apps/api/app/services/remote_visual.py` | Caption, object and image-embedding enrichers call vendor-specific route registration helpers and vendor-specific route ids. | Enrichers request `vision.caption`, `vision.object_detection` and `embeddings.image`; batch limits and mappings belong to route metadata. |
-| `apps/api/app/services/google_vision.py` | Provider-specific object-localization HTTP adapter, `GOOGLE_VISION_*`, label aliases and vertex-to-box conversion. | Port to a `generic_http` template with conformance fixtures (Task 17, Tier 1). Archive the file under a Git tag, then delete it after conformance passes (Task 19). |
-| `apps/api/app/services/pyannoteai_diarization.py` | Provider-specific upload reservation, signed upload, async submit/poll, 20-second minimum billing and seconds-to-milliseconds parsing. | Port to an `async_job` template with conformance fixtures (Task 17, Tier 1). The neutral wrapper that falls back to a degraded result moves to a neutral module. Archive the file under a Git tag, then delete it after conformance passes (Task 19). |
-| `apps/api/app/services/lalal_stems.py` | Provider-specific FLAC conversion, upload, split submit, POST polling, artifact download limits/host checks and cleanup. | Port to an `async_job` template with conformance fixtures (Task 17, Tier 1). Archive the file under a Git tag, then delete it after conformance passes (Task 19). Local CPU Demucs stays available as a `local` route (Task 14). |
-| `apps/api/app/services/remote_audio_emotion.py` | OpenRouter-specific class name and route setup although prompt/schema behavior is a generic audio chat strategy. | Move to a Motionly-owned audio-emotion strategy using any route that supports `audio.emotion`. |
-| `apps/api/app/services/scale.py` | `RunwayGen3Provider`, `FixtureRunwayProvider`, `RunwayResult`, `runway_task_id`, `runway_gateway_route`, Runway cost/quotas/errors, provider-specific download names. | Generic video-generation operation records, neutral `generated` asset kind and `provider_operation_id`/`provider_route_id`/`provider_model_revision`. |
-| `apps/api/app/api/scale.py` | Endpoint function `generate_runway_broll`, Runway premium copy, `runway_not_configured`. The URL `/projects/{project_id}/phase5/generated-broll` is already neutral. | Rename the operation, use neutral copy and return `capability_unavailable`. |
-| `apps/api/app/services/job_engine.py` | Passes `runway_provider` and `runway_gateway_route` through job execution. | Pass a generic inference runtime/operation service. |
-| `apps/api/app/services/billing.py` | `PROVIDER_QUOTAS` keys `runway` and `openrouter`; `PlanFeatureQuotaGuard` counts by `route.provider`, so changing providers can reset a workspace's effective feature quota. | Keep the guard but key it by Motionly feature/category (Decision B-1). Provider label remains telemetry metadata only. |
-| `apps/api/app/services/model_gateway_factory.py`, `apps/api/app/core/config.py`, `apps/api/app/core/production.py` | Vendor-specific route defaults, provider allowlists, required keys, pricing checks and pinned revision maps. Production currently hard-requires Runway generation in addition to planning and transcription. | Validate enabled routes by capability: planning and STT required; all others optional. Validate auth, revision policy, pricing and GPU suitability generically (Section 2.6). |
-| `apps/api/app/api/health.py` | `_probe_providers()` hard-codes OpenRouter, Groq and Runway URLs/headers. | Probe each configured adapter's declared health request and expose route/circuit health without provider names. |
-| `apps/api/app/core/logging.py`, `apps/worker/src/log-redaction.mjs` | Prefix-specific redaction for Groq and OpenRouter keys and a generic `sk-` rule. | Register resolved secret values with a generic redactor and retain only protocol-neutral token patterns. |
-| `apps/api/scripts/audit_local_capabilities.py` | Hard-coded vendor key names in local capability auditing. | Audit secret references and route declarations from the registry. |
-| `apps/api/app/services/ai_features.py` | Maps feature switches to vendor credentials and provider names. | Replace with a registry-derived capability report. |
-| `apps/api/app/core/config.py` | Settings include `GROQ_*`, `OPENROUTER_*`, `RUNWAY_*`, `JINA_*`, `GOOGLE_VISION_*`, `PYANNOTEAI_*`, `LALAL_*`, Azure-specific keys and vendor default model ids. | Keep only generic registry/secrets/budget settings (Task 26). |
-| `apps/api/app/core/production.py` | Requires `GROQ_API_KEY`, `OPENROUTER_API_KEY`, Runway key/cost and vendor-specific optional credentials; checks vendor-specific provider enum values. | Replace with one capability-based registry validator. |
-| `infra/docker-compose.gpu.yml` | Mounts `groq_api_key`, `openrouter_api_key`, `runway_api_key`, `azure_openai_api_key` and environment `_FILE` variables. | Mount one registry file and one generic secrets bundle (Tier 3 adds the KEK). |
-| `infra/docker-compose.remote-ai.yml` | Remote mode defaults and prices name Google Vision, OpenRouter, Jina, pyannoteAI and LALAL; mounts their secret files. | Keep topology and CPU/GPU placement only. Routes and prices move into registry config. |
-| `.github/workflows/live-provider-contracts.yml` | Passes `OPENROUTER_API_KEY`, `GROQ_API_KEY` and `RUNWAY_API_KEY` directly into a vendor-specific test. | Run registry-selected contract scenarios using a generic secrets bundle and explicit manual authorization. |
-| `scripts/deploy/apply_release.sh` | Fetches provider-specific secret-store names at lines 282–284. | Fetch the generic registry and secrets bundle. |
-| `scripts/release/write_compose_test_env.py`, `setup-local-env.sh`, `setup-local-env.ps1`, `.env.example`, `apps/api/.env.example`, `prod.env.example`, `infra/production-compose.env.example`, `infra/compose-host/host.env.example` | Document or generate vendor-specific variables and secret files. (`apps/worker/.env.example` was re-checked and has none.) | Replace with generic registry and secrets settings (Task 26). |
-| `apps/web/components/editor/ScalePanel.tsx` | UI state, section title and toast say `Runway Gen-3 B-roll`. | Rename to Generated B-roll (Task 18) and gate it on `video.generation.submit` (Task 9B). |
-| `apps/web/app/privacy/page.tsx` | Hard-coded processor sections for Google Cloud Vision, OpenRouter, Jina AI, pyannoteAI and LALAL.AI. | Render configured adapter data-processor metadata (Task 9A). |
-| `apps/api/app/schemas/broll.py`, `apps/api/app/repositories/broll.py`, `packages/shared/src/index.ts`, `packages/shared/src/generated/api.ts`, `packages/shared/openapi.json` | `stock_provider` includes/queries `runway`; generated API operation is Runway-named. | Add neutral `generated` and regenerate contracts. |
-| `supabase/migrations/202606210003_phase_5_scale.sql` | Adds `runway` to `public.stock_provider`. | Add `generated` in a forward migration and stop writing `runway`; the old enum value stays physically but is no longer used. |
-| `phase5_resources.payload` JSONB | Generated B-roll writes `runway_task_id`, route/model metadata and submit state. | Introduce `inference_operations` with `provider_operation_id`, `provider_route_id`, `provider_model_revision`; one-time rewrite (Path B) or one-release dual-read (Path A). |
-| `stock_assets.provider_asset_id`, `cost_attribution_events.metadata.task_id` | Store provider task id and vendor label indirectly. | Store neutral operation id/route metadata; historical cost rows stay as recorded. |
-| `apps/api/tests/fixtures/providers/runway_succeeded.json`, Runway tests in `apps/api/tests/` and vendor contract workflow | Tests assert vendor-specific transport and credentials. | Port to the fake async adapter. |
-| `docs/generated/motionly_technical_documentation.md`, `/workspaces/Motionly-claude/DEPLOYMENT-GUIDE.md` (Git root), `docs/security/data-handling.md`, `docs/security/secrets.md`, `docs/ops/compose-vm-deployment.md`, `docs/ops/supply-chain.md` | Vendor-specific operational and privacy documentation. | Rewrite operator guidance to registry concepts; vendor names may remain only as documented adapter examples. |
+| Actual file                                                                                                                                                                                                                                       | Finding                                                                                                                                                                                                                                                   | Planned replacement                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api/app/services/model_gateway_factory.py`                                                                                                                                                                                                  | `OPENROUTER_BASE_URL`, `GROQ_BASE_URL`, `_HTTP_ADAPTERS = {"azure", "openai_compatible", "openrouter", "groq"}`, vendor-key construction and `_legacy_routes()` create OpenRouter planning and Groq transcription routes.                                 | Build adapters from registry records `{id, type, base_url, auth, secret_ref}` (Task 6). Path A only: a one-release translator (Task 6L). Endpoint host comes from the configured URL, not a provider name.                                                 |
+| `apps/api/app/services/model_adapters.py`                                                                                                                                                                                                         | `OpenAICompatibleAdapter` is reusable, but `JinaEmbeddingsAdapter` and `JINA_BASE_URL` hard-code a provider-specific request shape. `AzureOpenAIAdapter` uses Azure-specific transport, which is acceptable only inside the Azure adapter implementation. | Keep protocol adapters under an adapter boundary. Delete the dedicated Jina adapter in Task 19 and add a closed `embeddings_input_style` option in Task 12.                                                                                                |
+| `apps/api/app/services/model_domain_adapters.py`                                                                                                                                                                                                  | Contains `RunwayVideoGenerationAdapter`, Jina registration, OpenRouter ZDR registration, Google Vision registration, pyannoteAI registration, LALAL registration and vendor-named route ids/provider strings.                                             | Capability routes come from the registry. The object, diarization and stem integrations are ported to templates (Task 17), and their vendor registrations are deleted after that (Task 19). Local runners remain behind a neutral local adapter (Task 14). |
+| `apps/api/app/services/model_gateway.py`                                                                                                                                                                                                          | Core is mostly neutral but uses coarse capability families and old operation names (`vision.prompt`, `audio.prompt`, `generation.video_submit`, etc.). Comments contain provider examples.                                                                | Preserve the gateway engine; add the fine-grained capability taxonomy and compatibility aliases. Move provider examples into docs.                                                                                                                         |
+| `apps/api/app/services/model_gateway_factory.py`, `apps/api/app/main.py`, `apps/api/app/workers/visual_job.py`, `apps/api/app/workers/matte_job.py`                                                                                               | API and workers construct gateways from environment-specific vendor switches. Workers construct their own gateway in separate processes.                                                                                                                  | One registry/runtime builder used by API and workers; registry version and route fingerprints keep them aligned.                                                                                                                                           |
+| `apps/api/app/services/model_provider_bridges.py`                                                                                                                                                                                                 | `GatewayEditPlannerProvider` subclasses the direct HTTP planner and carries endpoint/key compatibility details.                                                                                                                                           | Make the bridge accept only a gateway and typed planning request.                                                                                                                                                                                          |
+| `apps/api/app/services/edit_planner.py`                                                                                                                                                                                                           | Direct HTTP planner remains and calls `check_quota(provider="openrouter", category="tokens")`.                                                                                                                                                            | Gateway-only planning. Quota is keyed by Motionly feature/category, not route provider (Task 10, Decision B-1).                                                                                                                                            |
+| `apps/api/app/services/transcription_provider.py`, `apps/api/app/main.py`                                                                                                                                                                         | Non-production fallback uses `GROQ_TRANSCRIPTION_ENDPOINT` and Groq credentials directly.                                                                                                                                                                 | Gateway-only transcription with fake route in CI/dev.                                                                                                                                                                                                      |
+| `apps/api/app/services/remote_visual.py`                                                                                                                                                                                                          | Caption, object and image-embedding enrichers call vendor-specific route registration helpers and vendor-specific route ids.                                                                                                                              | Enrichers request `vision.caption`, `vision.object_detection` and `embeddings.image`; batch limits and mappings belong to route metadata.                                                                                                                  |
+| `apps/api/app/services/google_vision.py`                                                                                                                                                                                                          | Provider-specific object-localization HTTP adapter, `GOOGLE_VISION_*`, label aliases and vertex-to-box conversion.                                                                                                                                        | Port to a `generic_http` template with conformance fixtures (Task 17, Tier 1). Archive the file under a Git tag, then delete it after conformance passes (Task 19).                                                                                        |
+| `apps/api/app/services/pyannoteai_diarization.py`                                                                                                                                                                                                 | Provider-specific upload reservation, signed upload, async submit/poll, 20-second minimum billing and seconds-to-milliseconds parsing.                                                                                                                    | Port to an `async_job` template with conformance fixtures (Task 17, Tier 1). The neutral wrapper that falls back to a degraded result moves to a neutral module. Archive the file under a Git tag, then delete it after conformance passes (Task 19).      |
+| `apps/api/app/services/lalal_stems.py`                                                                                                                                                                                                            | Provider-specific FLAC conversion, upload, split submit, POST polling, artifact download limits/host checks and cleanup.                                                                                                                                  | Port to an `async_job` template with conformance fixtures (Task 17, Tier 1). Archive the file under a Git tag, then delete it after conformance passes (Task 19). Local CPU Demucs stays available as a `local` route (Task 14).                           |
+| `apps/api/app/services/remote_audio_emotion.py`                                                                                                                                                                                                   | OpenRouter-specific class name and route setup although prompt/schema behavior is a generic audio chat strategy.                                                                                                                                          | Move to a Motionly-owned audio-emotion strategy using any route that supports `audio.emotion`.                                                                                                                                                             |
+| `apps/api/app/services/scale.py`                                                                                                                                                                                                                  | `RunwayGen3Provider`, `FixtureRunwayProvider`, `RunwayResult`, `runway_task_id`, `runway_gateway_route`, Runway cost/quotas/errors, provider-specific download names.                                                                                     | Generic video-generation operation records, neutral `generated` asset kind and `provider_operation_id`/`provider_route_id`/`provider_model_revision`.                                                                                                      |
+| `apps/api/app/api/scale.py`                                                                                                                                                                                                                       | Endpoint function `generate_runway_broll`, Runway premium copy, `runway_not_configured`. The URL `/projects/{project_id}/phase5/generated-broll` is already neutral.                                                                                      | Rename the operation, use neutral copy and return `capability_unavailable`.                                                                                                                                                                                |
+| `apps/api/app/services/job_engine.py`                                                                                                                                                                                                             | Passes `runway_provider` and `runway_gateway_route` through job execution.                                                                                                                                                                                | Pass a generic inference runtime/operation service.                                                                                                                                                                                                        |
+| `apps/api/app/services/billing.py`                                                                                                                                                                                                                | `PROVIDER_QUOTAS` keys `runway` and `openrouter`; `PlanFeatureQuotaGuard` counts by `route.provider`, so changing providers can reset a workspace's effective feature quota.                                                                              | Keep the guard but key it by Motionly feature/category (Decision B-1). Provider label remains telemetry metadata only.                                                                                                                                     |
+| `apps/api/app/services/model_gateway_factory.py`, `apps/api/app/core/config.py`, `apps/api/app/core/production.py`                                                                                                                                | Vendor-specific route defaults, provider allowlists, required keys, pricing checks and pinned revision maps. Production currently hard-requires Runway generation in addition to planning and transcription.                                              | Validate enabled routes by capability: planning and STT required; all others optional. Validate auth, revision policy, pricing and GPU suitability generically (Section 2.6).                                                                              |
+| `apps/api/app/api/health.py`                                                                                                                                                                                                                      | `_probe_providers()` hard-codes OpenRouter, Groq and Runway URLs/headers.                                                                                                                                                                                 | Probe each configured adapter's declared health request and expose route/circuit health without provider names.                                                                                                                                            |
+| `apps/api/app/core/logging.py`, `apps/worker/src/log-redaction.mjs`                                                                                                                                                                               | Prefix-specific redaction for Groq and OpenRouter keys and a generic `sk-` rule.                                                                                                                                                                          | Register resolved secret values with a generic redactor and retain only protocol-neutral token patterns.                                                                                                                                                   |
+| `apps/api/scripts/audit_local_capabilities.py`                                                                                                                                                                                                    | Hard-coded vendor key names in local capability auditing.                                                                                                                                                                                                 | Audit secret references and route declarations from the registry.                                                                                                                                                                                          |
+| `apps/api/app/services/ai_features.py`                                                                                                                                                                                                            | Maps feature switches to vendor credentials and provider names.                                                                                                                                                                                           | Replace with a registry-derived capability report.                                                                                                                                                                                                         |
+| `apps/api/app/core/config.py`                                                                                                                                                                                                                     | Settings include `GROQ_*`, `OPENROUTER_*`, `RUNWAY_*`, `JINA_*`, `GOOGLE_VISION_*`, `PYANNOTEAI_*`, `LALAL_*`, Azure-specific keys and vendor default model ids.                                                                                          | Keep only generic registry/secrets/budget settings (Task 26).                                                                                                                                                                                              |
+| `apps/api/app/core/production.py`                                                                                                                                                                                                                 | Requires `GROQ_API_KEY`, `OPENROUTER_API_KEY`, Runway key/cost and vendor-specific optional credentials; checks vendor-specific provider enum values.                                                                                                     | Replace with one capability-based registry validator.                                                                                                                                                                                                      |
+| `infra/docker-compose.gpu.yml`                                                                                                                                                                                                                    | Mounts `groq_api_key`, `openrouter_api_key`, `runway_api_key`, `azure_openai_api_key` and environment `_FILE` variables.                                                                                                                                  | Mount one registry file and one generic secrets bundle (Tier 3 adds the KEK).                                                                                                                                                                              |
+| `infra/docker-compose.remote-ai.yml`                                                                                                                                                                                                              | Remote mode defaults and prices name Google Vision, OpenRouter, Jina, pyannoteAI and LALAL; mounts their secret files.                                                                                                                                    | Keep topology and CPU/GPU placement only. Routes and prices move into registry config.                                                                                                                                                                     |
+| `.github/workflows/live-provider-contracts.yml`                                                                                                                                                                                                   | Passes `OPENROUTER_API_KEY`, `GROQ_API_KEY` and `RUNWAY_API_KEY` directly into a vendor-specific test.                                                                                                                                                    | Run registry-selected contract scenarios using a generic secrets bundle and explicit manual authorization.                                                                                                                                                 |
+| `scripts/deploy/apply_release.sh`                                                                                                                                                                                                                 | Fetches provider-specific secret-store names at lines 282–284.                                                                                                                                                                                            | Fetch the generic registry and secrets bundle.                                                                                                                                                                                                             |
+| `scripts/release/write_compose_test_env.py`, `setup-local-env.sh`, `setup-local-env.ps1`, `.env.example`, `apps/api/.env.example`, `prod.env.example`, `infra/production-compose.env.example`, `infra/compose-host/host.env.example`              | Document or generate vendor-specific variables and secret files. (`apps/worker/.env.example` was re-checked and has none.)                                                                                                                                | Replace with generic registry and secrets settings (Task 26).                                                                                                                                                                                              |
+| `apps/web/components/editor/ScalePanel.tsx`                                                                                                                                                                                                       | UI state, section title and toast say `Runway Gen-3 B-roll`.                                                                                                                                                                                              | Rename to Generated B-roll (Task 18) and gate it on `video.generation.submit` (Task 9B).                                                                                                                                                                   |
+| `apps/web/app/privacy/page.tsx`                                                                                                                                                                                                                   | Hard-coded processor sections for Google Cloud Vision, OpenRouter, Jina AI, pyannoteAI and LALAL.AI.                                                                                                                                                      | Render configured adapter data-processor metadata (Task 9A).                                                                                                                                                                                               |
+| `apps/api/app/schemas/broll.py`, `apps/api/app/repositories/broll.py`, `packages/shared/src/index.ts`, `packages/shared/src/generated/api.ts`, `packages/shared/openapi.json`                                                                     | `stock_provider` includes/queries `runway`; generated API operation is Runway-named.                                                                                                                                                                      | Add neutral `generated` and regenerate contracts.                                                                                                                                                                                                          |
+| `supabase/migrations/202606210003_phase_5_scale.sql`                                                                                                                                                                                              | Adds `runway` to `public.stock_provider`.                                                                                                                                                                                                                 | Add `generated` in a forward migration and stop writing `runway`; the old enum value stays physically but is no longer used.                                                                                                                               |
+| `phase5_resources.payload` JSONB                                                                                                                                                                                                                  | Generated B-roll writes `runway_task_id`, route/model metadata and submit state.                                                                                                                                                                          | Introduce `inference_operations` with `provider_operation_id`, `provider_route_id`, `provider_model_revision`; one-time rewrite (Path B) or one-release dual-read (Path A).                                                                                |
+| `stock_assets.provider_asset_id`, `cost_attribution_events.metadata.task_id`                                                                                                                                                                      | Store provider task id and vendor label indirectly.                                                                                                                                                                                                       | Store neutral operation id/route metadata; historical cost rows stay as recorded.                                                                                                                                                                          |
+| `apps/api/tests/fixtures/providers/runway_succeeded.json`, Runway tests in `apps/api/tests/` and vendor contract workflow                                                                                                                         | Tests assert vendor-specific transport and credentials.                                                                                                                                                                                                   | Port to the fake async adapter.                                                                                                                                                                                                                            |
+| `docs/generated/motionly_technical_documentation.md`, `/workspaces/Motionly-claude/DEPLOYMENT-GUIDE.md` (Git root), `docs/security/data-handling.md`, `docs/security/secrets.md`, `docs/ops/compose-vm-deployment.md`, `docs/ops/supply-chain.md` | Vendor-specific operational and privacy documentation.                                                                                                                                                                                                    | Rewrite operator guidance to registry concepts; vendor names may remain only as documented adapter examples.                                                                                                                                               |
 
 ### 1.3 Specific requested audit answers
 
@@ -207,25 +222,25 @@ The worktree already contains extensive unrelated modified and untracked files. 
 
 ### 1.4 Existing gateway inventory and reuse decision
 
-| Existing component | Actual location | Decision |
-|---|---|---|
-| Typed requests/outputs (`PlanningRequest`, `TranscriptionRequest`, `VisionRequest`, `EmbeddingsRequest`, generation, matte, stems, diarization, object detection) | `apps/api/app/services/model_gateway.py` | Keep and split/rename into the fine-grained taxonomy; re-export old names while callers move. |
-| `ModelRoute` with id, capability, adapter, model, revision, priority, pricing, `explicitly_free`, enabled state, endpoint host and budget feature | `model_gateway.py` | Keep as the execution engine model; extend with timeout, GPU/CPU requirement, limits, strategy, scope, revision opt-in, pricing status, hard cap and model metadata. |
-| `ModelGateway.invoke` route filtering and priority fallback | `model_gateway.py` | Keep. Change operation mapping and make post-submit async failures non-fallback. |
-| `required_route_id` and `required_model_revision` | `model_gateway.py` | Keep and use for status calls; add a persisted immutable route snapshot for jobs. |
-| In-memory and Redis budget ledgers | `model_gateway.py` | Keep. Add operation/test scopes and per-route hard-cap accounting. |
-| In-memory and Redis circuit stores | `model_gateway.py` | Keep. Add read-only state/last-transition methods for admin health. |
-| `ProviderErrorInfo` and provider status classification | `apps/api/app/services/provider_resilience.py` | Keep; add `sent`/`commit_reached` to distinguish safe fallback from submit uncertainty. |
-| `PlanFeatureQuotaGuard` and `FEATURE_QUOTAS` | `apps/api/app/services/billing.py` | Keep; remove vendor-keyed quota categories and count by Motionly feature/category. |
-| `OperationsGatewayTelemetry` and `provider_slo_events` fields | `model_gateway.py`, migration `202607140010_provider_neutral_model_gateway.sql` | Keep; use route id/model revision/capability as stable labels and never store prompts/media/secrets. |
-| `OpenAICompatibleAdapter` and `AzureOpenAIAdapter` | `apps/api/app/services/model_adapters.py` | Keep behind registry adapter types; the former covers many compatible endpoints. |
-| Local adapters for visual manifest, audio intelligence, CLIP, matte and stems | `apps/api/app/services/model_domain_adapters.py` | Keep behind a neutral local adapter; remove vendor/model defaults from core settings. |
-| `route_catalog_fingerprint` and embedding cache-version logic | `model_gateway.py`, `model_domain_adapters.py` | Keep; route/model revision changes must invalidate caches. |
-| `ai_feature_report`, `gpu_worker_switches` and `degraded_capabilities` | `apps/api/app/services/ai_features.py`, `remote_visual.py` | Keep the behavior, replace implementation with registry-derived capability state. |
-| `_FILE` secret loading and media/ML subprocess environment allowlists | `apps/api/app/core/config.py`, `apps/api/app/services/subprocess_env.py`, `apps/worker/src/subprocess-env.mjs` | Generalize secret loading; preserve allowlists so generic secrets never reach ffmpeg/Chromium/Demucs unnecessarily. |
-| `require_admin` | `apps/api/app/api/admin.py` | Reuse for registry, secret, test-route and health APIs. |
-| `cryptography>=48.0.1,<49.0` | `apps/api/pyproject.toml` | Use existing dependency for AES-GCM; no encryption dependency is needed. |
-| `FakeAdapter` test doubles | `apps/api/tests/test_model_gateway.py`, `apps/api/tests/test_model_gateway_feature_budgets.py` | Promote into a shared no-network fake adapter/server. |
+| Existing component                                                                                                                                                | Actual location                                                                                                | Decision                                                                                                                                                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Typed requests/outputs (`PlanningRequest`, `TranscriptionRequest`, `VisionRequest`, `EmbeddingsRequest`, generation, matte, stems, diarization, object detection) | `apps/api/app/services/model_gateway.py`                                                                       | Keep and split/rename into the fine-grained taxonomy; re-export old names while callers move.                                                                        |
+| `ModelRoute` with id, capability, adapter, model, revision, priority, pricing, `explicitly_free`, enabled state, endpoint host and budget feature                 | `model_gateway.py`                                                                                             | Keep as the execution engine model; extend with timeout, GPU/CPU requirement, limits, strategy, scope, revision opt-in, pricing status, hard cap and model metadata. |
+| `ModelGateway.invoke` route filtering and priority fallback                                                                                                       | `model_gateway.py`                                                                                             | Keep. Change operation mapping and make post-submit async failures non-fallback.                                                                                     |
+| `required_route_id` and `required_model_revision`                                                                                                                 | `model_gateway.py`                                                                                             | Keep and use for status calls; add a persisted immutable route snapshot for jobs.                                                                                    |
+| In-memory and Redis budget ledgers                                                                                                                                | `model_gateway.py`                                                                                             | Keep. Add operation/test scopes and per-route hard-cap accounting.                                                                                                   |
+| In-memory and Redis circuit stores                                                                                                                                | `model_gateway.py`                                                                                             | Keep. Add read-only state/last-transition methods for admin health.                                                                                                  |
+| `ProviderErrorInfo` and provider status classification                                                                                                            | `apps/api/app/services/provider_resilience.py`                                                                 | Keep; add `sent`/`commit_reached` to distinguish safe fallback from submit uncertainty.                                                                              |
+| `PlanFeatureQuotaGuard` and `FEATURE_QUOTAS`                                                                                                                      | `apps/api/app/services/billing.py`                                                                             | Keep; remove vendor-keyed quota categories and count by Motionly feature/category.                                                                                   |
+| `OperationsGatewayTelemetry` and `provider_slo_events` fields                                                                                                     | `model_gateway.py`, migration `202607140010_provider_neutral_model_gateway.sql`                                | Keep; use route id/model revision/capability as stable labels and never store prompts/media/secrets.                                                                 |
+| `OpenAICompatibleAdapter` and `AzureOpenAIAdapter`                                                                                                                | `apps/api/app/services/model_adapters.py`                                                                      | Keep behind registry adapter types; the former covers many compatible endpoints.                                                                                     |
+| Local adapters for visual manifest, audio intelligence, CLIP, matte and stems                                                                                     | `apps/api/app/services/model_domain_adapters.py`                                                               | Keep behind a neutral local adapter; remove vendor/model defaults from core settings.                                                                                |
+| `route_catalog_fingerprint` and embedding cache-version logic                                                                                                     | `model_gateway.py`, `model_domain_adapters.py`                                                                 | Keep; route/model revision changes must invalidate caches.                                                                                                           |
+| `ai_feature_report`, `gpu_worker_switches` and `degraded_capabilities`                                                                                            | `apps/api/app/services/ai_features.py`, `remote_visual.py`                                                     | Keep the behavior, replace implementation with registry-derived capability state.                                                                                    |
+| `_FILE` secret loading and media/ML subprocess environment allowlists                                                                                             | `apps/api/app/core/config.py`, `apps/api/app/services/subprocess_env.py`, `apps/worker/src/subprocess-env.mjs` | Generalize secret loading; preserve allowlists so generic secrets never reach ffmpeg/Chromium/Demucs unnecessarily.                                                  |
+| `require_admin`                                                                                                                                                   | `apps/api/app/api/admin.py`                                                                                    | Reuse for registry, secret, test-route and health APIs.                                                                                                              |
+| `cryptography>=48.0.1,<49.0`                                                                                                                                      | `apps/api/pyproject.toml`                                                                                      | Use existing dependency for AES-GCM; no encryption dependency is needed.                                                                                             |
+| `FakeAdapter` test doubles                                                                                                                                        | `apps/api/tests/test_model_gateway.py`, `apps/api/tests/test_model_gateway_feature_budgets.py`                 | Promote into a shared no-network fake adapter/server.                                                                                                                |
 
 **Known gaps to implement:** encrypted DB secret store; declarative registry; admin API/UI; generic HTTP mapping; generic async submit/poll/artifact adapter; route-level timeout/health; per-route test action; license metadata; neutral required/optional startup validation; outbound GPU-agent design; and a final neutrality scanner.
 
@@ -237,22 +252,22 @@ The worktree already contains extensive unrelated modified and untracked files. 
 
 Capability ids are stable Motionly API concepts. Adapter details never leak into these schemas.
 
-| Capability | Motionly-owned request | Motionly-owned response | Execution notes |
-|---|---|---|---|
-| `planning.chat` | `PlanningRequest(messages, response_format, temperature, max_output_units)` | `PlanningOutput(content, raw_response, usage)` | Required at startup. |
-| `transcription.speech_to_text` | `TranscriptionRequest(audio, language, prompt, response_format)` | `TranscriptionOutput(text, language, confidence, words[])` | Required at startup; word timestamps remain in milliseconds. |
-| `vision.caption` | `VisionCaptionRequest(images, prompt, max_output_units, response_format)` | `VisionCaptionOutput(captions[], raw_response)` | Optional; may use a chat/vision strategy. |
-| `vision.object_detection` | `ObjectDetectionRequest(images, max_results)` | `ObjectDetectionOutput(detections-per-image[], raw_response)` | Boxes normalized to `[0,1]`. |
-| `embeddings.text` | `TextEmbeddingsRequest(inputs, dimensions?)` | `EmbeddingsOutput(vectors[])` | Text and image routes must declare the same `embedding_space` when consumers compare them. |
-| `embeddings.image` | `ImageEmbeddingsRequest(images, source_hints?)` | `EmbeddingsOutput(vectors[])` | Same vector-space rule. |
-| `audio.diarization` | `DiarizationRequest(audio, duration_s)` | `DiarizationOutput(segments[], speaker_count, raw_response)` | May be a blocking facade over an async provider job. |
-| `audio.emotion` | `AudioEmotionRequest(audio, window_ms, chunk_seconds, response_format)` | `AudioEmotionOutput(windows[], raw_response)` | Optional; generic audio-chat strategy. |
-| `audio.stem_separation` | `StemSeparationRequest(source, requested_stems, duration_s?)` | `StemSeparationOutput(stems: name → artifact)` | Must support local CPU and remote async. |
-| `image.generation` | `ImageGenerationRequest(prompt, input_images, size, count, response_format)` | `GenerationOutput(artifacts[], operation_id?)` | Optional; no current product caller is required for cutover. |
-| `video.generation.submit` | `VideoGenerationSubmitRequest(prompt, conditioning_image, duration_s, ratio, idempotency_key)` | `OperationHandle(provider_operation_id, route_id, model_revision)` | Optional; submit is never retried on another route after send uncertainty. |
-| `video.generation.status` | `VideoGenerationStatusRequest(provider_operation_id, original_route_id, original_revision)` | `OperationStatus(state, artifacts, error, usage)` | Poll remains bound to original route snapshot. |
-| `matte.segmentation` | `MatteSegmentationRequest(source, output, metadata, max_dimension)` | `MatteSegmentationOutput(fps, width, height, frame_count)` | Local CPU route is valid. |
-| `audio.sound_classification` | Existing sound-audio request normalized into a typed contract | Labels/scores and degradation status | Added to preserve current CPU YAMNet behavior. |
+| Capability                     | Motionly-owned request                                                                         | Motionly-owned response                                            | Execution notes                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `planning.chat`                | `PlanningRequest(messages, response_format, temperature, max_output_units)`                    | `PlanningOutput(content, raw_response, usage)`                     | Required at startup.                                                                       |
+| `transcription.speech_to_text` | `TranscriptionRequest(audio, language, prompt, response_format)`                               | `TranscriptionOutput(text, language, confidence, words[])`         | Required at startup; word timestamps remain in milliseconds.                               |
+| `vision.caption`               | `VisionCaptionRequest(images, prompt, max_output_units, response_format)`                      | `VisionCaptionOutput(captions[], raw_response)`                    | Optional; may use a chat/vision strategy.                                                  |
+| `vision.object_detection`      | `ObjectDetectionRequest(images, max_results)`                                                  | `ObjectDetectionOutput(detections-per-image[], raw_response)`      | Boxes normalized to `[0,1]`.                                                               |
+| `embeddings.text`              | `TextEmbeddingsRequest(inputs, dimensions?)`                                                   | `EmbeddingsOutput(vectors[])`                                      | Text and image routes must declare the same `embedding_space` when consumers compare them. |
+| `embeddings.image`             | `ImageEmbeddingsRequest(images, source_hints?)`                                                | `EmbeddingsOutput(vectors[])`                                      | Same vector-space rule.                                                                    |
+| `audio.diarization`            | `DiarizationRequest(audio, duration_s)`                                                        | `DiarizationOutput(segments[], speaker_count, raw_response)`       | May be a blocking facade over an async provider job.                                       |
+| `audio.emotion`                | `AudioEmotionRequest(audio, window_ms, chunk_seconds, response_format)`                        | `AudioEmotionOutput(windows[], raw_response)`                      | Optional; generic audio-chat strategy.                                                     |
+| `audio.stem_separation`        | `StemSeparationRequest(source, requested_stems, duration_s?)`                                  | `StemSeparationOutput(stems: name → artifact)`                     | Must support local CPU and remote async.                                                   |
+| `image.generation`             | `ImageGenerationRequest(prompt, input_images, size, count, response_format)`                   | `GenerationOutput(artifacts[], operation_id?)`                     | Optional; no current product caller is required for cutover.                               |
+| `video.generation.submit`      | `VideoGenerationSubmitRequest(prompt, conditioning_image, duration_s, ratio, idempotency_key)` | `OperationHandle(provider_operation_id, route_id, model_revision)` | Optional; submit is never retried on another route after send uncertainty.                 |
+| `video.generation.status`      | `VideoGenerationStatusRequest(provider_operation_id, original_route_id, original_revision)`    | `OperationStatus(state, artifacts, error, usage)`                  | Poll remains bound to original route snapshot.                                             |
+| `matte.segmentation`           | `MatteSegmentationRequest(source, output, metadata, max_dimension)`                            | `MatteSegmentationOutput(fps, width, height, frame_count)`         | Local CPU route is valid.                                                                  |
+| `audio.sound_classification`   | Existing sound-audio request normalized into a typed contract                                  | Labels/scores and degradation status                               | Added to preserve current CPU YAMNet behavior.                                             |
 
 `vision.video_manifest` and `audio.intelligence` remain orchestration/pipeline concepts. They call the fine-grained capabilities rather than becoming provider routes themselves.
 
@@ -375,17 +390,17 @@ Each rule produces either an **error** (the route is invalid) or a **warning** (
 
 **Route locality.** A route is **self-hosted** when its adapter type is `local` or `agent_pool`, or its adapter declares `network: private`. Every other route is **remote/hosted**.
 
-| Rule | Self-hosted / local routes | Remote / hosted routes |
-|---|---|---|
-| Required capabilities | `planning.chat` and `transcription.speech_to_text` each need at least one valid enabled route, or startup fails | Same |
-| Revision | An immutable pin is required: SHA-256, `==version`, a date, `vN` or a commit hash. `latest`, floating aliases and `provider-managed` are errors | A pinned revision; or `revision: provider-managed` with `allow_provider_managed_revision: true`, which logs warning `revision_provider_managed`. These are errors: `provider-managed` without the flag, `latest`, other floating aliases, and a revision equal to the model id |
-| Licence and commercial use | Required; missing is an error. A non-commercial licence is a warning, or an error when `AI_BLOCK_NONCOMMERCIAL=true` | Optional; missing is a warning |
-| Data-processor metadata | Not required | Missing is a warning in dev and an error in production (`APP_ENV=production`) |
-| Auth | `auth: none` is allowed | Auth with a secret reference is required |
-| Pricing | Priced, or `explicitly_free: true` | Priced; or `explicitly_free: true`; or `pricing.status: unknown` with a hard cap. A zero price without `explicitly_free` is an error |
-| Free planning route | Allowed | Error in production |
-| Fake adapter | Error in production | Error in production |
-| GPU requirement | `requires_gpu` routes are dropped when `GPU_WORKERS_ENABLED=false` | Not applicable |
+| Rule                       | Self-hosted / local routes                                                                                                                      | Remote / hosted routes                                                                                                                                                                                                                                                         |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Required capabilities      | `planning.chat` and `transcription.speech_to_text` each need at least one valid enabled route, or startup fails                                 | Same                                                                                                                                                                                                                                                                           |
+| Revision                   | An immutable pin is required: SHA-256, `==version`, a date, `vN` or a commit hash. `latest`, floating aliases and `provider-managed` are errors | A pinned revision; or `revision: provider-managed` with `allow_provider_managed_revision: true`, which logs warning `revision_provider_managed`. These are errors: `provider-managed` without the flag, `latest`, other floating aliases, and a revision equal to the model id |
+| Licence and commercial use | Required; missing is an error. A non-commercial licence is a warning, or an error when `AI_BLOCK_NONCOMMERCIAL=true`                            | Optional; missing is a warning                                                                                                                                                                                                                                                 |
+| Data-processor metadata    | Not required                                                                                                                                    | Missing is a warning in dev and an error in production (`APP_ENV=production`)                                                                                                                                                                                                  |
+| Auth                       | `auth: none` is allowed                                                                                                                         | Auth with a secret reference is required                                                                                                                                                                                                                                       |
+| Pricing                    | Priced, or `explicitly_free: true`                                                                                                              | Priced; or `explicitly_free: true`; or `pricing.status: unknown` with a hard cap. A zero price without `explicitly_free` is an error                                                                                                                                           |
+| Free planning route        | Allowed                                                                                                                                         | Error in production                                                                                                                                                                                                                                                            |
+| Fake adapter               | Error in production                                                                                                                             | Error in production                                                                                                                                                                                                                                                            |
+| GPU requirement            | `requires_gpu` routes are dropped when `GPU_WORKERS_ENABLED=false`                                                                              | Not applicable                                                                                                                                                                                                                                                                 |
 
 **Current code to change.** `ModelRoute.__post_init__` raises for any revision that fails `is_immutable_model_revision`, and that function explicitly rejects `provider-managed` (`apps/api/app/services/model_gateway.py`, around lines 607 and 1854). Task 4 moves the revision rule into the registry validator, which knows route locality. The engine then accepts `provider-managed` only on routes that carry the opt-in flag.
 
@@ -456,21 +471,21 @@ Non-commercial licences produce a warning and an admin badge (an error with `AI_
 
 Tier 1 ships a **minimal mapping slice**. It contains only what object detection, diarization and stem separation need for parity (Task 17). Planning, transcription, image generation, captions, voice emotion and embeddings need no mapping: they use `openai_compatible` with the closed options below, or `azure_openai`, `local` or `fake`. Everything beyond the slice is Tier 3 (Task 28).
 
-| Capability | `openai_compatible` alone | Needs `generic_http` | Needs `async_job` | Local option | Tier |
-|---|---|---|---|---|---|
-| `planning.chat` | Yes: `chat/completions` | No | No | Future private endpoint | 1 |
-| `transcription.speech_to_text` | Yes: `audio/transcriptions` with `verbose_json` and word timestamps | Only for non-compatible APIs (Task 28) | No | Future private endpoint | 1 |
-| `matte.segmentation` | No | No | No | MediaPipe on CPU | 1 (Task 14) |
-| `audio.sound_classification` | No | No | No | YAMNet TFLite on CPU | 1 (Task 14) |
-| `vision.object_detection` | No: no standard request | Yes: Tier 1 slice | No | No | 1 (Tasks 15, 17) |
-| `audio.diarization` | No: no standard request | Sync APIs: Tier 1 slice | Async APIs: Tier 1 slice, blocking mode | GPU model; transcript heuristic fallback | 1 (Tasks 15, 16B, 17) |
-| `audio.stem_separation` | No | No | Yes: Tier 1 slice, blocking mode | Demucs on CPU | 1 (Tasks 14, 16B, 17) |
-| `video.generation.submit` / `.status` | No: no standard request | No | Yes: Tier 1 slice, blocking mode | No | 1 if the provider fits the slice; otherwise Tier 3 (Task 28) |
-| `image.generation` | Yes: `images/generations` | No | No | No | Route type available from Tier 1; no product caller |
-| `vision.caption` | Yes: chat with image parts and Motionly's prompt | Only for non-compatible APIs (Task 28) | No | GPU models only | 2 |
-| `audio.emotion` | Yes: chat with `input_audio`; the route must use an audio-input model | No | No | GPU model only | 2 |
-| `embeddings.text` | Yes: `/embeddings` | Only for other request shapes (Task 28) | No | CLIP, GPU registry only | 2 |
-| `embeddings.image` | Yes, with `embeddings_input_style: typed_objects` | Only for other request shapes (Task 28) | No | CLIP, GPU registry only | 2 |
+| Capability                            | `openai_compatible` alone                                             | Needs `generic_http`                    | Needs `async_job`                       | Local option                             | Tier                                                         |
+| ------------------------------------- | --------------------------------------------------------------------- | --------------------------------------- | --------------------------------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| `planning.chat`                       | Yes: `chat/completions`                                               | No                                      | No                                      | Future private endpoint                  | 1                                                            |
+| `transcription.speech_to_text`        | Yes: `audio/transcriptions` with `verbose_json` and word timestamps   | Only for non-compatible APIs (Task 28)  | No                                      | Future private endpoint                  | 1                                                            |
+| `matte.segmentation`                  | No                                                                    | No                                      | No                                      | MediaPipe on CPU                         | 1 (Task 14)                                                  |
+| `audio.sound_classification`          | No                                                                    | No                                      | No                                      | YAMNet TFLite on CPU                     | 1 (Task 14)                                                  |
+| `vision.object_detection`             | No: no standard request                                               | Yes: Tier 1 slice                       | No                                      | No                                       | 1 (Tasks 15, 17)                                             |
+| `audio.diarization`                   | No: no standard request                                               | Sync APIs: Tier 1 slice                 | Async APIs: Tier 1 slice, blocking mode | GPU model; transcript heuristic fallback | 1 (Tasks 15, 16B, 17)                                        |
+| `audio.stem_separation`               | No                                                                    | No                                      | Yes: Tier 1 slice, blocking mode        | Demucs on CPU                            | 1 (Tasks 14, 16B, 17)                                        |
+| `video.generation.submit` / `.status` | No: no standard request                                               | No                                      | Yes: Tier 1 slice, blocking mode        | No                                       | 1 if the provider fits the slice; otherwise Tier 3 (Task 28) |
+| `image.generation`                    | Yes: `images/generations`                                             | No                                      | No                                      | No                                       | Route type available from Tier 1; no product caller          |
+| `vision.caption`                      | Yes: chat with image parts and Motionly's prompt                      | Only for non-compatible APIs (Task 28)  | No                                      | GPU models only                          | 2                                                            |
+| `audio.emotion`                       | Yes: chat with `input_audio`; the route must use an audio-input model | No                                      | No                                      | GPU model only                           | 2                                                            |
+| `embeddings.text`                     | Yes: `/embeddings`                                                    | Only for other request shapes (Task 28) | No                                      | CLIP, GPU registry only                  | 2                                                            |
+| `embeddings.image`                    | Yes, with `embeddings_input_style: typed_objects`                     | Only for other request shapes (Task 28) | No                                      | CLIP, GPU registry only                  | 2                                                            |
 
 **Closed `openai_compatible` options.** These are data, not templates:
 
@@ -493,6 +508,7 @@ Value forms:
    - `response.*`: the current response only
 
    Path segments are `key`, `[n]`, `[*]` and `{vars.<name>}`, which looks up a key named by a variable (for example a status keyed by the job id).
+
 3. `{"$fn": "<name>", "args": [...]}` calls one of the functions below.
 4. `{"$map": {"over": "<path>", "each": <value>}}` maps over a list, bounded by the route's `limits.max_batch`. `item.*` refers to the current element.
 5. Placeholders inside request paths only, for example `/jobs/{vars.job_id}`. Values are percent-encoded. Scheme, host and port can never be templated.
@@ -500,17 +516,17 @@ Value forms:
 
 Allowed functions (the complete list):
 
-| Function | Purpose |
-|---|---|
-| `base64(bytes)` | Base64-encode request bytes |
-| `data_url(bytes)` | `data:<sniffed image MIME>;base64,…`; unknown formats are rejected |
-| `uuid()` | Random UUID for idempotency keys |
-| `concat(a, b, …)` | Join string literals and values; used only to build opaque identifiers such as `media://motionly-<uuid>` |
-| `to_int(x)` | Integer conversion; failure is a malformed response |
-| `to_float(x)` | Float conversion; failure is a malformed response |
-| `to_ms(seconds)` | Seconds to integer milliseconds |
-| `clamp01(x)` | Clamp to `[0, 1]` |
-| `default(x, fallback)` | Use `fallback` when `x` is missing or null |
+| Function               | Purpose                                                                                                  |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| `base64(bytes)`        | Base64-encode request bytes                                                                              |
+| `data_url(bytes)`      | `data:<sniffed image MIME>;base64,…`; unknown formats are rejected                                       |
+| `uuid()`               | Random UUID for idempotency keys                                                                         |
+| `concat(a, b, …)`      | Join string literals and values; used only to build opaque identifiers such as `media://motionly-<uuid>` |
+| `to_int(x)`            | Integer conversion; failure is a malformed response                                                      |
+| `to_float(x)`          | Float conversion; failure is a malformed response                                                        |
+| `to_ms(seconds)`       | Seconds to integer milliseconds                                                                          |
+| `clamp01(x)`           | Clamp to `[0, 1]`                                                                                        |
+| `default(x, fallback)` | Use `fallback` when `x` is missing or null                                                               |
 
 **`generic_http` mapping, Tier 1 slice (Task 15):** one JSON request per call, with an optional pre-request input transform.
 
@@ -567,13 +583,13 @@ Any other extension requires a plan change.
 
 **Grammar freeze (revision 4).** Every element of the slice above came from a parity need. Several of them were added one at a time, each with its own justification: `concat`, the `vars` initializer, `{vars.<name>}` path segments, `require: https`, `tolerate_retryable`, `item_error_codes`, `label_aliases`, `force_https` and `input_transform.audio`. Elements added one at a time like this are how a mapping language turns into a programming language. So the slice is frozen as this inventory:
 
-| Group | Elements | Count |
-|---|---|---|
-| Value forms | JSON literal; `$ref` (roots `input`, `params`, `vars`, `response`, `item`; segments `key`, `[n]`, `[*]`, `{vars.<name>}`); `$fn`; `$map` (`over`, `each`); request-path placeholders; the `vars` block | 6 |
-| Functions | `base64`, `data_url`, `uuid`, `concat`, `to_int`, `to_float`, `to_ms`, `clamp01`, `default` | 9 |
-| `generic_http` keys | `request` (`method`, `path`, `body`); `items`; `aligned_to_input`; per-field output paths (`fields`); `box_format` (`vertices_norm`, `xywh_norm`); `item_error`; `item_error_codes` (`rejected`, `unavailable`); `error_map` (`rejected`, `unavailable`, `auth`, `quota`, `malformed`); `usage` (`count_items`, `count_ok_items`) | 9 |
-| `async_job` keys | `steps` with `method`, `path`, `url` (`auth: none` only), `capture`, `require` (`https`), `body` (JSON or `input.file`), `auth` (`adapter`, `none`); `commit`; `poll` with `method`, `path`, `body`, `status`, `status_map` (`running`, `succeeded`, `failed`, `retryable_failed`, with `billable` and `fallback`), `tolerate_retryable`, `interval_s`, `backoff` (`factor`, `max_interval_s`), `max_wait_s`; `result` (`items`, `fields`); `artifacts` with `items`, `name`, `url`, `name_map`, `required`, `max_bytes`, `allowed_hosts`, `force_https`, `auth: none`; `cleanup` (requests with `method`, `path`, `body`) | 6 |
-| Route options | `input_transform.audio` (`codec`, `sample_rate`, `channels`); `upload_filename`; `label_aliases` | 3 |
+| Group               | Elements                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Count |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| Value forms         | JSON literal; `$ref` (roots `input`, `params`, `vars`, `response`, `item`; segments `key`, `[n]`, `[*]`, `{vars.<name>}`); `$fn`; `$map` (`over`, `each`); request-path placeholders; the `vars` block                                                                                                                                                                                                                                                                                                                                                                                                                     | 6     |
+| Functions           | `base64`, `data_url`, `uuid`, `concat`, `to_int`, `to_float`, `to_ms`, `clamp01`, `default`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 9     |
+| `generic_http` keys | `request` (`method`, `path`, `body`); `items`; `aligned_to_input`; per-field output paths (`fields`); `box_format` (`vertices_norm`, `xywh_norm`); `item_error`; `item_error_codes` (`rejected`, `unavailable`); `error_map` (`rejected`, `unavailable`, `auth`, `quota`, `malformed`); `usage` (`count_items`, `count_ok_items`)                                                                                                                                                                                                                                                                                          | 9     |
+| `async_job` keys    | `steps` with `method`, `path`, `url` (`auth: none` only), `capture`, `require` (`https`), `body` (JSON or `input.file`), `auth` (`adapter`, `none`); `commit`; `poll` with `method`, `path`, `body`, `status`, `status_map` (`running`, `succeeded`, `failed`, `retryable_failed`, with `billable` and `fallback`), `tolerate_retryable`, `interval_s`, `backoff` (`factor`, `max_interval_s`), `max_wait_s`; `result` (`items`, `fields`); `artifacts` with `items`, `name`, `url`, `name_map`, `required`, `max_bytes`, `allowed_hosts`, `force_https`, `auth: none`; `cleanup` (requests with `method`, `path`, `body`) | 6     |
+| Route options       | `input_transform.audio` (`codec`, `sample_rate`, `channels`); `upload_filename`; `label_aliases`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | 3     |
 
 The rules:
 
@@ -587,14 +603,14 @@ The rules:
 4. Removing an element also goes through a plan revision, because routes may depend on it.
 5. Task 28's Tier 3 extensions joined this inventory when Task 28 landed (2026-10-25), as these rows. The freeze test pins them in a separate Tier 3 block:
 
-| Group (Tier 3) | Elements | Count |
-|---|---|---|
-| Value forms | `$multipart` (parts with `value`, `file`, `filename`, `content_type`) | 1 |
-| `generic_http` keys | `output` (`object_detection`, `transcription`, `caption`, `text_embeddings`, `image_embeddings`); `usage_path`; `time_unit` | 3 |
-| Box formats | `xyxy_norm`, `xyxy_px` | 2 |
-| `usage` modes | `response_path` | 1 |
-| `async_job` keys | `mode` (`blocking`, `non_blocking`) | 1 |
-| Typed output fields | transcription (`text`, `language`, `words`, `word`, `start`, `end`, `confidence`); caption (`caption`); embeddings (`vectors`, `vector`) | 3 |
+| Group (Tier 3)      | Elements                                                                                                                                 | Count |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| Value forms         | `$multipart` (parts with `value`, `file`, `filename`, `content_type`)                                                                    | 1     |
+| `generic_http` keys | `output` (`object_detection`, `transcription`, `caption`, `text_embeddings`, `image_embeddings`); `usage_path`; `time_unit`              | 3     |
+| Box formats         | `xyxy_norm`, `xyxy_px`                                                                                                                   | 2     |
+| `usage` modes       | `response_path`                                                                                                                          | 1     |
+| `async_job` keys    | `mode` (`blocking`, `non_blocking`)                                                                                                      | 1     |
+| Typed output fields | transcription (`text`, `language`, `words`, `word`, `start`, `end`, `confidence`); caption (`caption`); embeddings (`vectors`, `vector`) | 3     |
 
 `xyxy_px` reads image dimensions from the image headers (PNG, JPEG, WebP, GIF) in the normalizer. That is code, not grammar.
 
@@ -604,39 +620,98 @@ A route's `mapping` object takes one of these two shapes. The route's adapter ty
 
 ```json
 {
-  "request": { "method": "POST", "path": "/v1/detect", "body": { "...": "value forms" } },
+  "request": {
+    "method": "POST",
+    "path": "/v1/detect",
+    "body": { "...": "value forms" }
+  },
   "items": "response.results",
   "aligned_to_input": true,
-  "fields": { "detections": "objects", "label": "name", "score": "score", "box": "box" },
+  "fields": {
+    "detections": "objects",
+    "label": "name",
+    "score": "score",
+    "box": "box"
+  },
   "box_format": "vertices_norm",
   "item_error": "error.code",
   "item_error_codes": { "3": "rejected" },
-  "error_map": { "400": "rejected", "401": "auth", "403": "auth", "429": "quota" },
+  "error_map": {
+    "400": "rejected",
+    "401": "auth",
+    "403": "auth",
+    "429": "quota"
+  },
   "usage": "count_ok_items"
 }
 ```
 
 ```json
 {
-  "vars": { "name": { "$fn": "concat", "args": ["media://motionly-", { "$fn": "uuid", "args": [] }] } },
+  "vars": {
+    "name": {
+      "$fn": "concat",
+      "args": ["media://motionly-", { "$fn": "uuid", "args": [] }]
+    }
+  },
   "steps": [
-    { "method": "POST", "path": "/uploads", "body": { "name": { "$ref": "vars.name" } },
-      "capture": { "upload_url": "response.url" }, "require": { "upload_url": "https" } },
-    { "method": "PUT", "url": "vars.upload_url", "auth": "none", "body": "input.file" },
-    { "method": "POST", "path": "/jobs", "body": { "name": { "$ref": "vars.name" } },
-      "capture": { "job_id": "response.id" }, "commit": true }
+    {
+      "method": "POST",
+      "path": "/uploads",
+      "body": { "name": { "$ref": "vars.name" } },
+      "capture": { "upload_url": "response.url" },
+      "require": { "upload_url": "https" }
+    },
+    {
+      "method": "PUT",
+      "url": "vars.upload_url",
+      "auth": "none",
+      "body": "input.file"
+    },
+    {
+      "method": "POST",
+      "path": "/jobs",
+      "body": { "name": { "$ref": "vars.name" } },
+      "capture": { "job_id": "response.id" },
+      "commit": true
+    }
   ],
-  "poll": { "method": "GET", "path": "/jobs/{vars.job_id}", "status": "response.status",
-    "status_map": { "running": { "state": "running" }, "done": { "state": "succeeded" },
-      "failed": { "state": "failed", "billable": false, "fallback": false } },
-    "tolerate_retryable": true, "interval_s": 5, "backoff": { "factor": 1.5, "max_interval_s": 30 },
-    "max_wait_s": 900 },
-  "result": { "items": "response.output.segments", "fields": { "...": "value forms" } },
-  "artifacts": { "items": "response.tracks", "name": "type", "url": "url",
-    "name_map": { "a": "vocals", "b": "no_vocals" }, "required": ["vocals", "no_vocals"],
-    "max_bytes": 2147483648, "allowed_hosts": ["files.example.invalid"], "force_https": true,
-    "auth": "none" },
-  "cleanup": [ { "method": "POST", "path": "/delete", "body": { "id": { "$ref": "vars.job_id" } } } ]
+  "poll": {
+    "method": "GET",
+    "path": "/jobs/{vars.job_id}",
+    "status": "response.status",
+    "status_map": {
+      "running": { "state": "running" },
+      "done": { "state": "succeeded" },
+      "failed": { "state": "failed", "billable": false, "fallback": false }
+    },
+    "tolerate_retryable": true,
+    "interval_s": 5,
+    "backoff": { "factor": 1.5, "max_interval_s": 30 },
+    "max_wait_s": 900
+  },
+  "result": {
+    "items": "response.output.segments",
+    "fields": { "...": "value forms" }
+  },
+  "artifacts": {
+    "items": "response.tracks",
+    "name": "type",
+    "url": "url",
+    "name_map": { "a": "vocals", "b": "no_vocals" },
+    "required": ["vocals", "no_vocals"],
+    "max_bytes": 2147483648,
+    "allowed_hosts": ["files.example.invalid"],
+    "force_https": true,
+    "auth": "none"
+  },
+  "cleanup": [
+    {
+      "method": "POST",
+      "path": "/delete",
+      "body": { "id": { "$ref": "vars.job_id" } }
+    }
+  ]
 }
 ```
 
@@ -719,21 +794,21 @@ The operator supplies the models: every option is a registry route. Users choose
 
 The baseline uses remote routes where the current packaged CPU path is insufficient and local CPU routes where they already exist.
 
-| Capability | Remote-only/CPU execution today | Cheapest viable route type | Graceful no-route behavior | GPU or remote required? |
-|---|---|---|---|---|
-| `planning.chat` | Remote chat API; a private CPU llama.cpp-compatible endpoint can be added later | `openai_compatible` | Startup fails because required | Yes in the current packaged baseline; private CPU endpoint can remove the remote dependency later |
-| `transcription.speech_to_text` | Remote multipart STT route; current non-GPU topology already expects remote transcription | `openai_compatible` | Startup fails because required | Yes in current baseline; CPU local inference is a future adapter route |
-| `vision.caption` | Remote vision/chat route | `openai_compatible` or `generic_http` | Visual manifest marks captions unavailable/degraded; editing continues with transcript/CPU signals | Remote or a future CPU/GPU local model |
-| `vision.object_detection` | Any remote detection API through a `generic_http` template (Tier 1) | `generic_http` | Empty detections; visual analysis lists `objects: unavailable:not_configured` in `degraded_capabilities` and editing continues | Remote today; a CPU route could be added later |
-| `embeddings.text` | Remote embeddings or local CPU CLIP if the worker image is configured for it | Local CPU route is free; otherwise `openai_compatible` | B-roll ranking falls back to lexical matching | No if CPU CLIP is installed; otherwise remote |
-| `embeddings.image` | Remote image embeddings or local CPU CLIP | Same embedding-space route as text | Keyframe/stock vector enrichment is skipped | No if CPU CLIP is installed; otherwise remote |
-| `audio.diarization` | Any remote diarization API through a `generic_http` or `async_job` template (Tier 1); the local pyannote path is not in the CPU-only image | `async_job` (blocking) or `generic_http` | Heuristic speaker labels from the transcript (`heuristic_single_speaker_v1`), marked degraded | Remote or a future CPU local model |
-| `audio.emotion` | Remote audio-chat route; local wav2vec2 remains a GPU/local route unless separately packaged for CPU | `openai_compatible` with audio input | Empty emotion windows; transcript remains usable | Remote or local model runtime |
-| `audio.stem_separation` | Demucs on CPU (slower), or any remote stems API through an `async_job` template (Tier 1) | Local CPU `local` route (free); `async_job` for remote | No stem control: the editor's stem action is disabled with an unavailable message, the Audio tab keeps the full mix, renders are unchanged | No, CPU works |
-| `image.generation` | Remote image API | `openai_compatible` or `generic_http` | Feature is unavailable/hidden; no current required caller fails | Remote today |
-| `video.generation.submit/status` | Remote async generation API through `async_job`: Tier 1 if the provider fits the blocking slice, otherwise Tier 3 (Task 28) | `async_job` | Generated B-roll control disabled with clear unavailable state | Remote today |
-| `matte.segmentation` | MediaPipe CPU route via the existing CPU vision topology | Local CPU `local` route | Matte-dependent background effects are disabled | No, CPU works |
-| `audio.sound_classification` | Existing YAMNet TFLite CPU path | Local CPU `local` route | Labels are empty and audio intelligence is degraded | No, CPU works |
+| Capability                       | Remote-only/CPU execution today                                                                                                            | Cheapest viable route type                             | Graceful no-route behavior                                                                                                                 | GPU or remote required?                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `planning.chat`                  | Remote chat API; a private CPU llama.cpp-compatible endpoint can be added later                                                            | `openai_compatible`                                    | Startup fails because required                                                                                                             | Yes in the current packaged baseline; private CPU endpoint can remove the remote dependency later |
+| `transcription.speech_to_text`   | Remote multipart STT route; current non-GPU topology already expects remote transcription                                                  | `openai_compatible`                                    | Startup fails because required                                                                                                             | Yes in current baseline; CPU local inference is a future adapter route                            |
+| `vision.caption`                 | Remote vision/chat route                                                                                                                   | `openai_compatible` or `generic_http`                  | Visual manifest marks captions unavailable/degraded; editing continues with transcript/CPU signals                                         | Remote or a future CPU/GPU local model                                                            |
+| `vision.object_detection`        | Any remote detection API through a `generic_http` template (Tier 1)                                                                        | `generic_http`                                         | Empty detections; visual analysis lists `objects: unavailable:not_configured` in `degraded_capabilities` and editing continues             | Remote today; a CPU route could be added later                                                    |
+| `embeddings.text`                | Remote embeddings or local CPU CLIP if the worker image is configured for it                                                               | Local CPU route is free; otherwise `openai_compatible` | B-roll ranking falls back to lexical matching                                                                                              | No if CPU CLIP is installed; otherwise remote                                                     |
+| `embeddings.image`               | Remote image embeddings or local CPU CLIP                                                                                                  | Same embedding-space route as text                     | Keyframe/stock vector enrichment is skipped                                                                                                | No if CPU CLIP is installed; otherwise remote                                                     |
+| `audio.diarization`              | Any remote diarization API through a `generic_http` or `async_job` template (Tier 1); the local pyannote path is not in the CPU-only image | `async_job` (blocking) or `generic_http`               | Heuristic speaker labels from the transcript (`heuristic_single_speaker_v1`), marked degraded                                              | Remote or a future CPU local model                                                                |
+| `audio.emotion`                  | Remote audio-chat route; local wav2vec2 remains a GPU/local route unless separately packaged for CPU                                       | `openai_compatible` with audio input                   | Empty emotion windows; transcript remains usable                                                                                           | Remote or local model runtime                                                                     |
+| `audio.stem_separation`          | Demucs on CPU (slower), or any remote stems API through an `async_job` template (Tier 1)                                                   | Local CPU `local` route (free); `async_job` for remote | No stem control: the editor's stem action is disabled with an unavailable message, the Audio tab keeps the full mix, renders are unchanged | No, CPU works                                                                                     |
+| `image.generation`               | Remote image API                                                                                                                           | `openai_compatible` or `generic_http`                  | Feature is unavailable/hidden; no current required caller fails                                                                            | Remote today                                                                                      |
+| `video.generation.submit/status` | Remote async generation API through `async_job`: Tier 1 if the provider fits the blocking slice, otherwise Tier 3 (Task 28)                | `async_job`                                            | Generated B-roll control disabled with clear unavailable state                                                                             | Remote today                                                                                      |
+| `matte.segmentation`             | MediaPipe CPU route via the existing CPU vision topology                                                                                   | Local CPU `local` route                                | Matte-dependent background effects are disabled                                                                                            | No, CPU works                                                                                     |
+| `audio.sound_classification`     | Existing YAMNet TFLite CPU path                                                                                                            | Local CPU `local` route                                | Labels are empty and audio intelligence is degraded                                                                                        | No, CPU works                                                                                     |
 
 A no-GPU production acceptance profile must configure remote planning and transcription, and must either configure remote or CPU routes for any feature the operator wants enabled. No GPU Compose service may be required by startup validation when `GPU_WORKERS_ENABLED=false`.
 
@@ -759,63 +834,63 @@ Task numbers are kept from revision 1 so earlier references stay valid. Split ta
 
 ### 4.0 Tiers, execution order and gates
 
-| Tier | Execution order | Exit gate |
-|---|---|---|
+| Tier             | Execution order                                                                                            | Exit gate               |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------- |
 | **Tier 1 — MVP** | 1 → 2 → 3 → 4 → 5 → 6 → (6L, Path A only) → 7 → 8 → 9A → 10 → 14 → 15 → 16A → 16B → 17 → 18 → 19 → 26 → 27 | Tier 1 gate, end of 4.1 |
-| **Tier 2** | 9B → 11 → 12 → 29 → 30 → 31 → 32 → 33 | Tier 2 gate, end of 4.2 |
-| **Tier 3** | 28 → 20 → 21 → 22 → 23 → 24 → 25 | Tier 3 gate, end of 4.3 |
+| **Tier 2**       | 9B → 11 → 12 → 29 → 30 → 31 → 32 → 33                                                                      | Tier 2 gate, end of 4.2 |
+| **Tier 3**       | 28 → 20 → 21 → 22 → 23 → 24 → 25                                                                           | Tier 3 gate, end of 4.3 |
 
 Changes to the requested tier lists, each made to fix a dependency:
 
-| Change | Reason |
-|---|---|
-| Task 9 split: 9A (privacy metadata) to Tier 1, 9B (UI gating) to Tier 2 | Task 27 scans `apps/web`, and the privacy page hard-codes five processor names |
-| Task 14 added to Tier 1 | Task 27 needs local model ids out of code; Task 14 also keeps CPU matte, stems and sound classification available without a GPU |
-| Task 16 split: 16A (operation records, async gateway rules, migration) and 16B (`async_job` slice), both in Tier 1 | Task 18 needs 16A; Task 17 needs 16B |
-| Tasks 15 (minimum slice), 16B (minimum slice, blocking mode) and 17 (required) added to Tier 1, before Task 19 | Task 19 deletes the three vendor adapters, and Task 27 (in Tier 1) requires them gone. Task 17 must therefore pass in Tier 1, so its prerequisites 15 and 16B must be in Tier 1 too |
-| The rest of the old Tasks 15 and 16B becomes Task 28 in Tier 3 | Keeps Tier 1 to what the three ports need |
-| Task 6 keeps only the runtime; the translator becomes Task 6L | Path B, the confirmed path, has no translator (Section 0.4) |
-| Task 19 depends on Task 17 | The vendor files are deleted only after the conformance and differential tests pass |
+| Change                                                                                                             | Reason                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Task 9 split: 9A (privacy metadata) to Tier 1, 9B (UI gating) to Tier 2                                            | Task 27 scans `apps/web`, and the privacy page hard-codes five processor names                                                                                                      |
+| Task 14 added to Tier 1                                                                                            | Task 27 needs local model ids out of code; Task 14 also keeps CPU matte, stems and sound classification available without a GPU                                                     |
+| Task 16 split: 16A (operation records, async gateway rules, migration) and 16B (`async_job` slice), both in Tier 1 | Task 18 needs 16A; Task 17 needs 16B                                                                                                                                                |
+| Tasks 15 (minimum slice), 16B (minimum slice, blocking mode) and 17 (required) added to Tier 1, before Task 19     | Task 19 deletes the three vendor adapters, and Task 27 (in Tier 1) requires them gone. Task 17 must therefore pass in Tier 1, so its prerequisites 15 and 16B must be in Tier 1 too |
+| The rest of the old Tasks 15 and 16B becomes Task 28 in Tier 3                                                     | Keeps Tier 1 to what the three ports need                                                                                                                                           |
+| Task 6 keeps only the runtime; the translator becomes Task 6L                                                      | Path B, the confirmed path, has no translator (Section 0.4)                                                                                                                         |
+| Task 19 depends on Task 17                                                                                         | The vendor files are deleted only after the conformance and differential tests pass                                                                                                 |
 
 **Tier 1 scope change (revision 3).** Revision 2 said Tier 1 ships no mapping language. Tier 1 now includes the minimum `generic_http` and `async_job` slices (Section 2.10) and the three template ports, so roughly three more tasks of work. There is no smaller option: Task 27, the Tier 1 exit check, requires the vendor files to be gone, and Task 19 may delete them only after Task 17 passes. The only way to make Tier 1 smaller is to move Tasks 19 and 27 out of it.
 
-| Task | Tier | Depends on |
-|---|---|---|
-| 1 | 1 | — |
-| 2 | 1 | 1 |
-| 3 | 1 | 1 |
-| 4 | 1 | 3 |
-| 5 | 1 | 4 |
-| 6 | 1 | 3, 4, 5 |
-| 6L (Path A only) | 1 | 6 |
-| 7 | 1 | 6 |
-| 8 | 1 | 7 |
-| 9A | 1 | 4, 8 |
-| 10 | 1 | 6, 7, 8 |
-| 14 | 1 | 4, 6, 7 |
-| 15 | 1 | 4, 5, 7, 8 |
-| 16A | 1 | 3, 6, 7 |
-| 16B | 1 | 15, 16A |
-| 17 | 1 | 8, 14, 15, 16B |
-| 18 | 1 | 8, 10, 16A |
-| 19 | 1 | 7, 8, 10, 14, 17, 18 |
-| 26 | 1 | 9A, 10, 14, 19 |
-| 27 | 1 | 2, 9A, 26 |
-| 9B | 2 | 8, 18 |
-| 11 | 2 | 6, 8, 9A, 19 |
-| 12 | 2 | 6, 8, 9A, 14, 19 |
-| 29 | 2 | 4, 8 |
-| 30 | 2 | 10, 29 |
-| 31 | 2 | 10, 16A, 29, 30 |
-| 32 | 2 | 9B, 30, 31 |
-| 33 | 2 | 14 |
-| 28 | 3 | 15, 16B |
-| 20 | 3 | 4, 5, 7, 16A |
-| 21 | 3 | 16A, 20 |
-| 22 | 3 | 8, 20, 21 |
-| 23 | 3 | 9B, 21, 22 |
-| 24 | 3 | 7, 22 |
-| 25 | 3 | 5, 7, 22 |
+| Task             | Tier | Depends on           |
+| ---------------- | ---- | -------------------- |
+| 1                | 1    | —                    |
+| 2                | 1    | 1                    |
+| 3                | 1    | 1                    |
+| 4                | 1    | 3                    |
+| 5                | 1    | 4                    |
+| 6                | 1    | 3, 4, 5              |
+| 6L (Path A only) | 1    | 6                    |
+| 7                | 1    | 6                    |
+| 8                | 1    | 7                    |
+| 9A               | 1    | 4, 8                 |
+| 10               | 1    | 6, 7, 8              |
+| 14               | 1    | 4, 6, 7              |
+| 15               | 1    | 4, 5, 7, 8           |
+| 16A              | 1    | 3, 6, 7              |
+| 16B              | 1    | 15, 16A              |
+| 17               | 1    | 8, 14, 15, 16B       |
+| 18               | 1    | 8, 10, 16A           |
+| 19               | 1    | 7, 8, 10, 14, 17, 18 |
+| 26               | 1    | 9A, 10, 14, 19       |
+| 27               | 1    | 2, 9A, 26            |
+| 9B               | 2    | 8, 18                |
+| 11               | 2    | 6, 8, 9A, 19         |
+| 12               | 2    | 6, 8, 9A, 14, 19     |
+| 29               | 2    | 4, 8                 |
+| 30               | 2    | 10, 29               |
+| 31               | 2    | 10, 16A, 29, 30      |
+| 32               | 2    | 9B, 30, 31           |
+| 33               | 2    | 14                   |
+| 28               | 3    | 15, 16B              |
+| 20               | 3    | 4, 5, 7, 16A         |
+| 21               | 3    | 16A, 20              |
+| 22               | 3    | 8, 20, 21            |
+| 23               | 3    | 9B, 21, 22           |
+| 24               | 3    | 7, 22                |
+| 25               | 3    | 5, 7, 22             |
 
 **Path A ordering exception:** Tasks 11 and 12 move before Task 19 and drop their dependency on it, so live users keep those features.
 
@@ -1125,7 +1200,7 @@ Protocol terms such as `openai_compatible` are not findings.
 - **Temporary flag:** `AI_QUOTA_SCOPE=feature|provider`, default `feature`.
   - `provider` restores today's per-provider counting; the new planning quota is still recorded but not enforced.
   - Both modes read the same rows, because each row stores both the provider label and the category, so switching is lossless.
-  - Remove the flag at the Tier 2 gate, and no earlier than one full billing period after Tier 1 ships.
+  - Remove the flag at the Tier 2 gate, and no earlier than one full billing period after Tier 1 ships. Tier 1 shipped on 2026-10-25, so the flag must be kept until at least 2026-11-25 and may not be removed before that date.
 - **Settings:** `QUOTA_OPENROUTER_*` becomes `QUOTA_PLANNING_*` (Path A: Task 6L maps the old names for one release).
 
 **Implementation:** production planning and transcription go only through the gateway. The planning route records token usage through the quota guard.
@@ -1311,27 +1386,27 @@ The tag is the reference implementation for the differential tests and the live 
 
 **Behavior parity** (each row has at least one conformance scenario and one differential scenario):
 
-| Capability | Behavior today | Where it is kept |
-|---|---|---|
-| Objects | At most 16 images and about 9 MiB per request; the enricher splits batches | Route `limits.max_batch` and `limits.max_request_bytes` (Task 15) |
-| Objects | One response per image, in order; a length mismatch is a malformed response | `aligned_to_input: true` |
-| Objects | Per-image errors: if all images fail, codes 3, 9 and 11 mean rejected (not billed, no fallback) and other codes mean unavailable (retryable, not billed); if some fail, those images get no detections and a warning is logged | `item_error` and `item_error_codes` |
-| Objects | Only images that were annotated are billed | `usage: count_ok_items` |
-| Objects | Box from normalized vertices; a missing coordinate counts as 0; clamp to 0–1 | `box_format: vertices_norm` and the normalizer |
-| Objects | Labels lowercased and cut to 80 characters, with an alias map to COCO names; sorted by score; top N | Object-detection normalizer and `label_aliases` |
-| Diarization | Random opaque media name; no user or file name is shared | `vars` block with `concat` and `uuid()` |
-| Diarization | Reserve an upload, require an HTTPS upload URL, upload without the API key | Steps with `capture`, `require: https` and `auth: none` |
-| Diarization | Submit; from here the job is billable and must not fall back | `commit: true` |
-| Diarization | Poll: running states continue; failed and cancelled are not billed; unknown states are malformed; transient errors are tolerated; 5 s growing ×1.5 to 30 s; 900 s limit | `poll` with status map, `tolerate_retryable`, backoff and `max_wait_s` |
-| Diarization | Seconds to milliseconds; segments sorted | `to_ms` and the diarization normalizer |
-| Diarization | 20-second minimum billing | Route `pricing.minimum_billable_units` |
-| Stems | Audio-only, 44.1 kHz stereo FLAC before upload; video never leaves the worker | `input_transform.audio` |
-| Stems | Raw upload with a neutral filename | `body: input.file` and `upload_filename` |
-| Stems | Split request with the pinned model settings and an idempotency key | Route `params` and `uuid()` |
-| Stems | POST polling; status keyed by the task id; server errors retryable but no fallback | Path segment `{vars.task_id}` and status map with `fallback: false` |
-| Stems | Both tracks required and mapped to `vocals`/`no_vocals`; each under 2 GB and non-empty; provider host only; HTTPS forced; no key sent | `artifacts` with `name_map`, `required`, `max_bytes`, `allowed_hosts`, `force_https`, `auth: none` |
-| Stems | The uploaded source is always deleted at the provider afterwards, best effort | `cleanup` |
-| Stems | Local temp folder removed on any failure | Adapter-managed temp directory |
+| Capability  | Behavior today                                                                                                                                                                                                                 | Where it is kept                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Objects     | At most 16 images and about 9 MiB per request; the enricher splits batches                                                                                                                                                     | Route `limits.max_batch` and `limits.max_request_bytes` (Task 15)                                  |
+| Objects     | One response per image, in order; a length mismatch is a malformed response                                                                                                                                                    | `aligned_to_input: true`                                                                           |
+| Objects     | Per-image errors: if all images fail, codes 3, 9 and 11 mean rejected (not billed, no fallback) and other codes mean unavailable (retryable, not billed); if some fail, those images get no detections and a warning is logged | `item_error` and `item_error_codes`                                                                |
+| Objects     | Only images that were annotated are billed                                                                                                                                                                                     | `usage: count_ok_items`                                                                            |
+| Objects     | Box from normalized vertices; a missing coordinate counts as 0; clamp to 0–1                                                                                                                                                   | `box_format: vertices_norm` and the normalizer                                                     |
+| Objects     | Labels lowercased and cut to 80 characters, with an alias map to COCO names; sorted by score; top N                                                                                                                            | Object-detection normalizer and `label_aliases`                                                    |
+| Diarization | Random opaque media name; no user or file name is shared                                                                                                                                                                       | `vars` block with `concat` and `uuid()`                                                            |
+| Diarization | Reserve an upload, require an HTTPS upload URL, upload without the API key                                                                                                                                                     | Steps with `capture`, `require: https` and `auth: none`                                            |
+| Diarization | Submit; from here the job is billable and must not fall back                                                                                                                                                                   | `commit: true`                                                                                     |
+| Diarization | Poll: running states continue; failed and cancelled are not billed; unknown states are malformed; transient errors are tolerated; 5 s growing ×1.5 to 30 s; 900 s limit                                                        | `poll` with status map, `tolerate_retryable`, backoff and `max_wait_s`                             |
+| Diarization | Seconds to milliseconds; segments sorted                                                                                                                                                                                       | `to_ms` and the diarization normalizer                                                             |
+| Diarization | 20-second minimum billing                                                                                                                                                                                                      | Route `pricing.minimum_billable_units`                                                             |
+| Stems       | Audio-only, 44.1 kHz stereo FLAC before upload; video never leaves the worker                                                                                                                                                  | `input_transform.audio`                                                                            |
+| Stems       | Raw upload with a neutral filename                                                                                                                                                                                             | `body: input.file` and `upload_filename`                                                           |
+| Stems       | Split request with the pinned model settings and an idempotency key                                                                                                                                                            | Route `params` and `uuid()`                                                                        |
+| Stems       | POST polling; status keyed by the task id; server errors retryable but no fallback                                                                                                                                             | Path segment `{vars.task_id}` and status map with `fallback: false`                                |
+| Stems       | Both tracks required and mapped to `vocals`/`no_vocals`; each under 2 GB and non-empty; provider host only; HTTPS forced; no key sent                                                                                          | `artifacts` with `name_map`, `required`, `max_bytes`, `allowed_hosts`, `force_https`, `auth: none` |
+| Stems       | The uploaded source is always deleted at the provider afterwards, best effort                                                                                                                                                  | `cleanup`                                                                                          |
+| Stems       | Local temp folder removed on any failure                                                                                                                                                                                       | Adapter-managed temp directory                                                                     |
 
 **One improvement:** the stems integration creates a new idempotency key on every attempt today, so a worker retry can submit and pay twice. The ported version records the job (Task 16A), so a retry resumes polling.
 
@@ -1375,16 +1450,17 @@ The tag is the reference implementation for the differential tests and the live 
   - fixture diff (`none` or `updated`).
 
   Never record secrets, signed URLs or media.
+
 - **Authorization:** the run is manual, operator-approved and paid, and never runs in CI (invariant 9). Its spend is limited by a `budget.hard_cap` of a few requests on the example route.
 - **Revision 5:** the operator deferred this run. It no longer gates Task 19 or the Tier 1 gate, and runs whenever the operator authorizes it.
 
 **Rollout/back-compat:** Path B has no cached analyses or stored provenance to protect. The example routes therefore use **neutral** route ids, adapter ids and revision strings. The old exception that kept vendor-named ids is dropped.
 
-| Capability | Route id today | Revision today | Example route id | Example adapter id | Example revision |
-|---|---|---|---|---|---|
-| Objects | `google-vision-objects` | `google-vision-objects-builtin-stable-2026-10-22` | `vision-objects-remote` | `vision-objects-endpoint` | `builtin-stable-2026-10-22` |
-| Diarization | `pyannoteai-diarization` | `pyannoteai-precision-v3` | `audio-diarization-remote` | `audio-diarization-endpoint` | `precision-v3` |
-| Stems | `lalal-stem-separation` | `lalal-andromeda-v6` | `audio-stems-remote` | `audio-stems-endpoint` | `andromeda-v6` |
+| Capability  | Route id today           | Revision today                                    | Example route id           | Example adapter id           | Example revision            |
+| ----------- | ------------------------ | ------------------------------------------------- | -------------------------- | ---------------------------- | --------------------------- |
+| Objects     | `google-vision-objects`  | `google-vision-objects-builtin-stable-2026-10-22` | `vision-objects-remote`    | `vision-objects-endpoint`    | `builtin-stable-2026-10-22` |
+| Diarization | `pyannoteai-diarization` | `pyannoteai-precision-v3`                         | `audio-diarization-remote` | `audio-diarization-endpoint` | `precision-v3`              |
+| Stems       | `lalal-stem-separation`  | `lalal-andromeda-v6`                              | `audio-stems-remote`       | `audio-stems-endpoint`       | `andromeda-v6`              |
 
 - Vendor and model names may appear in an example's `model_id`, `base_url`, provider label, `data_processor` and `allowed_hosts` fields, which are configuration data. They may not appear in id or revision fields; the Task 2 scanner checks this.
 - After cutover, visual analyses and stem provenance are computed again under the new ids, and no migration is needed.
@@ -1486,6 +1562,7 @@ The Git tag `archive/pre-neutral-inference` (Task 17, Step 0) must exist on the 
    - **NEW (proposed) in Task 17:** `apps/api/tests/test_inference_template_differential.py`, because the adapters it compares against are gone.
 
    The three capabilities keep working through their template routes (Task 17), and `GatewayObjectsEnricher` stays.
+
 3. **Captions, voice emotion and remote embeddings wiring (rebuilt in Tier 2).** Delete:
    - the vendor factories `_openrouter_captions_enricher` and `_jina_keyframe_embeddings_enricher`, and the vendor switches in `remote_visual_enricher_versions` (`remote_visual.py`);
    - `ensure_openrouter_zdr_adapter`, `register_openrouter_audio_emotion_route`, `register_openrouter_vision_captions_route` and `register_jina_embedding_routes` (`model_domain_adapters.py`);
@@ -1494,6 +1571,7 @@ The Git tag `archive/pre-neutral-inference` (Task 17, Step 0) must exist on the 
    - their settings.
 
    Keep the Motionly-owned prompt, schema and parsing code: `GatewayCaptionsEnricher`, `GatewayKeyframeEmbeddingsEnricher`, and the window parsing in `remote_audio_emotion.py`. Rename `OpenRouterAudioEmotionProvider` to a neutral name. Tasks 11 and 12 wire these to capability routes.
+
 4. **Leftovers from Task 10.** Delete the endpoint constants `GROQ_TRANSCRIPTION_ENDPOINT` and `OPENROUTER_CHAT_COMPLETIONS_ENDPOINT` in `apps/api/app/main.py`, and the vendor key-prefix redaction rules in `apps/api/app/core/logging.py` and `apps/worker/src/log-redaction.mjs`.
 
 **Migration:** none beyond Task 18.
@@ -1607,6 +1685,8 @@ All of these must pass before Tier 2 starts:
 
 #### 9B. Gate the UI on capabilities
 
+**Progress (2026-10-25):** done. The editor controls read `/capabilities` through `apps/web/hooks/useCapabilities.ts` and `lib/capabilities.ts`; unavailable routes render a keyboard-accessible, `aria-disabled` "unavailable" state with visible text and no colour-only signal (`apps/web/tests/task9b-capability-gating.test.mjs`, `task31-capability-screens.test.mjs`).
+
 **Dependencies:** 8, 18.
 
 **Files:**
@@ -1630,6 +1710,8 @@ All of these must pass before Tier 2 starts:
 **Acceptance criteria:** disabling a route changes the corresponding control to a clear unavailable state without breaking unrelated editing, and no vendor-specific provider name is needed in the UI.
 
 #### 11. Captions and voice emotion on generic chat routes
+
+**Progress (2026-10-25):** done. Captions and voice emotion run on any configured `openai_compatible` route with Motionly-owned prompts/parsing, and degrade (not fail) when unconfigured (`apps/api/tests/test_remote_visual_captions.py`, `test_remote_audio_emotion.py`, `test_remote_visual_e2e.py`, `test_captions.py`).
 
 **Dependencies:** 6, 8, 9A, 19.
 
@@ -1658,6 +1740,8 @@ All of these must pass before Tier 2 starts:
 
 #### 12. Text and image embeddings on configured routes
 
+**Progress (2026-10-25):** done. Text and image embeddings are added through route config with a declared `embedding_space`; with no route, B-roll falls back to lexical ranking and `/capabilities` reports unavailable (`apps/api/tests/test_model_adapters_embeddings.py`, `test_task13_captions_embed.py`).
+
 **Dependencies:** 6, 8, 9A, 14, 19.
 
 **Files:**
@@ -1683,6 +1767,8 @@ All of these must pass before Tier 2 starts:
 **Acceptance criteria:** text and image embeddings are added through route config only. With no route, B-roll uses lexical ranking and `/capabilities` reports `unavailable`.
 
 #### 29. Offering metadata on routes
+
+**Progress (2026-10-25):** done. The `offering` block is validated strictly (`offering_invalid`, `offering_multiple_defaults`, `offering_plan_unknown`, `offering_quota_weight_out_of_range`, and the `offering_default_not_selectable` warning); two selectable planning routes yield two options with one operator default (`apps/api/tests/test_inference_offerings.py`).
 
 **Dependencies:** 4, 8.
 
@@ -1710,6 +1796,8 @@ The plan keys come from the existing billing plan enum.
 **Acceptance criteria:** a registry with two selectable planning routes yields two options and one operator default, and every offering error is reported with its code.
 
 #### 30. Model choice settings, permissions and API
+
+**Progress (2026-10-25):** done. `GET /model-options`, `GET`/`PUT /workspaces/current/model-settings` and `GET`/`PUT`/`DELETE /projects/{project_id}/model-settings` enforce the owner/admin/member matrix, plan gating, `allowed_option_ids` and lock, with a dangling option falling back by reason and no base URL/secret/model id in responses (`apps/api/tests/test_model_choice_api.py`, `test_model_choice_service.py`). The six routes are classified in `tests/test_role_route_inventory.py`.
 
 **Dependencies:** 10, 29.
 
@@ -1746,6 +1834,8 @@ The plan keys come from the existing billing plan enum.
 
 #### 31. Gateway honors the choice
 
+**Progress (2026-10-25):** done. The gateway resolves the preferred route, applies the served route's quota weight, keeps caches/provenance route-affine, and falls back to the operator default with a `fallback_reason`; an async submit after send does not fall back (`apps/api/tests/test_model_choice_gateway.py`). Client AI-result responses now carry a display-only `model_choice` (`requested_option_id`, `served_option_id`, `choice_source`, `fallback_reason`) on `EditPlanResponse` and `ProposalProvenance`, read via `ModelChoiceResult.from_payload()` which drops any base URL, secret ref or provider model id (`apps/api/tests/test_plan_model_choice.py`, 5 tests).
+
 **Dependencies:** 10, 16A, 29, 30.
 
 **Files:**
@@ -1772,6 +1862,8 @@ The plan keys come from the existing billing plan enum.
 
 #### 32. Model picker UI
 
+**Progress (2026-10-25):** done. A workspace "AI models" settings section (`apps/web/app/(app)/account/ai-models/`) and an in-editor `ProjectModelPicker` present one accessible radio group per capability with display name, description, labels and quota weight ("uses N× quota"); plan-locked options show "Requires <plan>" via `aria-disabled`, a locked workspace renders read-only with its reason, and a `ModelChoiceNotice` shows the fallback when `model_choice.fallback_reason` is set — all keyboard-operable, never colour alone, with no secret or URL in client payloads (`apps/web/tests/task32-model-picker.test.mjs`).
+
 **Dependencies:** 9B, 30, 31.
 
 **Files:**
@@ -1794,6 +1886,8 @@ The plan keys come from the existing billing plan enum.
 **Acceptance criteria:** a member picks a model for a project and the next AI result for that project reports the chosen option. An owner's lock makes the project picker read-only.
 
 #### 33. Local GPU and self-hosted models without one-model coupling
+
+**Progress (2026-10-25):** done. No AI capability depends on a model id in code: matte and sound classification resolve their model identity from their registry route, and the stale `test_create_app_worker_switches_sound_to_tflite` was rewritten to assert the constructed classifier's `model_sha256` equals the route's `weights_sha256` from a temp `AI_REGISTRY_FILE` (`apps/api/tests/test_cpu_vision_image.py`). The generic `transformers_pipeline` runner, GPU profiles, prefetch and self-hosted examples remain (`test_inference_local_routes.py`, `test_transformers_pipeline_runner.py`).
 
 **Dependencies:** 14.
 
@@ -1827,7 +1921,7 @@ The plan keys come from the existing billing plan enum.
 
 1. Every optional-capability control in the editor shows a clear, keyboard-accessible unavailable state driven by `/capabilities` (Task 9B).
 2. Captions, voice emotion, and text and image embeddings work through any configured `openai_compatible` route, and degrade instead of failing when unconfigured.
-3. `AI_QUOTA_SCOPE` is removed if one full billing period has passed since Tier 1 shipped; otherwise its removal date is recorded.
+3. `AI_QUOTA_SCOPE` is removed if one full billing period has passed since Tier 1 shipped; otherwise its removal date is recorded. AI_QUOTA_SCOPE must be kept until at least 2026-11-25 — one full monthly billing period after Tier 1 shipped on 2026-10-25 — and may not be removed before that date.
 4. The neutrality scan still reports zero findings.
 5. Users choose a model per capability for the whole workspace and per project, within their plan and the workspace's restrictions. A failed or disallowed choice falls back to the operator default with a visible reason, and quota usage follows the served route's weight (Tasks 29–32).
 6. No AI capability depends on a model id in code. Local GPU routes and self-hosted endpoints are configured by registry only (Task 33).
@@ -1835,6 +1929,8 @@ The plan keys come from the existing billing plan enum.
 ### 4.3 Tier 3 — generic adapters, database registry, admin tooling and more protocols
 
 #### 28. `generic_http` and `async_job` — Tier 3 extensions
+
+**Progress (2026-10-25):** done for the non-blocking video path. The inference polling engine and `async_job` adapter drive video generation in non-blocking mode (reserve capability `video.generation.submit`), and `scale.py`'s generated-b-roll path submits once, re-enqueues delayed polls, resumes after a worker restart without resubmitting, is idempotent, and on an after-send timeout returns `SUBMIT_UNKNOWN` without contacting a second route (`apps/api/tests/test_video_generation_nonblocking.py`, 6 tests; `test_generated_broll_operations.py::test_non_blocking_video_route_submits_once_and_renders`). The other Section 2.10 Tier 3 extensions (multipart, `xyxy_*` box formats, `usage`-path, non-OpenAI typed transcription) are covered by `test_generic_http_tier3.py`. A live stack run is not performed here.
 
 **Dependencies:** 15, 16B.
 
@@ -1870,6 +1966,8 @@ The plan keys come from the existing billing plan enum.
 The transitional adapter is removed from the plan. Path B has nothing to keep running during a transition, and Task 17 ports the three integrations directly to templates.
 
 #### 20. DB registry and AES-256-GCM encrypted global secrets
+
+**Progress (2026-10-25):** done in code. The database registry store encrypts secrets with AES-256-GCM (round-trip, wrong-AAD rejection, KEK rotation), keeps no plaintext column, enforces global scope and the policy rules (local model without licence, `provider-managed` without the flag, unknown pricing without a cap), and bumps the version atomically (`apps/api/tests/test_inference_registry_store.py`, `test_inference_secret_store.py`, `test_inference_registry.py`). RLS/worker-grant and reload-without-restart behaviour against a live database (pgTAP) is **not run here** (needs Supabase).
 
 **Dependencies:** 4, 5, 7, 16A.
 
@@ -1910,6 +2008,8 @@ Apply RLS, service-role access and restricted worker grants, following the exist
 
 #### 21. Add admin inference registry API
 
+**Progress (2026-10-25):** done. CRUD + dry-run for adapters, models and routes (with each route's `offering`), write-only secret create/rotate/delete returning metadata only, route deletion refused while non-terminal operations reference it, validation-before-commit with the Section 2.7 warnings, admin-only with non-admin 403, and no secret in any response (`apps/api/tests/test_admin_inference_api.py`, `test_admin_inference_adapter_acceptance.py`). The routes are classified in `tests/test_role_route_inventory.py` (ADMIN_OPS).
+
 **Dependencies:** 16A, 20.
 
 **Files:**
@@ -1939,6 +2039,8 @@ Apply RLS, service-role access and restricted worker grants, following the exist
 **Acceptance criteria:** an operator can create a global secret, adapter, model and route through the API, sees only secret metadata afterwards, and can activate the route through a reload.
 
 #### 22. Add route test action and per-route health/circuit status
+
+**Progress (2026-10-25):** done. The admin route-test runs tiny typed samples with a per-test cost limit and reports schema validity, latency, usage, estimated/actual cost, error code and circuit state; a malformed response is reported as `schema_invalid`; paid async submits require explicit `allow_paid`; `CircuitStore.state()` is exposed on both stores (`apps/api/tests/test_inference_route_test.py`).
 
 **Dependencies:** 8, 20, 21.
 
@@ -1970,6 +2072,8 @@ Apply RLS, service-role access and restricted worker grants, following the exist
 
 #### 23. Add admin AI configuration UI
 
+**Progress (2026-10-25):** done. `apps/web/app/(app)/admin/ai/` adds the capability matrix, route health/circuit panel with Section 2.7 warning badges (visible text, never colour alone), keyboard-operable priority/fallback reorder, a route-test action with an explicit paid-async confirmation dialog, JSON record forms, write-only secret forms (values cleared after submit, metadata-only table), and focus-trapped delete confirmations; admin auth is enforced server-side and no secret value is held in browser state (`apps/web/tests/task23-admin-ai.test.mjs`, 13 tests). The admin pages are direct-URL only (this app has no admin nav menu). A live browser run is **not run here**.
+
 **Dependencies:** 9B, 21, 22.
 
 **Files:**
@@ -1999,6 +2103,8 @@ Apply RLS, service-role access and restricted worker grants, following the exist
 
 #### 24. Add Hugging Face endpoint adapter
 
+**Progress (2026-10-25):** done. The endpoint adapter supports text generation, vision/audio, text embeddings and pipeline responses through fixed typed mappings with Bearer secret refs and no vendor name in core; response normalization, timeout/auth/error classification and the route test are covered by fakes (`apps/api/tests/test_huggingface_endpoint_adapter.py`).
+
 **Dependencies:** 7, 22.
 
 **Files:** **NEW (proposed)** adapter module under the existing API service tree; registry examples; adapter tests.
@@ -2016,6 +2122,10 @@ Apply RLS, service-role access and restricted worker grants, following the exist
 **Acceptance criteria:** a registry-only Hugging Face route passes the admin route test and serves a feature call through fake contract fixtures.
 
 #### 25. Add AWS Bedrock adapter with IAM/SigV4
+
+**Progress (2026-10-25):** done. Converse/InvokeModel mappings run over a standard-library SigV4 auth strategy (no `botocore` dependency), verified against AWS's published SigV4 test vectors plus a fake Bedrock transport, credential refresh, auth failure and typed schema validation; the IAM path stores no static cloud key as an AI secret (`apps/api/tests/test_aws_bedrock_adapter.py`, `test_aws_sigv4.py`).
+
+**Amendment (2026-10-25):** a new `aws_access_key` auth type adds a static IAM-user key path for `aws_bedrock` adapters, alongside the existing IAM credential chain. The registry carries two refs — `access_key_id_ref` and `secret_ref` — each a `file:`/`bundle:` secret ref (validated by the shared `_validate_secret_ref`, so `env:` is rejected in production); the type is allowed only on `aws_bedrock` adapters and requires both refs, while `aws_bedrock` still accepts `auth: none`. The `IamCredentialChain` takes an optional injected `static_key_source` used **exclusively** when set (no env/ECS/IMDS fallback). It is resolved **lazily** on the first signed request — never at runtime-build time — then cached and re-read at most every 300 s so a rotated key is picked up without a restart. Lazy resolution is required because non-credentialed containers (cpu-ffmpeg, remotion, demucs) also build the full runtime via `create_app`: eager resolution would drop the Bedrock planning/transcription routes there, fail production startup, and change the catalog fingerprint. A missing/empty/unreadable key raises a credential error mapped to `ProviderCallFailure(provider_auth_failed, retryable=False, fallback_eligible=True, circuit_worthy=False, billable=False, sent=False)` with no HTTP request sent; values resolve through the `SecretResolver`, so they are registered with the log redactor and never appear in logs, exceptions or reprs (`apps/api/tests/test_aws_bedrock_static_keys.py`).
 
 **Dependencies:** 5, 7, 22.
 
@@ -2051,14 +2161,14 @@ Apply RLS, service-role access and restricted worker grants, following the exist
 
 All migrations are forward-only. Each one has a matching file in `supabase/tests/`, as `apps/api/tests/test_migration_contract_coverage.py` requires. Never edit an applied migration.
 
-| # | Tier / task | Migration | Path B (confirmed) | Path A (contingency) |
-|---|---|---|---|---|
-| M1 | Tier 1 / 10 | Index `cost_attribution_events(workspace_id, category, created_at desc)` | Same | Same |
-| M2 | Tier 1 / 16A | `inference_operations` table, RLS and worker grants | Same | Same |
-| M3 | Tier 1 / 18 | Add `generated` to `public.stock_provider` (its own migration) | Same | Same |
-| M4 | Tier 1 / 18 | Backfill providers and operation rows; replace old payload keys; `CHECK (provider <> 'runway')` | One-time rewrite; constraints added immediately | Backfill in Release N while keeping the old keys for dual-read; constraints in N+1 |
-| M5 | Tier 3 / 20 | Registry tables, encrypted secrets, version counter | Same | Same |
-| M6 | Tier 2 / 30 | `workspace_model_settings` and `project_model_settings` | Same | Same |
+| #   | Tier / task  | Migration                                                                                       | Path B (confirmed)                              | Path A (contingency)                                                               |
+| --- | ------------ | ----------------------------------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
+| M1  | Tier 1 / 10  | Index `cost_attribution_events(workspace_id, category, created_at desc)`                        | Same                                            | Same                                                                               |
+| M2  | Tier 1 / 16A | `inference_operations` table, RLS and worker grants                                             | Same                                            | Same                                                                               |
+| M3  | Tier 1 / 18  | Add `generated` to `public.stock_provider` (its own migration)                                  | Same                                            | Same                                                                               |
+| M4  | Tier 1 / 18  | Backfill providers and operation rows; replace old payload keys; `CHECK (provider <> 'runway')` | One-time rewrite; constraints added immediately | Backfill in Release N while keeping the old keys for dual-read; constraints in N+1 |
+| M5  | Tier 3 / 20  | Registry tables, encrypted secrets, version counter                                             | Same                                            | Same                                                                               |
+| M6  | Tier 2 / 30  | `workspace_model_settings` and `project_model_settings`                                         | Same                                            | Same                                                                               |
 
 - Tier 2 adds only M6 (revision 5), and Task 22 needs none because the existing `provider_slo_events` index covers it.
 - Take a database backup before M4 (procedure in `docs/backups-restore.md`).
@@ -2160,30 +2270,30 @@ Rollback: disable the database routes; the file registry keeps working.
 
 ## 8. Risks and mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Duplicate paid async submissions | Persist the operation before send; idempotency key; commit boundary; `submit_unknown`; polling on the original route; no fallback after send. |
-| Provider switch resets quota | Decision B-1 counts by feature; `AI_QUOTA_SCOPE=provider` is only a temporary stop-gap. |
-| Secret leakage through logs or UI | Secret references only; write-only endpoints; registration of exact values with the redactor; no request-body logging; fake-secret tests; AES-GCM for database secrets. |
-| Admin-configured URL SSRF | HTTPS and public-host validation; explicit private-network flag; IP and metadata-address blocking; artifact host allowlist; no template host override. |
-| Generic templates become a programming language | The capped grammar in Section 2.10, frozen as a numbered inventory; the grammar-freeze test fails on any code-only addition; any extension needs a plan change that explains why a fixed adapter rule or a normalizer cannot do the job. |
-| Fakes drift from the real provider APIs | One mandatory live run per ported capability, archived adapter and template side by side, before deletion (Task 17); live responses refresh the fixtures. |
-| In-flight route removed or edited | Immutable route snapshot; deletion refused while non-terminal operations exist; status calls use the snapshot. |
-| GPU-free boot accidentally requires a GPU | Route `requires_gpu`; capability startup validation; Compose contract test. |
-| Local model licence violation | Required licence and commercial-use flags with source URL and verification timestamp; optional block flag. |
-| Provider changes behavior or vectors under a `provider-managed` revision | Explicit opt-in and warning; `provider-managed` in cache keys; the reported model id in telemetry; pinning recommended for embeddings routes. |
-| Unknown-pricing route overspends | Hard cap in requests or units; `cost_unknown` telemetry; startup warning. |
-| Worker/API registry drift | Registry version and route catalog fingerprint in startup and heartbeat checks. |
-| Deleting untracked or uncommitted code loses it | Archive tag `archive/pre-neutral-inference` (Task 17, Step 0); Task 19 checks the tag before deleting. |
-| A ported capability behaves differently from the archived adapter | The parity table in Task 17, with a conformance scenario and a differential scenario per row; deletion is blocked until both pass. |
-| Tier 1 grows by three tasks | Accepted, because Task 27 requires the vendor files gone and Task 19 may delete them only after Task 17 passes; Task 28 holds everything beyond the minimum slice. |
-| Captions, voice emotion and remote embeddings unavailable between tiers | Accepted under Path B; Path A puts Tasks 11–12 before Task 19. |
-| Historical migration grep noise | The immutable migration report is separate from the strict active-source proof; new coupling is never hidden in that exception. |
-| Backfill races with old writers | Path A deploys neutral readers and writers first, then backfills, then removes old writers. |
-| A user's model choice mixes cached results across models | Cache keys and provenance include the served route and revision (Task 31). |
-| A pricier model drains a workspace's quota unexpectedly | `quota_weight` is shown in the picker (Task 32) and applied to the served route (Task 31). |
-| Local GPU support erodes during cleanup | Invariant 11: local runners, the GPU registry fragment, the GPU profiles and prefetch are never removed. |
-| Overly broad inference scope | Unrelated stock, payment, storage and rendering features stay out of this change, except for their existing inference references. |
+| Risk                                                                     | Mitigation                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Duplicate paid async submissions                                         | Persist the operation before send; idempotency key; commit boundary; `submit_unknown`; polling on the original route; no fallback after send.                                                                                            |
+| Provider switch resets quota                                             | Decision B-1 counts by feature; `AI_QUOTA_SCOPE=provider` is only a temporary stop-gap.                                                                                                                                                  |
+| Secret leakage through logs or UI                                        | Secret references only; write-only endpoints; registration of exact values with the redactor; no request-body logging; fake-secret tests; AES-GCM for database secrets.                                                                  |
+| Admin-configured URL SSRF                                                | HTTPS and public-host validation; explicit private-network flag; IP and metadata-address blocking; artifact host allowlist; no template host override.                                                                                   |
+| Generic templates become a programming language                          | The capped grammar in Section 2.10, frozen as a numbered inventory; the grammar-freeze test fails on any code-only addition; any extension needs a plan change that explains why a fixed adapter rule or a normalizer cannot do the job. |
+| Fakes drift from the real provider APIs                                  | One mandatory live run per ported capability, archived adapter and template side by side, before deletion (Task 17); live responses refresh the fixtures.                                                                                |
+| In-flight route removed or edited                                        | Immutable route snapshot; deletion refused while non-terminal operations exist; status calls use the snapshot.                                                                                                                           |
+| GPU-free boot accidentally requires a GPU                                | Route `requires_gpu`; capability startup validation; Compose contract test.                                                                                                                                                              |
+| Local model licence violation                                            | Required licence and commercial-use flags with source URL and verification timestamp; optional block flag.                                                                                                                               |
+| Provider changes behavior or vectors under a `provider-managed` revision | Explicit opt-in and warning; `provider-managed` in cache keys; the reported model id in telemetry; pinning recommended for embeddings routes.                                                                                            |
+| Unknown-pricing route overspends                                         | Hard cap in requests or units; `cost_unknown` telemetry; startup warning.                                                                                                                                                                |
+| Worker/API registry drift                                                | Registry version and route catalog fingerprint in startup and heartbeat checks.                                                                                                                                                          |
+| Deleting untracked or uncommitted code loses it                          | Archive tag `archive/pre-neutral-inference` (Task 17, Step 0); Task 19 checks the tag before deleting.                                                                                                                                   |
+| A ported capability behaves differently from the archived adapter        | The parity table in Task 17, with a conformance scenario and a differential scenario per row; deletion is blocked until both pass.                                                                                                       |
+| Tier 1 grows by three tasks                                              | Accepted, because Task 27 requires the vendor files gone and Task 19 may delete them only after Task 17 passes; Task 28 holds everything beyond the minimum slice.                                                                       |
+| Captions, voice emotion and remote embeddings unavailable between tiers  | Accepted under Path B; Path A puts Tasks 11–12 before Task 19.                                                                                                                                                                           |
+| Historical migration grep noise                                          | The immutable migration report is separate from the strict active-source proof; new coupling is never hidden in that exception.                                                                                                          |
+| Backfill races with old writers                                          | Path A deploys neutral readers and writers first, then backfills, then removes old writers.                                                                                                                                              |
+| A user's model choice mixes cached results across models                 | Cache keys and provenance include the served route and revision (Task 31).                                                                                                                                                               |
+| A pricier model drains a workspace's quota unexpectedly                  | `quota_weight` is shown in the picker (Task 32) and applied to the served route (Task 31).                                                                                                                                               |
+| Local GPU support erodes during cleanup                                  | Invariant 11: local runners, the GPU registry fragment, the GPU profiles and prefetch are never removed.                                                                                                                                 |
+| Overly broad inference scope                                             | Unrelated stock, payment, storage and rendering features stay out of this change, except for their existing inference references.                                                                                                        |
 
 ---
 

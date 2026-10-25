@@ -79,6 +79,10 @@ SECRET_FILE_NAMES = (
     # (plan Task 26); no vendor-named key file is mounted. A fixture/local-audit
     # deployment leaves it empty.
     "ai_secrets_bundle",
+    # Bedrock static keys (docs/aws), mounted only into the API and the workers
+    # that call a Bedrock route; a local-audit deployment leaves them empty.
+    "aws_inference_access_key_id",
+    "aws_inference_secret_access_key",
     "metrics_bearer_token",
     "temporal_ca_cert",
     "temporal_server_cert",
@@ -99,7 +103,9 @@ SECRET_FILE_NAMES = (
     "temporal_diagnostics_key",
     LOCAL_AUDIT_AUTHORIZATION_SECRET_NAME,
 )
-OPTIONAL_EMPTY_SECRET_FILES = frozenset({"ai_secrets_bundle"})
+OPTIONAL_EMPTY_SECRET_FILES = frozenset(
+    {"ai_secrets_bundle", "aws_inference_access_key_id", "aws_inference_secret_access_key"}
+)
 LOCAL_AUDIT_VOLUMES = (
     "motionly-media",
     "motionly-model-cache",

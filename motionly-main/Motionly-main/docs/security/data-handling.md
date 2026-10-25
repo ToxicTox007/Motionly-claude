@@ -8,6 +8,7 @@ Motionly does not hard-code its inference providers. The operator configures eve
 
 - **Production rule:** a remote route without `data_processor` metadata is invalid in production and is dropped at startup (plan Section 2.6). Self-hosted routes (`local` adapters or `network: private`) are not external processors and are not listed.
 - **Public list:** `GET /public/data-processors` returns one entry per distinct processor of the enabled remote routes, with display metadata only (no base URLs, model ids, route ids or secrets). The privacy page renders exactly this list.
+- **Cross-Region processing (AWS Bedrock deployment).** When the operator points the registry at Amazon Bedrock, some routes use cross-region (APAC) inference profiles. Requests and their results may be processed in any region of the profile's geography — Nova Pro/Lite (`apac.*`) across ap-northeast-1/2/3, ap-south-1, ap-southeast-1/2, and Bedrock Data Automation (`apac.data-automation-v1`) additionally across ap-south-2 and ap-southeast-4 — while the data stays **stored** only in the source region (ap-south-1). Titan text embeddings stay in ap-south-1 and video generation (Luma Ray 2) is processed and stored in us-west-2. Each affected route discloses this in its `data_processor.purpose` string, so the public list above reflects it.
 - **What each capability shares:**
 
 | Capability                                  | Data sent to the configured processor                                         |

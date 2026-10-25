@@ -516,6 +516,8 @@ services:
         temporal_ca_cert,
         temporal_api_cert,
         temporal_api_key,
+        aws_inference_access_key_id,
+        aws_inference_secret_access_key,
       ]
     depends_on:
       volume-permissions: { condition: service_completed_successfully }
@@ -746,7 +748,18 @@ services:
       start_period: 900s
     depends_on: *worker-depends-on
     volumes: *media-volumes
-    secrets: *worker-secrets
+    # Workers that call a Bedrock inference route also mount the AWS static
+    # keys; the registry's ``file:`` refs read them. Media-only workers keep
+    # *worker-secrets and get no AWS credentials.
+    secrets:
+      &inference-worker-secrets [
+        supabase_worker_key,
+        supabase_jwt_secret,
+        worker_api_token,
+        ai_secrets_bundle,
+        aws_inference_access_key_id,
+        aws_inference_secret_access_key,
+      ]
 
     networks: [app]
 
@@ -815,7 +828,7 @@ services:
     healthcheck: *worker-healthcheck
     depends_on: *worker-depends-on
     volumes: *media-volumes
-    secrets: *worker-secrets
+    secrets: *inference-worker-secrets
 
     networks: [app]
 
@@ -829,7 +842,7 @@ services:
     healthcheck: *worker-healthcheck
     depends_on: *worker-depends-on
     volumes: *media-volumes
-    secrets: *worker-secrets
+    secrets: *inference-worker-secrets
 
     networks: [app]
 
@@ -895,6 +908,16 @@ secrets:
   # vendor-named secret is mounted.
   ai_secrets_bundle:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/ai_secrets_bundle
+  # Static keys for a dedicated, narrowly scoped AWS IAM user (docs/aws), mounted
+  # ONLY into the API and the worker services that call a Bedrock inference route
+  # (via the &inference-worker-secrets anchor). The registry's
+  # ``file:aws_inference_access_key_id`` / ``file:aws_inference_secret_access_key``
+  # refs read them; they never appear as AWS_* environment variables. A
+  # deployment without Bedrock routes leaves the files empty.
+  aws_inference_access_key_id:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/aws_inference_access_key_id
+  aws_inference_secret_access_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/aws_inference_secret_access_key
   metrics_bearer_token:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/metrics_bearer_token
   # Origin guard (CloudFront custom header); previous is empty outside a rotation.

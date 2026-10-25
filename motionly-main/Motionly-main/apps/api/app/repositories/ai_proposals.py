@@ -513,6 +513,7 @@ class InMemoryAIProposalRepository:
                         if proposal.fallback_history_codes
                         else None
                     ),
+                    model_choice=proposal.provenance.model_choice,
                     cache_key=f"approved-proposal:{proposal.id}:{result_hash}",
                     schema_hash=PLANNER_SCHEMA_HASH,
                     latency_ms=proposal.cost.latency_ms,

@@ -57,7 +57,7 @@ from app.services.model_gateway import (
     ModelRoute,
     StemSeparationRequest,
     VideoGenerationSubmitRequest,
-    operation_for_request,
+    inference_capability_for_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ class PollTarget:
     adapter: AsyncJobAdapter
     route: ModelRoute
     config: AsyncJobRouteConfig
-    request: DiarizationRequest | StemSeparationRequest
+    request: NonBlockingRequest
 
 
 # A resolver maps an operation to its poll target, or ``None`` when the route is
@@ -132,7 +132,7 @@ class InferencePollingEngine:
         resolver: PollTargetResolver,
     ) -> None:
         self._operations = operations_repository
-        self._resolve = resolver
+        self._resolve_poll_target = resolver
 
     # -- submit -------------------------------------------------------------
     def submit(
@@ -163,7 +163,7 @@ class InferencePollingEngine:
         operation, created = self._operations.reserve(
             workspace_id=workspace_id,
             project_id=project_id,
-            capability=operation_for_request(target.request).value,
+            capability=inference_capability_for_request(target.request).value,
             idempotency_key=idempotency_key,
             route_id=route.route_id,
             model=route.model,
@@ -202,7 +202,7 @@ class InferencePollingEngine:
             # transient pending so a stray early poll simply retries.
             return PollResult(state=operation.state, pending=True, retry_after_s=0.0)
 
-        target = self._resolve(operation)
+        target = self._resolve_poll_target(operation)
         if target is None:
             raise RouteUnavailableError(
                 f"operation {operation_id} route {operation.provider_route_id!r} is unavailable"

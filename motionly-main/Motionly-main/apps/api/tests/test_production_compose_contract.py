@@ -61,6 +61,10 @@ SECRET_FILE_NAMES = (
     "worker_api_token",
     # One generic inference secrets bundle (plan Task 26); no vendor-named key.
     "ai_secrets_bundle",
+    # Bedrock static keys (docs/aws): mounted only into the API and the workers
+    # that call a Bedrock route; empty when no Bedrock route is configured.
+    "aws_inference_access_key_id",
+    "aws_inference_secret_access_key",
     "metrics_bearer_token",
     "edge_origin_verify",
     "edge_origin_verify_previous",

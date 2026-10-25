@@ -82,11 +82,14 @@ from app.services.model_gateway import (
     DiarizationOutput,
     DiarizationRequest,
     DiarizationSegmentOutput,
+    GeneratedArtifact,
+    GenerationOutput,
     ModelRequest,
     ModelRoute,
     ModelUsage,
     StemSeparationOutput,
     StemSeparationRequest,
+    VideoGenerationSubmitRequest,
     diarization_billable_seconds,
     inherited_call_context,
     operation_for_request,
@@ -108,6 +111,12 @@ ADAPTER_TYPE = "async_job"
 # A neutral temp-directory prefix (no vendor name). Task 17 adds this prefix to
 # the scale.py cleanup allowlist so a caller-handed stem directory is removed.
 ASYNC_JOB_TEMP_PREFIX = "motionly-async-stems-"
+
+# The request types the ``async_job`` adapter runs. Diarization and stems are the
+# Tier 1 blocking capabilities; ``VideoGenerationSubmitRequest`` is the Tier 3
+# non-blocking caller (plan Task 28). They are grouped so the submit/poll methods
+# accept any of them.
+AsyncJobRequest = DiarizationRequest | StemSeparationRequest | VideoGenerationSubmitRequest
 
 
 @dataclass(frozen=True)
@@ -238,6 +247,15 @@ class AsyncJobAdapter:
         if route_id in self._routes:
             raise ValueError(f"async_job route already configured: {route_id}")
         self._routes[route_id] = config
+
+    def route_config(self, route_id: str) -> AsyncJobRouteConfig | None:
+        """The configured mapping for ``route_id``, or ``None`` when absent.
+
+        A caller that needs to drive the non-blocking engine (plan Task 28)
+        reads the route config to check :meth:`is_non_blocking` and to build the
+        :class:`~app.services.inference_polling.PollTarget`.
+        """
+        return self._routes.get(route_id)
 
     def invoke(self, *, route: ModelRoute, request: ModelRequest) -> AdapterResult:
         config = self._routes.get(route.route_id)
@@ -388,16 +406,17 @@ class AsyncJobAdapter:
         self,
         *,
         route: ModelRoute,
-        request: DiarizationRequest | StemSeparationRequest,
+        request: AsyncJobRequest,
         config: AsyncJobRouteConfig,
         provider: str,
         operation: InferenceOperation,
-        upload_path: Path,
+        upload_path: Path | None,
         vars_state: dict[str, object],
     ) -> None:
         mapping = config.mapping
         steps = list(mapping["steps"])  # type: ignore[arg-type]
         vars_state.update(self._initial_vars(mapping, config, provider))
+        input_values = _request_input_values(request)
         committed = False
 
         with self._client() as client:
@@ -418,6 +437,7 @@ class AsyncJobAdapter:
                         provider=provider,
                         vars_state=vars_state,
                         upload_path=upload_path,
+                        input_values=input_values,
                     )
                 except ProviderCallFailure as exc:
                     self._on_step_failure(
@@ -493,9 +513,10 @@ class AsyncJobAdapter:
         config: AsyncJobRouteConfig,
         provider: str,
         vars_state: dict[str, object],
-        upload_path: Path,
+        upload_path: Path | None,
+        input_values: Mapping[str, object] | None = None,
     ) -> None:
-        ctx = self._ctx(vars_state, config.params)
+        ctx = self._ctx(vars_state, config.params, input_values)
         method = str(step["method"]).upper()
         auth_mode = str(step.get("auth", "adapter"))
         body_spec = step.get("body")
@@ -614,7 +635,7 @@ class AsyncJobAdapter:
         self,
         *,
         route: ModelRoute,
-        request: DiarizationRequest | StemSeparationRequest,
+        request: AsyncJobRequest,
         config: AsyncJobRouteConfig,
         operation: InferenceOperation,
     ) -> InferenceOperation:
@@ -650,7 +671,7 @@ class AsyncJobAdapter:
         self,
         *,
         route: ModelRoute,
-        request: DiarizationRequest | StemSeparationRequest,
+        request: AsyncJobRequest,
         config: AsyncJobRouteConfig,
         operation: InferenceOperation,
     ) -> AsyncPollOutcome:
@@ -796,13 +817,22 @@ class AsyncJobAdapter:
         self,
         *,
         route: ModelRoute,
-        request: DiarizationRequest | StemSeparationRequest,
+        request: AsyncJobRequest,
         config: AsyncJobRouteConfig,
         provider: str,
         final_response: object,
         vars_state: dict[str, object],
     ) -> AdapterResult:
         mapping = config.mapping
+        if isinstance(request, VideoGenerationSubmitRequest):
+            return self._build_video_result(
+                route=route,
+                request=request,
+                mapping=mapping,
+                provider=provider,
+                final_response=final_response,
+                vars_state=vars_state,
+            )
         if isinstance(request, DiarizationRequest):
             segments = self._parse_diarization(mapping, final_response, provider)
             return AdapterResult(
@@ -827,6 +857,54 @@ class AsyncJobAdapter:
         return AdapterResult(
             output=StemSeparationOutput(stems=stems),
             usage=ModelUsage(input_units=self._stem_units(route, request)),
+            usage_reported=True,
+        )
+
+    def _build_video_result(
+        self,
+        *,
+        route: ModelRoute,
+        request: VideoGenerationSubmitRequest,
+        mapping: Mapping[str, object],
+        provider: str,
+        final_response: object,
+        vars_state: dict[str, object],
+    ) -> AdapterResult:
+        """Build a ``GenerationOutput`` from the terminal video poll response.
+
+        A video route resolves one artifact URL from the mapping's ``result``
+        group (``items`` + ``fields.url``) and returns it as a
+        :class:`GenerationOutput`, the same typed output the blocking video path
+        emits. Unlike stems, the URL is NOT downloaded here: generated B-roll is
+        fetched by ``scale.py`` under its own SSRF policy, exactly as the blocking
+        path does, so the two paths write the artifact identically.
+        """
+        result = mapping["result"]
+        assert isinstance(result, Mapping)
+        items = self._resolve_items(str(result["items"]), final_response, provider, vars_state)
+        if not items:
+            raise self._malformed(provider)  # An empty artifact list is malformed.
+        fields = result["fields"]
+        assert isinstance(fields, Mapping)
+        item = items[0]
+        ctx = TemplateContext(response=None).with_item(item)
+        try:
+            url = self._field_value(fields["url"], ctx)
+        except (TemplateMissing, TemplateError) as exc:
+            raise self._malformed(provider) from exc
+        if not isinstance(url, str) or not url:
+            raise self._malformed(provider)
+        operation_id = None
+        provider_job = vars_state.get("job_id")
+        if isinstance(provider_job, (str, int)):
+            operation_id = str(provider_job)
+        return AdapterResult(
+            output=GenerationOutput(
+                artifacts=(GeneratedArtifact(url=url),),
+                operation_id=operation_id,
+                raw_response={"artifacts": 1},
+            ),
+            usage=ModelUsage(input_units=max(1, int(request.duration_s))),
             usage_reported=True,
         )
 
@@ -1202,9 +1280,16 @@ class AsyncJobAdapter:
 
     # -- template plumbing --------------------------------------------------
     def _ctx(
-        self, vars_state: Mapping[str, object], params: Mapping[str, object]
+        self,
+        vars_state: Mapping[str, object],
+        params: Mapping[str, object],
+        input_values: Mapping[str, object] | None = None,
     ) -> TemplateContext:
-        return TemplateContext(params=dict(params), vars=dict(vars_state))
+        return TemplateContext(
+            params=dict(params),
+            vars=dict(vars_state),
+            input=dict(input_values or {}),
+        )
 
     def _initial_vars(
         self, mapping: Mapping[str, object], config: AsyncJobRouteConfig, provider: str
@@ -1306,10 +1391,14 @@ class AsyncJobAdapter:
     # -- input transform ----------------------------------------------------
     def _prepare_input(
         self,
-        request: DiarizationRequest | StemSeparationRequest,
+        request: AsyncJobRequest,
         config: AsyncJobRouteConfig,
         temp_dir: Path,
-    ) -> Path:
+    ) -> Path | None:
+        if isinstance(request, VideoGenerationSubmitRequest):
+            # Video generation submits a JSON prompt body (``input.*``), not an
+            # uploaded file, so there is no prepared upload path.
+            return None
         source = (
             request.audio_path
             if isinstance(request, DiarizationRequest)
@@ -1429,6 +1518,24 @@ class AsyncJobAdapter:
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
+def _request_input_values(request: AsyncJobRequest) -> dict[str, object]:
+    """The ``input.*`` values a submit step may template.
+
+    Diarization and stems upload a file (``body: input.file``) and read nothing
+    else from the request, so they expose no templatable input. Video generation
+    carries a JSON prompt body, so its typed fields are exposed under ``input``
+    for the submit step's body mapping (plan Task 28, Section 2.10 ``input`` root).
+    """
+    if isinstance(request, VideoGenerationSubmitRequest):
+        return {
+            "prompt": request.prompt,
+            "prompt_image_url": request.prompt_image_url,
+            "duration_s": request.duration_s,
+            "ratio": request.ratio,
+        }
+    return {}
+
+
 def _as_uuid(value: object) -> UUID:
     if isinstance(value, UUID):
         return value

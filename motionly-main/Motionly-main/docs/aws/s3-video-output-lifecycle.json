@@ -1,0 +1,17 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-video-output-objects-after-7-days",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "video/"
+      },
+      "Expiration": {
+        "Days": 7
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}

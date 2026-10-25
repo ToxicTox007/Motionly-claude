@@ -689,6 +689,11 @@ class ModelRoute:
     pricing_status: str = "priced"
     hard_cap_max_requests: int | None = None
     hard_cap_max_units: int | None = None
+    # Optional per-UTC-day hard caps (S2). Additive and default to ``None`` so
+    # every existing route construction keeps today's behaviour. When set they
+    # are enforced alongside the monthly caps for ANY route that declares a cap.
+    hard_cap_max_requests_per_day: int | None = None
+    hard_cap_max_units_per_day: int | None = None
     minimum_billable_units: int = 0
     timeout_s: float | None = None
     max_batch: int | None = None
@@ -1665,53 +1670,80 @@ class ModelGateway:
     def _reserve_route_hard_cap(
         self, *, route: ModelRoute, request: ModelRequest
     ) -> list[tuple[BudgetReservation, int]]:
-        """Reserve against a route's unknown-pricing hard cap (plan Section 2.6).
+        """Reserve against a route's monthly AND daily hard caps (plan S2).
 
-        An unknown-pricing route has no dollar price, so its cap is counted in
-        whole requests and/or whole billing units on the budget ledger, in a
-        per-route monthly scope (``route_hard_cap_scope``). Integer counts avoid
-        float drift. A status/poll call never consumes the cap. Raises
-        :class:`ModelBudgetExceeded` when a cap is already full; the caller turns
-        that into ``route_hard_cap_exhausted`` and continues the fallback.
+        A hard cap has no dollar price, so it is counted in whole requests and/or
+        whole billing units on the budget ledger: a monthly scope
+        (:func:`route_hard_cap_scope`) and, when a daily cap is declared, a
+        per-UTC-day scope (:func:`route_daily_hard_cap_scope`). Integer counts
+        avoid float drift. Any route that declares at least one cap is enforced,
+        regardless of ``pricing_status`` (originally only ``unknown``-priced
+        routes were capped); a route that declares no cap behaves exactly as
+        before (this returns an empty list and reserves nothing). A status/poll
+        call never consumes the cap. Raises :class:`ModelBudgetExceeded` when any
+        cap is already full; the caller turns that into
+        ``route_hard_cap_exhausted`` and continues the fallback.
 
         Returns the reservations paired with the integer count to settle on
         success, so success commits the same count it reserved and a non-billable
         failure releases it.
         """
-        if route.pricing_status != "unknown":
-            return []
         if isinstance(request, VideoGenerationPollRequest):
             # Status calls are never charged and never consume the cap.
             return []
         now = datetime.now(UTC)
         reservations: list[tuple[BudgetReservation, int]] = []
+        units: int | None = None
+
+        def _reserve(*, scope: str, amount: int, limit: int) -> None:
+            reservations.append(
+                (
+                    self._budget_ledger.reserve(
+                        scope=scope,
+                        amount_usd=float(amount),
+                        limit_usd=float(limit),
+                    ),
+                    amount,
+                )
+            )
+
         try:
             if route.hard_cap_max_requests is not None and route.hard_cap_max_requests > 0:
-                reservations.append(
-                    (
-                        self._budget_ledger.reserve(
-                            scope=route_hard_cap_scope(
-                                route.route_id, unit="requests", now=now
-                            ),
-                            amount_usd=1.0,
-                            limit_usd=float(route.hard_cap_max_requests),
-                        ),
-                        1,
-                    )
+                _reserve(
+                    scope=route_hard_cap_scope(route.route_id, unit="requests", now=now),
+                    amount=1,
+                    limit=route.hard_cap_max_requests,
+                )
+            if (
+                route.hard_cap_max_requests_per_day is not None
+                and route.hard_cap_max_requests_per_day > 0
+            ):
+                _reserve(
+                    scope=route_daily_hard_cap_scope(
+                        route.route_id, unit="requests", now=now
+                    ),
+                    amount=1,
+                    limit=route.hard_cap_max_requests_per_day,
                 )
             if route.hard_cap_max_units is not None and route.hard_cap_max_units > 0:
                 units = max(1, int(estimate_input_units(request)))
-                reservations.append(
-                    (
-                        self._budget_ledger.reserve(
-                            scope=route_hard_cap_scope(
-                                route.route_id, unit="units", now=now
-                            ),
-                            amount_usd=float(units),
-                            limit_usd=float(route.hard_cap_max_units),
-                        ),
-                        units,
-                    )
+                _reserve(
+                    scope=route_hard_cap_scope(route.route_id, unit="units", now=now),
+                    amount=units,
+                    limit=route.hard_cap_max_units,
+                )
+            if (
+                route.hard_cap_max_units_per_day is not None
+                and route.hard_cap_max_units_per_day > 0
+            ):
+                if units is None:
+                    units = max(1, int(estimate_input_units(request)))
+                _reserve(
+                    scope=route_daily_hard_cap_scope(
+                        route.route_id, unit="units", now=now
+                    ),
+                    amount=units,
+                    limit=route.hard_cap_max_units_per_day,
                 )
         except ModelBudgetExceeded:
             for reservation, _count in reservations:
@@ -1930,9 +1962,10 @@ class ModelGateway:
                 )
                 continue
 
-            # Unknown-pricing hard cap (plan Section 2.6): reserve the route's
-            # per-route monthly request/unit cap before contacting the provider.
-            # When the cap is already full, skip this route with
+            # Route hard cap (plan Section 2.6 + S2 daily caps): reserve the
+            # route's per-route monthly AND daily request/unit caps before
+            # contacting the provider, for ANY route that declares a cap. When a
+            # cap is already full, skip this route with
             # ``route_hard_cap_exhausted`` and let the fallback continue. Status
             # calls never consume the cap.
             try:
@@ -2044,9 +2077,10 @@ class ModelGateway:
                 # Remote attempts may be billable; local preflight rejections are not.
                 failed_cost = estimated_cost if error_info.billable else 0.0
                 self._settle(reservations, actual_usd=failed_cost)
-                # An unknown-pricing route's hard cap counts a billable failure
+                # A capped route's hard cap counts a billable failure
                 # (the provider may have run) and releases a non-billable one
-                # (plan Section 2.6).
+                # (plan Section 2.6 + S2). A route without caps has no
+                # reservations, so both paths are no-ops for it.
                 if error_info.billable:
                     self._settle_route_hard_cap(hard_cap_reservations)
                 else:
@@ -2108,8 +2142,8 @@ class ModelGateway:
                 raise
             request_spend += actual_cost
             self._circuit_store.record_success(route.circuit_key)
-            # An unknown-pricing route settles its hard cap on success (plan
-            # Section 2.6: settle on success).
+            # A capped route settles its hard cap on success (plan
+            # Section 2.6 + S2: settle on success). Empty for an uncapped route.
             self._settle_route_hard_cap(hard_cap_reservations)
             self._record_attempt(
                 context=context,
@@ -2458,6 +2492,25 @@ def route_hard_cap_scope(
     """
     current = now or datetime.now(UTC)
     return f"route-hard-cap:{unit}:{route_id}:{current.year:04d}-{current.month:02d}"
+
+
+def route_daily_hard_cap_scope(
+    route_id: str, *, unit: str = "requests", now: datetime | None = None
+) -> str:
+    """Per-route per-UTC-day scope for a daily hard cap (S2 daily caps).
+
+    A sibling of :func:`route_hard_cap_scope` that buckets by the full UTC date
+    (``YYYY-MM-DD``) instead of the month, so a daily cap resets at UTC midnight
+    independently of the monthly cap. ``unit`` is ``"requests"`` or ``"units"``
+    so the two daily caps never share a scope, and the ``route-hard-cap-daily:``
+    prefix keeps them disjoint from the monthly ``route-hard-cap:`` scopes on the
+    same budget ledger (``InMemoryBudgetLedger``/``RedisBudgetLedger``).
+    """
+    current = now or datetime.now(UTC)
+    return (
+        f"route-hard-cap-daily:{unit}:{route_id}:"
+        f"{current.year:04d}-{current.month:02d}-{current.day:02d}"
+    )
 
 
 def provider_failure(code: str, *, retryable: bool = False) -> ProviderCallFailure:

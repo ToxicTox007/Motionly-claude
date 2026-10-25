@@ -347,6 +347,42 @@ def _generate_broll(
         )
 
     adapter_owns_operation = _route_adapter_is_async_job(model_gateway, video_generation_route)
+
+    # Non-blocking async video (plan Task 28, Tier 3 gate item 2). When the
+    # served ``video.generation`` route is an ``async_job`` route whose mapping
+    # declares ``mode: non_blocking``, generated B-roll runs through the
+    # ``InferencePollingEngine``: it submits once (route-affine, never
+    # resubmitting after a restart), stores the inference operation id on the
+    # phase5 payload with neutral keys, and advances the job with delayed polls
+    # instead of holding a worker slot on a blocking poll loop. Blocking routes
+    # fall through to the unchanged Tier 1 path below.
+    async_adapter = _async_job_adapter_for(model_gateway, video_generation_route)
+    if async_adapter is not None and inference_operations_repository is not None:
+        route_config = async_adapter.route_config(video_generation_route.route_id)
+        if route_config is not None and type(async_adapter).is_non_blocking(route_config):
+            video_url = _generate_broll_non_blocking(
+                record=record,
+                payload=payload,
+                duration_s=duration_s,
+                ratio=ratio,
+                adapter=async_adapter,
+                route=video_generation_route,
+                route_config=route_config,
+                inference_operations_repository=inference_operations_repository,
+                repository=repository,
+            )
+            return _finalize_generated_broll(
+                record=record,
+                settings=settings,
+                broll_repository=broll_repository,
+                payload=payload,
+                duration_s=duration_s,
+                ratio=ratio,
+                video_url=video_url,
+                operation_id=payload.get("inference_operation_id"),
+                operations_repository=operations_repository,
+            )
+
     operation: InferenceOperation | None = None
     if inference_operations_repository is not None and not adapter_owns_operation:
         idempotency_key = f"generated_broll:{record.id}"
@@ -498,6 +534,46 @@ def _generate_broll(
             )
         time.sleep(poll_interval_s)
 
+    operation = _transition_operation(
+        inference_operations_repository,
+        operation,
+        OperationState.SUCCEEDED,
+        expected_from={OperationState.RUNNING},
+        actual_cost_usd=float(payload.get("unit_cost_usd") or 0) * duration_s,
+    )
+    return _finalize_generated_broll(
+        record=record,
+        settings=settings,
+        broll_repository=broll_repository,
+        payload=payload,
+        duration_s=duration_s,
+        ratio=ratio,
+        video_url=video_url,
+        operation_id=operation_id,
+        operations_repository=operations_repository,
+    )
+
+
+def _finalize_generated_broll(
+    *,
+    record,
+    settings,
+    broll_repository,
+    payload: dict[str, Any],
+    duration_s: int,
+    ratio: str,
+    video_url: str | None,
+    operation_id: object,
+    operations_repository=None,
+) -> dict[str, Any]:
+    """Record cost, store the generated clip and upsert the B-roll asset.
+
+    Shared by the blocking (Tier 1) and non-blocking (Tier 3, Task 28) video
+    paths so both write the artifact and return identical neutral result keys.
+    The artifact URL is fetched under the SSRF-safe stream policy regardless of
+    which path produced it.
+    """
+    video_url = video_url or ""
     if operations_repository is not None:
         operations_repository.record_cost(
             workspace_id=record.workspace_id,
@@ -512,13 +588,6 @@ def _generate_broll(
                 "operation_id": str(operation_id),
             },
         )
-    operation = _transition_operation(
-        inference_operations_repository,
-        operation,
-        OperationState.SUCCEEDED,
-        expected_from={OperationState.RUNNING},
-        actual_cost_usd=float(payload.get("unit_cost_usd") or 0) * duration_s,
-    )
 
     storage_metadata: dict[str, Any] = {}
     if video_url.startswith(("http://", "https://")):
@@ -617,6 +686,104 @@ def _route_adapter_is_async_job(model_gateway: object, route: object) -> bool:
         return False
     adapter = adapters.get(adapter_name)
     return adapter is not None and type(adapter).__name__ == "AsyncJobAdapter"
+
+
+def _async_job_adapter_for(model_gateway: object, route: object):
+    """Return ``route``'s registered ``AsyncJobAdapter``, or ``None``.
+
+    Used by the non-blocking video path (plan Task 28) to read the route's
+    mapping and drive the polling engine. Returns ``None`` for any route whose
+    adapter is not an ``async_job`` adapter, so a blocking/fake route is
+    unaffected.
+    """
+    if not _route_adapter_is_async_job(model_gateway, route):
+        return None
+    adapters = getattr(model_gateway, "_adapters", None)
+    return adapters.get(getattr(route, "adapter", None)) if isinstance(adapters, dict) else None
+
+
+def _generate_broll_non_blocking(
+    *,
+    record,
+    payload: dict[str, Any],
+    duration_s: int,
+    ratio: str,
+    adapter,
+    route,
+    route_config,
+    inference_operations_repository,
+    repository=None,
+) -> str:
+    """Drive a non-blocking ``async_job`` video route through the poll engine.
+
+    Submits exactly once (route-affine; a worker restart resumes polling the
+    recorded operation instead of resubmitting, plan invariant 6), stores the
+    inference operation id on the phase5 payload with neutral keys, then advances
+    the job with delayed polls until the artifact URL is terminal. The delay
+    between polls is the engine's ``retry_after_s`` (the route's poll interval);
+    the worker queue carries the same value as ``delay_seconds`` when a poll is
+    re-enqueued rather than awaited in-process. Returns the terminal video URL.
+    """
+    from app.services.inference_polling import (
+        InferencePollingEngine,
+        PollTarget,
+    )
+
+    submit_request = VideoGenerationSubmitRequest(
+        prompt=str(payload["prompt"]),
+        prompt_image_url=(
+            str(payload["prompt_image_url"]) if payload.get("prompt_image_url") else None
+        ),
+        duration_s=duration_s,
+        ratio=ratio,
+        idempotency_key=f"generated_broll:{record.id}",
+    )
+    target = PollTarget(
+        adapter=adapter,
+        route=route,
+        config=route_config,
+        request=submit_request,
+    )
+    engine = InferencePollingEngine(
+        operations_repository=inference_operations_repository,
+        resolver=lambda _operation: target,
+    )
+
+    operation, handle = engine.submit(
+        target=target,
+        workspace_id=record.workspace_id,
+        project_id=record.project_id,
+        idempotency_key=f"generated_broll:{record.id}",
+    )
+    # Persist the neutral operation id so a resumed job polls the recorded
+    # operation rather than submitting a second time.
+    payload["inference_operation_id"] = str(operation.id)
+    if repository is not None:
+        repository.update(record=record, payload=payload)
+
+    # Advance the job with delayed polls. Each pending poll yields the delay the
+    # worker would apply before re-enqueuing the poll job (delay_seconds); here
+    # the same engine drives it to the terminal artifact.
+    delay_s = handle.first_delay_s
+    deadline = time.monotonic() + float(getattr(route, "timeout_s", None) or 900.0)
+    while True:
+        result = engine.poll_once(operation.id)
+        if result.is_terminal:
+            output = result.result.output if result.result is not None else None
+            if isinstance(output, GenerationOutput) and output.artifacts:
+                return str(output.artifacts[0].url or "")
+            raise ApiError(
+                502,
+                "generated_broll_failed",
+                "Generated B-roll did not return a usable artifact.",
+            )
+        if time.monotonic() >= deadline:
+            raise ApiError(
+                504,
+                "generated_broll_timeout",
+                "Generated B-roll did not complete in time.",
+            )
+        time.sleep(max(0.0, result.retry_after_s or delay_s))
 
 
 def _transition_operation(

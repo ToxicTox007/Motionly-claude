@@ -78,6 +78,10 @@ New-Item -ItemType File -Force -Path "edge_origin_verify_previous" | Out-Null
 # Create the generic inference secrets bundle file (empty in fixture mode)
 New-Item -ItemType File -Force -Path "ai_secrets_bundle" | Out-Null
 
+# Bedrock static keys (docs/aws); empty in fixture mode (no Bedrock route).
+New-Item -ItemType File -Force -Path "aws_inference_access_key_id" | Out-Null
+New-Item -ItemType File -Force -Path "aws_inference_secret_access_key" | Out-Null
+
 Write-Host "[OK] Created core secrets (11 files)" -ForegroundColor Green
 
 # Create empty Temporal cert files

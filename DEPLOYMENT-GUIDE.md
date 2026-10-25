@@ -43,6 +43,9 @@ The project is **designed and documented for exactly one deployment target**:
 > [!NOTE]
 > **Region is `ap-south-1` (Mumbai).** The CloudFormation template, the prefix-list lookup, and the deploy workflow all hard-code this. Changing it requires editing the template and workflow.
 
+> [!NOTE]
+> **CPU-only production is supported.** The `m7i.2xlarge` (`ComputeProfile=cpu`) is not only for rehearsals: the signed release can run it in production with the GPU-free remote AI topology (GPU work → remote Bedrock routes, CPU work local). Set `MOTIONLY_CPU_TOPOLOGY=gpu-free` (and `MOTIONLY_LOCAL_STEMS=enabled` when stems run on the local CPU Demucs route) in `/etc/motionly/host.env`; both default to the GPU topology above when unset. See [Section 13](#13-gpu-free-remote-ai-mode).
+
 ---
 
 ## 2. Architecture Overview
@@ -605,6 +608,9 @@ Validate before deploying: `cd apps/api && python -m app.ops.validate_inference_
 
 > [!IMPORTANT]
 > The signed release flow (`scripts/deploy/apply_release.sh`) deploys only `infra/docker-compose.gpu.yml` and refuses `MOTIONLY_COMPOSE_OVERLAY` outside rehearsal. The release manifest does not carry the cpu-vision image. Until it does, run this mode with operator-run Compose as above. The agent does fetch `ai-secrets-bundle`, so registry routes need no extra SSM parameters.
+
+> [!NOTE]
+> **Signed-release GPU-free deployment (recommended).** The release agent now deploys this overlay for you when the host opts in: set `MOTIONLY_COMPUTE_PROFILE=cpu`, `MOTIONLY_CPU_TOPOLOGY=gpu-free`, and `MOTIONLY_LOCAL_STEMS=enabled` in `/etc/motionly/host.env`. The signed manifest now carries the optional `MOTIONLY_CPU_VISION_WORKER_IMAGE` (built by the supply-chain `cpu-vision-worker` component) and the release bundle carries `infra/docker-compose.remote-ai.yml`, so the agent adds the overlay and the `local-stems` profile on top of `docker-compose.gpu.yml` — no operator-run Compose needed. The agent still refuses `MOTIONLY_COMPOSE_OVERLAY` outside rehearsal; `gpu-free` selects a bundled overlay, not an operator override. It records the topology per release, so rollback reuses it. Both settings default to the GPU topology, so existing hosts and already-published releases are unchanged. The operator-run Compose command above remains a supported fallback. See [`docs/aws/first-paid-test.md`](motionly-main/Motionly-main/docs/aws/first-paid-test.md) and [Compose VM deployment](motionly-main/Motionly-main/docs/ops/compose-vm-deployment.md).
 
 ### 13.4 Cost controls and failure behaviour
 

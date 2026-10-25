@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Input, Label, Select, TextArea, Slider } from "./ui";
+import { Input, Label, Select, TextArea, Slider, PanelSection } from "./ui";
 import { Button } from "../button";
 import {
   AlertCircle,
@@ -47,6 +47,10 @@ import { useCapabilities } from "@/hooks/useCapabilities";
 import { CAPABILITY_IDS } from "@/lib/capabilities";
 import { CapabilityStatus } from "./CapabilityGate";
 import { EditorialMemoryIndicator } from "../editorial-memory-indicator";
+import { ProjectModelPicker } from "./ModelPicker";
+import { ModelChoiceNotice } from "./ModelChoiceNotice";
+import { useModelOptions } from "@/hooks/useModelOptions";
+import type { ModelChoice } from "@/lib/model-options";
 
 interface AIStepProps {
   projectId: string;
@@ -180,6 +184,15 @@ export function AIStep({
   );
   const captionsCapability = resolveCapabilityState(CAPABILITY_IDS.captions);
   const emotionCapability = resolveCapabilityState(CAPABILITY_IDS.emotion);
+
+  // Task 32: the planning-model picker for this project. `planning.chat` is the
+  // capability the edit-plan generation on this panel uses, so its per-project
+  // override lives here beside the plan controls.
+  const { resolve: resolveModelOptions } = useModelOptions(
+    workspaceId,
+    projectId,
+  );
+  const planningModelOptions = resolveModelOptions("planning.chat");
 
   const [style, setStyle] = useState<StylePickerValue>(
     activePlan?.style ?? "auto",
@@ -1125,6 +1138,35 @@ export function AIStep({
           Nothing changes on the timeline until you approve it.
         </p>
       </div>
+
+      {/* Task 32: per-project planning-model choice. Only shown when the
+          operator offers more than one selectable planning model, so the panel
+          is uncluttered when there is nothing to choose. A locked workspace
+          renders the picker read-only with the reason (handled inside). */}
+      {planningModelOptions && planningModelOptions.options.length > 1 ? (
+        <PanelSection title="AI model" data-testid="project-model-picker">
+          <p className="mb-3 text-xs text-muted-foreground">
+            Choose which model plans this project&rsquo;s edit. This overrides
+            the workspace default for this project only.
+          </p>
+          <ProjectModelPicker
+            workspaceId={workspaceId}
+            projectId={projectId}
+            capability={planningModelOptions}
+          />
+        </PanelSection>
+      ) : null}
+
+      {/* Task 32: when the gateway fell back to another model for the active
+          plan, tell the user. The field is optional on the plan record while
+          Task 31 lands it; read it defensively without depending on a
+          generated type that may not exist yet in this working tree. */}
+      <ModelChoiceNotice
+        modelChoice={
+          (activePlan as { model_choice?: ModelChoice } | undefined)
+            ?.model_choice ?? null
+        }
+      />
 
       {/* Visual analysis status */}
       <div

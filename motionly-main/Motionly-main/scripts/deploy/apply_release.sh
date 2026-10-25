@@ -62,6 +62,26 @@ case "$MOTIONLY_COMPUTE_PROFILE" in
   gpu | cpu) ;;
   *) refuse "MOTIONLY_COMPUTE_PROFILE must be gpu or cpu" ;;
 esac
+# CPU-only production topology (docs/ops/compose-vm-deployment.md). base (the
+# default) preserves today's behaviour exactly; gpu-free deploys the GPU-free
+# remote overlay on top of gpu.yml for a ComputeProfile=cpu host. Validated here,
+# before anything is written, so an unsupported combination is refused early.
+MOTIONLY_CPU_TOPOLOGY="${MOTIONLY_CPU_TOPOLOGY:-base}"
+MOTIONLY_LOCAL_STEMS="${MOTIONLY_LOCAL_STEMS:-disabled}"
+case "$MOTIONLY_CPU_TOPOLOGY" in
+  base | gpu-free) ;;
+  *) refuse "MOTIONLY_CPU_TOPOLOGY must be base or gpu-free" ;;
+esac
+case "$MOTIONLY_LOCAL_STEMS" in
+  enabled | disabled) ;;
+  *) refuse "MOTIONLY_LOCAL_STEMS must be enabled or disabled" ;;
+esac
+if [[ "$MOTIONLY_CPU_TOPOLOGY" == gpu-free && "$MOTIONLY_COMPUTE_PROFILE" != cpu ]]; then
+  refuse "MOTIONLY_CPU_TOPOLOGY=gpu-free requires MOTIONLY_COMPUTE_PROFILE=cpu"
+fi
+if [[ "$MOTIONLY_LOCAL_STEMS" == enabled && "$MOTIONLY_CPU_TOPOLOGY" != gpu-free ]]; then
+  refuse "MOTIONLY_LOCAL_STEMS=enabled requires MOTIONLY_CPU_TOPOLOGY=gpu-free"
+fi
 # The local release rehearsal (scripts/release/rehearse_release.py) runs this
 # agent against emulated AWS endpoints, a loopback registry, a test signing key
 # and the CPU-stage overlay. A real environment refuses every one of these.
@@ -143,6 +163,55 @@ validate_release_bundle() {
     --validate-bundle \
     --manifest "$release_dir/release-manifest.json" \
     --bundle "$release_dir/release-bundle.tar.gz"
+}
+
+# A gpu-free host can only deploy a release built for the GPU-free overlay: its
+# bundle must carry docker-compose.remote-ai.yml and its signed manifest must
+# list the cpu-vision-worker image. Called in preflight (after the bundle is on
+# disk) and in apply before any SSM read or secret write, so an unsupported
+# release is refused before anything sensitive happens. base needs nothing new.
+validate_release_topology() {
+  local release_dir="$1"
+  [[ "$MOTIONLY_CPU_TOPOLOGY" == gpu-free ]] || return 0
+  local overlay="$release_dir/bundle/infra/docker-compose.remote-ai.yml"
+  [[ -f "$overlay" ]] || {
+    echo "MOTIONLY_CPU_TOPOLOGY=gpu-free requires the GPU-free overlay, but this release bundle lacks infra/docker-compose.remote-ai.yml" >&2
+    exit 65
+  }
+  # The manifest is JSON; read it with python3 (no jq on the host).
+  python3 - "$release_dir/release-manifest.json" <<'PY' || exit 65
+import json
+import sys
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+if "MOTIONLY_CPU_VISION_WORKER_IMAGE" not in manifest.get("images", {}):
+    raise SystemExit(
+        "MOTIONLY_CPU_TOPOLOGY=gpu-free requires MOTIONLY_CPU_VISION_WORKER_IMAGE "
+        "in release-manifest.json images"
+    )
+PY
+}
+
+# Records this release's resolved topology next to its compose.env so rollback
+# and restore reuse exactly what was applied. Writes only the three non-secret
+# keys (no secret ever enters argv or this file). When gpu-free with local
+# stems, appends CPU_VISION_WORKER_QUEUES to compose.env so cpu-vision-worker
+# gives up audio_demucs (the Demucs worker serves it instead).
+write_release_topology() {
+  local release_dir="$1"
+  local topology_env="$release_dir/topology.env"
+  umask 177
+  {
+    printf 'MOTIONLY_COMPUTE_PROFILE=%s\n' "$MOTIONLY_COMPUTE_PROFILE"
+    printf 'MOTIONLY_CPU_TOPOLOGY=%s\n' "$MOTIONLY_CPU_TOPOLOGY"
+    printf 'MOTIONLY_LOCAL_STEMS=%s\n' "$MOTIONLY_LOCAL_STEMS"
+  } >"$topology_env"
+  umask 077
+  chmod 600 "$topology_env"
+  if [[ "$MOTIONLY_CPU_TOPOLOGY" == gpu-free && "$MOTIONLY_LOCAL_STEMS" == enabled ]]; then
+    printf 'CPU_VISION_WORKER_QUEUES=%s\n' "visual_analysis,transcription,matte_extraction" \
+      >>"$release_dir/compose.env"
+    chmod 600 "$release_dir/compose.env"
+  fi
 }
 
 # Runs in a command substitution; every step fails it explicitly as well
@@ -283,6 +352,12 @@ write_release_inputs() {
   # secret parameter is fetched. A missing parameter leaves an empty file so a
   # registry that uses only ``file:`` refs (or no secrets) still deploys.
   fetch_secret_to_file ai-secrets-bundle "$secrets_dir/ai_secrets_bundle" optional
+  # Bedrock (docs/aws): the dedicated inference IAM user's static access keys,
+  # mounted only into the API and the workers that call a Bedrock route. Fetched
+  # with ``optional``, like the bundle above, so a deployment without any
+  # Bedrock route leaves the two files empty and still starts.
+  fetch_secret_to_file aws-inference-access-key-id "$secrets_dir/aws_inference_access_key_id" optional
+  fetch_secret_to_file aws-inference-secret-access-key "$secrets_dir/aws_inference_secret_access_key" optional
   # Origin guard (infra/aws/edge-contract.json): CloudFront sends the current
   # value; the previous one exists only while a rotation deploys.
   fetch_secret_to_file edge/origin-verify "$secrets_dir/edge_origin_verify"
@@ -358,10 +433,43 @@ compose_for() {
   local release_dir="$1"
   shift
   local -a files=(-f "$release_dir/bundle/infra/docker-compose.gpu.yml")
-  [[ -z "${MOTIONLY_COMPOSE_OVERLAY:-}" ]] || files+=(-f "$MOTIONLY_COMPOSE_OVERLAY")
   local -a profiles=()
   # ComputeProfile=cpu (infra/aws) has no GPU, so the GPU services stay off.
+  local topology="base" stems="disabled" profile="$MOTIONLY_COMPUTE_PROFILE"
+  # A release applied by this agent records its resolved topology next to
+  # compose.env (write_release_topology). Read it WITHOUT `source`: a strict
+  # line parser accepts only the three expected keys and their allowed values,
+  # so a tampered or unexpected file fails closed rather than running shell.
+  if [[ -f "$release_dir/topology.env" ]]; then
+    local line key val
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$line" ]] && continue
+      key="${line%%=*}"
+      val="${line#*=}"
+      case "$key=$val" in
+        MOTIONLY_COMPUTE_PROFILE=gpu | MOTIONLY_COMPUTE_PROFILE=cpu) profile="$val" ;;
+        MOTIONLY_CPU_TOPOLOGY=base | MOTIONLY_CPU_TOPOLOGY=gpu-free) topology="$val" ;;
+        MOTIONLY_LOCAL_STEMS=enabled | MOTIONLY_LOCAL_STEMS=disabled) stems="$val" ;;
+        *)
+          echo "unrecognised entry in $release_dir/topology.env: $line" >&2
+          return 1
+          ;;
+      esac
+    done <"$release_dir/topology.env"
+    if [[ "$profile" != "$MOTIONLY_COMPUTE_PROFILE" ]]; then
+      echo "recorded topology profile ($profile) does not match host MOTIONLY_COMPUTE_PROFILE ($MOTIONLY_COMPUTE_PROFILE)" >&2
+      return 1
+    fi
+  fi
+  # Files: gpu.yml, then the bundle's GPU-free overlay when gpu-free, then the
+  # rehearsal overlay (refused outside rehearsal above) last.
+  [[ "$topology" != gpu-free ]] || files+=(-f "$release_dir/bundle/infra/docker-compose.remote-ai.yml")
+  [[ -z "${MOTIONLY_COMPOSE_OVERLAY:-}" ]] || files+=(-f "$MOTIONLY_COMPOSE_OVERLAY")
   [[ "$MOTIONLY_COMPUTE_PROFILE" != gpu ]] || profiles=(--profile gpu)
+  # gpu-free with local stems starts the Demucs worker (--profile local-stems).
+  if [[ "$topology" == gpu-free && "$stems" == enabled ]]; then
+    profiles+=(--profile local-stems)
+  fi
   docker compose --project-name motionly "${profiles[@]}" --env-file "$release_dir/compose.env" "${files[@]}" "$@"
 }
 
@@ -434,13 +542,16 @@ fi
 
 release_dir="$(fetch_release)"
 if [[ "$mode" == "preflight" ]]; then
+  validate_release_topology "$release_dir"
   validate_temporal_canary_gate "$release_dir"
-  echo "Validated signed release $release_id and Temporal canary evidence; no containers or secrets were changed."
+  echo "Validated signed release $release_id (topology $MOTIONLY_CPU_TOPOLOGY, local stems $MOTIONLY_LOCAL_STEMS) and Temporal canary evidence; no containers or secrets were changed."
   exit 0
 fi
 
+validate_release_topology "$release_dir"
 validate_temporal_canary_gate "$release_dir"
 write_release_inputs "$release_dir"
+write_release_topology "$release_dir"
 login_registry
 if ! activate_release "$release_dir"; then
   echo "Release $release_id failed health verification; restoring the running release." >&2

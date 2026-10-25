@@ -50,6 +50,57 @@ class EditPlanStatus(StrEnum):
     FAILED = "failed"
 
 
+class ModelChoiceResult(BaseModel):
+    """The user's model-choice provenance for an AI result (plan Section 2.11).
+
+    Display-only: it carries the opaque option ids (registry route ids), where
+    the effective choice came from and, when a fallback happened, why. It never
+    carries a base URL, secret or provider model id — those stay operator-only
+    (served by the admin surfaces), so a client can show "served <option>
+    (fell back: <reason>)" without learning any infrastructure detail.
+    """
+
+    requested_option_id: str | None = Field(
+        default=None,
+        description="The user's highest-priority requested option id, when one was set.",
+    )
+    served_option_id: str = Field(
+        description="The option id (registry route id) that actually served the call."
+    )
+    choice_source: str = Field(
+        description="Where the effective choice came from: project, workspace or operator."
+    )
+    fallback_reason: str | None = Field(
+        default=None,
+        description="Why the served option differs from the request (e.g. plan_not_allowed); "
+        "null when the request was served as asked.",
+    )
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "ModelChoiceResult | None":
+        """Build from the gateway's ``raw_payload['model_choice']`` dict.
+
+        Returns ``None`` for anything that is not a well-formed model-choice dict
+        (so a missing or malformed payload simply omits the field). Only the four
+        safe keys are read; any extra keys are ignored, so a provider detail that
+        ever leaked into the dict cannot reach the client through this model.
+        """
+        if not isinstance(value, dict):
+            return None
+        served = value.get("served_option_id")
+        choice_source = value.get("choice_source")
+        if not isinstance(served, str) or not isinstance(choice_source, str):
+            return None
+        requested = value.get("requested_option_id")
+        fallback = value.get("fallback_reason")
+        return cls(
+            requested_option_id=requested if isinstance(requested, str) else None,
+            served_option_id=served,
+            choice_source=choice_source,
+            fallback_reason=fallback if isinstance(fallback, str) else None,
+        )
+
+
 class EditPlanCut(BaseModel):
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
@@ -324,6 +375,7 @@ class EditPlanResponse(BaseModel):
     prompt_version: str = EDIT_PLAN_PROMPT_VERSION
     retry_count: int = 0
     fallback_reason: str | None = None
+    model_choice: ModelChoiceResult | None = None
     cache_key: str
     schema_hash: str
     latency_ms: int | None = None

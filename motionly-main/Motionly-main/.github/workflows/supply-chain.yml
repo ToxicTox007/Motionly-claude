@@ -218,13 +218,15 @@ jobs:
             --image "MOTIONLY_PLANNING_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
             --image "MOTIONLY_REMOTION_WORKER_IMAGE=${IMAGE_PREFIX}/remotion-worker@$(digest remotion-worker)" \
             --image "MOTIONLY_TEMPORAL_SERVER_IMAGE=${IMAGE_PREFIX}/temporal-server@$(digest temporal-server)" \
+            --image "MOTIONLY_CPU_VISION_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-vision-worker@$(digest cpu-vision-worker)" \
             --sbom api=sbom-api.spdx.json \
             --sbom web=sbom-web.spdx.json \
             --sbom cpu-worker=sbom-cpu-worker.spdx.json \
             --sbom gpu-worker=sbom-gpu-worker.spdx.json \
             --sbom demucs-worker=sbom-demucs-worker.spdx.json \
             --sbom remotion-worker=sbom-remotion-worker.spdx.json \
-            --sbom temporal-server=sbom-temporal-server.spdx.json
+            --sbom temporal-server=sbom-temporal-server.spdx.json \
+            --sbom cpu-vision-worker=sbom-cpu-vision-worker.spdx.json
       - name: Verify the archive against the unsigned manifest before signing
         run: >-
           python scripts/release/generate_release_manifest.py

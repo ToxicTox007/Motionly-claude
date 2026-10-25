@@ -177,3 +177,112 @@ def test_session_token_is_signed() -> None:
     )
     assert signed.headers["x-amz-security-token"] == "FQoGZXIvYXdzEBYa.EXAMPLE"
     assert "x-amz-security-token" in signed.authorization
+
+
+# --- Published AWS S3 presign (query-string auth) worked example -----------
+# Source: AWS S3 Developer Guide, "Authenticating Requests: Using Query
+# Parameters (AWS Signature Version 4)". The example shares a presigned URL for
+# the object ``test.txt`` in ``examplebucket`` valid for 24 hours. These are the
+# public, non-secret example credentials AWS publishes for this test case.
+# https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+S3_PRESIGN_ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
+S3_PRESIGN_SECRET_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+S3_PRESIGN_AMZ_DATE = "20130524T000000Z"
+S3_PRESIGN_HOST = "examplebucket.s3.amazonaws.com"
+S3_PRESIGN_EXPECTED_SIGNATURE = (
+    "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+)
+S3_PRESIGN_EXPECTED_URL = (
+    "https://examplebucket.s3.amazonaws.com/test.txt"
+    "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+    "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request"
+    "&X-Amz-Date=20130524T000000Z"
+    "&X-Amz-Expires=86400"
+    "&X-Amz-SignedHeaders=host"
+    f"&X-Amz-Signature={S3_PRESIGN_EXPECTED_SIGNATURE}"
+)
+
+
+def test_presign_url_matches_published_s3_example() -> None:
+    url = aws_sigv4.presign_url(
+        credentials=aws_sigv4.SigV4Credentials(
+            access_key_id=S3_PRESIGN_ACCESS_KEY,
+            secret_access_key=S3_PRESIGN_SECRET_KEY,
+        ),
+        method="GET",
+        host=S3_PRESIGN_HOST,
+        path="/test.txt",
+        region="us-east-1",
+        service="s3",
+        amz_date=S3_PRESIGN_AMZ_DATE,
+        expires_s=86400,
+    )
+    # The exact signature AWS publishes for this worked example.
+    assert f"X-Amz-Signature={S3_PRESIGN_EXPECTED_SIGNATURE}" in url
+    # And the full presigned URL matches byte for byte.
+    assert url == S3_PRESIGN_EXPECTED_URL
+
+
+def test_presign_url_is_https_and_excludes_signature_from_signed_query() -> None:
+    url = aws_sigv4.presign_url(
+        credentials=aws_sigv4.SigV4Credentials(
+            access_key_id=S3_PRESIGN_ACCESS_KEY,
+            secret_access_key=S3_PRESIGN_SECRET_KEY,
+        ),
+        method="GET",
+        host=S3_PRESIGN_HOST,
+        path="/test.txt",
+        region="us-east-1",
+        service="s3",
+        amz_date=S3_PRESIGN_AMZ_DATE,
+        expires_s=86400,
+    )
+    assert url.startswith("https://")
+    assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in url
+    assert "X-Amz-SignedHeaders=host" in url
+    # X-Amz-Signature appears exactly once, appended after the signed query.
+    assert url.count("X-Amz-Signature=") == 1
+    assert url.endswith(f"X-Amz-Signature={S3_PRESIGN_EXPECTED_SIGNATURE}")
+
+
+def test_presign_url_includes_session_token_when_temporary() -> None:
+    url = aws_sigv4.presign_url(
+        credentials=aws_sigv4.SigV4Credentials(
+            access_key_id=S3_PRESIGN_ACCESS_KEY,
+            secret_access_key=S3_PRESIGN_SECRET_KEY,
+            session_token="FQoGZXIvYXdzEBYa/EXAMPLE token",
+        ),
+        method="GET",
+        host=S3_PRESIGN_HOST,
+        path="/test.txt",
+        region="us-east-1",
+        service="s3",
+        amz_date=S3_PRESIGN_AMZ_DATE,
+        expires_s=900,
+    )
+    # The session token is part of the signed query string (URL-encoded) and so
+    # changes the signature away from the no-token example value.
+    assert "X-Amz-Security-Token=" in url
+    assert "FQoGZXIvYXdzEBYa%2FEXAMPLE%20token" in url
+    assert f"X-Amz-Signature={S3_PRESIGN_EXPECTED_SIGNATURE}" not in url
+
+
+def test_presign_url_merges_caller_query_and_drops_signature_key() -> None:
+    url = aws_sigv4.presign_url(
+        credentials=aws_sigv4.SigV4Credentials(
+            access_key_id=S3_PRESIGN_ACCESS_KEY,
+            secret_access_key=S3_PRESIGN_SECRET_KEY,
+        ),
+        method="GET",
+        host=S3_PRESIGN_HOST,
+        path="/test.txt",
+        region="us-east-1",
+        service="s3",
+        amz_date=S3_PRESIGN_AMZ_DATE,
+        expires_s=86400,
+        query={"response-content-type": "text/plain", "X-Amz-Signature": "bogus"},
+    )
+    assert "response-content-type=text%2Fplain" in url
+    # A caller-injected signature key is never allowed into the signed query.
+    assert url.count("X-Amz-Signature=") == 1
+    assert "X-Amz-Signature=bogus" not in url

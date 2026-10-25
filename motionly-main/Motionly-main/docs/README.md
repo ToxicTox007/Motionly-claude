@@ -34,6 +34,18 @@ This directory is the canonical home for maintained Motionly documentation. Link
 - [Temporal mTLS canary](ops/temporal-mtls-canary.md)
 - [Temporal task-queue migration](ops/temporal-queue-migration.md)
 
+## AWS deployment with Amazon Bedrock
+
+Operator guide for running Motionly on AWS with Amazon Bedrock inference.
+
+- [AWS deployment overview](aws/README.md) — order of operations, placeholder legend, regions/models, and unverified facts.
+- [IAM inference user and policy](aws/iam-inference-policy.md)
+- [S3 buckets](aws/s3-buckets.md)
+- [Model access and smoke tests](aws/model-access.md)
+- [Data Automation project](aws/data-automation-project.md)
+- [Cost guardrails](aws/cost-guardrails.md) — AWS Budgets plus the registry per-route hard caps.
+- [First paid test](aws/first-paid-test.md) — the controlled end-to-end runbook and rollback.
+
 ## Security and governance
 
 - [Data handling](security/data-handling.md) — external providers and internal storage.

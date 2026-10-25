@@ -517,7 +517,9 @@ class Settings(BaseSettings):
     # feature/category across provider labels; ``provider`` restores per-provider
     # counting and records (but does not enforce) the planning quota. Both modes
     # read the same cost rows. Removed at the Tier 2 gate, no earlier than one
-    # full billing period after Tier 1 ships.
+    # full billing period after Tier 1 ships. Tier 1 shipped 2026-10-25, so this
+    # flag must be kept until at least 2026-11-25 (one full monthly billing
+    # period later); it may not be removed before that date.
     ai_quota_scope: str = Field(default="feature", alias="AI_QUOTA_SCOPE")
 
     # Per-plan quotas for the remote AI features (metered by the model gateway;

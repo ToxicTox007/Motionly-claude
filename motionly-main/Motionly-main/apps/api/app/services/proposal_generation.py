@@ -6,7 +6,7 @@ from uuid import UUID
 
 from app.api.errors import ApiError
 from app.schemas.ai_proposals import ProposalCostUsage, ProposalProvenance, ProposalState
-from app.schemas.plans import EDIT_PLAN_PROMPT_VERSION, PlanCreateRequest
+from app.schemas.plans import EDIT_PLAN_PROMPT_VERSION, ModelChoiceResult, PlanCreateRequest
 from app.services.ai_proposals import (
     build_multimodal_context,
     context_digest,
@@ -224,6 +224,11 @@ def execute_proposal_generation(
     deterministic = result.planner_source in {"deterministic_fixture", "deterministic_fallback"}
     approval_ready = not (production and deterministic)
     actual_cost = gateway.get("actual_cost_usd")
+    model_choice = ModelChoiceResult.from_payload(
+        result.raw_payload.get("model_choice")
+        if isinstance(result.raw_payload, dict)
+        else None
+    )
     provenance = ProposalProvenance(
         provider=result.provider,
         model=result.model,
@@ -237,6 +242,7 @@ def execute_proposal_generation(
         planner_source=result.planner_source,
         prompt_version=result.prompt_version or EDIT_PLAN_PROMPT_VERSION,
         editorial_memory=editorial_memory_provenance,
+        model_choice=model_choice,
     )
     completed = proposal_repository.complete_generation(
         proposal_id=proposal.id,

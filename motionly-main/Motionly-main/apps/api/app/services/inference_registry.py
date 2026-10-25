@@ -69,7 +69,19 @@ _CONFIGURED_ADAPTER_TYPES = frozenset({"huggingface_endpoint", "aws_bedrock"})
 _IAM_CREDENTIAL_ADAPTER_TYPES = frozenset({"aws_bedrock"})
 _SELF_HOSTED_ADAPTER_TYPES = frozenset({"local", "agent_pool"})
 _AUTH_TYPES = frozenset(
-    {"none", "bearer", "custom_header", "azure_api_key", "oauth2_client_credentials"}
+    {
+        "none",
+        "bearer",
+        "custom_header",
+        "azure_api_key",
+        "oauth2_client_credentials",
+        # ``aws_access_key`` is the static-key path for ``aws_bedrock`` adapters
+        # only (S1, Amendment 2026-10-25): a narrowly scoped IAM user's access
+        # key id + secret key, each a ``file:``/``bundle:`` secret ref, resolved
+        # lazily at call time. ``aws_bedrock`` still accepts ``auth: none`` (the
+        # existing IAM credential-chain behaviour).
+        "aws_access_key",
+    }
 )
 _NETWORKS = frozenset({"public", "private"})
 _STRATEGIES = frozenset(
@@ -174,13 +186,22 @@ _SUPPORT_MATRIX: dict[str, frozenset[InferenceCapability]] = {
             InferenceCapability.AUDIO_EMOTION,
         }
     ),
-    # AWS Bedrock (plan Task 25). Converse serves planning.chat and
-    # vision.caption; InvokeModel serves embeddings.text.
+    # AWS Bedrock (plan Task 25, extended for the CPU-only deployment in spec
+    # item E). Converse serves planning.chat, vision.caption and
+    # vision.object_detection; InvokeModel serves embeddings.text; Data
+    # Automation serves transcription.speech_to_text and audio.diarization;
+    # async-invoke serves the two video.generation.* capabilities. The precise
+    # capability-per-api rule is enforced per route in ``_validate_route_rules``.
     "aws_bedrock": frozenset(
         {
             InferenceCapability.PLANNING_CHAT,
             InferenceCapability.VISION_CAPTION,
+            InferenceCapability.VISION_OBJECT_DETECTION,
             InferenceCapability.EMBEDDINGS_TEXT,
+            InferenceCapability.TRANSCRIPTION_SPEECH_TO_TEXT,
+            InferenceCapability.AUDIO_DIARIZATION,
+            InferenceCapability.VIDEO_GENERATION_SUBMIT,
+            InferenceCapability.VIDEO_GENERATION_STATUS,
         }
     ),
 }
@@ -216,6 +237,10 @@ class DiagnosticCode:
     AUTH_TYPE_UNKNOWN = "auth_type_unknown"
     AUTH_MISSING_HEADER_NAME = "auth_missing_header_name"
     AUTH_MISSING_OAUTH_FIELDS = "auth_missing_oauth_fields"
+    # ``aws_access_key`` auth (S1): allowed only on ``aws_bedrock`` adapters and
+    # requires both an access-key-id ref and a secret ref.
+    AUTH_ACCESS_KEY_WRONG_ADAPTER = "auth_access_key_wrong_adapter"
+    AUTH_ACCESS_KEY_MISSING_REFS = "auth_access_key_missing_refs"
     API_VERSION_NOT_ALLOWED = "api_version_not_allowed"
     EXTRA_BODY_NOT_ALLOWED = "extra_body_not_allowed"
     # Typed adapter config (plan Tasks 24/25). A ``config`` block is required for
@@ -314,6 +339,11 @@ class AuthConfig:
     client_id: str | None = None
     client_secret_ref: str | None = None
     scope: str | None = None
+    # ``aws_access_key`` auth only (S1): the access key id secret ref. The secret
+    # key uses the shared ``secret_ref`` field. Both are ``file:``/``bundle:``
+    # refs resolved lazily at call time; this field is ``None`` for every other
+    # auth type.
+    access_key_id_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -364,6 +394,15 @@ class ModelRecord:
 class HardCap:
     max_requests_per_month: int | None = None
     max_units_per_month: int | None = None
+    # Optional per-UTC-day caps (S2 daily caps). These are additive and default
+    # to ``None`` so every existing registry file keeps today's behaviour. They
+    # are enforced alongside the monthly caps for ANY route that declares a cap
+    # (see ``model_gateway._reserve_route_hard_cap``). ``has_positive_cap`` below
+    # is intentionally left counting only the MONTHLY caps so the unknown-pricing
+    # rule ("unknown pricing requires a hard cap greater than 0") still requires a
+    # positive monthly cap and is unchanged by this addition.
+    max_requests_per_day: int | None = None
+    max_units_per_day: int | None = None
 
     @property
     def has_positive_cap(self) -> bool:
@@ -515,6 +554,7 @@ _AUTH_KEYS = frozenset(
         "client_id",
         "client_secret_ref",
         "scope",
+        "access_key_id_ref",
     }
 )
 _HEALTH_KEYS = frozenset({"method", "path"})
@@ -589,7 +629,14 @@ _PRICING_KEYS = frozenset(
     }
 )
 _BUDGET_KEYS = frozenset({"feature", "monthly_usd", "hard_cap"})
-_HARD_CAP_KEYS = frozenset({"max_requests_per_month", "max_units_per_month"})
+_HARD_CAP_KEYS = frozenset(
+    {
+        "max_requests_per_month",
+        "max_units_per_month",
+        "max_requests_per_day",
+        "max_units_per_day",
+    }
+)
 _LIMITS_KEYS = frozenset(
     {"max_batch", "max_request_bytes", "max_duration_s", "max_output_units"}
 )
@@ -770,6 +817,9 @@ def _parse_auth(raw: object, obj_id: str, path: str) -> AuthConfig:
             value, "client_secret_ref", "adapter", obj_id, path
         ),
         scope=_str_field(value, "scope", "adapter", obj_id, path),
+        access_key_id_ref=_str_field(
+            value, "access_key_id_ref", "adapter", obj_id, path
+        ),
     )
 
 
@@ -1029,6 +1079,12 @@ def _parse_hard_cap(raw: object, obj_id: str, path: str) -> HardCap:
         ),
         max_units_per_month=_int_field(
             value, "max_units_per_month", "route", obj_id, path
+        ),
+        max_requests_per_day=_int_field(
+            value, "max_requests_per_day", "route", obj_id, path
+        ),
+        max_units_per_day=_int_field(
+            value, "max_units_per_day", "route", obj_id, path
         ),
     )
 
@@ -1906,6 +1962,14 @@ def _validate_adapter(
             adapter, auth.client_secret_ref, app_env, f"{path}.auth", "client_secret_ref"
         )
     )
+    # Validate the access-key-id ref whenever it is present (it uses the same
+    # ``file:``/``bundle:`` rules as every other secret ref; ``env:`` is rejected
+    # in production).
+    diagnostics.extend(
+        _validate_secret_ref(
+            adapter, auth.access_key_id_ref, app_env, f"{path}.auth", "access_key_id_ref"
+        )
+    )
     if auth.type == "custom_header" and not auth.header_name:
         diagnostics.append(
             _diag(
@@ -1931,6 +1995,32 @@ def _validate_adapter(
                 f"{path}.auth",
             )
         )
+    if auth.type == "aws_access_key":
+        # Static IAM-user keys are a Bedrock-only path (S1): the SigV4 adapter is
+        # the only consumer. Any other adapter type carrying this auth is an
+        # error so a stray static key can never reach a generic HTTP adapter.
+        if adapter.type != "aws_bedrock":
+            diagnostics.append(
+                _diag(
+                    "adapter",
+                    adapter.id,
+                    "error",
+                    DiagnosticCode.AUTH_ACCESS_KEY_WRONG_ADAPTER,
+                    "aws_access_key auth is only valid on aws_bedrock adapters",
+                    f"{path}.auth.type",
+                )
+            )
+        if not (auth.access_key_id_ref and auth.secret_ref):
+            diagnostics.append(
+                _diag(
+                    "adapter",
+                    adapter.id,
+                    "error",
+                    DiagnosticCode.AUTH_ACCESS_KEY_MISSING_REFS,
+                    "aws_access_key auth requires access_key_id_ref and secret_ref",
+                    f"{path}.auth",
+                )
+            )
     diagnostics.extend(_validate_adapter_config(adapter, path))
     return diagnostics
 
@@ -2003,11 +2093,37 @@ def _validate_adapter_config(
             api=config.get("api"),  # type: ignore[arg-type]
             embedding_family=config.get("embedding_family"),  # type: ignore[arg-type]
             timeout_s=timeout if isinstance(timeout, (int, float)) else -1.0,
+            s3_bucket=config.get("s3_bucket"),  # type: ignore[arg-type]
+            s3_region=config.get("s3_region"),  # type: ignore[arg-type]
+            data_automation_profile_arn=config.get(  # type: ignore[arg-type]
+                "data_automation_profile_arn"
+            ),
+            data_automation_project_arn=config.get(  # type: ignore[arg-type]
+                "data_automation_project_arn"
+            ),
+            video_family=config.get("video_family"),  # type: ignore[arg-type]
         )
         for problem in errors:
             _config_error(problem)
         # Reject unknown config keys so the block mirrors ``BedrockConfig``.
-        allowed = {"region", "api", "embedding_family", "timeout_s"}
+        allowed = {
+            "region",
+            "api",
+            "embedding_family",
+            "timeout_s",
+            "s3_bucket",
+            "s3_prefix",
+            "s3_region",
+            "data_automation_profile_arn",
+            "data_automation_project_arn",
+            "data_automation_stage",
+            "max_wait_s",
+            "poll_interval_s",
+            "cleanup",
+            "video_family",
+            "video_resolution",
+            "presign_expires_s",
+        }
         for key in config:
             if key not in allowed:
                 _config_error(f"unknown key {key!r}")
@@ -2025,6 +2141,74 @@ def _route_pricing_is_zero(route: RouteRecord) -> bool:
         pricing.per_unit_usd,
     ]
     return all((amount or 0.0) == 0.0 for amount in amounts)
+
+
+# Which capabilities each Bedrock ``api`` value serves (spec item E). The
+# support matrix already gates the whole adapter type; this narrows a route to
+# the specific api its adapter is configured for so, e.g., a ``converse`` route
+# can never serve ``transcription.speech_to_text``.
+_BEDROCK_API_CAPABILITIES: dict[str, frozenset[InferenceCapability]] = {
+    "converse": frozenset(
+        {
+            InferenceCapability.PLANNING_CHAT,
+            InferenceCapability.VISION_CAPTION,
+            InferenceCapability.VISION_OBJECT_DETECTION,
+        }
+    ),
+    "invoke_model": frozenset({InferenceCapability.EMBEDDINGS_TEXT}),
+    "data_automation": frozenset(
+        {
+            InferenceCapability.TRANSCRIPTION_SPEECH_TO_TEXT,
+            InferenceCapability.AUDIO_DIARIZATION,
+        }
+    ),
+    "async_invoke": frozenset(
+        {
+            InferenceCapability.VIDEO_GENERATION_SUBMIT,
+            InferenceCapability.VIDEO_GENERATION_STATUS,
+        }
+    ),
+}
+
+
+def _validate_bedrock_route_api(
+    route: RouteRecord,
+    adapter: AdapterRecord,
+    path: str,
+    add: Callable[..., None],
+) -> None:
+    """Check a Bedrock route's capability against its adapter's ``api``.
+
+    Reuses the ``capability_adapter_unsupported`` diagnostic. ``audio.diarization``
+    requires a ``data_automation_project_arn`` because speaker labeling is enabled
+    on the BDA project.
+    """
+    api = adapter.config.get("api")
+    if not isinstance(api, str):
+        return  # an invalid/missing api is already reported on the adapter.
+    allowed = _BEDROCK_API_CAPABILITIES.get(api)
+    if allowed is None:
+        return
+    if route.capability not in allowed:
+        add(
+            "error",
+            DiagnosticCode.CAPABILITY_ADAPTER_UNSUPPORTED,
+            f"aws_bedrock api {api!r} does not serve {route.capability.value}",
+            f"{path}.capability",
+        )
+        return
+    if (
+        route.capability == InferenceCapability.AUDIO_DIARIZATION
+        and not adapter.config.get("data_automation_project_arn")
+    ):
+        add(
+            "error",
+            DiagnosticCode.CAPABILITY_ADAPTER_UNSUPPORTED,
+            "audio.diarization on aws_bedrock requires a "
+            "data_automation_project_arn (speaker labeling is enabled on the "
+            "BDA project)",
+            f"{path}.capability",
+        )
 
 
 def _validate_route_rules(
@@ -2068,6 +2252,15 @@ def _validate_route_rules(
             f"{route.capability.value}",
             f"{path}.capability",
         )
+
+    # Bedrock api/capability affinity (spec item E). A Bedrock adapter serves a
+    # fixed set of capabilities per its configured ``api`` value; a route whose
+    # capability does not match its adapter's api is rejected with the existing
+    # ``capability_adapter_unsupported`` diagnostic. ``audio.diarization``
+    # additionally requires a data-automation project ARN (speaker labeling is
+    # enabled on the project).
+    if adapter.type == "aws_bedrock":
+        _validate_bedrock_route_api(route, adapter, path, add)
 
     # Revision policy by locality.
     revision = route.model_revision.strip().lower()
@@ -2463,6 +2656,8 @@ def to_model_route(route: RouteRecord, adapter: AdapterRecord) -> ModelRoute:
         pricing_status=pricing.status,
         hard_cap_max_requests=route.budget.hard_cap.max_requests_per_month,
         hard_cap_max_units=route.budget.hard_cap.max_units_per_month,
+        hard_cap_max_requests_per_day=route.budget.hard_cap.max_requests_per_day,
+        hard_cap_max_units_per_day=route.budget.hard_cap.max_units_per_day,
         minimum_billable_units=minimum_units,
         timeout_s=route.timeout_s if route.timeout_s is not None else adapter.timeout_s,
         max_batch=route.limits.max_batch,

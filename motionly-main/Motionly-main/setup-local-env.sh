@@ -77,6 +77,9 @@ touch edge_origin_verify_previous
 # Create the generic inference secrets bundle file (empty in fixture mode)
 touch ai_secrets_bundle
 
+# Bedrock static keys (docs/aws); empty in fixture mode (no Bedrock route).
+touch aws_inference_access_key_id aws_inference_secret_access_key
+
 echo "✓ Created core secrets (11 files)"
 
 # Create empty Temporal cert files (for local dev without TLS)

@@ -31,6 +31,7 @@ const navItems = [
 const settingsItems = [
   { href: "/billing", label: "Billing", icon: "billing" },
   { href: "/account/team", label: "Team", icon: "settings" },
+  { href: "/account/ai-models", label: "AI models", icon: "settings" },
   { href: "/account/api-keys", label: "API Keys", icon: "settings" },
   { href: "/account", label: "Settings", icon: "settings" },
 ] satisfies Array<{ href: string; label: string; icon: PixelIconName }>;
@@ -93,6 +94,7 @@ export async function AppShell({
                 ? [{ href: "/billing", label: "Billing" }]
                 : []),
               { href: "/account/team", label: "Team" },
+              { href: "/account/ai-models", label: "AI models" },
               ...(shell.showApiKeys
                 ? [{ href: "/account/api-keys", label: "API Keys" }]
                 : []),

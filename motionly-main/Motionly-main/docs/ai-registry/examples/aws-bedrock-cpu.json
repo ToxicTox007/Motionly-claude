@@ -1,0 +1,205 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "bedrock-converse",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": { "type": "none" },
+      "timeout_s": 60,
+      "config": { "region": "us-east-1", "api": "converse" },
+      "data_processor": {
+        "display_name": "Amazon Bedrock (Converse)",
+        "purpose": "Serves planning chat through the Converse API. Credentials come from the IAM credential chain (no static key is stored as an AI secret). Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["text"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "bedrock-detection",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": { "type": "none" },
+      "timeout_s": 60,
+      "config": { "region": "us-east-1", "api": "converse" },
+      "data_processor": {
+        "display_name": "Amazon Bedrock (Nova Lite, Converse)",
+        "purpose": "Serves object detection by sending still frames to Amazon Nova Lite through the Converse API. Credentials come from the IAM credential chain. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["image"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "bedrock-data-automation",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": { "type": "none" },
+      "timeout_s": 900,
+      "config": {
+        "region": "ap-south-1",
+        "api": "data_automation",
+        "s3_bucket": "motionly-bda-staging",
+        "s3_prefix": "audio",
+        "s3_region": "ap-south-1",
+        "data_automation_profile_arn": "arn:aws:bedrock:ap-south-1:123456789012:data-automation-profile/motionly-audio",
+        "data_automation_project_arn": "arn:aws:bedrock:ap-south-1:123456789012:data-automation-project/motionly-audio-speaker-labels",
+        "data_automation_stage": "LIVE",
+        "max_wait_s": 900,
+        "poll_interval_s": 5,
+        "cleanup": true
+      },
+      "data_processor": {
+        "display_name": "Amazon Bedrock Data Automation",
+        "purpose": "Transcribes and diarizes audio through Bedrock Data Automation. The audio is staged in an S3 bucket you own, processed asynchronously, and the structured output is read back and deleted. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["audio"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "bedrock-video",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": { "type": "none" },
+      "timeout_s": 900,
+      "config": {
+        "region": "us-east-1",
+        "api": "async_invoke",
+        "s3_bucket": "motionly-nova-reel-output",
+        "s3_prefix": "video",
+        "s3_region": "us-east-1",
+        "video_family": "nova_reel",
+        "video_resolution": "720p",
+        "presign_expires_s": 900
+      },
+      "data_processor": {
+        "display_name": "Amazon Bedrock (Nova Reel, async-invoke)",
+        "purpose": "Generates text-to-video clips with Amazon Nova Reel through the asynchronous invoke API. The finished MP4 is written to an S3 bucket you own in us-east-1 and served through a short-lived presigned URL. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["text", "video"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "bedrock-planning-model",
+      "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "revision": "20241022-v2",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "bedrock-detection-model",
+      "model_id": "amazon.nova-lite-v1:0",
+      "revision": "v1-0",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["vision.object_detection"]
+    },
+    {
+      "id": "bedrock-audio-model",
+      "model_id": "amazon.bedrock-data-automation-audio",
+      "revision": "bda-audio-2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["transcription.speech_to_text", "audio.diarization"]
+    },
+    {
+      "id": "bedrock-video-model",
+      "model_id": "amazon.nova-reel-v1:1",
+      "revision": "v1-1",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["video.generation.submit", "video.generation.status"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "bedrock-planning-chat",
+      "capability": "planning.chat",
+      "adapter_id": "bedrock-converse",
+      "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "model_ref": "bedrock-planning-model",
+      "model_revision": "20241022-v2",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": { "status": "unknown" },
+      "budget": {
+        "feature": "planning",
+        "hard_cap": { "max_requests_per_month": 20000 }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-transcription",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "bedrock-data-automation",
+      "model_id": "amazon.bedrock-data-automation-audio",
+      "model_ref": "bedrock-audio-model",
+      "model_revision": "bda-audio-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": { "status": "unknown", "unit": "seconds" },
+      "budget": {
+        "feature": "transcription",
+        "hard_cap": { "max_units_per_month": 3600000 }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-diarization",
+      "capability": "audio.diarization",
+      "adapter_id": "bedrock-data-automation",
+      "model_id": "amazon.bedrock-data-automation-audio",
+      "model_ref": "bedrock-audio-model",
+      "model_revision": "bda-audio-2026-10-01",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": { "status": "unknown", "unit": "seconds" },
+      "budget": {
+        "feature": "audio_diarization",
+        "hard_cap": { "max_units_per_month": 3600000 }
+      },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-object-detection",
+      "capability": "vision.object_detection",
+      "adapter_id": "bedrock-detection",
+      "model_id": "amazon.nova-lite-v1:0",
+      "model_ref": "bedrock-detection-model",
+      "model_revision": "v1-0",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "pricing": { "status": "unknown", "unit": "images" },
+      "budget": {
+        "feature": "vision_objects",
+        "hard_cap": { "max_requests_per_month": 50000 }
+      },
+      "limits": { "max_batch": 8, "max_request_bytes": 9437184 },
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "bedrock-video-generation",
+      "capability": "video.generation.submit",
+      "adapter_id": "bedrock-video",
+      "model_id": "amazon.nova-reel-v1:1",
+      "model_ref": "bedrock-video-model",
+      "model_revision": "v1-1",
+      "priority": 100,
+      "compute_requirement": "remote",
+      "timeout_s": 900,
+      "pricing": { "status": "unknown", "unit": "seconds" },
+      "budget": {
+        "feature": "video_generation",
+        "hard_cap": { "max_requests_per_month": 2000 }
+      },
+      "enabled": true,
+      "scope": "global"
+    }
+  ]
+}

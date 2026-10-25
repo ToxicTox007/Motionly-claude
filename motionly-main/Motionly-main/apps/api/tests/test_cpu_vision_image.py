@@ -423,12 +423,77 @@ def _audio_route(app):
     )
 
 
-def test_create_app_worker_switches_sound_to_tflite(monkeypatch: pytest.MonkeyPatch) -> None:
+# A distinct SHA (not the baked YAMNET_SHA256) so the assertion proves the
+# classifier's ``model_sha256`` is threaded from the registry route's
+# ``params.weights_sha256`` (plan Task 33), not a code default.
+_ROUTE_SOUND_SHA256 = "b" * 64
+
+
+def _sound_registry(tmp_path: Path) -> Path:
+    """A dev registry: the built-in fake planning/transcription routes plus one
+    local ``audio.sound_classification`` route whose ``params`` carry the model
+    path and weights SHA (plan Task 33: sound identity comes from the registry
+    route, not from settings)."""
+    import copy
+    import json
+
+    from app.services.inference_runtime import _DEV_FAKE_REGISTRY
+
+    document = copy.deepcopy(_DEV_FAKE_REGISTRY)
+    document["adapters"].append(
+        {"id": "local-cpu-sound", "type": "local", "network": "private"}
+    )
+    document["models"].append(
+        {
+            "id": "yamnet-tflite-sound",
+            "model_id": "yamnet-tflite",
+            "revision": f"sha256:{_ROUTE_SOUND_SHA256}",
+            "licence": "Apache-2.0",
+            "commercial_use": True,
+            "capabilities": ["audio.sound_classification"],
+            "verified_at": "2026-10-24",
+        }
+    )
+    document["routes"].append(
+        {
+            "id": "local-sound-classification",
+            "capability": "audio.sound_classification",
+            "adapter_id": "local-cpu-sound",
+            "model_id": "yamnet-tflite",
+            "model_ref": "yamnet-tflite-sound",
+            "model_revision": f"sha256:{_ROUTE_SOUND_SHA256}",
+            "priority": 10,
+            "strategy": "local",
+            "compute_requirement": "cpu",
+            "requires_gpu": False,
+            "pricing": {"status": "free"},
+            "explicitly_free": True,
+            "params": {
+                "runner": "yamnet_sound",
+                "model_path": "/opt/motionly/models/yamnet.tflite",
+                "weights_sha256": _ROUTE_SOUND_SHA256,
+            },
+        }
+    )
+    path = tmp_path / "sound-registry.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def test_create_app_worker_switches_sound_to_tflite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("PROCESS_ROLE", "worker")
     get_settings.cache_clear()
     default_app = create_app()
 
+    # Task 33: the CPU sound classifier is built from the registry
+    # ``audio.sound_classification`` local route (its ``params.model_path`` /
+    # ``params.weights_sha256``), not from a settings-driven YAMNet model id. The
+    # provider group is still switched on via ``AUDIO_SOUND_PROVIDER=yamnet_tflite``;
+    # the model identity is threaded from the route.
     monkeypatch.setenv("AUDIO_SOUND_PROVIDER", "yamnet_tflite")
+    monkeypatch.setenv("AI_REGISTRY_FILE", str(_sound_registry(tmp_path)))
     get_settings.cache_clear()
     cpu_app = create_app()
 
@@ -437,7 +502,8 @@ def test_create_app_worker_switches_sound_to_tflite(monkeypatch: pytest.MonkeyPa
     )
     sound = cpu_app.state.audio_ml_providers["sound"]
     assert isinstance(sound, YamnetTFLiteSoundClassifier)
-    assert sound.model_sha256 == YAMNET_SHA256
+    # The classifier's SHA comes from the route's ``params.weights_sha256``.
+    assert sound.model_sha256 == _ROUTE_SOUND_SHA256
     # The bundle revision is derived from the constructed providers' identities
     # (sourced from the registry local routes, plan Task 14), not config model-id
     # defaults.
