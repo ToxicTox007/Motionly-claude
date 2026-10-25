@@ -37,7 +37,7 @@
       "stands_in_for": "Speech-to-text through the model gateway",
       "identified_by": "provider fixture, model fixture-v1",
       "enabled_by": {
-        "TRANSCRIPTION_PROVIDER": "fixture"
+        "ALLOW_FIXTURE_PROVIDERS": "true"
       },
       "production": "rejected"
     },
@@ -50,7 +50,7 @@
       "stands_in_for": "LLM edit planning through the model gateway",
       "identified_by": "provider fixture, model fixture-edit-planner-v1",
       "enabled_by": {
-        "EDIT_PLANNER_PROVIDER": "fixture"
+        "ALLOW_FIXTURE_PROVIDERS": "true"
       },
       "production": "rejected"
     },
@@ -90,19 +90,6 @@
       "identified_by": "stems copied from the source audio",
       "enabled_by": {
         "STEM_SEPARATION_PROVIDER": "fixture"
-      },
-      "production": "rejected"
-    },
-    {
-      "id": "video-generation",
-      "kind": "fixture",
-      "label": "Test generated video",
-      "symbol": "FixtureRunwayProvider",
-      "path": "apps/api/app/services/scale.py",
-      "stands_in_for": "Runway Gen-3 video generation",
-      "identified_by": "task ids fixture-*, fixture:// URLs",
-      "enabled_by": {
-        "RUNWAY_API_KEY": ""
       },
       "production": "rejected"
     },

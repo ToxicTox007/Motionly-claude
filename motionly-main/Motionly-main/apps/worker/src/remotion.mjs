@@ -16,7 +16,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -32,6 +32,8 @@ import {
   validateRenderMediaManifest,
 } from "./media-url-policy.mjs";
 import { env } from "./queue-common.mjs";
+import { createRedactingLineWriter } from "./log-redaction.mjs";
+import { mediaToolEnv, rendererEnv } from "./subprocess-env.mjs";
 
 class StructuredRenderError extends Error {
   constructor(code, message, { retryable = false } = {}) {
@@ -972,7 +974,7 @@ export async function downloadToFile(
   }
 }
 
-function startValidatedMediaProxy() {
+export function startValidatedMediaProxy() {
   const targets = new Map();
   let nextId = 1;
   return new Promise((resolveProxy, reject) => {
@@ -1015,11 +1017,15 @@ function startValidatedMediaProxy() {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
+      const origin = `http://127.0.0.1:${port}`;
       resolveProxy({
+        // Downloads from this proxy (segmentation alpha-keying) trust exactly
+        // this origin; every upstream it fetches was validated on register.
+        origin,
         register(target, { trustedInternal = false } = {}) {
           const path = `/media/${nextId++}`;
           targets.set(path, { url: target, trustedInternal });
-          return `http://127.0.0.1:${port}${path}`;
+          return `${origin}${path}`;
         },
         close: () => new Promise((done) => server.close(done)),
       });
@@ -1027,10 +1033,24 @@ function startValidatedMediaProxy() {
   });
 }
 
-function startLocalFileServer(filePath) {
+export function startLocalFileServer(filePath) {
   return new Promise((resolve, reject) => {
-    const server = createServer((_req, res) => {
+    // Same URL shape as the media proxy (/media/N): the renderer accepts
+    // nothing else (apps/renderer/src/render-props-policy.ts).
+    const servedPath = "/media/1";
+    const server = createServer((req, res) => {
+      if (
+        req.url !== servedPath ||
+        !["GET", "HEAD"].includes(req.method ?? "")
+      ) {
+        res.writeHead(404).end();
+        return;
+      }
       res.writeHead(200, { "Content-Type": "video/webm" });
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
       createReadStream(filePath).pipe(res);
     });
     server.on("error", reject);
@@ -1038,53 +1058,170 @@ function startLocalFileServer(filePath) {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       resolve({
-        url: `http://127.0.0.1:${port}/keyed.webm`,
+        url: `http://127.0.0.1:${port}${servedPath}`,
         close: () => new Promise((done) => server.close(done)),
       });
     });
   });
 }
 
-async function applySegmentationAlphaKey({
+const FFMPEG_KILL_GRACE_MS = 5_000;
+const RENDERER_KILL_GRACE_MS = 10_000;
+const FFMPEG_STDERR_TAIL_CHARS = 8_192;
+
+/**
+ * Run ffmpeg without blocking the event loop.
+ *
+ * The worker's event loop renews BullMQ job locks, sends heartbeats and polls
+ * cancellation, so a long encode must never run synchronously. On timeout or
+ * cancellation ffmpeg gets SIGTERM, then SIGKILL after ``killGraceMs``; the
+ * promise settles only once the process has exited, so callers can safely
+ * delete its working files.
+ */
+export function runFfmpeg(
+  args,
+  {
+    timeoutMs,
+    killGraceMs = FFMPEG_KILL_GRACE_MS,
+    isCanceled = null,
+    cancelPollMs = 1_000,
+  } = {},
+) {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    let failure = null;
+    let settled = false;
+    let killTimer = null;
+    let polling = false;
+    const proc = spawn("ffmpeg", args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      // Never hand worker secrets to a process parsing untrusted media.
+      env: mediaToolEnv(),
+    });
+    proc.stderr.setEncoding("utf8");
+    proc.stderr.on("data", (chunk) => {
+      stderr = (stderr + chunk).slice(-FFMPEG_STDERR_TAIL_CHARS);
+    });
+    const stop = (error) => {
+      if (failure) return;
+      failure = error;
+      proc.kill("SIGTERM");
+      killTimer = setTimeout(() => proc.kill("SIGKILL"), killGraceMs);
+    };
+    const timeoutId = setTimeout(
+      () =>
+        stop(
+          new StructuredRenderError(
+            "segmentation_timeout",
+            "Background removal timed out.",
+            { retryable: true },
+          ),
+        ),
+      Math.max(1, timeoutMs),
+    );
+    const cancelInterval = isCanceled
+      ? setInterval(async () => {
+          if (polling) return;
+          polling = true;
+          try {
+            if (await isCanceled()) {
+              stop(
+                new StructuredRenderError(
+                  "render_cancelled",
+                  "Render was canceled by the user.",
+                ),
+              );
+            }
+          } catch {
+            // Keep encoding if status polling is transiently unavailable.
+          } finally {
+            polling = false;
+          }
+        }, cancelPollMs)
+      : null;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      clearTimeout(killTimer);
+      if (cancelInterval) clearInterval(cancelInterval);
+      fn(value);
+    };
+    proc.on("error", (error) => settle(reject, error));
+    proc.on("close", (code, signal) => {
+      if (failure) settle(reject, failure);
+      else if (code === 0) settle(resolve, { stderr });
+      else {
+        settle(
+          reject,
+          new Error(
+            `ffmpeg exited with ${code ?? signal}: ${stderr.slice(-500)}`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+export async function applySegmentationAlphaKey({
   sourceUrl,
   matteUrl,
   featherPx,
   workDir,
+  internalOrigin,
+  timeoutMs = renderTimeoutMs(),
+  killGraceMs = FFMPEG_KILL_GRACE_MS,
+  isCanceled = null,
 }) {
   await mkdir(workDir, { recursive: true });
   const sourcePath = join(workDir, "source.mp4");
   const mattePath = join(workDir, "matte.mp4");
   const keyedPath = join(workDir, "keyed.webm");
-  await downloadToFile(sourceUrl, sourcePath, { trustedInternal: true });
-  await downloadToFile(matteUrl, mattePath, { trustedInternal: true });
+  // Source and matte come through this render's loopback media proxy, which
+  // already validated and pinned the upstream. Trust exactly the proxy's
+  // origin: any other URL still gets the strict public-address guard.
+  await downloadToFile(sourceUrl, sourcePath, {
+    trustedInternal: true,
+    internalOrigin,
+  });
+  await downloadToFile(matteUrl, mattePath, {
+    trustedInternal: true,
+    internalOrigin,
+  });
   const feather = Math.max(0, Math.min(20, Number(featherPx ?? 18) / 8));
-  const result = spawnSync(
-    "ffmpeg",
-    [
-      "-y",
-      "-i",
-      sourcePath,
-      "-i",
-      mattePath,
-      "-filter_complex",
-      `[1:v]format=gray,scale=iw:ih:flags=bilinear,boxblur=luma_radius=${feather.toFixed(1)}:luma_power=1[alpha];[0:v][alpha]alphamerge[out]`,
-      "-map",
-      "[out]",
-      "-map",
-      "0:a?",
-      "-c:v",
-      "libvpx-vp9",
-      "-pix_fmt",
-      "yuva420p",
-      "-auto-alt-ref",
-      "0",
-      keyedPath,
-    ],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0 || !(await stat(keyedPath).catch(() => null))) {
+  try {
+    await runFfmpeg(
+      [
+        "-y",
+        "-i",
+        sourcePath,
+        "-i",
+        mattePath,
+        "-filter_complex",
+        `[1:v]format=gray,scale=iw:ih:flags=bilinear,boxblur=luma_radius=${feather.toFixed(1)}:luma_power=1[alpha];[0:v][alpha]alphamerge[out]`,
+        "-map",
+        "[out]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libvpx-vp9",
+        "-pix_fmt",
+        "yuva420p",
+        "-auto-alt-ref",
+        "0",
+        keyedPath,
+      ],
+      { timeoutMs, killGraceMs, isCanceled },
+    );
+  } catch (error) {
+    if (error instanceof StructuredRenderError) throw error;
     throw new Error(
-      `Failed to alpha-key source for segmentation: ${(result.stderr || "").slice(-500)}`,
+      `Failed to alpha-key source for segmentation: ${error.message}`,
+    );
+  }
+  if (!(await stat(keyedPath).catch(() => null))) {
+    throw new Error(
+      "Failed to alpha-key source for segmentation: no keyed output was written",
     );
   }
   return startLocalFileServer(keyedPath);
@@ -1098,10 +1235,21 @@ async function applySegmentationAlphaKey({
  * Spawn render-cli.ts and wait for it to exit 0.
  * stdout/stderr are streamed to process.stdout/stderr for service logs.
  */
-function spawnRenderer(
+export function spawnRenderer(
   propsPath,
   outputPath,
-  { renderJobId, workspaceId, projectId, timeoutMs },
+  {
+    renderJobId,
+    workspaceId,
+    projectId,
+    timeoutMs,
+    killGraceMs = RENDERER_KILL_GRACE_MS,
+    isCanceled = () =>
+      loadRenderJobStatusDirect(renderJobId, workspaceId, projectId).then(
+        (status) => status === "canceled",
+      ),
+    cancelPollMs = 1000,
+  },
 ) {
   return new Promise((resolve, reject) => {
     const rPath = rendererPath();
@@ -1126,52 +1274,80 @@ function spawnRenderer(
     const proc = spawn("node", args, {
       cwd: rPath,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
+      // Own process group: Chromium runs as a grandchild, so stopping the
+      // render signals the whole group, not only render-cli.
+      detached: process.platform !== "win32",
+      // Allowlisted: Remotion runs Chromium unsandboxed over user-controlled
+      // props, so the renderer must not inherit the worker's secrets
+      // (Supabase key, worker token, Redis URL, provider keys).
+      env: rendererEnv(process.env, {
         TS_NODE_PROJECT: join(rPath, "tsconfig.json"),
-        // Let Remotion find Chrome in Docker containers
-        ...(process.env.BROWSER_EXECUTABLE_PATH && {
-          BROWSER_EXECUTABLE_PATH: process.env.BROWSER_EXECUTABLE_PATH,
-        }),
-        ...(process.env.PUPPETEER_EXECUTABLE_PATH && {
-          PUPPETEER_EXECUTABLE_PATH: process.env.PUPPETEER_EXECUTABLE_PATH,
-        }),
-      },
+      }),
     });
 
-    proc.stdout.on("data", (data) => process.stdout.write(data));
-    proc.stderr.on("data", (data) => process.stderr.write(data));
+    // Line-buffered and credential-redacted (render props carry signed URLs).
+    const stdoutWriter = createRedactingLineWriter((line) =>
+      process.stdout.write(line),
+    );
+    const stderrWriter = createRedactingLineWriter((line) =>
+      process.stderr.write(line),
+    );
+    proc.stdout.on("data", (data) => stdoutWriter.write(data));
+    proc.stderr.on("data", (data) => stderrWriter.write(data));
+    proc.on("close", () => {
+      stdoutWriter.flush();
+      stderrWriter.flush();
+    });
 
     let settled = false;
+    let failure = null;
+    let killTimer = null;
+    let polling = false;
+    const signalRenderer = (signal) => {
+      try {
+        if (process.platform !== "win32" && proc.pid) {
+          process.kill(-proc.pid, signal);
+        } else {
+          proc.kill(signal);
+        }
+      } catch {
+        // Already exited.
+      }
+    };
     const finish = (fn, value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutId);
+      clearTimeout(killTimer);
       clearInterval(cancelInterval);
       fn(value);
     };
-    const timeoutId = setTimeout(() => {
-      proc.kill("SIGTERM");
-      finish(
-        reject,
-        new StructuredRenderError(
-          "render_timeout",
-          "Premium render timed out.",
-          { retryable: true },
+    // Ask the renderer to stop, force it after killGraceMs, and settle only
+    // once it has exited: the caller then deletes its temp files and frees
+    // the render slot, which must not happen while Chromium is still running.
+    const stop = (error) => {
+      if (failure) return;
+      failure = error;
+      signalRenderer("SIGTERM");
+      killTimer = setTimeout(() => signalRenderer("SIGKILL"), killGraceMs);
+    };
+    const timeoutId = setTimeout(
+      () =>
+        stop(
+          new StructuredRenderError(
+            "render_timeout",
+            "Premium render timed out.",
+            { retryable: true },
+          ),
         ),
-      );
-    }, timeoutMs);
+      timeoutMs,
+    );
     const cancelInterval = setInterval(async () => {
+      if (polling || failure) return;
+      polling = true;
       try {
-        const status = await loadRenderJobStatusDirect(
-          renderJobId,
-          workspaceId,
-          projectId,
-        );
-        if (status === "canceled") {
-          proc.kill("SIGTERM");
-          finish(
-            reject,
+        if (await isCanceled()) {
+          stop(
             new StructuredRenderError(
               "render_cancelled",
               "Render was canceled by the user.",
@@ -1180,11 +1356,17 @@ function spawnRenderer(
         }
       } catch {
         // Leave the render running if status polling is transiently unavailable.
+      } finally {
+        polling = false;
       }
-    }, 1000);
+    }, cancelPollMs);
 
     proc.on("close", (code) => {
-      if (code === 0) finish(resolve);
+      if (failure) {
+        // The CLI is gone; make sure nothing it started survives it.
+        signalRenderer("SIGKILL");
+        finish(reject, failure);
+      } else if (code === 0) finish(resolve);
       else
         finish(
           reject,
@@ -1373,6 +1555,15 @@ export async function runRemotionJob(
         matteUrl,
         featherPx: backgroundRemoval.feather_px,
         workDir: keyedWorkDir,
+        internalOrigin: mediaProxy.origin,
+        timeoutMs: renderTimeoutMs(),
+        isCanceled: async () =>
+          (await loadRenderJobStatusDirect(
+            renderJobId,
+            workspaceId,
+            projectId,
+            client,
+          )) === "canceled",
       });
       resolvedProps.sourceVideo = {
         ...resolvedProps.sourceVideo,

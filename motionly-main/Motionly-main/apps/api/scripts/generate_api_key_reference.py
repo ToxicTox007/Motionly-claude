@@ -54,7 +54,10 @@ def build_reference(openapi: dict) -> dict:
         "scheme": "Bearer mtly_<key>",
         "note": (
             "Agency-plan API keys may call only the routes listed here. Every "
-            "other endpoint returns 403 api_key_route_forbidden."
+            "other endpoint returns 403 api_key_route_forbidden. A key also stops "
+            "working (403 api_key_creator_inactive) once its creator is no longer an "
+            "active owner/admin of the workspace, and (402 plan_feature_required) "
+            "while the workspace plan lacks API access."
         ),
         "routes": routes,
     }

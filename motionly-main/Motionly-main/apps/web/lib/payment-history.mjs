@@ -75,7 +75,8 @@ export function formatDate(value) {
 /**
  * Validate a refund amount entered by an admin, in whole rupees. Returns the
  * amount in paise when valid, or an error code the surface turns into a
- * message. An empty amount means "refund the full plan price" (the API default)
+ * message. An empty amount means "refund what is still refundable on the latest
+ * payment" (the API default)
  * and is allowed (returns { ok: true, amountPaise: null }).
  */
 export function validateRefundRupees(input) {
@@ -89,4 +90,17 @@ export function validateRefundRupees(input) {
     return { ok: false, error: "refund_amount_invalid" };
   }
   return { ok: true, amountPaise: Math.round(rupees * 100) };
+}
+
+/**
+ * The past-due banner's consequence line. A failed renewal keeps paid
+ * features until the API's `past_due_grace_ends_at`; after that the workspace
+ * is on Free until the renewal is paid.
+ */
+export function pastDueGraceMessage(graceEndsAt, now = new Date()) {
+  const ends = graceEndsAt ? Date.parse(graceEndsAt) : Number.NaN;
+  if (Number.isFinite(ends) && ends > now.getTime()) {
+    return `Paid features stay on until ${formatDate(graceEndsAt)}; retry the payment before then to keep your plan.`;
+  }
+  return "Paid features are paused and Free plan limits apply until the payment succeeds. Retry the payment to restore your plan.";
 }

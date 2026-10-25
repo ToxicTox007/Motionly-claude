@@ -204,6 +204,7 @@ def _execute_job(*, job: EnqueuedJob, request: Any) -> dict[str, Any]:
                 provider=provider_name,
                 model=model,
                 cache_key=cache_key,
+                runtime=getattr(request.app.state, "inference_runtime", None),
             )
             result.update(
                 {
@@ -333,11 +334,10 @@ def _execute_job(*, job: EnqueuedJob, request: Any) -> dict[str, Any]:
             ),
             analytics_repository=request.app.state.analytics_repository,
             stem_separator=request.app.state.stem_separator,
-            runway_provider=request.app.state.runway_provider,
             model_gateway=getattr(request.app.state, "model_gateway", None),
-            runway_gateway_route=getattr(
+            video_generation_route=getattr(
                 request.app.state,
-                "runway_gateway_route",
+                "video_generation_route",
                 None,
             ),
             stem_gateway_route=getattr(
@@ -346,6 +346,11 @@ def _execute_job(*, job: EnqueuedJob, request: Any) -> dict[str, Any]:
                 None,
             ),
             operations_repository=request.app.state.operations_repository,
+            inference_operations_repository=getattr(
+                getattr(request.app.state, "inference_runtime", None),
+                "operations_repository",
+                None,
+            ),
             billing_repository=request.app.state.billing_repository,
             editorial_learning_repository=getattr(
                 request.app.state, "editorial_learning_repository", None
@@ -445,12 +450,15 @@ def _execute_job(*, job: EnqueuedJob, request: Any) -> dict[str, Any]:
         )
 
     if job.kind == "stock_asset_enrichment":
-        from app.services.stock_video import enrich_stock_asset
+        from app.services.stock_video import (
+            DEFAULT_EMBEDDING_MODEL_NAME,
+            enrich_stock_asset,
+        )
 
         params = json.loads(job.render_engine or "{}")
         clip_model_name = str(
             params.get("clip_model_name")
-            or getattr(settings, "visual_clip_model", "openai/clip-vit-base-patch32")
+            or getattr(settings, "visual_clip_model", DEFAULT_EMBEDDING_MODEL_NAME)
         )
         asset = request.app.state.broll_repository.get_asset(
             project_id=job.project_id,

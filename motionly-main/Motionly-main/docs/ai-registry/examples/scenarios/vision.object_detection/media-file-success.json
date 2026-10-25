@@ -1,0 +1,55 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "max_results": 12,
+    "images": [{ "file": "one-object.jpg" }]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/images:annotate" },
+      "response": {
+        "status": 200,
+        "json": {
+          "responses": [
+            {
+              "localizedObjectAnnotations": [
+                {
+                  "name": "Car",
+                  "score": 0.97,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0.1, "y": 0.2 },
+                      { "x": 0.5, "y": 0.2 },
+                      { "x": 0.5, "y": 0.7 },
+                      { "x": 0.1, "y": 0.7 }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "output": {
+      "detections": [
+        [{ "label": "car", "score": 0.97, "box": [0.1, 0.2, 0.4, 0.5] }]
+      ]
+    },
+    "usage": { "input_units": 1 },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "vision.googleapis.com",
+        "path": "/v1/images:annotate",
+        "header_names": ["accept", "x-goog-api-key"],
+        "body_keys": ["requests"]
+      }
+    ]
+  }
+}

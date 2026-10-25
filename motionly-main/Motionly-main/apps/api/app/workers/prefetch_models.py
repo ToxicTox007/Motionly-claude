@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -12,6 +13,59 @@ from app.core.config import get_settings
 from app.core.production import validate_production_settings
 
 
+def _enabled_local_models(settings) -> list[dict[str, object]]:
+    """The enabled local models from the registry (plan Task 14).
+
+    Reads the built runtime's route + model records: every model behind an
+    enabled ``local`` route, with its registry-sourced id, revision, weights
+    path/SHA. GPU-only models are skipped on a GPU-free deployment
+    (``GPU_WORKERS_ENABLED=false``). No model id, revision, URL or SHA comes from
+    a code default; the registry is the only source.
+    """
+    try:
+        from app.services.inference_runtime import build_inference_runtime
+
+        runtime = build_inference_runtime(settings)
+    except Exception as exc:  # a missing/invalid registry must not crash prefetch
+        print(f"model_prefetch_warning: registry unavailable: {exc}", file=sys.stderr)
+        return []
+    gpu_enabled = bool(getattr(settings, "gpu_workers_enabled", True))
+    document = getattr(runtime.validation, "document", None)
+    models_by_id = (
+        {model.id: model for model in document.models} if document is not None else {}
+    )
+    selected: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for route in runtime.route_records.values():
+        adapter = runtime.adapter_records.get(route.adapter_id)
+        if adapter is None or adapter.type != "local":
+            continue
+        if route.requires_gpu and not gpu_enabled:
+            continue
+        model = models_by_id.get(route.model_ref) if route.model_ref else None
+        if model is None or model.model_id in seen:
+            continue
+        seen.add(model.model_id)
+        params = dict(route.params)
+        selected.append(
+            {
+                "model_id": model.model_id,
+                "revision": model.revision,
+                "weights_sha256": model.weights_sha256,
+                "model_path": params.get("model_path"),
+            }
+        )
+    return selected
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main() -> None:
     settings = get_settings()
     validate_production_settings(settings)
@@ -22,53 +76,40 @@ def main() -> None:
     attempted = 0
     tmp_cleanup = cleanup_worker_tmp()
 
-    if importlib.util.find_spec("huggingface_hub"):
-        from huggingface_hub import snapshot_download
+    for entry in _enabled_local_models(settings):
+        attempted += 1
+        model_id = str(entry["model_id"])
+        revision = str(entry["revision"])
+        weights_sha256 = entry.get("weights_sha256")
+        model_path = entry.get("model_path")
+        try:
+            if model_path:
+                # A file-weights model (MediaPipe matte, YAMNet TFLite): verify the
+                # pinned SHA-256 of the baked-in file; never download a code URL.
+                path = Path(str(model_path))
+                if not path.is_file():
+                    raise FileNotFoundError(f"weights file missing: {model_path}")
+                if weights_sha256:
+                    actual = _sha256_file(path)
+                    if actual != str(weights_sha256).strip().lower():
+                        raise ValueError(
+                            f"weights SHA-256 mismatch for {model_id}: "
+                            f"expected {weights_sha256}, got {actual}"
+                        )
+            elif model_id == "htdemucs" and importlib.util.find_spec("demucs"):
+                from demucs.pretrained import get_model
 
-        models = [
-            (settings.visual_clip_model, settings.visual_clip_model_revision),
-            (settings.visual_blip_model, settings.visual_blip_model_revision),
-            (settings.wav2vec_emotion_model, settings.wav2vec_emotion_model_revision),
-        ]
-        if settings.pyannote_auth_token:
-            models.append((settings.pyannote_model, settings.pyannote_model_revision))
-        for model, revision in models:
-            attempted += 1
-            try:
+                get_model(model_id)
+            elif importlib.util.find_spec("huggingface_hub"):
+                from huggingface_hub import snapshot_download
+
                 snapshot_download(
-                    repo_id=model,
+                    repo_id=model_id,
                     revision=revision,
-                    token=settings.pyannote_auth_token,
+                    token=getattr(settings, "pyannote_auth_token", None),
                 )
-            except Exception as exc:  # worker logs retain the exact provider failure
-                failures.append(f"{model}@{revision}: {exc}")
-
-    if importlib.util.find_spec("ultralytics"):
-        attempted += 1
-        try:
-            from ultralytics import YOLO
-
-            YOLO(settings.visual_yolo_model)
-        except Exception as exc:
-            failures.append(f"{settings.visual_yolo_model}: {exc}")
-
-    if importlib.util.find_spec("tensorflow_hub"):
-        attempted += 1
-        try:
-            import tensorflow_hub as hub
-
-            hub.load(settings.yamnet_model_url)
-        except Exception as exc:
-            failures.append(f"YAMNet: {exc}")
-
-    if importlib.util.find_spec("demucs"):
-        attempted += 1
-        try:
-            from demucs.pretrained import get_model
-
-            get_model(settings.demucs_model)
-        except Exception as exc:
-            failures.append(f"Demucs {settings.demucs_model}: {exc}")
+        except Exception as exc:  # worker logs retain the exact provider failure
+            failures.append(f"{model_id}@{revision}: {exc}")
 
     for failure in failures:
         print(f"model_prefetch_warning: {failure}", file=sys.stderr)

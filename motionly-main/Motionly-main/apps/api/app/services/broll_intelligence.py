@@ -39,6 +39,27 @@ def latest_visual_manifest_for_broll(
     return record.manifest if record and record.manifest else None
 
 
+def manifest_embeddings_match(
+    visual_manifest: VideoManifest | None, embedding_revision: str | None
+) -> bool:
+    """Whether manifest scene vectors share a space with the active embedding routes.
+
+    Manifests that declare ``summary.embedding_revision`` (the remote visual
+    provider) are compared exactly. Manifests that declare nothing keep the
+    existing behaviour, where the dimension check in ranking is the safety net.
+    """
+    if visual_manifest is None or not embedding_revision:
+        return True
+    declared = (visual_manifest.summary or {}).get("embedding_revision")
+    return not declared or str(declared) == str(embedding_revision)
+
+
+def without_scene_embeddings(visual_manifest: VideoManifest) -> VideoManifest:
+    """The manifest with scene vectors removed (captions, objects and faces kept)."""
+    scenes = [scene.model_copy(update={"embedding": []}) for scene in visual_manifest.scenes]
+    return visual_manifest.model_copy(update={"scenes": scenes})
+
+
 def visual_manifest_cache_signature(visual_manifest: VideoManifest | None) -> str:
     if visual_manifest is None:
         return "none"

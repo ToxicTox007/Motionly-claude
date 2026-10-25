@@ -8,12 +8,20 @@ from app.core.config import get_settings
 from app.core.production import validate_production_settings
 from app.repositories.uploads import SupabaseUploadRepository
 from app.repositories.visual import SupabaseVisualRepository
+from app.services.cpu_vision import SELFIE_SEGMENTER_LANDSCAPE, load_cpu_matte_models
+from app.services.inference_runtime import build_inference_runtime
 from app.services.matte_jobs import run_matte_for_upload
+from app.services.model_choice import wire_worker_choice_resolver
 from app.services.model_domain_adapters import register_matte_route
 from app.services.model_gateway import ModelOperation, validate_gateway_operations
-from app.services.model_gateway_factory import model_gateway_from_settings
 from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider
+from app.services.visual_jobs import local_visual_model_identity
+from app.workers.executor_protocol import open_protocol_channel
+from app.workers.inference_fingerprint import (
+    MATTE_CAPABILITY_IDS,
+    enforce_registry_fingerprint,
+)
 
 
 def main() -> None:
@@ -48,31 +56,71 @@ def _runner():
         service_role_key=settings.supabase_service_role_key,
     )
     visual_provider_key = settings.visual_intelligence_provider.strip().lower()
-    if visual_provider_key == "fixture":
-        provider_models = {}
-    else:
-        provider = LocalMLVisualIntelligenceProvider(
-            clip_model=settings.visual_clip_model,
-            blip_model=settings.visual_blip_model,
-            yolo_model=settings.visual_yolo_model,
-        )
-        provider_models = provider._load_models()
-
+    matte_provider_key = str(getattr(settings, "matte_provider", "local_ml")).strip().lower()
+    matte_revision = "mediapipe-selfie-segmentation-v1"
+    matte_route_identity: dict[str, str] = {}
     operations = OperationsRepository(
         supabase_url=str(settings.supabase_url),
         service_role_key=settings.supabase_service_role_key,
     )
-    gateway = model_gateway_from_settings(
+    runtime = build_inference_runtime(
         settings,
         metrics_registry=MetricsRegistry(),
         operations_repository=operations,
     )
+    gateway = runtime.gateway
+    # Background jobs follow the user's model choice too (plan Section 2.11,
+    # Task 31): wire the resolver on this worker's gateway from the shared runtime.
+    wire_worker_choice_resolver(gateway, runtime=runtime, settings=settings)
+    if visual_provider_key == "fixture":
+        provider_models = {}
+    elif matte_provider_key == "local_cpu":
+        # MediaPipe Tasks on CPU: no torch/transformers model is loaded.
+        provider_models = load_cpu_matte_models(
+            model_path=settings.matte_cpu_model_path,
+            model_sha256=settings.matte_cpu_model_sha256,
+        )
+        matte_revision = f"sha256:{settings.matte_cpu_model_sha256.strip().lower()}"
+        matte_route_identity = {
+            "provider": "local_mediapipe_cpu",
+            "model": SELFIE_SEGMENTER_LANDSCAPE.name,
+        }
+    else:
+        # Local CLIP/BLIP/YOLO identity comes from the registry local routes
+        # (gpu-local.json, plan Task 14), never a config model-id default.
+        identity = local_visual_model_identity(gateway)
+        provider = LocalMLVisualIntelligenceProvider(
+            clip_model=identity["clip_model"],
+            blip_model=identity["blip_model"],
+            yolo_model=identity["yolo_model"],
+        )
+        provider_models = provider._load_models()
+
     matte_route = None
     if gateway is not None and provider_models:
+        # Prefer the matte identity from the configured ``matte.segmentation``
+        # registry route (plan Task 33: identity comes from the route, not a code
+        # default); fall back to the computed revision/identity otherwise.
+        registry_matte = next(
+            (
+                route
+                for route in getattr(gateway, "routes", [])
+                if getattr(route, "capability_id", None) == "matte.segmentation"
+                and getattr(route, "enabled", True)
+            ),
+            None,
+        )
+        if registry_matte is not None:
+            matte_revision = registry_matte.model_revision
+            matte_route_identity = {
+                "provider": registry_matte.provider,
+                "model": registry_matte.model,
+            }
         matte_route = register_matte_route(
             gateway,
             provider_models=provider_models,
-            revision="mediapipe-selfie-segmentation-v1",
+            revision=matte_revision,
+            **matte_route_identity,
         )
     if settings.app_env == "production":
         validate_gateway_operations(
@@ -82,6 +130,11 @@ def _runner():
         )
 
     def execute(payload: dict[str, object]) -> dict[str, object]:
+        # Fail closed if the API enqueued this job against a different inference
+        # catalog for matte segmentation (plan Task 6).
+        enforce_registry_fingerprint(
+            payload, runtime=runtime, capability_ids=MATTE_CAPABILITY_IDS
+        )
         record = run_matte_for_upload(
             repository=repository,
             workspace_id=UUID(str(payload["workspace_id"])),
@@ -109,13 +162,15 @@ def _runner():
 
 
 def _serve() -> None:
+    # Before the models load: only `channel` may write to the real stdout.
+    channel = open_protocol_channel()
     execute = _runner()
     for line in sys.stdin:
         request: dict[str, object] = {}
         try:
             request = json.loads(line)
             if request.get("control") == "ping":
-                print(json.dumps({"id": request.get("id"), "result": {"ok": True}}), flush=True)
+                channel.send({"id": request.get("id"), "result": {"ok": True}})
                 continue
             response = {
                 "id": request.get("id"),
@@ -131,7 +186,7 @@ def _serve() -> None:
                 "error": redact_string(str(exc)),
                 "error_code": type(exc).__name__,
             }
-        print(json.dumps(response), flush=True)
+        channel.send(response)
 
 
 def _arguments() -> argparse.Namespace:

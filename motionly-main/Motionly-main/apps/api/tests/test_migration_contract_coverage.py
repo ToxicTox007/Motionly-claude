@@ -9,6 +9,49 @@ MIGRATIONS = ROOT / "supabase" / "migrations"
 SQL_TESTS = ROOT / "supabase" / "tests"
 
 MIGRATION_TEST_CONTRACTS = {
+    "202610250201_model_choice_settings.sql": (
+        "model_choice_settings_test.sql",
+        (
+            "workspace_model_settings",
+            "project_model_settings",
+            "allowed_option_ids",
+            "locked",
+            "planning.chat",
+            "motionly_worker",
+            "service_role",
+        ),
+    ),
+    "202610250101_inference_registry.sql": (
+        "inference_registry_test.sql",
+        (
+            "ai_adapters",
+            "ai_models",
+            "ai_routes",
+            "ai_secrets",
+            "ai_registry_version",
+            "offering",
+            "motionly_bump_ai_registry_version",
+            "motionly_worker",
+            "service_role",
+        ),
+    ),
+    "202610240301_worker_revoke_unused_upload_session_reads.sql": (
+        "worker_revoke_unused_upload_session_reads_test.sql",
+        ("motionly_worker", "motionly_worker_jobs", "upload_sessions", "uploaded_videos"),
+    ),
+    "202610220101_remote_ai_feature_quota_categories.sql": (
+        "remote_ai_feature_quota_categories_test.sql",
+        (
+            "cost_attribution_events_category_check",
+            "vision_object_images",
+            "vision_caption_images",
+            "embedding_inputs",
+            "diarization_seconds",
+            "emotion_seconds",
+            "stem_seconds",
+            "generated_seconds",
+        ),
+    ),
     "202610200301_task18_worker_row_access.sql": (
         "task_18_worker_row_access_test.sql",
         ("motionly_worker", "password_reset_requests", "workspace_api_keys"),

@@ -1,0 +1,67 @@
+{
+  "registry": "stem-separation.json",
+  "route_id": "audio-stems-remote",
+  "capability": "audio.stem_separation",
+  "request": {
+    "type": "stem_separation",
+    "source": { "b64": "c291cmNlLW1lZGlh" },
+    "model": "htdemucs",
+    "duration_s": 1
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/api/v1/upload/" },
+      "response": {
+        "status": 200,
+        "json": { "id": "2fe8f214-1771-4900-9e7e-570f823bd359" }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/split/stem_separator/" },
+      "response": {
+        "status": 200,
+        "json": { "task_id": "8cad7e3d-a5a3-4e79-9463-59cd4da16977" }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/check/" },
+      "response": {
+        "status": 200,
+        "json": {
+          "result": {
+            "8cad7e3d-a5a3-4e79-9463-59cd4da16977": {
+              "status": "success",
+              "result": {
+                "duration": 1,
+                "tracks": [
+                  {
+                    "type": "stem",
+                    "url": "https://d.lalal.ai/task/abcd/vocals"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/delete/" },
+      "response": { "status": 200, "json": { "status": "success" } }
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": "provider_malformed_response",
+      "fallback_eligible": true,
+      "billable": true
+    },
+    "cleanup": [
+      {
+        "method": "POST",
+        "path": "/api/v1/delete/",
+        "body_keys": ["source_id"]
+      }
+    ]
+  }
+}

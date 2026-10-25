@@ -44,6 +44,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-ml.lock --dry-run
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-cpu-vision.lock --dry-run
       - name: Verify Python package licenses
         run: pip-licenses --fail-on='GPL;AGPL;LGPL'
       - name: Verify npm lockfiles
@@ -91,6 +92,11 @@ jobs:
           - component: demucs-worker
             dockerfile: apps/worker/Dockerfile.python
             build_args: API_EXTRAS=demucs
+          - component: cpu-vision-worker
+            dockerfile: apps/worker/Dockerfile.python
+            build_args: |
+              API_EXTRAS=cpu-vision
+              CPU_VISION_ENABLED=true
           - component: remotion-worker
             dockerfile: apps/worker/Dockerfile
             build_args: ""

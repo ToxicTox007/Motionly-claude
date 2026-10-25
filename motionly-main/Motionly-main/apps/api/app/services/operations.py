@@ -201,17 +201,17 @@ class OperationsRepository:
         self,
         *,
         workspace_id: Any,
-        provider: str,
         category: str,
         period_start: datetime,
         period_end: datetime,
+        provider: str | None = None,
     ) -> float:
         if not self.base_url or not self.headers:
             total = 0.0
             for row in self.cost_events:
                 if (
                     str(row.get("workspace_id")) == str(workspace_id)
-                    and row.get("provider") == provider
+                    and (provider is None or row.get("provider") == provider)
                     and row.get("category") == category
                 ):
                     created_at = row.get("created_at") or datetime.now(UTC)
@@ -229,13 +229,14 @@ class OperationsRepository:
         end_str = period_end.isoformat()
         params = [
             ("workspace_id", f"eq.{workspace_id}"),
-            ("provider", f"eq.{provider}"),
             ("category", f"eq.{category}"),
             ("created_at", f"gte.{start_str}"),
             ("created_at", f"lt.{end_str}"),
             ("select", "quantity"),
             ("limit", "10000"),
         ]
+        if provider is not None:
+            params.insert(1, ("provider", f"eq.{provider}"))
         try:
             response = httpx.get(
                 f"{self.base_url}/cost_attribution_events",
@@ -251,7 +252,7 @@ class OperationsRepository:
             for row in self.cost_events:
                 if (
                     str(row.get("workspace_id")) == str(workspace_id)
-                    and row.get("provider") == provider
+                    and (provider is None or row.get("provider") == provider)
                     and row.get("category") == category
                 ):
                     created_at = row.get("created_at") or datetime.now(UTC)

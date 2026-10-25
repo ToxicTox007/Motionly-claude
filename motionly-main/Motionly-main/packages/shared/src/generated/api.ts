@@ -81,6 +81,9 @@ export interface components {
     "BrollSwapResponse": { slot: components["schemas"]["BrollSlotResponse"]; status?: "updated"; };
     "CameraMotion": "static" | "pan" | "tilt" | "push_in" | "handheld" | "unknown";
     "CancelSubscriptionResponse": { subscription: components["schemas"]["SubscriptionSummary"]; demo_notice?: string | null; };
+    "CapabilitiesResponse": { registry_version: string; capabilities: Array<components["schemas"]["CapabilitySummary"]>; };
+    "CapabilityOptions": { capability: string; options: Array<components["schemas"]["ModelOption"]>; operator_default_option_id?: string | null; effective_option_id?: string | null; effective_source: string; requested_option_id?: string | null; fallback_reason?: string | null; };
+    "CapabilitySummary": { id: string; status: "available" | "degraded" | "unavailable"; reason?: string | null; is_async: boolean; compute_requirement: "cpu" | "gpu" | "remote" | "any"; route_count: number; required: boolean; };
     "CaptionAnimation": "fade_up" | "pop" | "type_on" | "glow" | "slide_up" | "impact_stamp" | "minimal_fade" | "edu_step" | "ticker";
     "CaptionGenerateRequest": { transcript_id?: string | null; preset?: components["schemas"]["CaptionPresetKey"]; hide_filler_words?: boolean; output_language?: string; };
     "CaptionGenerateResponse": { track?: components["schemas"]["CaptionTrackReadResponse"] | null; job_id: string; status: "ready" | "queued"; status_url?: string | null; };
@@ -123,9 +126,12 @@ export interface components {
     "CreativeVariantSetListResponse": { variant_sets?: Array<components["schemas"]["CreativeVariantSetResponse"]>; };
     "CreativeVariantSetResponse": { id: string; workspace_id: string; project_id: string; name: string; status: components["schemas"]["ScaleResourceStatus"]; revision: number; source_plan_id: string; source_plan_revision: number; dimensions: Array<components["schemas"]["CreativeVariantDimension"]>; variants: Array<components["schemas"]["CreativeVariant"]>; selected_variant_id?: string | null; review_status: components["schemas"]["CreativeVariantReviewStatus"]; review_only?: boolean; applied_variant_id?: string | null; applied_plan_id?: string | null; applied_plan_revision?: number | null; created_at: string; updated_at: string; };
     "CutSegment": { start_ms: number; end_ms: number; reason: string; };
+    "DataProcessorEntry": { display_name: string; purpose: string; data_categories: Array<string>; policy_url: string; };
+    "DataProcessorsResponse": { processors: Array<components["schemas"]["DataProcessorEntry"]>; };
     "DeepHealthResponse": { status: string; service: string; environment: string; gpu_stage: "enabled" | "not_enabled"; request_id: string; components: { [key: string]: components["schemas"]["ComponentHealth"]; }; };
+    "DeletionResponse": { committed: boolean; registry_version: number; warnings?: Array<components["schemas"]["ValidationDiagnostic"]>; errors?: Array<components["schemas"]["ValidationDiagnostic"]>; };
     "DependencyHealth": { status: string; message: string; metadata?: { [key: string]: unknown; }; };
-    "DependencyHealthResponse": { status: string; service: string; environment: string; gpu_stage: "enabled" | "not_enabled"; request_id: string; dependencies: { [key: string]: components["schemas"]["DependencyHealth"]; }; };
+    "DependencyHealthResponse": { status: string; service: string; environment: string; gpu_stage: "enabled" | "not_enabled"; request_id: string; dependencies: { [key: string]: components["schemas"]["DependencyHealth"]; }; registry_version?: string | null; catalog_fingerprint?: string | null; };
     "DominantColor": { hex: string; rgb: Array<unknown>; percentage: number; };
     "DurationPreset": "short" | "medium" | "long";
     "EditPlan": { schema_version?: number; prompt_version?: string; style: components["schemas"]["EditPlanStyle"]; aspect_ratio?: "9:16" | "16:9" | "1:1" | "4:5"; render_dimensions?: components["schemas"]["RenderDimensions"]; layout?: components["schemas"]["EditPlanLayoutMetadata"]; target_duration_s: number; cuts?: Array<components["schemas"]["EditPlanCut"]>; caption_highlights?: Array<components["schemas"]["CaptionHighlight"]>; broll_requests?: Array<components["schemas"]["BrollRequest"]>; zoom_moments?: Array<components["schemas"]["ZoomMoment"]>; music_mood: string; effects?: Array<string>; color_grade: string; risk_flags?: Array<string>; manual_elements?: Array<components["schemas"]["ManualElement"]>; timeline?: components["schemas"]["TimelineDocument"] | null; hook_text?: string | null; caption_preset?: components["schemas"]["CaptionPresetKey"] | null; opening_frame?: components["schemas"]["PlanOpeningFrame"] | null; };
@@ -196,6 +202,8 @@ export interface components {
     "MediaUploadCompleteRequest": { sha256_hash?: string | null; };
     "MediaUploadSessionResponse": { session_id: string; owner_id: string; status: components["schemas"]["MultipartSessionStatus"]; total_parts: number; completed_parts: number; uploaded_bytes: number; file_size_bytes: number; part_size_bytes: number; pending_part_urls: Array<components["schemas"]["PartUploadUrl"]>; expires_at: string; object_reference_id?: string | null; verified_size_bytes?: number | null; verified_sha256?: string | null; };
     "MemberResponse": { user_id: string; role: string; status: string; created_at: string; };
+    "ModelOption": { option_id: string; display_name?: string | null; description?: string | null; labels?: Array<string>; quota_weight: number; status: string; allowed: boolean; reason?: string | null; required_plan?: string | null; };
+    "ModelOptionsResponse": { capabilities: Array<components["schemas"]["CapabilityOptions"]>; };
     "ModelTrainingRequest": { name?: string; minimum_examples?: number; };
     "MotionEasing": "linear" | "ease_in" | "ease_out" | "ease_in_out" | "spring";
     "MotionEffectKey": "zoom_punch" | "ken_burns" | "speed_ramp" | "beat_impact" | "motion_blur" | "flash" | "glitch" | "broll_slide_in" | "gradient_ramp";
@@ -221,6 +229,7 @@ export interface components {
     "MusicTrackListResponse": { tracks: Array<components["schemas"]["MusicTrackResponse"]>; mood: string; };
     "MusicTrackPreviewResponse": { track_id: string; provider_track_id: string; title: string; preview_url: string; expires_in_seconds: number; };
     "MusicTrackResponse": { id: string; workspace_id: string; project_id: string; provider: components["schemas"]["MusicProviderKey"]; provider_track_id: string; title: string; license: string; duration_ms: number; mood_tags?: Array<string>; bpm?: number | null; energy?: number | null; vocals?: boolean; loopable?: boolean; beat_map?: Array<number>; raw_metadata?: { [key: string]: unknown; }; created_at: string; };
+    "MutationResponse": { committed: boolean; registry_version: number; entry?: components["schemas"]["RegistryEntry"] | null; warnings?: Array<components["schemas"]["ValidationDiagnostic"]>; errors?: Array<components["schemas"]["ValidationDiagnostic"]>; };
     "ObjectDetection": { label: string; confidence: number; box: components["schemas"]["BoundingBox"]; };
     "OutputAspect": "original" | "9:16" | "1:1" | "4:5" | "16:9";
     "PartCompleteRequest": { etag?: string | null; };
@@ -256,6 +265,9 @@ export interface components {
     "ProjectDeleteResponse": { id: string; deleted?: boolean; };
     "ProjectLatestUpload": { id: string; status: string; original_filename: string; duration_ms?: number | null; warnings?: Array<string>; };
     "ProjectListResponse": { projects: Array<components["schemas"]["ProjectResponse"]>; };
+    "ProjectModelSettingItem": { capability: string; option_id: string; };
+    "ProjectModelSettingUpdate": { capability: string; option_id: string; };
+    "ProjectModelSettingsResponse": { settings: Array<components["schemas"]["ProjectModelSettingItem"]>; };
     "ProjectResponse": { id: string; workspace_id: string; created_by: string; title: string; status: components["schemas"]["ProjectStatus"]; active_video_id?: string | null; latest_upload?: components["schemas"]["ProjectLatestUpload"] | null; created_at: string; updated_at: string; };
     "ProjectStatus": "draft" | "ready" | "failed";
     "ProjectUpdateRequest": { title?: string | null; status?: components["schemas"]["ProjectStatus"] | null; };
@@ -296,6 +308,9 @@ export interface components {
     "RegenerateResponse": { status?: "queued"; job_id: string; affected_layers: Array<components["schemas"]["RegenerationLayer"]>; preserved_layers: Array<components["schemas"]["RegenerationLayer"]>; controls: components["schemas"]["ControlSettingsResponse"]; artifact_versions: Array<components["schemas"]["ArtifactVersionResponse"]>; creates_new_version?: boolean; message?: string; };
     "RegenerationAction": "make_punchier" | "more_cinematic" | "less_broll" | "change_music";
     "RegenerationLayer": "transcript" | "captions" | "plan" | "cuts" | "broll" | "music" | "effects" | "render";
+    "RegistryEntry": { id: string; managed: "file" | "database"; record?: { [key: string]: unknown; }; };
+    "RegistryRecordRequest": { record: { [key: string]: unknown; }; };
+    "RegistrySnapshotResponse": { database_enabled: boolean; registry_version: number; adapters?: Array<components["schemas"]["RegistryEntry"]>; models?: Array<components["schemas"]["RegistryEntry"]>; routes?: Array<components["schemas"]["RegistryEntry"]>; warnings?: Array<components["schemas"]["ValidationDiagnostic"]>; errors?: Array<components["schemas"]["ValidationDiagnostic"]>; };
     "RenderAdjustmentAction": "make_punchier" | "more_cinematic";
     "RenderAdminActionResponse": { job: components["schemas"]["RenderJobResponse"]; };
     "RenderBulkCreateRequest": { caption_track_id?: string | null; localized_publish_package_id?: string | null; include_captions?: boolean; include_broll?: boolean; edit_plan_id?: string | null; template_id?: components["schemas"]["RenderTemplateId"] | null; adjustment_action?: components["schemas"]["RenderAdjustmentAction"] | null; duration_preset?: components["schemas"]["DurationPreset"]; export_targets: Array<components["schemas"]["ExportOptions"]>; force?: boolean; };
@@ -325,6 +340,10 @@ export interface components {
     "ReviewShareLinkCreateRequest": { expires_in_hours?: number; can_comment?: boolean; can_decide?: boolean; };
     "ReviewShareLinkCreateResponse": { id: string; review_id: string; url: string; expires_at: string; can_comment: boolean; can_decide: boolean; };
     "ReviewStatus": "open" | "approved" | "rejected";
+    "RouteHealthEntry": { route_id: string; capability?: string | null; model?: string | null; model_revision?: string | null; enabled?: boolean; managed?: "file" | "database"; circuit_state?: string; last_success_at?: string | null; last_failure_at?: string | null; p50_latency_ms?: number | null; p95_latency_ms?: number | null; error_rate?: number | null; total_calls?: number; fallback_count?: number; last_error_code?: string | null; hard_cap_max_requests?: number | null; hard_cap_max_units?: number | null; pricing_status?: string; };
+    "RouteHealthResponse": { database_enabled: boolean; routes?: Array<components["schemas"]["RouteHealthEntry"]>; };
+    "RouteTestRequest": { max_cost_usd?: number; allow_paid?: boolean; };
+    "RouteTestResponse": { route_id: string; capability: string; status: "ok" | "schema_invalid" | "error"; schema_valid: boolean; latency_ms?: number | null; usage?: { [key: string]: number; }; estimated_cost_usd?: number; actual_cost_usd?: number; cost_unknown?: boolean; error_code?: string | null; circuit_state?: string; paid_confirmation_required?: boolean; operation_id?: string | null; };
     "SavedTemplateCreateRequest": { name: string; settings: components["schemas"]["SavedTemplateSettings"]; };
     "SavedTemplateSettings": { style: components["schemas"]["EditPlanStyle"]; target_duration_s?: number; broll_density?: components["schemas"]["BrollDensity"]; direction?: string; caption_settings?: { [key: string]: unknown; }; effects_settings?: { [key: string]: unknown; }; };
     "SavedTemplateUpdateRequest": { name?: string | null; settings?: components["schemas"]["SavedTemplateSettings"] | null; };
@@ -333,6 +352,10 @@ export interface components {
     "ScaleResourceStatus": "draft" | "queued" | "processing" | "ready" | "completed" | "partial" | "failed" | "canceled";
     "SceneSegment": { index: number; start_ms: number; end_ms: number; representative_timestamp_ms: number; caption?: string; embedding?: Array<number>; dominant_colors?: Array<components["schemas"]["DominantColor"]>; objects?: Array<components["schemas"]["ObjectDetection"]>; faces?: Array<components["schemas"]["FaceDetection"]>; camera_motion?: components["schemas"]["CameraMotion"]; scene_type?: components["schemas"]["SceneType"]; visual_importance_score: number; };
     "SceneType": "talking_head" | "screen_recording" | "product" | "landscape" | "crowd" | "text_heavy" | "abstract" | "unknown";
+    "SecretListResponse": { secrets?: Array<components["schemas"]["SecretMetadataResponse"]>; };
+    "SecretMetadataResponse": { name: string; scope: string; fingerprint: string; key_version: string; created_by?: string | null; created_at?: string | null; rotated_at?: string | null; last_used_at?: string | null; };
+    "SecretRotateRequest": { scope?: string; value: string; };
+    "SecretWriteRequest": { name: string; scope?: string; value: string; };
     "SegmentationMatte": { bucket: string; path: string; model?: string; provenance?: string | null; fps: number; width: number; height: number; frame_count: number; cache_key?: string | null; status?: components["schemas"]["MatteStatus"]; failure_reason?: string | null; };
     "ShareLinkExpiry": 1 | 7 | 30;
     "SignupRequest": { full_name: string; email: string; password: string; };
@@ -345,10 +368,10 @@ export interface components {
     "SpeechRhythm": { bpm_equivalent?: number | null; onset_count: number; mean_interval_ms?: number | null; interval_variability?: number | null; energy_curve: Array<components["schemas"]["SpeechEnergyWindow"]>; };
     "SpeedRampSettings": { enabled?: boolean; ramp_in_ms?: number; ramp_out_ms?: number; peak_speed?: number; easing?: components["schemas"]["MotionEasing"]; };
     "StemSelectionUpdateRequest": { active: "vocals" | "no_vocals"; expected_revision: number; };
-    "StemSeparationRequest": { model?: string; };
+    "StemSeparationRequest": { model?: string | null; };
     "StockAssetEnrichmentStatus": "pending" | "processing" | "completed" | "failed" | "skipped";
     "StockOrientation": "portrait" | "landscape" | "square";
-    "StockProviderKey": "fixture" | "pexels" | "pixabay" | "user_library" | "runway";
+    "StockProviderKey": "fixture" | "pexels" | "pixabay" | "user_library" | "generated";
     "StockVideoAssetResponse": { id: string; workspace_id: string; project_id: string; provider: components["schemas"]["StockProviderKey"]; provider_asset_id: string; title: string; thumbnail_url?: string | null; preview_video_url?: string | null; download_url?: string | null; license: string; width: number; height: number; duration_ms: number; orientation: components["schemas"]["StockOrientation"]; score: number; confidence_label?: components["schemas"]["BrollConfidenceLabel"] | null; enrichment_status?: components["schemas"]["StockAssetEnrichmentStatus"] | null; enrichment_failure_reason?: string | null; embedding_model_version?: string | null; raw_metadata?: { [key: string]: unknown; }; object_reference_id?: string | null; media_upload_session_id?: string | null; media_state?: string | null; verified_size_bytes?: number | null; verified_sha256?: string | null; created_at: string; };
     "StyleClassification": { predicted_style: components["schemas"]["EditPlanStyle"]; effective_style: components["schemas"]["EditPlanStyle"]; requested_style?: components["schemas"]["EditPlanStyle"] | null; confidence: number; scores?: { [key: string]: number; }; signals?: Array<string>; source?: "audio_visual_classifier"; };
     "StyleProfileCreateRequest": { name: string; target_style?: components["schemas"]["EditPlanStyle"]; };
@@ -357,7 +380,7 @@ export interface components {
     "StyleTrainRequest": { force?: boolean; };
     "SubjectTrackPoint": { timestamp_ms: number; x: number; y: number; width: number; height: number; confidence: number; source: "face" | "object"; };
     "SubscriptionStatus": "none" | "trialing" | "active" | "past_due" | "canceled" | "unpaid" | "incomplete";
-    "SubscriptionSummary": { workspace_id: string; plan: components["schemas"]["BillingPlanKey"]; status: components["schemas"]["SubscriptionStatus"]; gateway_customer_id?: string | null; gateway_subscription_id?: string | null; gateway_price_id?: string | null; current_period_start?: string | null; current_period_end?: string | null; cancel_at_period_end?: boolean; payment_issue?: boolean; updated_at: string; };
+    "SubscriptionSummary": { workspace_id: string; plan: components["schemas"]["BillingPlanKey"]; status: components["schemas"]["SubscriptionStatus"]; gateway_customer_id?: string | null; gateway_subscription_id?: string | null; gateway_price_id?: string | null; current_period_start?: string | null; current_period_end?: string | null; cancel_at_period_end?: boolean; payment_issue?: boolean; past_due_grace_ends_at?: string | null; updated_at: string; };
     "SubtitleFormat": "srt" | "vtt";
     "TimelineAudioLayer": { source_stems?: { [key: string]: unknown; } | null; music?: { [key: string]: unknown; } | null; sfx?: Array<{ [key: string]: unknown; }>; };
     "TimelineBrollLayer": { id: string; start_ms: number; end_ms: number; src?: string; source_start_ms?: number | null; source_end_ms?: number | null; metadata?: { [key: string]: unknown; }; };
@@ -384,6 +407,7 @@ export interface components {
     "UserBrollUploadCompleteResponse": { asset: components["schemas"]["StockVideoAssetResponse"]; };
     "UserBrollUploadInitRequest": { filename: string; mime_type: string; file_size_bytes: number; width?: number; height?: number; duration_ms?: number; sha256_hash?: string | null; };
     "UserControlSettings": { caption_style?: string | null; broll_density?: number | null; music_volume?: number | null; sfx_intensity?: number | null; effects_intensity?: number | null; duration_preset?: components["schemas"]["DurationPreset"] | null; };
+    "ValidationDiagnostic": { object_kind: string; object_id: string; severity: "error" | "warning"; code: string; message: string; path: string; };
     "ValidationError": { loc: Array<string | number>; msg: string; type: string; input?: unknown; ctx?: {  }; };
     "VideoManifest": { schema_version?: number; duration_ms?: number | null; sample_rate_fps?: number; frame_count?: number; provider: string; model_versions?: { [key: string]: string; }; frame_samples?: Array<components["schemas"]["FrameSample"]>; scenes?: Array<components["schemas"]["SceneSegment"]>; summary?: { [key: string]: unknown; }; segmentation_matte?: components["schemas"]["SegmentationMatte"] | null; };
     "VideoManifestResponse": { id: string; workspace_id: string; project_id: string; uploaded_video_id: string; version: number; schema_version: number; status: components["schemas"]["VisualManifestStatus"]; provider: string; model: string; cache_key?: string | null; manifest?: components["schemas"]["VideoManifest"] | null; error_code?: string | null; error_message?: string | null; created_at: string; updated_at: string; };
@@ -413,6 +437,9 @@ export interface components {
     "WorkflowSummaryResponse": { id: string; project_id: string; uploaded_video_id: string; workflow_type: string; workflow_version: string; state: components["schemas"]["WorkflowRunState"]; revision: number; source_media_revision: number; current_step_key?: string | null; retry_of_workflow_run_id?: string | null; root_workflow_run_id: string; failure_code?: string | null; allowed_actions: Array<components["schemas"]["WorkflowAllowedAction"]>; delayed?: boolean; status_detail?: string | null; started_at: string; completed_at?: string | null; created_at: string; updated_at: string; };
     "WorkspaceMemberName": { user_id: string; name: string; role: string; };
     "WorkspaceMemberNamesResponse": { members: Array<components["schemas"]["WorkspaceMemberName"]>; };
+    "WorkspaceModelSettingItem": { capability: string; default_option_id?: string | null; allowed_option_ids?: Array<string> | null; locked?: boolean; };
+    "WorkspaceModelSettingUpdate": { capability: string; default_option_id?: string | null; allowed_option_ids?: Array<string> | null; locked?: boolean; };
+    "WorkspaceModelSettingsResponse": { settings: Array<components["schemas"]["WorkspaceModelSettingItem"]>; };
     "ZoomMoment": { timestamp_ms: number; intensity: number; reason: string; };
   };
 }
@@ -424,6 +451,22 @@ export interface ApiOperationMap {
   "POST /admin/editorial-learning/deployments/{project_id}/rollback": { method: "POST"; template: "/admin/editorial-learning/deployments/{project_id}/rollback"; path: { project_id: string; }; query: {  }; body: components["schemas"]["EditorialLearningRollbackRequest"]; response: components["schemas"]["EditorialLearningDeploymentResponse"]; };
   "GET /admin/editorial-learning/projects/{project_id}/datasets": { method: "GET"; template: "/admin/editorial-learning/projects/{project_id}/datasets"; path: { project_id: string; }; query: {  }; body: never; response: components["schemas"]["EditorialLearningDatasetListResponse"]; };
   "GET /admin/editorial-learning/projects/{project_id}/deployment": { method: "GET"; template: "/admin/editorial-learning/projects/{project_id}/deployment"; path: { project_id: string; }; query: {  }; body: never; response: components["schemas"]["EditorialLearningDeploymentResponse"]; };
+  "POST /admin/inference/adapters": { method: "POST"; template: "/admin/inference/adapters"; path: {  }; query: { dry_run?: boolean; }; body: components["schemas"]["RegistryRecordRequest"]; response: components["schemas"]["MutationResponse"]; };
+  "PUT /admin/inference/adapters/{adapter_id}": { method: "PUT"; template: "/admin/inference/adapters/{adapter_id}"; path: { adapter_id: string; }; query: { dry_run?: boolean; }; body: components["schemas"]["RegistryRecordRequest"]; response: components["schemas"]["MutationResponse"]; };
+  "DELETE /admin/inference/adapters/{adapter_id}": { method: "DELETE"; template: "/admin/inference/adapters/{adapter_id}"; path: { adapter_id: string; }; query: { dry_run?: boolean; }; body: never; response: components["schemas"]["DeletionResponse"]; };
+  "POST /admin/inference/models": { method: "POST"; template: "/admin/inference/models"; path: {  }; query: { dry_run?: boolean; }; body: components["schemas"]["RegistryRecordRequest"]; response: components["schemas"]["MutationResponse"]; };
+  "PUT /admin/inference/models/{model_id}": { method: "PUT"; template: "/admin/inference/models/{model_id}"; path: { model_id: string; }; query: { dry_run?: boolean; }; body: components["schemas"]["RegistryRecordRequest"]; response: components["schemas"]["MutationResponse"]; };
+  "DELETE /admin/inference/models/{model_id}": { method: "DELETE"; template: "/admin/inference/models/{model_id}"; path: { model_id: string; }; query: { dry_run?: boolean; }; body: never; response: components["schemas"]["DeletionResponse"]; };
+  "GET /admin/inference/registry": { method: "GET"; template: "/admin/inference/registry"; path: {  }; query: {  }; body: never; response: components["schemas"]["RegistrySnapshotResponse"]; };
+  "POST /admin/inference/routes": { method: "POST"; template: "/admin/inference/routes"; path: {  }; query: { dry_run?: boolean; }; body: components["schemas"]["RegistryRecordRequest"]; response: components["schemas"]["MutationResponse"]; };
+  "GET /admin/inference/routes/health": { method: "GET"; template: "/admin/inference/routes/health"; path: {  }; query: {  }; body: never; response: components["schemas"]["RouteHealthResponse"]; };
+  "PUT /admin/inference/routes/{route_id}": { method: "PUT"; template: "/admin/inference/routes/{route_id}"; path: { route_id: string; }; query: { dry_run?: boolean; }; body: components["schemas"]["RegistryRecordRequest"]; response: components["schemas"]["MutationResponse"]; };
+  "DELETE /admin/inference/routes/{route_id}": { method: "DELETE"; template: "/admin/inference/routes/{route_id}"; path: { route_id: string; }; query: { dry_run?: boolean; }; body: never; response: components["schemas"]["DeletionResponse"]; };
+  "POST /admin/inference/routes/{route_id}/test": { method: "POST"; template: "/admin/inference/routes/{route_id}/test"; path: { route_id: string; }; query: {  }; body: components["schemas"]["RouteTestRequest"]; response: components["schemas"]["RouteTestResponse"]; };
+  "GET /admin/inference/secrets": { method: "GET"; template: "/admin/inference/secrets"; path: {  }; query: {  }; body: never; response: components["schemas"]["SecretListResponse"]; };
+  "POST /admin/inference/secrets": { method: "POST"; template: "/admin/inference/secrets"; path: {  }; query: {  }; body: components["schemas"]["SecretWriteRequest"]; response: components["schemas"]["SecretMetadataResponse"]; };
+  "DELETE /admin/inference/secrets/{name}": { method: "DELETE"; template: "/admin/inference/secrets/{name}"; path: { name: string; }; query: { scope?: string; }; body: never; response: components["schemas"]["SecretListResponse"]; };
+  "POST /admin/inference/secrets/{name}/rotate": { method: "POST"; template: "/admin/inference/secrets/{name}/rotate"; path: { name: string; }; query: {  }; body: components["schemas"]["SecretRotateRequest"]; response: components["schemas"]["SecretMetadataResponse"]; };
   "GET /admin/music/tracks": { method: "GET"; template: "/admin/music/tracks"; path: {  }; query: { limit?: number; }; body: never; response: components["schemas"]["MusicCatalogListResponse"]; };
   "GET /admin/ops/overview": { method: "GET"; template: "/admin/ops/overview"; path: {  }; query: {  }; body: never; response: components["schemas"]["AdminOverviewResponse"]; };
   "GET /admin/queues": { method: "GET"; template: "/admin/queues"; path: {  }; query: { limit?: number; }; body: never; response: components["schemas"]["QueueListResponse"]; };
@@ -461,6 +504,7 @@ export interface ApiOperationMap {
   "POST /billing/retry": { method: "POST"; template: "/billing/retry"; path: {  }; query: {  }; body: never; response: components["schemas"]["RetryRenewalResponse"]; };
   "GET /billing/status": { method: "GET"; template: "/billing/status"; path: {  }; query: {  }; body: never; response: components["schemas"]["BillingStatusResponse"]; };
   "POST /billing/webhooks/mock-gateway": { method: "POST"; template: "/billing/webhooks/mock-gateway"; path: {  }; query: {  }; body: never; response: components["schemas"]["GatewayWebhookResponse"]; };
+  "GET /capabilities": { method: "GET"; template: "/capabilities"; path: {  }; query: {  }; body: never; response: components["schemas"]["CapabilitiesResponse"]; };
   "GET /editorial-learning/policy": { method: "GET"; template: "/editorial-learning/policy"; path: {  }; query: {  }; body: never; response: components["schemas"]["EditorialLearningPolicyResponse"]; };
   "PUT /editorial-learning/policy": { method: "PUT"; template: "/editorial-learning/policy"; path: {  }; query: {  }; body: components["schemas"]["EditorialLearningPolicyUpdateRequest"]; response: components["schemas"]["EditorialLearningPolicyResponse"]; };
   "GET /editorial-learning/projects/{project_id}/memory": { method: "GET"; template: "/editorial-learning/projects/{project_id}/memory"; path: { project_id: string; }; query: {  }; body: never; response: components["schemas"]["EditorialMemoryIndicatorResponse"]; };
@@ -484,6 +528,7 @@ export interface ApiOperationMap {
   "POST /internal/workflows/draft-renders/ensure": { method: "POST"; template: "/internal/workflows/draft-renders/ensure"; path: {  }; query: {  }; body: components["schemas"]["WorkflowDraftRenderEnsureRequest"]; response: components["schemas"]["WorkflowDraftRenderEnsureResponse"]; };
   "POST /internal/workflows/proposals/ensure": { method: "POST"; template: "/internal/workflows/proposals/ensure"; path: {  }; query: {  }; body: components["schemas"]["WorkflowProposalEnsureRequest"]; response: components["schemas"]["WorkflowProposalEnsureResponse"]; };
   "GET /metrics": { method: "GET"; template: "/metrics"; path: {  }; query: {  }; body: never; response: string; };
+  "GET /model-options": { method: "GET"; template: "/model-options"; path: {  }; query: { project_id?: string | null; }; body: never; response: components["schemas"]["ModelOptionsResponse"]; };
   "POST /phase5/batches": { method: "POST"; template: "/phase5/batches"; path: {  }; query: {  }; body: components["schemas"]["BatchCreateRequest"]; response: components["schemas"]["ScaleResourceResponse"]; };
   "POST /phase5/batches/{batch_id}/cancel": { method: "POST"; template: "/phase5/batches/{batch_id}/cancel"; path: { batch_id: string; }; query: {  }; body: never; response: components["schemas"]["ScaleResourceResponse"]; };
   "GET /phase5/brand-kits": { method: "GET"; template: "/phase5/brand-kits"; path: {  }; query: { limit?: number; }; body: never; response: components["schemas"]["ScaleResourceListResponse"]; };
@@ -533,6 +578,9 @@ export interface ApiOperationMap {
   "PATCH /projects/{project_id}/localized-publish-packages/{package_id}/review": { method: "PATCH"; template: "/projects/{project_id}/localized-publish-packages/{package_id}/review"; path: { project_id: string; package_id: string; }; query: {  }; body: components["schemas"]["LocalizedPublishPackageReviewRequest"]; response: components["schemas"]["LocalizedPublishPackageResponse"]; };
   "GET /projects/{project_id}/localized-publish-packages/{package_id}/subtitles": { method: "GET"; template: "/projects/{project_id}/localized-publish-packages/{package_id}/subtitles"; path: { project_id: string; package_id: string; }; query: { format?: components["schemas"]["SubtitleFormat"]; }; body: never; response: void; };
   "POST /projects/{project_id}/media/refresh-urls": { method: "POST"; template: "/projects/{project_id}/media/refresh-urls"; path: { project_id: string; }; query: {  }; body: components["schemas"]["RefreshUrlsRequest"]; response: components["schemas"]["RefreshUrlsResponse"]; };
+  "GET /projects/{project_id}/model-settings": { method: "GET"; template: "/projects/{project_id}/model-settings"; path: { project_id: string; }; query: {  }; body: never; response: components["schemas"]["ProjectModelSettingsResponse"]; };
+  "PUT /projects/{project_id}/model-settings": { method: "PUT"; template: "/projects/{project_id}/model-settings"; path: { project_id: string; }; query: {  }; body: components["schemas"]["ProjectModelSettingUpdate"]; response: components["schemas"]["ProjectModelSettingItem"]; };
+  "DELETE /projects/{project_id}/model-settings": { method: "DELETE"; template: "/projects/{project_id}/model-settings"; path: { project_id: string; }; query: { capability: string; }; body: never; response: components["schemas"]["ProjectModelSettingsResponse"]; };
   "PATCH /projects/{project_id}/music/regions": { method: "PATCH"; template: "/projects/{project_id}/music/regions"; path: { project_id: string; }; query: {  }; body: components["schemas"]["MusicRegionsUpdateRequest"]; response: components["schemas"]["MusicSelectionResponse"]; };
   "POST /projects/{project_id}/music/select": { method: "POST"; template: "/projects/{project_id}/music/select"; path: { project_id: string; }; query: {  }; body: components["schemas"]["MusicSelectRequest"]; response: components["schemas"]["MusicSelectResponse"]; };
   "GET /projects/{project_id}/music/selection": { method: "GET"; template: "/projects/{project_id}/music/selection"; path: { project_id: string; }; query: {  }; body: never; response: components["schemas"]["MusicSelectionResponse"] | null; };
@@ -596,6 +644,7 @@ export interface ApiOperationMap {
   "GET /projects/{project_id}/workflows/{workflow_run_id}": { method: "GET"; template: "/projects/{project_id}/workflows/{workflow_run_id}"; path: { project_id: string; workflow_run_id: string; }; query: {  }; body: never; response: components["schemas"]["WorkflowDetailResponse"]; };
   "POST /projects/{project_id}/workflows/{workflow_run_id}/cancel": { method: "POST"; template: "/projects/{project_id}/workflows/{workflow_run_id}/cancel"; path: { project_id: string; workflow_run_id: string; }; query: {  }; body: components["schemas"]["WorkflowCommandRequest"]; response: components["schemas"]["WorkflowCommandResponse"]; };
   "POST /projects/{project_id}/workflows/{workflow_run_id}/retry": { method: "POST"; template: "/projects/{project_id}/workflows/{workflow_run_id}/retry"; path: { project_id: string; workflow_run_id: string; }; query: {  }; body: components["schemas"]["WorkflowCommandRequest"]; response: components["schemas"]["WorkflowCommandResponse"]; };
+  "GET /public/data-processors": { method: "GET"; template: "/public/data-processors"; path: {  }; query: {  }; body: never; response: components["schemas"]["DataProcessorsResponse"]; };
   "POST /public/exports/resolve": { method: "POST"; template: "/public/exports/resolve"; path: {  }; query: {  }; body: components["schemas"]["PublicExportResolveRequest"]; response: components["schemas"]["PublicExportResponse"]; };
   "POST /public/reviews/{share_link_id}/comments": { method: "POST"; template: "/public/reviews/{share_link_id}/comments"; path: { share_link_id: string; }; query: {  }; body: components["schemas"]["PublicReviewCommentCreateRequest"]; response: components["schemas"]["PublicReviewCommentResponse"]; };
   "POST /public/reviews/{share_link_id}/decision": { method: "POST"; template: "/public/reviews/{share_link_id}/decision"; path: { share_link_id: string; }; query: {  }; body: components["schemas"]["PublicReviewDecisionRequest"]; response: components["schemas"]["PublicReviewResponse"]; };
@@ -610,6 +659,8 @@ export interface ApiOperationMap {
   "DELETE /team/members/{user_id}": { method: "DELETE"; template: "/team/members/{user_id}"; path: { user_id: string; }; query: {  }; body: never; response: void; };
   "PATCH /team/members/{user_id}/role": { method: "PATCH"; template: "/team/members/{user_id}/role"; path: { user_id: string; }; query: {  }; body: components["schemas"]["ChangeRoleRequest"]; response: components["schemas"]["MemberResponse"]; };
   "POST /team/transfer-ownership": { method: "POST"; template: "/team/transfer-ownership"; path: {  }; query: {  }; body: components["schemas"]["TransferOwnershipRequest"]; response: void; };
+  "GET /workspaces/current/model-settings": { method: "GET"; template: "/workspaces/current/model-settings"; path: {  }; query: {  }; body: never; response: components["schemas"]["WorkspaceModelSettingsResponse"]; };
+  "PUT /workspaces/current/model-settings": { method: "PUT"; template: "/workspaces/current/model-settings"; path: {  }; query: {  }; body: components["schemas"]["WorkspaceModelSettingUpdate"]; response: components["schemas"]["WorkspaceModelSettingItem"]; };
 }
 
 export type ApiOperation = keyof ApiOperationMap;

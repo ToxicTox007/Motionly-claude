@@ -1,0 +1,24 @@
+{
+  "registry": "object-detection-alt.json",
+  "route_id": "vision-objects-alt-remote",
+  "capability": "vision.object_detection",
+  "differential": false,
+  "differential_skip_reason": "second provider shape; exercises the registry error_map, not the archived classify-by-status path",
+  "request": {
+    "type": "object_detection",
+    "images": [{ "b64": "/9j/wA==" }]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/api/v2/detect" },
+      "response": { "status": 429, "json": { "detail": "rate limited" } }
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": "provider_quota_exceeded",
+      "fallback_eligible": true,
+      "billable": true
+    }
+  }
+}

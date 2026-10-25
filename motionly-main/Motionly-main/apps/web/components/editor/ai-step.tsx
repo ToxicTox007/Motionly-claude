@@ -43,6 +43,9 @@ import {
   proposalDecisionIdempotencyKey,
   proposalIdentityFromWorkflow,
 } from "@/lib/workflow-ui.mjs";
+import { useCapabilities } from "@/hooks/useCapabilities";
+import { CAPABILITY_IDS } from "@/lib/capabilities";
+import { CapabilityStatus } from "./CapabilityGate";
 import { EditorialMemoryIndicator } from "../editorial-memory-indicator";
 
 interface AIStepProps {
@@ -171,6 +174,12 @@ export function AIStep({
   const router = useRouter();
   const activePlan =
     initialPlans.find((p) => p.id === activePlanId) || initialPlans[0];
+  const { resolve: resolveCapabilityState } = useCapabilities(workspaceId);
+  const objectDetectionCapability = resolveCapabilityState(
+    CAPABILITY_IDS.objectDetection,
+  );
+  const captionsCapability = resolveCapabilityState(CAPABILITY_IDS.captions);
+  const emotionCapability = resolveCapabilityState(CAPABILITY_IDS.emotion);
 
   const [style, setStyle] = useState<StylePickerValue>(
     activePlan?.style ?? "auto",
@@ -1144,6 +1153,22 @@ export function AIStep({
             Visual analysis: {visualStatus.status}
           </div>
           <p className="mt-1 text-muted-foreground">{visualStatus.message}</p>
+          {/* Task 9B: optional analysis capabilities. When the operator has
+              not configured a route (or the API is unreachable) the related
+              signals are surfaced as unavailable/unknown rather than silently
+              missing. Editing continues with the transcript regardless. */}
+          <CapabilityStatus
+            state={objectDetectionCapability}
+            id="ai-step-objects-status"
+          />
+          <CapabilityStatus
+            state={captionsCapability}
+            id="ai-step-captions-status"
+          />
+          <CapabilityStatus
+            state={emotionCapability}
+            id="ai-step-emotion-status"
+          />
         </div>
       </div>
 

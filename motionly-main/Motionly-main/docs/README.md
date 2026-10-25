@@ -14,6 +14,10 @@ This directory is the canonical home for maintained Motionly documentation. Link
 - [Technical documentation snapshot](generated/motionly_technical_documentation.md) — broad generated reference; treat implementation and focused runbooks as authoritative.
 - [Editor collaboration](editor-collaboration.md) — collaboration and editing behavior.
 - [Renderer feature matrix](renderer-feature-matrix.md) — supported renderer features and gates.
+- [Provider-neutral inference implementation plan](provider-neutral-inference-implementation-plan.md) — tiered plan for routing every AI capability through a provider-neutral registry.
+- [Inference registry](ai-registry/README.md) — operator guide: registry format, validation rules, secrets, fragments, enabling capabilities.
+- [AI registry examples and template scenarios](ai-registry/examples/README.md) — example registry documents and the Task 17 template-port scenario schema.
+- [AI live-run evidence log](ai-registry/live-runs.md) — mandatory live-provider runs recorded before Task 19 deletes a vendor adapter.
 
 ## Operations and deployment
 
@@ -34,6 +38,7 @@ This directory is the canonical home for maintained Motionly documentation. Link
 
 - [Data handling](security/data-handling.md) — external providers and internal storage.
 - [Runtime secrets](security/secrets.md) — secret-file names, permissions, and `/run/secrets` behavior.
+- [Dependency advisories](security/dependency-advisories.md) — pinned fixes and known unpatched advisories.
 - [Edit-plan integrity](security/edit-plan-integrity.md)
 - [Phase 0 tenancy matrix](security/phase-0-tenancy-matrix.md)
 - [Prelaunch review](prelaunch-review.md)

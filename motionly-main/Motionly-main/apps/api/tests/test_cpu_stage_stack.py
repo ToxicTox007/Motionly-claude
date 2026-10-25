@@ -35,8 +35,6 @@ FIXTURE_ENVIRONMENT = {
     "ML_EXECUTION_MODE": "test_fixture",
     "ALLOW_FIXTURE_PROVIDERS": "true",
     "VISUAL_PROVIDER": "fixture",
-    "TRANSCRIPTION_PROVIDER": "fixture",
-    "EDIT_PLANNER_PROVIDER": "fixture",
     "STEM_SEPARATION_PROVIDER": "fixture",
     "STOCK_VIDEO_PROVIDER": "fixture",
     "FFMPEG_GPU_ENABLED": "false",
@@ -260,7 +258,7 @@ def test_cpu_stage_writer_creates_private_random_inputs_without_live_provider_ke
     assert re.fullmatch(r"[0-9a-f]{32,}", first["POSTGRES_PASSWORD"])
     secrets_a = secrets_dir.with_name("secrets-a")
     assert stat.S_IMODE(secrets_a.stat().st_mode) == 0o700
-    for name in ("groq_api_key", "openrouter_api_key", "runway_api_key", "azure_openai_api_key"):
+    for name in ("ai_secrets_bundle",):
         assert (secrets_a / name).read_text(encoding="utf-8") == "", name
     assert (secrets_a / "postgres_password").read_text().strip() == first["POSTGRES_PASSWORD"]
     # Read-only for every container user (Compose mounts file secrets with the

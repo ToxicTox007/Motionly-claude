@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   bullConnection,
   allQueueNames,
+  bullDelayMs,
   bullPriority,
   bullTransportAttempts,
   canceledJobsKey,
@@ -51,6 +52,7 @@ async function enqueue(connection, payload) {
     project_id: payload.project_id || null,
     resource_id: payload.resource_id || null,
     render_engine: payload.render_engine || "ffmpeg_basic",
+    registry_fingerprint: payload.registry_fingerprint || null,
     trace_id: payload.trace_id || null,
     error_code: payload.error_code || null,
     error_message: payload.error_message || null,
@@ -61,6 +63,10 @@ async function enqueue(connection, payload) {
     jobId: payload.id,
     priority: bullPriority(payload.priority),
     attempts: transportAttempts,
+    // Delayed re-enqueue for non-blocking async polling (plan Task 28). A
+    // missing/zero `delay_seconds` leaves the job immediate, so every existing
+    // caller is unchanged.
+    delay: bullDelayMs(payload.delay_seconds),
   });
   const state = await job.getState();
   return normalizeJobRecord(job, state);

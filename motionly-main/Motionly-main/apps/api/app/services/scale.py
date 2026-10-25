@@ -3,7 +3,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -14,10 +13,17 @@ from app.api.errors import ApiError
 from app.repositories.scale import ScaleResourceRecord
 from app.schemas.broll import StockOrientation, StockProviderKey
 from app.schemas.scale import ScaleResourceStatus
+from app.services.async_job_adapter import ASYNC_JOB_TEMP_PREFIX
+from app.services.inference_operations import (
+    InferenceOperation,
+    OperationState,
+    route_snapshot,
+)
 from app.services.local_storage import create_object_storage
-from app.services.media_probe import probe_video
+from app.services.media_probe import probe_duration_seconds, probe_video
 from app.services.media_url_policy import MediaUrlPolicyError, safe_http_stream
 from app.services.model_gateway import (
+    FeatureQuotaExceeded,
     GenerationOperationOutput,
     GenerationOutput,
     ModelCallContext,
@@ -28,10 +34,9 @@ from app.services.model_gateway import (
 )
 from app.services.provider_resilience import (
     ProviderCallFailure,
-    ProviderErrorInfo,
-    classify_provider_exception,
-    classify_provider_status,
+    may_have_been_sent,
 )
+from app.services.subprocess_env import ml_tool_env
 from app.services.worker_media import materialize_upload_source
 
 
@@ -49,7 +54,9 @@ class DemucsStemSeparator:
             str(output_root),
             str(source_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=1800, check=False, env=ml_tool_env()
+        )
         if result.returncode != 0:
             shutil.rmtree(output_root, ignore_errors=True)
             raise ApiError(
@@ -73,222 +80,6 @@ class FixtureStemSeparator:
         return stems
 
 
-@dataclass(frozen=True)
-class RunwayResult:
-    task_id: str
-    video_url: str
-
-
-class RunwayGen3Provider:
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        model: str = "gen3a_turbo",
-        api_version: str = "2024-11-06",
-    ) -> None:
-        self.api_key = api_key
-        self.model = model
-        self.api_version = api_version
-        self.base_url = "https://api.dev.runwayml.com/v1"
-
-    @staticmethod
-    def _failure(
-        error_info: ProviderErrorInfo,
-        *,
-        message: str | None = None,
-    ) -> ProviderCallFailure:
-        return ProviderCallFailure(
-            provider="runway",
-            error_info=error_info,
-            message=message,
-        )
-
-    def initiate_generation(
-        self,
-        *,
-        prompt: str,
-        prompt_image_url: str | None,
-        duration_s: int,
-        ratio: str,
-        idempotency_key: str | None = None,
-    ) -> str:
-        if not prompt_image_url:
-            raise self._failure(
-                ProviderErrorInfo(
-                    "provider_request_rejected",
-                    False,
-                    fallback_eligible=False,
-                    circuit_worthy=False,
-                    billable=False,
-                ),
-                message="Runway video generation requires a prompt image.",
-            )
-        import logging
-
-        logger = logging.getLogger(__name__)
-        try:
-            response = httpx.post(
-                f"{self.base_url}/image_to_video",
-                headers={
-                    "authorization": f"Bearer {self.api_key}",
-                    "x-runway-version": self.api_version,
-                    "content-type": "application/json",
-                    **({"idempotency-key": idempotency_key} if idempotency_key else {}),
-                },
-                json={
-                    "model": self.model,
-                    "promptImage": prompt_image_url,
-                    "promptText": prompt,
-                    "duration": duration_s,
-                    "ratio": ratio,
-                },
-                timeout=30,
-            )
-        except Exception as exc:
-            from app.core.logging import redact_string
-
-            logger.error(
-                "runway_generation_post_failed",
-                extra={
-                    "model": self.model,
-                    "duration_s": duration_s,
-                    "error_type": type(exc).__name__,
-                    "error_detail": redact_string(str(exc)),
-                },
-            )
-            raise self._failure(classify_provider_exception(exc)) from None
-
-        if response.status_code >= 400:
-            raise self._failure(classify_provider_status(response.status_code))
-        try:
-            task_id = str(response.json().get("id") or "")
-        except (TypeError, ValueError):
-            task_id = ""
-        if not task_id:
-            raise self._failure(
-                ProviderErrorInfo(
-                    "provider_malformed_response",
-                    False,
-                    fallback_eligible=True,
-                    circuit_worthy=True,
-                )
-            )
-        return task_id
-
-    def poll_task(self, task_id: str) -> str:
-        import logging
-
-        logger = logging.getLogger(__name__)
-        for _ in range(300):
-            try:
-                task = httpx.get(
-                    f"{self.base_url}/tasks/{task_id}",
-                    headers={
-                        "authorization": f"Bearer {self.api_key}",
-                        "x-runway-version": self.api_version,
-                    },
-                    timeout=30,
-                )
-            except Exception as exc:
-                from app.core.logging import redact_string
-
-                logger.error(
-                    "runway_generation_poll_failed",
-                    extra={
-                        "task_id": task_id,
-                        "error_type": type(exc).__name__,
-                        "error_detail": redact_string(str(exc)),
-                    },
-                )
-                raise self._failure(classify_provider_exception(exc)) from None
-
-            if task.status_code >= 400:
-                raise self._failure(classify_provider_status(task.status_code))
-            try:
-                data = task.json()
-            except (TypeError, ValueError) as exc:
-                raise self._failure(
-                    ProviderErrorInfo(
-                        "provider_malformed_response",
-                        False,
-                        fallback_eligible=True,
-                        circuit_worthy=True,
-                    )
-                ) from exc
-            if data.get("status") == "SUCCEEDED":
-                outputs = data.get("output") or []
-                if outputs:
-                    return str(outputs[0])
-                raise self._failure(
-                    ProviderErrorInfo(
-                        "provider_malformed_response",
-                        False,
-                        fallback_eligible=True,
-                        circuit_worthy=True,
-                    )
-                )
-            if data.get("status") in {"FAILED", "CANCELLED"}:
-                raise self._failure(
-                    ProviderErrorInfo(
-                        "provider_request_rejected",
-                        False,
-                        fallback_eligible=False,
-                        circuit_worthy=False,
-                    ),
-                    message="Runway generation did not complete successfully.",
-                )
-            time.sleep(2)
-        raise self._failure(ProviderErrorInfo("provider_timeout", True))
-
-    def generate(
-        self,
-        *,
-        prompt: str,
-        prompt_image_url: str | None,
-        duration_s: int,
-        ratio: str,
-    ) -> RunwayResult:
-        task_id = self.initiate_generation(
-            prompt=prompt,
-            prompt_image_url=prompt_image_url,
-            duration_s=duration_s,
-            ratio=ratio,
-        )
-        video_url = self.poll_task(task_id)
-        return RunwayResult(task_id=task_id, video_url=video_url)
-
-
-class FixtureRunwayProvider:
-    def initiate_generation(
-        self,
-        *,
-        prompt: str,
-        prompt_image_url: str | None,
-        duration_s: int,
-        ratio: str,
-    ) -> str:
-        del prompt_image_url, duration_s, ratio
-        slug = "-".join(prompt.lower().split())[:40] or "generated"
-        return f"fixture-{slug}"
-
-    def poll_task(self, task_id: str) -> str:
-        slug = task_id.replace("fixture-", "")
-        return f"fixture://runway/{slug}.mp4"
-
-    def generate(
-        self, *, prompt: str, prompt_image_url: str | None, duration_s: int, ratio: str
-    ) -> RunwayResult:
-        task_id = self.initiate_generation(
-            prompt=prompt,
-            prompt_image_url=prompt_image_url,
-            duration_s=duration_s,
-            ratio=ratio,
-        )
-        video_url = self.poll_task(task_id)
-        return RunwayResult(task_id=task_id, video_url=video_url)
-
-
 def execute_scale_resource(
     *,
     repository,
@@ -300,11 +91,11 @@ def execute_scale_resource(
     visual_provider,
     analytics_repository,
     stem_separator,
-    runway_provider,
     model_gateway=None,
-    runway_gateway_route=None,
+    video_generation_route=None,
     stem_gateway_route=None,
     operations_repository=None,
+    inference_operations_repository=None,
     billing_repository=None,
     editorial_learning_repository=None,
     object_reference_service=None,
@@ -332,10 +123,10 @@ def execute_scale_resource(
                 record=record,
                 settings=settings,
                 broll_repository=broll_repository,
-                runway_provider=runway_provider,
                 model_gateway=model_gateway,
-                runway_gateway_route=runway_gateway_route,
+                video_generation_route=video_generation_route,
                 operations_repository=operations_repository,
+                inference_operations_repository=inference_operations_repository,
                 billing_repository=billing_repository,
                 repository=repository,
             )
@@ -390,17 +181,49 @@ def _separate_stems(
         service_role_key=settings.supabase_service_role_key,
     )
     source = materialize_upload_source(upload=upload, storage=storage)
-    model = str(record.payload.get("model") or settings.demucs_model)
+    # Model identity comes from the registry route (plan Task 14: no local model
+    # id remains a code default). The job payload carries the model the API
+    # resolved from the route; when absent, fall back to the gateway route's
+    # model, and only to a neutral capability label if no route is configured.
+    route_model = getattr(stem_gateway_route, "model", None) if stem_gateway_route else None
+    model = str(record.payload.get("model") or route_model or "stem-separation")
     if model_gateway is not None and stem_gateway_route is not None:
-        separated = model_gateway.invoke(
-            StemSeparationRequest(source_path=source, model=model),
-            context=ModelCallContext(
-                workspace_id=record.workspace_id,
-                project_id=record.project_id,
-                required_route_id=stem_gateway_route.route_id,
-                required_model_revision=stem_gateway_route.model_revision,
-            ),
-        )
+        duration_s = None
+        if (
+            stem_gateway_route.input_cost_per_million_usd > 0
+            or stem_gateway_route.budget_feature is not None
+        ):
+            # Remote stems are priced and quota-metered per second of audio:
+            # reserve from the real duration, and refuse sources whose length
+            # cannot be measured.
+            duration_s = probe_duration_seconds(source)
+            if duration_s is None:
+                raise ApiError(
+                    422,
+                    "stem_source_duration_unknown",
+                    "The source length could not be measured for stem separation.",
+                )
+        try:
+            separated = model_gateway.invoke(
+                StemSeparationRequest(source_path=source, model=model, duration_s=duration_s),
+                context=ModelCallContext(
+                    workspace_id=record.workspace_id,
+                    project_id=record.project_id,
+                    # The stem job's resource id is a stable idempotency key: a
+                    # worker retry of this job reserves the SAME async operation,
+                    # so an async_job route resumes polling the recorded remote
+                    # job instead of submitting (and paying) a second time (plan
+                    # Task 17 "one improvement", invariant 6). Local/synchronous
+                    # routes ignore it.
+                    idempotency_key=f"stem_separation:{record.id}",
+                    required_route_id=stem_gateway_route.route_id,
+                    required_model_revision=stem_gateway_route.model_revision,
+                ),
+            )
+        except FeatureQuotaExceeded as exc:
+            # Stems are user-requested, so a used-up quota fails visibly (402)
+            # instead of degrading like the analysis features.
+            raise ApiError(402, "audio_stems_quota_exceeded", str(exc)) from exc
         if not isinstance(separated.output, StemSeparationOutput):
             raise TypeError("stem separation route returned the wrong typed output")
         stems = dict(separated.output.stems)
@@ -414,7 +237,12 @@ def _separate_stems(
     else:
         stems = stem_separator.separate(source_path=source, model=model)
         provenance = None
-    result: dict[str, Any] = {"provider": "demucs", "model": model, "active": "vocals"}
+    result: dict[str, Any] = {
+        # Demucs and the fixture separator keep the historical "demucs" label.
+        "provider": getattr(stem_separator, "provider_name", "demucs"),
+        "model": getattr(stem_separator, "model", None) or model,
+        "active": "vocals",
+    }
     if provenance is None:
         # Non-production stems are produced by the labelled FixtureStemSeparator
         # (fixtures/registry.json id "stem-separation", label "Test stems"); mark
@@ -448,7 +276,11 @@ def _remove_stem_temp_directory(stems: dict[str, Path]) -> None:
     first_stem = next(iter(stems.values())).resolve()
     for parent in first_stem.parents:
         if parent.parent == temp_root and parent.name.startswith(
-            ("motionly-demucs-", "motionly-fixture-stems-")
+            (
+                "motionly-demucs-",
+                "motionly-fixture-stems-",
+                ASYNC_JOB_TEMP_PREFIX,
+            )
         ):
             shutil.rmtree(parent, ignore_errors=True)
             return
@@ -459,45 +291,104 @@ def _generate_broll(
     record,
     settings,
     broll_repository,
-    runway_provider,
     model_gateway=None,
-    runway_gateway_route=None,
+    video_generation_route=None,
     operations_repository=None,
+    inference_operations_repository=None,
     billing_repository=None,
     repository=None,
 ) -> dict[str, Any]:
+    """Generate B-roll through a neutral async video operation (plan Task 18).
+
+    The clip is submitted with ``VideoGenerationSubmitRequest`` (capability
+    ``video.generation.submit``) and polled with ``VideoGenerationPollRequest``
+    (``video.generation.status``), both bound to the stored route id and
+    revision so a resumed job polls the original route and never resubmits (plan
+    invariant 6, Section 2.5). A durable ``inference_operations`` row records the
+    route snapshot, the external operation id and the Section 2.5 state trace.
+
+    Operation ownership (single-owner rule): ``_generate_broll`` owns the
+    operation record for a blocking video route. If the resolved route's adapter
+    is an ``AsyncJobAdapter`` (an ``async_job`` route that persists its own
+    operation), this function does not reserve a second record and lets the
+    adapter own it. The Tier 1 ``async_job`` adapter does not serve video
+    generation (Section 2.10), so this branch is defensive; a blocking video
+    route always resolves here, where ``_generate_broll`` is the single owner.
+    """
     if not record.project_id:
         raise ApiError(422, "scale_project_required", "Generated B-roll needs a project.")
     payload = record.payload
 
+    if model_gateway is None or video_generation_route is None:
+        # No ``video.generation.submit`` route is configured (plan Task 18).
+        raise ApiError(
+            503,
+            "capability_unavailable",
+            "Generated B-roll requires a configured video generation route.",
+        )
+
     from app.services.billing import check_quota
 
-    # Pre-call quota check
+    duration_s = int(payload.get("duration_s") or 5)
+    ratio = str(payload.get("ratio") or "768:1280")
+
+    # Pre-call quota check (feature-keyed, Decision B-1 / Task 10). The feature
+    # scope sums usage across provider labels; the provider label is now the
+    # neutral ``generated`` key rather than a vendor name.
     if billing_repository is not None and operations_repository is not None:
         check_quota(
             workspace_id=record.workspace_id,
-            provider="runway",
+            feature="video_generation",
             category="generated_seconds",
             billing_repository=billing_repository,
             operations_repository=operations_repository,
-            estimated_quantity=float(payload.get("duration_s") or 5),
+            estimated_quantity=float(duration_s),
+            provider="generated",
         )
 
-    task_id = payload.get("runway_task_id")
-    route_id = str(payload.get("model_gateway_route_id") or "") or None
-    if not task_id:
-        if model_gateway is not None and runway_gateway_route is not None:
-            idempotency_key = str(payload.get("model_gateway_idempotency_key") or record.id)
-            payload.update(
-                {
-                    "model_gateway_submit_state": "submitting",
-                    "model_gateway_idempotency_key": idempotency_key,
-                    "model_gateway_route_id": runway_gateway_route.route_id,
-                    "model_revision": runway_gateway_route.model_revision,
-                }
-            )
-            if repository is not None:
-                repository.update(record=record, payload=payload)
+    adapter_owns_operation = _route_adapter_is_async_job(model_gateway, video_generation_route)
+    operation: InferenceOperation | None = None
+    if inference_operations_repository is not None and not adapter_owns_operation:
+        idempotency_key = f"generated_broll:{record.id}"
+        operation, _created = inference_operations_repository.reserve(
+            workspace_id=record.workspace_id,
+            project_id=record.project_id,
+            capability="video.generation.submit",
+            idempotency_key=idempotency_key,
+            route_id=video_generation_route.route_id,
+            model=video_generation_route.model,
+            model_revision=video_generation_route.model_revision,
+            route_snapshot=route_snapshot(
+                adapter_id=str(video_generation_route.adapter),
+                adapter_type="async_submit",
+                base_url=str(video_generation_route.endpoint_host or ""),
+                model=video_generation_route.model,
+                model_revision=video_generation_route.model_revision,
+                mapping_version="1",
+                secret_ref_name=None,
+            ),
+            estimated_cost_usd=float(payload.get("unit_cost_usd") or 0) * duration_s,
+        )
+
+    operation_id = payload.get("inference_operation_id") or (
+        operation.provider_operation_id if operation is not None else None
+    )
+    if operation is not None and operation.provider_operation_id:
+        # Resumed after the submit boundary: poll the recorded job instead of
+        # resubmitting (plan invariant 6, Section 2.5).
+        operation_id = operation.provider_operation_id
+
+    if not operation_id:
+        operation = _transition_operation(
+            inference_operations_repository,
+            operation,
+            OperationState.SUBMITTING,
+            expected_from={OperationState.RESERVED},
+        )
+        submit_idempotency_key = (
+            operation.idempotency_key if operation is not None else f"generated_broll:{record.id}"
+        )
+        try:
             submitted = model_gateway.invoke(
                 VideoGenerationSubmitRequest(
                     prompt=str(payload["prompt"]),
@@ -506,144 +397,156 @@ def _generate_broll(
                         if payload.get("prompt_image_url")
                         else None
                     ),
-                    duration_s=int(payload.get("duration_s") or 5),
-                    ratio=str(payload.get("ratio") or "768:1280"),
-                    idempotency_key=idempotency_key,
+                    duration_s=duration_s,
+                    ratio=ratio,
+                    idempotency_key=submit_idempotency_key,
                 ),
                 context=ModelCallContext(
                     workspace_id=record.workspace_id,
                     project_id=record.project_id,
-                    idempotency_key=idempotency_key,
-                    required_route_id=runway_gateway_route.route_id,
-                    required_model_revision=runway_gateway_route.model_revision,
+                    idempotency_key=submit_idempotency_key,
+                    required_route_id=video_generation_route.route_id,
+                    required_model_revision=video_generation_route.model_revision,
                 ),
             )
-            if not isinstance(submitted.output, GenerationOperationOutput):
-                raise TypeError("video generation submit returned the wrong typed output")
-            task_id = submitted.output.operation_id
-            route_id = submitted.metadata.route_id
-            payload.update(
-                {
-                    "runway_task_id": task_id,
-                    "model_gateway_route_id": route_id,
-                    "model_provider": submitted.metadata.provider,
-                    "model": submitted.metadata.model,
-                    "model_revision": submitted.metadata.model_revision,
-                    "model_gateway_submit_state": "submitted",
-                }
+        except Exception as exc:
+            # A failure that may have reached the provider is route-affine: the
+            # operation becomes ``submit_unknown`` and is reconciled by polling
+            # the original route, never retried on another route (plan Section
+            # 2.5). A failure proven before send fails the operation outright.
+            # The gateway records whether the request was sent on the attempt
+            # telemetry; derive it from that, treating "unknown" conservatively
+            # as after-send so a possible remote job is never orphaned.
+            after_send = _submit_may_have_been_sent(operations_repository, exc)
+            _transition_operation(
+                inference_operations_repository,
+                operation,
+                OperationState.SUBMIT_UNKNOWN if after_send else OperationState.FAILED,
+                expected_from={OperationState.SUBMITTING},
+                error_code=_submit_error_code(exc),
+                error_detail=str(exc),
             )
-        elif getattr(settings, "app_env", "test") == "production":
-            raise ApiError(
-                503,
-                "runway_gateway_route_required",
-                "Production Runway submission requires an executable gateway route.",
-            )
-        else:
-            task_id = runway_provider.initiate_generation(
-                prompt=str(payload["prompt"]),
-                prompt_image_url=(
-                    str(payload["prompt_image_url"]) if payload.get("prompt_image_url") else None
-                ),
-                duration_s=int(payload.get("duration_s") or 5),
-                ratio=str(payload.get("ratio") or "768:1280"),
-            )
-            payload["runway_task_id"] = task_id
-        if repository is not None:
-            repository.update(record=record, payload=payload)
-
-    if task_id and route_id is None and getattr(settings, "app_env", "test") == "production":
-        configured_revision = getattr(runway_gateway_route, "model_revision", None)
-        legacy_revision = str(payload.get("model_revision") or "") or None
-        if (
-            model_gateway is None
-            or runway_gateway_route is None
-            or (legacy_revision is not None and legacy_revision != configured_revision)
-        ):
-            raise ApiError(
-                503,
-                "runway_legacy_route_unavailable",
-                "Legacy Runway polling cannot be safely bound to the configured gateway route.",
-            )
-        route_id = runway_gateway_route.route_id
-        payload.update(
-            {
-                "model_gateway_route_id": route_id,
-                "model_provider": runway_gateway_route.provider,
-                "model": runway_gateway_route.model,
-                "model_revision": configured_revision,
-                "model_gateway_submit_state": "legacy_route_bound",
-            }
+            raise
+        if not isinstance(submitted.output, GenerationOperationOutput):
+            raise TypeError("video generation submit returned the wrong typed output")
+        operation_id = submitted.output.operation_id
+        operation = _transition_operation(
+            inference_operations_repository,
+            operation,
+            OperationState.SUBMITTED,
+            expected_from={OperationState.SUBMITTING},
+            provider_operation_id=operation_id,
+        )
+        payload["inference_operation_id"] = (
+            str(operation.id) if operation is not None else payload.get("inference_operation_id")
         )
         if repository is not None:
             repository.update(record=record, payload=payload)
 
-    if getattr(settings, "app_env", "test") == "production" and (
-        model_gateway is None
-        or runway_gateway_route is None
-        or route_id != runway_gateway_route.route_id
-        or str(payload.get("model_revision") or "") != runway_gateway_route.model_revision
-    ):
-        raise ApiError(
-            503,
-            "runway_gateway_route_unavailable",
-            "Runway polling requires the configured gateway route and revision.",
-        )
+    operation = _transition_operation(
+        inference_operations_repository,
+        operation,
+        OperationState.RUNNING,
+        expected_from={OperationState.SUBMITTED, OperationState.SUBMIT_UNKNOWN},
+    )
 
-    if model_gateway is not None and route_id is not None:
-        polled = model_gateway.invoke(
-            VideoGenerationPollRequest(operation_id=str(task_id)),
-            context=ModelCallContext(
-                workspace_id=record.workspace_id,
-                project_id=record.project_id,
-                required_route_id=route_id,
-                required_model_revision=(
-                    str(payload.get("model_revision")) if payload.get("model_revision") else None
+    # Blocking poll loop (Tier 1, plan Task 18 / 16B). Poll the bound route until
+    # it returns artifacts; a ``GenerationOperationOutput`` means still running.
+    max_wait_s = float(getattr(video_generation_route, "timeout_s", None) or 900.0)
+    poll_interval_s = 2.0
+    deadline = time.monotonic() + max_wait_s
+    video_url: str | None = None
+    while True:
+        try:
+            polled = model_gateway.invoke(
+                VideoGenerationPollRequest(operation_id=str(operation_id)),
+                context=ModelCallContext(
+                    workspace_id=record.workspace_id,
+                    project_id=record.project_id,
+                    required_route_id=video_generation_route.route_id,
+                    required_model_revision=video_generation_route.model_revision,
                 ),
-            ),
-        )
-        if not isinstance(polled.output, GenerationOutput) or not polled.output.artifacts:
+            )
+        except Exception as exc:  # noqa: BLE001 - record failure then re-raise
+            _transition_operation(
+                inference_operations_repository,
+                operation,
+                OperationState.FAILED,
+                expected_from={OperationState.RUNNING},
+                error_code="generation_failed",
+                error_detail=str(exc),
+            )
+            raise
+        if isinstance(polled.output, GenerationOutput) and polled.output.artifacts:
+            video_url = str(polled.output.artifacts[0].url or "")
+            break
+        if not isinstance(polled.output, (GenerationOutput, GenerationOperationOutput)):
             raise TypeError("video generation poll returned the wrong typed output")
-        video_url = str(polled.output.artifacts[0].url or "")
-    else:
-        video_url = runway_provider.poll_task(str(task_id))
-    generated = RunwayResult(task_id=str(task_id), video_url=video_url)
+        if time.monotonic() >= deadline:
+            _transition_operation(
+                inference_operations_repository,
+                operation,
+                OperationState.FAILED,
+                expected_from={OperationState.RUNNING},
+                error_code="generation_timeout",
+                error_detail="generated B-roll did not complete within the route deadline",
+            )
+            raise ApiError(
+                504,
+                "generated_broll_timeout",
+                "Generated B-roll did not complete in time.",
+            )
+        time.sleep(poll_interval_s)
 
     if operations_repository is not None:
         operations_repository.record_cost(
             workspace_id=record.workspace_id,
             project_id=record.project_id,
-            provider="runway",
+            provider="generated",
             category="generated_seconds",
-            quantity=float(payload.get("duration_s") or 5),
+            quantity=float(duration_s),
             unit="second",
             unit_cost_usd=float(payload.get("unit_cost_usd") or 0),
-            metadata={"resource_id": str(record.id), "task_id": generated.task_id},
+            metadata={
+                "resource_id": str(record.id),
+                "operation_id": str(operation_id),
+            },
         )
+    operation = _transition_operation(
+        inference_operations_repository,
+        operation,
+        OperationState.SUCCEEDED,
+        expected_from={OperationState.RUNNING},
+        actual_cost_usd=float(payload.get("unit_cost_usd") or 0) * duration_s,
+    )
+
     storage_metadata: dict[str, Any] = {}
-    if generated.video_url.startswith(("http://", "https://")):
+    if video_url.startswith(("http://", "https://")):
         storage = create_object_storage(
             root=settings.media_work_dir,
             supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
             service_role_key=settings.supabase_service_role_key,
         )
-        target = storage.object_path(bucket="tmp", path=f"runway-{record.id}.mp4")
+        target = storage.object_path(bucket="tmp", path=f"generated-broll-{record.id}.mp4")
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             stream_context = safe_http_stream(
-                generated.video_url,
+                video_url,
                 timeout=180,
             )
             with stream_context as response:
                 if response.status_code >= 400:
                     raise ApiError(
-                        502, "runway_asset_download_failed", "Generated B-roll could not be saved."
+                        502,
+                        "generated_broll_download_failed",
+                        "Generated B-roll could not be saved.",
                     )
                 with target.open("wb") as output:
                     for chunk in response.iter_bytes(chunk_size=1024 * 1024):
                         output.write(chunk)
         except (httpx.HTTPError, MediaUrlPolicyError) as exc:
             raise ApiError(
-                502, "runway_asset_download_failed", "Generated B-roll could not be saved."
+                502, "generated_broll_download_failed", "Generated B-roll could not be saved."
             ) from exc
         storage_path = (
             f"workspaces/{record.workspace_id}/projects/{record.project_id}/"
@@ -660,30 +563,26 @@ def _generate_broll(
             "storage_bucket": settings.upload_storage_bucket,
             "storage_path": storage_path,
         }
-    portrait = str(payload.get("ratio")) != "1280:768"
+    portrait = ratio != "1280:768"
     asset = broll_repository.upsert_asset(
         workspace_id=record.workspace_id,
         project_id=record.project_id,
-        provider=StockProviderKey.RUNWAY,
-        provider_asset_id=generated.task_id,
+        provider=StockProviderKey.GENERATED,
+        provider_asset_id=str(operation_id),
         title=str(payload["prompt"])[:160],
         thumbnail_url=None,
-        preview_video_url=generated.video_url,
-        download_url=generated.video_url,
-        license="runway_generated_user_content",
+        preview_video_url=video_url,
+        download_url=video_url,
+        license="generated_user_content",
         width=768 if portrait else 1280,
         height=1280 if portrait else 768,
-        duration_ms=int(payload.get("duration_s") or 5) * 1000,
+        duration_ms=duration_s * 1000,
         orientation=StockOrientation.PORTRAIT if portrait else StockOrientation.LANDSCAPE,
         score=1.0,
         raw_metadata={
-            "runway_task_id": generated.task_id,
             "prompt": payload["prompt"],
             "status": "ready",
-            "model_gateway_route_id": payload.get("model_gateway_route_id"),
-            "model_provider": payload.get("model_provider"),
-            "model": payload.get("model"),
-            "model_revision": payload.get("model_revision"),
+            "inference_operation_id": payload.get("inference_operation_id"),
             **storage_metadata,
         },
     )
@@ -696,13 +595,88 @@ def _generate_broll(
         broll_repository.add_slot_candidates(slot=slot, asset_ids=[asset.id])
         broll_repository.update_slot_selection(slot=slot, asset_id=asset.id, disabled=False)
     return {
-        "task_id": generated.task_id,
-        "video_url": generated.video_url,
-        "model_gateway_route_id": payload.get("model_gateway_route_id"),
-        "model_revision": payload.get("model_revision"),
+        "operation_id": str(operation_id),
+        "video_url": video_url,
+        "inference_operation_id": payload.get("inference_operation_id"),
         **storage_metadata,
         "asset_id": str(asset.id),
     }
+
+
+def _route_adapter_is_async_job(model_gateway: object, route: object) -> bool:
+    """Whether ``route``'s registered adapter is an ``AsyncJobAdapter``.
+
+    When it is, the adapter persists its own ``inference_operations`` record
+    (plan Task 16B), so ``_generate_broll`` must not reserve a second one
+    (single-owner rule). The Tier 1 ``async_job`` adapter does not serve video
+    generation, so this returns ``False`` for every Tier 1 video route.
+    """
+    adapters = getattr(model_gateway, "_adapters", None)
+    adapter_name = getattr(route, "adapter", None)
+    if not isinstance(adapters, dict) or adapter_name is None:
+        return False
+    adapter = adapters.get(adapter_name)
+    return adapter is not None and type(adapter).__name__ == "AsyncJobAdapter"
+
+
+def _transition_operation(
+    repository,
+    operation: InferenceOperation | None,
+    to_state: OperationState,
+    *,
+    expected_from: set[OperationState] | None = None,
+    provider_operation_id: str | None = None,
+    error_code: str | None = None,
+    error_detail: str | None = None,
+    actual_cost_usd: float | None = None,
+) -> InferenceOperation | None:
+    """Advance the operation record when one is owned; a no-op otherwise.
+
+    Returns the refreshed operation (or ``None`` when no record is owned, for
+    example when the route's adapter owns it or no repository was provided).
+    """
+    if repository is None or operation is None:
+        return operation
+    return repository.transition(
+        operation.id,
+        to_state=to_state,
+        expected_from=expected_from,
+        provider_operation_id=provider_operation_id,
+        error_code=error_code,
+        error_detail=error_detail,
+        actual_cost_usd=actual_cost_usd,
+    )
+
+
+def _submit_error_code(exc: Exception) -> str:
+    """A bounded, neutral error code for a failed video submit."""
+    if isinstance(exc, ProviderCallFailure):
+        return exc.error_info.code
+    return getattr(exc, "code", None) or "generation_submit_failed"
+
+
+def _submit_may_have_been_sent(operations_repository, exc: Exception) -> bool:
+    """Whether a failed video submit may have reached the provider.
+
+    A ``ProviderCallFailure`` carries the ``sent`` classification directly. The
+    gateway wraps a route-affine stop in ``ModelProvidersExhausted``; for that
+    case the gateway's attempt telemetry records ``sent`` on the shared cost
+    repository's ``provider_events``. "unknown" is treated as after-send so a
+    possible remote job is never orphaned (plan Section 2.5).
+    """
+    if isinstance(exc, ProviderCallFailure):
+        return may_have_been_sent(exc.error_info)
+    events = getattr(operations_repository, "provider_events", None)
+    if isinstance(events, list):
+        for event in reversed(events):
+            if event.get("success"):
+                continue
+            usage = event.get("usage")
+            if isinstance(usage, dict) and "sent" in usage:
+                return str(usage.get("sent")) != "false"
+            break
+    # No signal: be conservative and treat an unproven failure as after-send.
+    return True
 
 
 def _train_style(

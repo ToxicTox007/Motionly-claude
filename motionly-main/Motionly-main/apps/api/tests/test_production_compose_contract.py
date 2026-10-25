@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.vendor_names import names_vendor
+
 ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_PATH = ROOT / "infra" / "docker-compose.gpu.yml"
 PRODUCTION_TEMPLATE_PATH = ROOT / "infra" / "production-compose.env.example"
@@ -57,10 +59,8 @@ SECRET_FILE_NAMES = (
     "realtime_metrics_jwt_secret",
     "admin_api_token",
     "worker_api_token",
-    "groq_api_key",
-    "openrouter_api_key",
-    "runway_api_key",
-    "azure_openai_api_key",
+    # One generic inference secrets bundle (plan Task 26); no vendor-named key.
+    "ai_secrets_bundle",
     "metrics_bearer_token",
     "edge_origin_verify",
     "edge_origin_verify_previous",
@@ -492,3 +492,101 @@ def test_the_api_uses_the_service_role_key_and_workers_use_the_restricted_key() 
         assert services[worker]["environment"]["SUPABASE_SERVICE_ROLE_KEY_FILE"] == (
             "/run/secrets/supabase_worker_key"
         ), worker
+
+
+# -- Task 26 acceptance ----------------------------------------------------------------
+
+
+def test_a_fresh_production_compose_needs_no_vendor_variable_and_starts_no_gpu_service(
+    tmp_path: Path,
+) -> None:
+    """Task 26 acceptance: a fresh production Compose configuration with only a
+    registry file and a secrets bundle passes `compose config`, requires no
+    vendor-specific environment variable, and starts no GPU service by default.
+    """
+    if shutil.which("docker") is None:
+        pytest.fail("docker compose is required to validate the production Compose configuration")
+
+    secret_directory = tmp_path / "secrets"
+    secret_directory.mkdir(mode=0o700)
+    for secret_name in SECRET_FILE_NAMES:
+        (secret_directory / secret_name).write_text(f"test-{secret_name}\n")
+    values = _production_values(secret_directory)
+
+    # The only inference inputs are the generic registry file and the secrets
+    # bundle; no vendor-specific variable is required to render or start the
+    # stack. Checked with the neutrality scanner's matcher, plus the two
+    # removed vendor-shaped settings families it does not cover.
+    assert not [
+        name
+        for name in values
+        if names_vendor(name) or name.startswith(("AZURE_OPENAI", "MODEL_GATEWAY_ROUTES"))
+    ]
+
+    environment_file = tmp_path / ".env"
+    _write_env_file(environment_file, values)
+    result = _compose_config(environment_file)
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    rendered = subprocess.run(
+        [
+            "docker", "compose", "--env-file", str(environment_file),
+            "-f", str(COMPOSE_PATH), "config", "--format", "json",
+        ],
+        cwd=ROOT,
+        env=_compose_environment(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rendered.returncode == 0, rendered.stderr
+    services = json.loads(rendered.stdout)["services"]
+    gpu_services = {"gpu-inference-worker", "matte-worker", "gpu-ffmpeg-worker"}
+    assert not gpu_services & set(services)
+    assert not [name for name, service in services.items() if service.get("gpus")]
+    # The mounted inference inputs are exactly the registry volume and the one
+    # generic secrets bundle; no vendor-named secret is mounted.
+    api = services["api"]
+    api_secrets = {item["source"] for item in api.get("secrets") or []}
+    assert "ai_secrets_bundle" in api_secrets
+    assert not [name for name in api_secrets if names_vendor(name)]
+    assert api["environment"]["AI_REGISTRY_FILE"].endswith("/registry.json")
+    assert api["environment"]["AI_SECRETS_BUNDLE_FILE"].endswith("/ai_secrets_bundle")
+
+
+def test_create_app_in_production_serves_planning_and_transcription_from_a_registry() -> None:
+    """Task 26 acceptance (application level): with only a registry file and a
+    secrets bundle, a production app builds its inference runtime and serves the
+    two required capabilities (planning, transcription), with no vendor setting.
+    """
+    from app.main import _validate_production_settings, build_inference_runtime
+    from tests.test_service_hardening import _production_settings
+
+    fixtures = ROOT / "apps/api/tests/fixtures/inference_registry"
+    settings = _production_settings(
+        process_role="worker",
+        ai_registry_file=str(fixtures / "production_remote.json"),
+        ai_secrets_bundle_file=str(fixtures / "bundle.json"),
+        gpu_workers_enabled=False,
+        visual_intelligence_provider="remote",
+        matte_provider="local_cpu",
+        matte_cpu_model_sha256="0" * 64,
+        visual_cpu_face_model_sha256="0" * 64,
+        visual_objects_provider="disabled",
+        visual_captions_provider="disabled",
+        audio_diarization_provider="disabled",
+        audio_emotion_provider="disabled",
+        audio_sound_provider="yamnet_tflite",
+        stem_separation_provider="demucs",
+    )
+
+    # Production validation accepts the GPU-free, registry-only configuration.
+    _validate_production_settings(settings)
+
+    runtime = build_inference_runtime(settings)
+    capabilities = {
+        getattr(route.capability, "value", route.capability)
+        for route in runtime.route_records.values()
+    }
+    assert "planning.chat" in capabilities
+    assert "transcription.speech_to_text" in capabilities

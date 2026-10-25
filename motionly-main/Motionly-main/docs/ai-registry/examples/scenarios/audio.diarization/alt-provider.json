@@ -1,0 +1,50 @@
+{
+  "registry": "diarization-alt.json",
+  "route_id": "audio-diarization-alt-remote",
+  "capability": "audio.diarization",
+  "request": {
+    "type": "diarization",
+    "audio": { "b64": "UklGRi4uLi5mYWtlLXdhdi1ieXRlcy1mb3ItZGlhcml6YXRpb24=" },
+    "duration_s": 30.0
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/api/jobs" },
+      "response": { "status": 201, "json": { "id": "job-7f3c" } }
+    },
+    {
+      "match": { "method": "PUT", "path_prefix": "/api/jobs/" },
+      "response": { "status": 200, "json": { "ok": true } }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/status" },
+      "response": { "status": 200, "json": { "state": "processing" } }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/status" },
+      "response": {
+        "status": 200,
+        "json": {
+          "state": "done",
+          "segments": [
+            { "label": "B", "from_s": 5.0, "to_s": 9.0 },
+            { "label": "A", "from_s": 0.0, "to_s": 4.5 }
+          ]
+        }
+      },
+      "repeat": "always"
+    }
+  ],
+  "expect": {
+    "output": {
+      "segments": [
+        { "speaker": "A", "start_ms": 0, "end_ms": 4500 },
+        { "speaker": "B", "start_ms": 5000, "end_ms": 9000 }
+      ]
+    },
+    "usage": { "input_units": 30 },
+    "operation": { "state": "succeeded" }
+  },
+  "differential": false,
+  "differential_skip_reason": "A second, differently shaped async diarization API (direct raw upload to a job path, then POST polling keyed by the job id in the body). The archived vendor adapter only speaks the pyannoteAI reserve/upload/submit/GET-poll shape, so there is no archived adapter to run this scenario against."
+}

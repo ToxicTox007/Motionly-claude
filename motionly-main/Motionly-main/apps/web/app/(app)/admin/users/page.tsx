@@ -96,7 +96,8 @@ export default async function AdminUsersPage({
       )}
 
       {/* Billing admin: issue a refund for a workspace. */}
-      <RefundPanel demoMode={env.billingEnabled} />
+      {/* The no-charge notice follows the billing mode, not billingEnabled. */}
+      <RefundPanel demoMode={env.billingMode === "demo"} />
 
       {/* Search */}
       <section className="mb-8">

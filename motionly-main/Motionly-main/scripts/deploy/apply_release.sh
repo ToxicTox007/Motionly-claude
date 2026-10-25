@@ -277,12 +277,12 @@ write_release_inputs() {
   fetch_secret_to_file admin-api-token "$secrets_dir/admin_api_token"
   fetch_secret_to_file worker-api-token "$secrets_dir/worker_api_token"
   fetch_secret_to_file metrics-bearer-token "$secrets_dir/metrics_bearer_token"
-  # Provider keys: the application's production validation requires the ones
-  # production uses; a missing parameter leaves an empty file.
-  fetch_secret_to_file groq-api-key "$secrets_dir/groq_api_key" optional
-  fetch_secret_to_file openrouter-api-key "$secrets_dir/openrouter_api_key" optional
-  fetch_secret_to_file runway-api-key "$secrets_dir/runway_api_key" optional
-  fetch_secret_to_file azure-openai-api-key "$secrets_dir/azure_openai_api_key" optional
+  # Inference routes (plan Task 26): one declarative registry and one generic
+  # secrets bundle replace the old per-vendor keys. The registry's
+  # ``bundle:<key>`` refs read keys out of this JSON object; no vendor-named
+  # secret parameter is fetched. A missing parameter leaves an empty file so a
+  # registry that uses only ``file:`` refs (or no secrets) still deploys.
+  fetch_secret_to_file ai-secrets-bundle "$secrets_dir/ai_secrets_bundle" optional
   # Origin guard (infra/aws/edge-contract.json): CloudFront sends the current
   # value; the previous one exists only while a rotation deploys.
   fetch_secret_to_file edge/origin-verify "$secrets_dir/edge_origin_verify"
@@ -309,12 +309,12 @@ PY
 
   # Compose interpolation receives only non-secret release topology and image
   # metadata, plus the values upstream images can read only from environment.
-  python3 - "$manifest" "$env_file" "$secrets_dir" "${MOTIONLY_APP_DOMAIN:?}" "${MOTIONLY_AZURE_OPENAI_ENDPOINT:-}" "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" "${MOTIONLY_BILLING_MODE:?}" <<'PY'
+  python3 - "$manifest" "$env_file" "$secrets_dir" "${MOTIONLY_APP_DOMAIN:?}" "$MOTIONLY_TEMPORAL_ADMIN_TOOLS_IMAGE" "$MOTIONLY_TEMPORAL_BOOTSTRAP_ADMIN_UNTIL" "${MOTIONLY_BILLING_MODE:?}" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
-manifest_path, env_path, secrets_dir, app_domain, azure_endpoint, temporal_admin_tools_image, bootstrap_admin_until, billing_mode = sys.argv[1:]
+manifest_path, env_path, secrets_dir, app_domain, temporal_admin_tools_image, bootstrap_admin_until, billing_mode = sys.argv[1:]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 secret_root = Path(secrets_dir)
 def secret(name: str) -> str:
@@ -336,8 +336,6 @@ environment = {
     "PUBLIC_ORIGIN": f"https://{app_domain}",
     "BILLING_MODE": billing_mode,
 }
-if azure_endpoint:
-    environment["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
 for name, value in environment.items():
     if "\n" in value or "\r" in value:
         raise SystemExit(f"unsafe newline in {name}")

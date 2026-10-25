@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "local-gpu-embeddings",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-gpu-caption",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-gpu-diarization",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-gpu-emotion",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-gpu-pipeline-caption",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-gpu-pipeline-objects",
+      "type": "local",
+      "network": "private"
+    }
+  ],
+  "models": [
+    {
+      "id": "clip-vit-base-patch32",
+      "model_id": "openai/clip-vit-base-patch32",
+      "revision": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+      "licence": "MIT",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/openai/clip-vit-base-patch32",
+      "capabilities": ["embeddings.text", "embeddings.image"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "blip2-opt-2-7b",
+      "model_id": "Salesforce/blip2-opt-2.7b",
+      "revision": "59a1ef6c1e5117b3f65523d1c6066825bcf315e3",
+      "licence": "MIT",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/Salesforce/blip2-opt-2.7b",
+      "capabilities": ["vision.caption"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "yolov8n-objects",
+      "model_id": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
+      "revision": "ultralytics-assets-v8.3.0",
+      "licence": "AGPL-3.0",
+      "commercial_use": false,
+      "source_type": "weights_file",
+      "source_url": "https://github.com/ultralytics/ultralytics/blob/main/LICENSE",
+      "capabilities": ["vision.object_detection"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "pyannote-speaker-diarization-3-1",
+      "model_id": "pyannote/speaker-diarization-3.1",
+      "revision": "84fd25912480287da0247647c3d2b4853cb3ee5d",
+      "licence": "MIT",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://github.com/pyannote/hf-speaker-diarization-3.1",
+      "capabilities": ["audio.diarization"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "wav2vec2-base-superb-er",
+      "model_id": "superb/wav2vec2-base-superb-er",
+      "revision": "441a7599c3b22107314dcbd9166621c5c83f2cc5",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/superb/wav2vec2-base-superb-er",
+      "capabilities": ["audio.emotion"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "blip-image-captioning-large",
+      "model_id": "Salesforce/blip-image-captioning-large",
+      "revision": "2227ac38c9f16105cb0412e7cab4759978a8fd90",
+      "licence": "BSD-3-Clause",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/Salesforce/blip-image-captioning-large",
+      "capabilities": ["vision.caption"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "detr-resnet-50",
+      "model_id": "facebook/detr-resnet-50",
+      "revision": "1d5f47bd3bdd2c4bbfa585418ffe6da5028b4c0b",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/facebook/detr-resnet-50",
+      "capabilities": ["vision.object_detection"],
+      "verified_at": "2026-10-24"
+    }
+  ],
+  "routes": [
+    {
+      "id": "local-embeddings-text",
+      "capability": "embeddings.text",
+      "adapter_id": "local-gpu-embeddings",
+      "model_id": "openai/clip-vit-base-patch32",
+      "model_ref": "clip-vit-base-patch32",
+      "model_revision": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "gpu",
+      "requires_gpu": true,
+      "embedding_space": "clip-vit-base-patch32",
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "clip_embeddings",
+        "model_name": "openai/clip-vit-base-patch32"
+      }
+    },
+    {
+      "id": "local-embeddings-image",
+      "capability": "embeddings.image",
+      "adapter_id": "local-gpu-embeddings",
+      "model_id": "openai/clip-vit-base-patch32",
+      "model_ref": "clip-vit-base-patch32",
+      "model_revision": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "gpu",
+      "requires_gpu": true,
+      "embedding_space": "clip-vit-base-patch32",
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "clip_embeddings",
+        "model_name": "openai/clip-vit-base-patch32"
+      }
+    },
+    {
+      "id": "local-vision-caption",
+      "capability": "vision.caption",
+      "adapter_id": "local-gpu-caption",
+      "model_id": "Salesforce/blip2-opt-2.7b",
+      "model_ref": "blip2-opt-2-7b",
+      "model_revision": "59a1ef6c1e5117b3f65523d1c6066825bcf315e3",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "gpu",
+      "requires_gpu": true,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "blip_caption",
+        "model_name": "Salesforce/blip2-opt-2.7b"
+      }
+    },
+    {
+      "id": "local-audio-diarization",
+      "capability": "audio.diarization",
+      "adapter_id": "local-gpu-diarization",
+      "model_id": "pyannote/speaker-diarization-3.1",
+      "model_ref": "pyannote-speaker-diarization-3-1",
+      "model_revision": "84fd25912480287da0247647c3d2b4853cb3ee5d",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "gpu",
+      "requires_gpu": true,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "pyannote_diarization",
+        "model_name": "pyannote/speaker-diarization-3.1"
+      }
+    },
+    {
+      "id": "local-audio-emotion",
+      "capability": "audio.emotion",
+      "adapter_id": "local-gpu-emotion",
+      "model_id": "superb/wav2vec2-base-superb-er",
+      "model_ref": "wav2vec2-base-superb-er",
+      "model_revision": "441a7599c3b22107314dcbd9166621c5c83f2cc5",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "gpu",
+      "requires_gpu": true,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "wav2vec2_emotion",
+        "model_name": "superb/wav2vec2-base-superb-er"
+      }
+    },
+    {
+      "id": "local-vision-caption-pipeline",
+      "capability": "vision.caption",
+      "adapter_id": "local-gpu-pipeline-caption",
+      "model_id": "Salesforce/blip-image-captioning-large",
+      "model_ref": "blip-image-captioning-large",
+      "model_revision": "2227ac38c9f16105cb0412e7cab4759978a8fd90",
+      "priority": 20,
+      "strategy": "local",
+      "compute_requirement": "gpu",
+      "requires_gpu": true,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "Local BLIP captions",
+        "description": "A second local caption model served by the generic transformers pipeline runner.",
+        "labels": ["local"],
+        "quota_weight": 1.0
+      },
+      "params": {
+        "runner": "transformers_pipeline",
+        "pipeline_task": "image-to-text",
+        "model_name": "Salesforce/blip-image-captioning-large"
+      }
+    },
+    {
+      "id": "local-vision-object-detection-pipeline",
+      "capability": "vision.object_detection",
+      "adapter_id": "local-gpu-pipeline-objects",
+      "model_id": "facebook/detr-resnet-50",
+      "model_ref": "detr-resnet-50",
+      "model_revision": "1d5f47bd3bdd2c4bbfa585418ffe6da5028b4c0b",
+      "priority": 20,
+      "strategy": "local",
+      "compute_requirement": "gpu",
+      "requires_gpu": true,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "transformers_pipeline",
+        "pipeline_task": "object-detection",
+        "model_name": "facebook/detr-resnet-50"
+      }
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import { getBillingStatus, getPaymentHistory } from "@/lib/billing";
 import { getWorkspaceApiContext, canManageBilling } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { usageMeter } from "@/lib/usage-meter.mjs";
+import { pastDueGraceMessage } from "@/lib/payment-history.mjs";
 import { cn } from "@/lib/utils";
 import { cancelSubscription, retryRenewal, startCheckout } from "./actions";
 import { PaymentHistory } from "./PaymentHistory";
@@ -44,8 +45,8 @@ export default async function BillingPage({
         {status.subscription.payment_issue ? (
           <Alert tone="danger" title="Payment past due">
             Your last renewal failed.{" "}
-            {env.billingEnabled ? DEMO_NOTICE + "." : ""} Retry the payment to
-            restore your plan.
+            {env.billingEnabled ? DEMO_NOTICE + "." : ""}{" "}
+            {pastDueGraceMessage(status.subscription.past_due_grace_ends_at)}
             {isOwner && env.billingEnabled ? (
               <form action={retryRenewal} className="mt-3">
                 <Button type="submit" variant="secondary">
@@ -248,8 +249,9 @@ export default async function BillingPage({
               exports stay available and only future premium actions are gated.
             </p>
             <p>
-              A failed renewal marks the plan past due; retry the payment to
-              restore it. Receipts appear in your payment history.
+              A failed renewal marks the plan past due. Paid features stay on
+              for a short grace period; after it, Free limits apply until the
+              payment succeeds. Receipts appear in your payment history.
             </p>
           </div>
         </section>

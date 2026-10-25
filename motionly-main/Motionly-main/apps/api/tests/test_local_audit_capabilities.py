@@ -80,9 +80,9 @@ def _environment(secret_directory: Path, *, effects_enabled: bool = False) -> di
         "LOCAL_AUDIT_TARGET": "local-sandbox",
         "LOCAL_AUDIT_RUN_ID": "local-audit-run-20260830",
         "LOCAL_AUDIT_PROVIDER_ACCOUNTS": json.dumps(
-            [{"provider": "openrouter", "account_id": "openrouter-audit-001"}]
+            [{"provider": "provider-a", "account_id": "provider-a-audit-001"}]
         ),
-        "LOCAL_AUDIT_APPROVED_DOMAINS": "openrouter.ai",
+        "LOCAL_AUDIT_APPROVED_DOMAINS": "api.provider-a.example",
         "LOCAL_AUDIT_MAX_PER_RUN_SPEND_USD": "1.25",
         "LOCAL_AUDIT_MAX_TOTAL_SPEND_USD": "5.00",
         "LOCAL_AUDIT_REMOTE_CLEANUP_OWNER": "audit-owner-dev",
@@ -175,7 +175,7 @@ def test_successful_preflight_is_redacted_and_keeps_live_effects_denied_by_defau
 
     rendered = json.dumps(report)
     assert "audit-secret-value" not in rendered
-    assert "openrouter-audit-001" not in rendered
+    assert "provider-a-audit-001" not in rendered
     assert str(secrets) not in rendered
     assert "signed" not in rendered
 
@@ -201,7 +201,7 @@ def test_successful_preflight_is_redacted_and_keeps_live_effects_denied_by_defau
             lambda values, _secrets: values.update(
                 {
                     "LOCAL_AUDIT_PROVIDER_ACCOUNTS": json.dumps(
-                        [{"provider": "openrouter", "account_id": "production-account"}]
+                        [{"provider": "provider-a", "account_id": "production-account"}]
                     )
                 }
             ),
@@ -267,14 +267,14 @@ def test_model_gate_denies_before_budget_reservation_or_adapter_invocation(tmp_p
     adapter = _Adapter()
     ledger = InMemoryBudgetLedger()
     route = ModelRoute(
-        route_id="openrouter-audit",
+        route_id="planning-audit",
         capability=ModelCapability.PLANNING,
         adapter="remote",
-        provider="openrouter",
+        provider="provider-a",
         model="audit-model",
         model_revision="audit-model-2026-08-30",
         fixed_cost_usd=0.25,
-        endpoint_host="openrouter.ai",
+        endpoint_host="api.provider-a.example",
         requires_live_effects_gate=True,
     )
     gateway = ModelGateway(
@@ -296,8 +296,8 @@ def test_model_gate_denies_before_budget_reservation_or_adapter_invocation(tmp_p
         "action": "model_invoke",
         "allowed": False,
         "reason": "local_audit_external_effects_disabled",
-        "provider": "openrouter",
-        "endpoint_hosts": ["openrouter.ai"],
+        "provider": "provider-a",
+        "endpoint_hosts": ["api.provider-a.example"],
         "estimated_cost_usd": 0.25,
     }
 

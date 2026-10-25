@@ -54,6 +54,11 @@ def workspace_scan_pattern(workspace_id: UUID) -> str:
     return f"{_KEY_PREFIX}:{workspace_id}:*"
 
 
+def user_scan_pattern(user_id: UUID) -> str:
+    """Redis SCAN pattern matching one user's entries in every workspace."""
+    return f"{_KEY_PREFIX}:*:{user_id}"
+
+
 class MembershipCacheBackend(Protocol):
     def get(self, user_id: UUID, workspace_id: UUID) -> str | None: ...
 
@@ -62,6 +67,8 @@ class MembershipCacheBackend(Protocol):
     def invalidate_membership(self, user_id: UUID, workspace_id: UUID) -> None: ...
 
     def invalidate_workspace(self, workspace_id: UUID) -> None: ...
+
+    def invalidate_user(self, user_id: UUID) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -104,6 +111,16 @@ class InMemoryMembershipCache:
             for key in [key for key in self._entries if key.startswith(prefix)]:
                 self._entries.pop(key, None)
 
+    def invalidate_user(self, user_id: UUID) -> None:
+        suffix = f":{user_id}"
+        with self._lock:
+            for key in [
+                key
+                for key in self._entries
+                if key.startswith(f"{_KEY_PREFIX}:") and key.endswith(suffix)
+            ]:
+                self._entries.pop(key, None)
+
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
@@ -132,6 +149,11 @@ class RedisMembershipCache:
     def invalidate_workspace(self, workspace_id: UUID) -> None:
         pattern = workspace_scan_pattern(workspace_id)
         keys = list(self.redis.scan_iter(match=pattern))
+        if keys:
+            self.redis.delete(*keys)
+
+    def invalidate_user(self, user_id: UUID) -> None:
+        keys = list(self.redis.scan_iter(match=user_scan_pattern(user_id)))
         if keys:
             self.redis.delete(*keys)
 
@@ -193,6 +215,11 @@ def invalidate_membership(user_id: UUID, workspace_id: UUID) -> None:
 def invalidate_workspace(workspace_id: UUID) -> None:
     """Drop every cached role for a workspace. Call after bulk membership changes."""
     get_membership_cache().invalidate_workspace(workspace_id)
+
+
+def invalidate_user(user_id: UUID) -> None:
+    """Drop a user's cached role in every workspace. Call after a ban or unban."""
+    get_membership_cache().invalidate_user(user_id)
 
 
 def clear_membership_cache_for_test() -> None:

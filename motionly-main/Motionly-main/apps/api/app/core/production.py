@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from app.services.model_gateway import (
-    ModelCapability,
-    ModelOperation,
-    is_immutable_model_revision,
-)
-from app.services.model_gateway_factory import model_gateway_from_settings
+import re
+
+from app.services.ai_features import gpu_worker_switches
+from app.services.inference_runtime import build_inference_runtime
+from app.services.inference_validation import InferenceStartupError
 
 ORCHESTRATION_PROCESS_ROLES = {
     "temporal-dispatcher",
@@ -113,20 +112,13 @@ def validate_production_settings(settings: object) -> None:
                 )
         return
 
-    transcription_provider_key = settings.transcription_provider.strip().lower()
-    edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
     visual_provider_key = settings.visual_intelligence_provider.strip().lower()
     audio_ml_provider_key = settings.audio_ml_provider.strip().lower()
     music_provider_key = settings.music_provider.strip().lower()
     stock_video_provider_key = settings.stock_video_provider.strip().lower().replace(",", "_")
 
     supported_providers = {
-        "TRANSCRIPTION_PROVIDER": (transcription_provider_key, {"groq", "openai_compatible"}),
-        "EDIT_PLANNER_PROVIDER": (
-            edit_planner_provider_key,
-            {"openrouter", "openai_compatible"},
-        ),
-        "VISUAL_PROVIDER": (visual_provider_key, {"local_ml"}),
+        "VISUAL_PROVIDER": (visual_provider_key, {"local_ml", "remote"}),
         "AUDIO_ML_PROVIDER": (
             audio_ml_provider_key,
             {"local_ml", "local", "full", "disabled", "none", "off"},
@@ -146,75 +138,28 @@ def validate_production_settings(settings: object) -> None:
 
     if settings.allow_fixture_providers:
         raise RuntimeError("ALLOW_FIXTURE_PROVIDERS must be false in production")
-    if settings.stem_separation_provider != "demucs":
-        raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
-    explicit_gateway_routes = bool(str(getattr(settings, "model_gateway_routes", "") or "").strip())
-    if not explicit_gateway_routes and not settings.groq_api_key:
-        raise RuntimeError("GROQ_API_KEY is required for the legacy transcription route")
-    if not explicit_gateway_routes and not settings.openrouter_api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is required for the legacy planning route")
+    _validate_stem_separation_provider(settings)
+    _validate_vision_providers(settings)
+    _validate_gpu_free_deployment(settings)
+    # Inference routes are validated by capability, not by vendor key or provider
+    # value (plan Task 7, Section 2.6). ``build_inference_runtime`` loads the
+    # declarative registry, applies every Section 2.6 rule and runs the startup
+    # decision (``validate_inference_startup``): a required capability
+    # (planning.chat, transcription.speech_to_text) without a valid enabled route
+    # fails startup; every other capability is optional. A ``provider-managed``
+    # revision, unknown pricing, missing remote licence, etc. are warnings logged
+    # once at build time. The vendor key checks, provider-value checks, the
+    # video-generation requirement, the vendor pricing checks and the vendor
+    # revision maps are gone; config.py keeps the vendor SETTINGS (Task 26
+    # removes them).
     try:
-        production_gateway = model_gateway_from_settings(settings)
-    except ValueError as exc:
-        raise RuntimeError(f"Invalid production model gateway configuration: {exc}") from exc
-    if production_gateway is None:
-        raise RuntimeError("MODEL_GATEWAY_ENABLED must be true in production")
-    uncosted_external_routes = [
-        route.route_id
-        for route in production_gateway.routes
-        if route.adapter in {"azure", "openai_compatible", "openrouter", "groq"}
-        and route.input_cost_per_million_usd == 0
-        and route.output_cost_per_million_usd == 0
-        and route.fixed_cost_usd == 0
-        and not route.explicitly_free
-    ]
-    if uncosted_external_routes:
-        raise RuntimeError(
-            "Production external model routes require explicit pricing or "
-            f"explicitly_free=true: {', '.join(sorted(uncosted_external_routes))}"
-        )
-    if any(
-        route.capability == ModelCapability.PLANNING and route.explicitly_free
-        for route in production_gateway.routes
-    ):
-        raise RuntimeError("Production planning routes cannot be explicitly free")
-    configured_operations = {
-        operation for route in production_gateway.routes for operation in route.operations
-    }
-    required_configured = {
-        ModelCapability.PLANNING: ModelOperation.PLANNING_CHAT,
-        ModelCapability.TRANSCRIPTION: ModelOperation.TRANSCRIPTION_SPEECH_TO_TEXT,
-    }
-    missing_capabilities = [
-        capability
-        for capability, operation in required_configured.items()
-        if operation not in configured_operations
-    ]
-    if missing_capabilities:
-        names = ", ".join(sorted(item.value for item in missing_capabilities))
-        raise RuntimeError(f"Production model gateway is missing capabilities: {names}")
+        build_inference_runtime(settings)
+    except InferenceStartupError:
+        raise
+    except (ValueError, RuntimeError) as exc:
+        raise RuntimeError(f"Invalid production inference registry: {exc}") from exc
     if audio_ml_provider_key in {"disabled", "none", "off"}:
         raise RuntimeError("Production AUDIO_ML_PROVIDER must enable audio intelligence")
-    if not settings.runway_api_key:
-        raise RuntimeError("RUNWAY_API_KEY is required for generation capability routing")
-    if settings.runway_estimated_cost_per_request_usd <= 0:
-        raise RuntimeError("RUNWAY_ESTIMATED_COST_PER_REQUEST_USD must be positive in production")
-    pinned_revisions = {
-        "PYANNOTE_MODEL_REVISION": settings.pyannote_model_revision,
-        "WAV2VEC_EMOTION_MODEL_REVISION": settings.wav2vec_emotion_model_revision,
-        "VISUAL_CLIP_MODEL_REVISION": settings.visual_clip_model_revision,
-        "VISUAL_BLIP_MODEL_REVISION": settings.visual_blip_model_revision,
-        "VISUAL_YOLO_MODEL_REVISION": settings.visual_yolo_model_revision,
-        "DEMUCS_MODEL_REVISION": settings.demucs_model_revision,
-        "RUNWAY_MODEL_REVISION": settings.runway_model_revision,
-    }
-    for name, revision in pinned_revisions.items():
-        if not is_immutable_model_revision(str(revision)):
-            raise RuntimeError(f"{name} must be an immutable model revision")
-    if settings.edit_planner_model == "openrouter/free" or settings.edit_planner_model.endswith(
-        ":free"
-    ):
-        raise RuntimeError("Production planning requires a pinned non-aggregator model")
     if music_provider_key == "licensed_catalog" and (
         not settings.supabase_url or not settings.supabase_service_role_key
     ):
@@ -277,6 +222,59 @@ def validate_production_settings(settings: object) -> None:
 
     if settings.force_local_media_storage:
         raise RuntimeError("FORCE_LOCAL_MEDIA_STORAGE must be false in production")
+
+
+def _validate_vision_providers(settings: object) -> None:
+    """GPU-free matte and visual analysis: pinned CPU models and priced remote routes."""
+    matte = str(getattr(settings, "matte_provider", "local_ml") or "").strip().lower()
+    if matte == "local_cpu" and not _is_sha256(getattr(settings, "matte_cpu_model_sha256", "")):
+        raise RuntimeError("MATTE_CPU_MODEL_SHA256 must be a SHA-256 hex digest in production")
+    visual = str(getattr(settings, "visual_intelligence_provider", "") or "").strip().lower()
+    if visual != "remote":
+        return
+    if not _is_sha256(getattr(settings, "visual_cpu_face_model_sha256", "")):
+        raise RuntimeError(
+            "VISUAL_CPU_FACE_MODEL_SHA256 must be a SHA-256 hex digest in production"
+        )
+    # Keyframe object detection is enabled by a ``vision.object_detection``
+    # registry route (plan Task 17), validated by the declarative registry
+    # validator (licence, pricing, immutable revision — Section 2.6); the former
+    # vendor object-detection settings and their production check are removed
+    # (plan Task 19 item 2).
+    # Keyframe captions are rebuilt as a registry capability route in Tier 2
+    # (plan Task 12); the former vendor caption settings and their production
+    # check are removed in Task 26. The declarative registry validator enforces
+    # the route's licence, pricing and immutable revision (Section 2.6).
+    # Keyframe and B-roll embeddings are rebuilt as registry capability routes in
+    # Tier 2 (plan Task 12); the vendor embeddings settings and their production
+    # check are removed in Task 26. The declarative registry validator enforces
+    # the route's licence, pricing and immutable revision (Section 2.6).
+
+
+def _is_sha256(value: object) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", str(value or "").strip().lower()))
+
+
+def _validate_gpu_free_deployment(settings: object) -> None:
+    """GPU_WORKERS_ENABLED=false: no feature may wait on a GPU worker that never runs."""
+    if bool(getattr(settings, "gpu_workers_enabled", True)):
+        return
+    offenders = gpu_worker_switches(settings)
+    if offenders:
+        raise RuntimeError(
+            "GPU_WORKERS_ENABLED=false needs a CPU or remote provider for every feature; "
+            "these still need a GPU worker: " + ", ".join(offenders)
+        )
+
+
+def _validate_stem_separation_provider(settings: object) -> None:
+    # Local Demucs is the only code-bound stem provider; a remote provider is
+    # configured through a ``audio.stem_separation`` registry route (plan Task
+    # 17), validated by the declarative registry validator. The former vendor
+    # provider switch and its production check are removed (plan Task 19 item 2).
+    provider = str(getattr(settings, "stem_separation_provider", "")).strip().lower()
+    if provider not in {"demucs", ""}:
+        raise RuntimeError("STEM_SEPARATION_PROVIDER must be demucs in production")
 
 
 def _require_billing_mode(settings: object) -> None:

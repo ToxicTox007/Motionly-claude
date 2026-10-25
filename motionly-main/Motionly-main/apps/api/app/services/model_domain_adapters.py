@@ -6,14 +6,12 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from pathlib import Path
 
+from app.services.audio_ml_providers import emotion_insights
 from app.services.model_gateway import (
     AdapterResult,
     AudioIntelligenceOutput,
     AudioIntelligenceRequest,
     EmbeddingsOutput,
-    GeneratedArtifact,
-    GenerationOperationOutput,
-    GenerationOutput,
     ImageEmbeddingsRequest,
     MatteSegmentationOutput,
     MatteSegmentationRequest,
@@ -26,12 +24,10 @@ from app.services.model_gateway import (
     ModelUsage,
     StemSeparationOutput,
     StemSeparationRequest,
-    VideoGenerationPollRequest,
-    VideoGenerationSubmitRequest,
     VisualManifestOutput,
     VisualManifestRequest,
+    stem_duration_units,
 )
-from app.services.provider_resilience import ProviderCallFailure, ProviderErrorInfo
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +130,7 @@ class LocalAudioIntelligenceAdapter:
         emotion = self.providers.get("emotion")
         if emotion is not None and hasattr(emotion, "classify_windows"):
             try:
-                insights["emotion_windows"] = emotion.classify_windows(
-                    audio_path=request.audio_path
-                )
+                insights.update(emotion_insights(emotion, audio_path=request.audio_path))
             except Exception as exc:
                 logger.error(
                     "audio_ml_provider_failed",
@@ -339,67 +333,15 @@ class LocalStemSeparationAdapter:
             source_path=request.source_path,
             model=request.model,
         )
+        input_units = (
+            stem_duration_units(request.duration_s)
+            if request.duration_s is not None
+            else max(1, request.source_path.stat().st_size // 1024)
+        )
         return AdapterResult(
             output=StemSeparationOutput(stems=dict(stems)),
-            usage=ModelUsage(input_units=max(1, request.source_path.stat().st_size // 1024)),
+            usage=ModelUsage(input_units=input_units),
         )
-
-
-class RunwayVideoGenerationAdapter:
-    def __init__(self, provider: object) -> None:
-        self.provider = provider
-
-    def invoke(self, *, route: ModelRoute, request: ModelRequest) -> AdapterResult:
-        provider_model = getattr(self.provider, "model", route.model)
-        provider_api_version = getattr(self.provider, "api_version", None)
-        if provider_model != route.model:
-            raise ValueError("Runway route model does not match transport model")
-        if provider_api_version and provider_api_version not in route.model_revision:
-            raise ValueError("Runway route revision does not match transport API version")
-        if isinstance(request, VideoGenerationSubmitRequest):
-            if not request.prompt_image_url:
-                raise ProviderCallFailure(
-                    provider="runway",
-                    error_info=ProviderErrorInfo(
-                        "provider_request_rejected",
-                        False,
-                        fallback_eligible=False,
-                        circuit_worthy=False,
-                        billable=False,
-                    ),
-                    message="Runway video generation requires a prompt image.",
-                )
-            import inspect
-
-            submit_values = {
-                "prompt": request.prompt,
-                "prompt_image_url": request.prompt_image_url,
-                "duration_s": request.duration_s,
-                "ratio": request.ratio,
-            }
-            if "idempotency_key" in inspect.signature(
-                self.provider.initiate_generation
-            ).parameters:
-                submit_values["idempotency_key"] = request.idempotency_key
-            operation_id = self.provider.initiate_generation(**submit_values)
-            return AdapterResult(
-                output=GenerationOperationOutput(
-                    operation_id=operation_id,
-                    raw_response={"route_id": route.route_id},
-                ),
-                usage=ModelUsage(output_units=request.duration_s),
-            )
-        if isinstance(request, VideoGenerationPollRequest):
-            video_url = self.provider.poll_task(request.operation_id)
-            return AdapterResult(
-                output=GenerationOutput(
-                    artifacts=(GeneratedArtifact(url=video_url),),
-                    operation_id=request.operation_id,
-                    raw_response={},
-                ),
-                usage=ModelUsage(),
-            )
-        raise TypeError("Runway adapter requires video submit or poll request")
 
 
 def bundle_revision(*parts: object) -> str:
@@ -505,13 +447,15 @@ def register_matte_route(
     *,
     provider_models: Mapping[str, object],
     revision: str,
+    provider: str = "local_mediapipe",
+    model: str = "mediapipe-selfie-segmentation",
 ) -> ModelRoute:
     route = ModelRoute(
         route_id="local-matte-segmentation",
         capability=ModelCapability.VISION,
         adapter="local-matte-segmentation-adapter",
-        provider="local_mediapipe",
-        model="mediapipe-selfie-segmentation",
+        provider=provider,
+        model=model,
         model_revision=revision,
         operations=(ModelOperation.VISION_MATTE_SEGMENTATION,),
         priority=10,
@@ -539,36 +483,5 @@ def register_stem_route(
         priority=10,
     )
     gateway.register_adapter(route.adapter, LocalStemSeparationAdapter(separator))
-    gateway.register_route(route)
-    return route
-
-
-def register_runway_route(
-    gateway: ModelGateway,
-    *,
-    provider: object,
-    model: str,
-    revision: str,
-    fixed_cost_usd: float,
-    endpoint_host: str | None = None,
-    requires_live_effects_gate: bool = False,
-) -> ModelRoute:
-    route = ModelRoute(
-        route_id="runway-video-generation",
-        capability=ModelCapability.GENERATION,
-        adapter="runway-video-generation-adapter",
-        provider="runway",
-        model=model,
-        model_revision=revision,
-        operations=(
-            ModelOperation.GENERATION_VIDEO_SUBMIT,
-            ModelOperation.GENERATION_VIDEO_POLL,
-        ),
-        priority=10,
-        fixed_cost_usd=fixed_cost_usd,
-        endpoint_host=endpoint_host,
-        requires_live_effects_gate=requires_live_effects_gate,
-    )
-    gateway.register_adapter(route.adapter, RunwayVideoGenerationAdapter(provider))
     gateway.register_route(route)
     return route

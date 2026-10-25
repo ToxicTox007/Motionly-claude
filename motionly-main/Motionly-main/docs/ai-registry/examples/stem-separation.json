@@ -1,0 +1,258 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "audio-stems-endpoint",
+      "type": "async_job",
+      "base_url": "https://www.lalal.ai",
+      "network": "public",
+      "auth": {
+        "type": "custom_header",
+        "header_name": "x-license-key",
+        "secret_ref": "bundle:audio-stems-endpoint"
+      },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "LALAL.AI",
+        "purpose": "Receives the audio track of your video, without the picture, when you ask to separate the voice from the background audio. The uploaded audio is deleted as soon as the separated tracks have been downloaded.",
+        "data_categories": ["audio"],
+        "policy_url": "https://www.lalal.ai/privacy/"
+      }
+    },
+    {
+      "id": "baseline-chat-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://chat.example.invalid/v1",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:baseline-chat-endpoint"
+      },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "Baseline chat and transcription endpoint",
+        "purpose": "Serves the required planning and transcription capabilities so this example is a complete, production-valid operator registry.",
+        "data_categories": ["text", "audio"],
+        "policy_url": "https://chat.example.invalid/policy"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "audio-stems-model",
+      "model_id": "lalal/andromeda",
+      "revision": "andromeda-v6",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["audio.stem_separation"]
+    },
+    {
+      "id": "baseline-chat-model",
+      "model_id": "baseline-chat",
+      "revision": "baseline-2026-01-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "baseline-stt-model",
+      "model_id": "baseline-stt",
+      "revision": "baseline-2026-01-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["transcription.speech_to_text"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "baseline-planning",
+      "capability": "planning.chat",
+      "adapter_id": "baseline-chat-endpoint",
+      "model_id": "baseline-chat",
+      "model_ref": "baseline-chat-model",
+      "model_revision": "baseline-2026-01-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "input_per_million_usd": 1,
+        "output_per_million_usd": 2
+      },
+      "budget": {
+        "feature": "planning",
+        "monthly_usd": 10
+      },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "baseline-transcription",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "baseline-chat-endpoint",
+      "model_id": "baseline-stt",
+      "model_ref": "baseline-stt-model",
+      "model_revision": "baseline-2026-01-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "per_unit_usd": 0.0001
+      },
+      "budget": {
+        "feature": "transcription",
+        "monthly_usd": 10
+      },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "audio-stems-remote",
+      "capability": "audio.stem_separation",
+      "adapter_id": "audio-stems-endpoint",
+      "model_id": "lalal/andromeda",
+      "model_ref": "audio-stems-model",
+      "model_revision": "andromeda-v6",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": 0.01
+      },
+      "budget": {
+        "feature": "audio_stems",
+        "monthly_usd": 50,
+        "hard_cap": {
+          "max_requests_per_month": 5
+        }
+      },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "upload_filename": "motionly-audio.flac",
+      "input_transform": {
+        "audio": {
+          "codec": "flac",
+          "sample_rate": 44100,
+          "channels": 2
+        }
+      },
+      "params": {
+        "stem": "vocals",
+        "splitter": "andromeda",
+        "extraction_level": "deep_extraction",
+        "encoder_format": "wav",
+        "dereverb_enabled": false
+      },
+      "mapping": {
+        "steps": [
+          {
+            "method": "POST",
+            "path": "/api/v1/upload/",
+            "body": "input.file",
+            "capture": {
+              "source_id": "response.id"
+            }
+          },
+          {
+            "method": "POST",
+            "path": "/api/v1/split/stem_separator/",
+            "body": {
+              "source_id": {
+                "$ref": "vars.source_id"
+              },
+              "presets": {
+                "stem": {
+                  "$ref": "params.stem"
+                },
+                "splitter": {
+                  "$ref": "params.splitter"
+                },
+                "extraction_level": {
+                  "$ref": "params.extraction_level"
+                },
+                "encoder_format": {
+                  "$ref": "params.encoder_format"
+                },
+                "dereverb_enabled": {
+                  "$ref": "params.dereverb_enabled"
+                }
+              },
+              "idempotency_key": {
+                "$fn": "uuid",
+                "args": []
+              }
+            },
+            "capture": {
+              "task_id": "response.task_id"
+            },
+            "commit": true
+          }
+        ],
+        "poll": {
+          "method": "POST",
+          "path": "/api/v1/check/",
+          "body": {
+            "task_ids": [
+              {
+                "$ref": "vars.task_id"
+              }
+            ]
+          },
+          "status": "response.result.{vars.task_id}.status",
+          "status_map": {
+            "progress": {
+              "state": "running"
+            },
+            "success": {
+              "state": "succeeded"
+            },
+            "error": {
+              "state": "failed",
+              "fallback": false
+            },
+            "cancelled": {
+              "state": "failed",
+              "fallback": false
+            },
+            "server_error": {
+              "state": "retryable_failed",
+              "fallback": false
+            }
+          },
+          "tolerate_retryable": true,
+          "interval_s": 5,
+          "backoff": {
+            "factor": 1.5,
+            "max_interval_s": 30
+          },
+          "max_wait_s": 1800
+        },
+        "artifacts": {
+          "items": "response.result.{vars.task_id}.result.tracks",
+          "name": "type",
+          "url": "url",
+          "name_map": {
+            "stem": "vocals",
+            "back": "no_vocals"
+          },
+          "required": ["vocals", "no_vocals"],
+          "max_bytes": 2147483648,
+          "allowed_hosts": ["lalal.ai", "*.lalal.ai"],
+          "force_https": true,
+          "auth": "none"
+        },
+        "cleanup": [
+          {
+            "method": "POST",
+            "path": "/api/v1/delete/",
+            "body": {
+              "source_id": {
+                "$ref": "vars.source_id"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

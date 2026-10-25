@@ -15,7 +15,7 @@ def test_provider_slo_rate_limit_and_cost_alert_inputs_are_measured() -> None:
     operations.record_provider_slo(
         workspace_id=workspace_id,
         project_id=project_id,
-        provider="openrouter",
+        provider="provider-a",
         operation="edit_plan",
         success=False,
         latency_ms=2500,
@@ -25,7 +25,7 @@ def test_provider_slo_rate_limit_and_cost_alert_inputs_are_measured() -> None:
         workspace_id=workspace_id,
         project_id=project_id,
         render_job_id=render_id,
-        provider="openrouter",
+        provider="provider-a",
         category="tokens",
         quantity=1000,
         unit="token",
@@ -39,11 +39,11 @@ def test_provider_slo_rate_limit_and_cost_alert_inputs_are_measured() -> None:
     )
 
     assert operations.cost_summary()["cost_per_approved_export_usd"] == 0.002
-    assert operations.cost_summary()["by_provider"]["openrouter"] == 0.002
+    assert operations.cost_summary()["by_provider"]["provider-a"] == 0.002
     assert operations.provider_slo_summary()[0]["success_rate"] == 0
     assert operations.provider_slo_summary()[0]["p95_latency_ms"] == 2500
     assert any(
-        event["provider"] == "openrouter"
+        event["provider"] == "provider-a"
         and event["error_code"] == "rate_limit_exceeded"
         and event["latency_ms"] == 2500
         for event in operations.provider_events

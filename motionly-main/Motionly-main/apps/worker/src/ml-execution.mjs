@@ -55,6 +55,24 @@ export function mlExecutionMode(environment = process.env) {
   return mode;
 }
 
+// GPU-free execution of an ML queue: the cpu-vision worker image
+// (CPU_VISION_ENABLED=true) serves a queue when its feature switch selects a
+// CPU or remote provider. Without that switch the queue stays on the GPU image.
+const CPU_VISION_QUEUE_SWITCHES = {
+  visual_analysis: { setting: "VISUAL_PROVIDER", values: ["remote"] },
+  matte_extraction: { setting: "MATTE_PROVIDER", values: ["local_cpu"] },
+};
+
+export function cpuVisionQueues(queueNames, environment = process.env) {
+  if (value(environment, "CPU_VISION_ENABLED") !== "true") return [];
+  return queueNames.filter((queue) => {
+    const rule = CPU_VISION_QUEUE_SWITCHES[queue];
+    return Boolean(
+      rule && rule.values.includes(value(environment, rule.setting).toLowerCase()),
+    );
+  });
+}
+
 export function mlExecutionPlan(queueNames, environment = process.env) {
   const mode = mlExecutionMode(environment);
   const mlQueues = queueNames.filter((queue) => ML_QUEUES.includes(queue));
@@ -90,13 +108,16 @@ export function mlExecutionPlan(queueNames, environment = process.env) {
         );
       }
     }
-  } else if (
-    mlQueues.length > 0 &&
-    value(environment, "ML_WORKER_ENABLED") !== "true"
-  ) {
-    throw new Error(
-      "visual_analysis and matte_extraction must run with ML_WORKER_ENABLED=true.",
-    );
+  } else if (value(environment, "ML_WORKER_ENABLED") !== "true") {
+    const cpuServed = cpuVisionQueues(mlQueues, environment);
+    const gpuOnly = mlQueues.filter((queue) => !cpuServed.includes(queue));
+    if (gpuOnly.length > 0) {
+      throw new Error(
+        "visual_analysis and matte_extraction must run with ML_WORKER_ENABLED=true " +
+          `(GPU queues here: ${gpuOnly.join(", ")}), or on a cpu-vision worker ` +
+          "(CPU_VISION_ENABLED=true) with a CPU provider such as MATTE_PROVIDER=local_cpu.",
+      );
+    }
   }
 
   const gpu =
@@ -105,6 +126,10 @@ export function mlExecutionPlan(queueNames, environment = process.env) {
   return {
     mode,
     role: gpu ? "gpu" : "cpu",
+    cpuVisionQueues:
+      mode === "gpu" && value(environment, "ML_WORKER_ENABLED") !== "true"
+        ? cpuVisionQueues(mlQueues, environment)
+        : [],
     fixtureCapabilities:
       mode === "test_fixture"
         ? mlQueues.map((queue) => ({
@@ -124,8 +149,27 @@ export function mlJobsAllowed(environment = process.env) {
   );
 }
 
+// True when this worker may execute jobs from one ML queue: the GPU/ML image,
+// the CPU stage's test fixtures, or a cpu-vision worker with a CPU provider.
+export function mlJobAllowed(queue, environment = process.env) {
+  return (
+    mlJobsAllowed(environment) ||
+    cpuVisionQueues([queue], environment).includes(queue)
+  );
+}
+
 export function workerHeartbeatPayload(queueNames, environment = process.env) {
   const plan = mlExecutionPlan(queueNames, environment);
+  const metadata = {
+    concurrency: value(environment, "WORKER_CONCURRENCY") || "1",
+    process_role: value(environment, "PROCESS_ROLE") || "worker",
+    ml_execution_mode: plan.mode,
+    fixture_capabilities: plan.fixtureCapabilities,
+  };
+  // Only GPU-free workers report it, so existing heartbeats are unchanged.
+  if (plan.cpuVisionQueues.length > 0) {
+    metadata.cpu_vision_queues = plan.cpuVisionQueues;
+  }
   return {
     worker_id:
       value(environment, "WORKER_ID") ||
@@ -133,17 +177,14 @@ export function workerHeartbeatPayload(queueNames, environment = process.env) {
     worker_role: plan.role,
     queues: queueNames,
     version: value(environment, "APP_VERSION") || null,
-    metadata: {
-      concurrency: value(environment, "WORKER_CONCURRENCY") || "1",
-      process_role: value(environment, "PROCESS_ROLE") || "worker",
-      ml_execution_mode: plan.mode,
-      fixture_capabilities: plan.fixtureCapabilities,
-    },
+    metadata,
   };
 }
 
 // Repeatable maintenance jobs. The GPU capacity observer (autoscaler) belongs
-// to the GPU stage, so a test_fixture worker never schedules it.
+// to the GPU stage, so a test_fixture worker and a GPU-free deployment
+// (GPU_WORKERS_ENABLED=false, infra/docker-compose.remote-ai.yml) never
+// schedule it.
 export function maintenanceRepeatJobs(environment = process.env) {
   const jobs = [
     {
@@ -152,7 +193,10 @@ export function maintenanceRepeatJobs(environment = process.env) {
       pattern: value(environment, "RETENTION_CRON") || "0 3 * * *",
     },
   ];
-  if (mlExecutionMode(environment) === "gpu") {
+  if (
+    mlExecutionMode(environment) === "gpu" &&
+    value(environment, "GPU_WORKERS_ENABLED").toLowerCase() !== "false"
+  ) {
     jobs.push({
       name: "gpu-autoscaling",
       data: { kind: "gpu_autoscaling", queue_name: "maintenance" },

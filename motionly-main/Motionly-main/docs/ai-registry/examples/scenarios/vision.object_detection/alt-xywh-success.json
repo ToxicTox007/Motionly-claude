@@ -1,0 +1,68 @@
+{
+  "registry": "object-detection-alt.json",
+  "route_id": "vision-objects-alt-remote",
+  "capability": "vision.object_detection",
+  "differential": false,
+  "differential_skip_reason": "second, differently-shaped provider (xywh_norm boxes, renamed fields); the archived Google Vision adapter cannot run this shape",
+  "request": {
+    "type": "object_detection",
+    "max_results": 5,
+    "images": [{ "b64": "/9j/wA==" }, { "b64": "/9j/wB==" }]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/api/v2/detect" },
+      "response": {
+        "status": 200,
+        "json": {
+          "images": [
+            {
+              "objects": [
+                {
+                  "class_name": "Automobile",
+                  "prob": 0.88,
+                  "bbox": { "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.25 }
+                },
+                {
+                  "class_name": "Cellphone",
+                  "prob": 0.44,
+                  "bbox": { "x": 0.5, "y": 0.5, "w": 0.1, "h": 0.2 }
+                }
+              ]
+            },
+            {
+              "objects": [
+                {
+                  "class_name": "Dog",
+                  "prob": 1.3,
+                  "bbox": { "x": -0.1, "y": 0.0, "w": 1.5, "h": 0.4 }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "output": {
+      "detections": [
+        [
+          { "label": "car", "score": 0.88, "box": [0.1, 0.2, 0.3, 0.25] },
+          { "label": "cell phone", "score": 0.44, "box": [0.5, 0.5, 0.1, 0.2] }
+        ],
+        [{ "label": "dog", "score": 1.0, "box": [0.0, 0.0, 1.0, 0.4] }]
+      ]
+    },
+    "usage": { "input_units": 2 },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "detect.example.net",
+        "path": "/api/v2/detect",
+        "header_names": ["accept", "authorization"],
+        "body_keys": ["frames", "top_k"]
+      }
+    ]
+  }
+}

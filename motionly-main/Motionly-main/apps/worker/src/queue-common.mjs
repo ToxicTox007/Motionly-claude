@@ -312,6 +312,24 @@ export function bullPriority(priority) {
   return Math.max(1, 100 - Math.min(parsed, 99));
 }
 
+// Delayed re-enqueue support (plan Task 28, non-blocking async polling).
+// BullMQ already supports delayed jobs natively (the bridge lists the "delayed"
+// state everywhere, retry() promotes delayed jobs, and snapshots count them);
+// this helper turns a caller-supplied `delay_seconds` into the BullMQ `delay`
+// option in milliseconds. A missing, zero or invalid value yields `undefined`
+// so the job enqueues immediately, keeping every existing caller unchanged.
+export const MAX_ENQUEUE_DELAY_SECONDS = 86_400;
+
+export function bullDelayMs(delaySeconds) {
+  if (delaySeconds === undefined || delaySeconds === null || delaySeconds === "") {
+    return undefined;
+  }
+  const parsed = Number(delaySeconds);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  const bounded = Math.min(parsed, MAX_ENQUEUE_DELAY_SECONDS);
+  return Math.round(bounded * 1000);
+}
+
 export function normalizeJobRecord(job, state) {
   const data = job?.data || {};
   const optsAttempts =
@@ -337,6 +355,7 @@ export function normalizeJobRecord(job, state) {
     project_id: data.project_id || null,
     resource_id: data.resource_id || null,
     render_engine: data.render_engine || "ffmpeg_basic",
+    registry_fingerprint: data.registry_fingerprint || null,
     trace_id: data.trace_id || null,
     error_code: data.error_code || null,
     error_message: data.error_message || null,

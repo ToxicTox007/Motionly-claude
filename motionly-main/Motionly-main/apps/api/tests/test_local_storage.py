@@ -235,10 +235,13 @@ def test_local_storage_route_rejects_unsigned_tampered_and_expired_links(tmp_pat
         secret=secret, method="GET", bucket="raw-uploads", path="a/b.mp4", expires_in_seconds=300
     )
     exp, sig = (part.split("=", 1)[1] for part in query.split("&"))
+    # Flip the last character to a different one (replacing it with a fixed
+    # character is a no-op whenever the real signature already ends with it).
+    tampered_sig = sig[:-1] + ("1" if sig.endswith("0") else "0")
     tampered = _local_request(tmp_path, signing_secret=secret)
     with pytest.raises(ApiError) as tampered_error:
         asyncio.run(
-            get_local_object("raw-uploads", "a/b.mp4", tampered, exp=exp, sig=sig[:-1] + "0")
+            get_local_object("raw-uploads", "a/b.mp4", tampered, exp=exp, sig=tampered_sig)
         )
     assert tampered_error.value.status_code == 403
 

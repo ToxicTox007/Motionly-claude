@@ -15,6 +15,9 @@ import {
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
+import { useCapabilities } from "@/hooks/useCapabilities";
+import { CAPABILITY_IDS } from "@/lib/capabilities";
+import { CapabilityStatus } from "../CapabilityGate";
 import type { PreviewAudioState } from "../preview/VideoPreview";
 
 interface AudioTabProps {
@@ -55,6 +58,8 @@ export function AudioTab({
   onSelectionUpdated,
   onPreviewAudioUpdated,
 }: AudioTabProps) {
+  const { resolve: resolveCapabilityState } = useCapabilities(workspaceId);
+  const stemsCapability = resolveCapabilityState(CAPABILITY_IDS.stemSeparation);
   const initialMood = useMemo(() => {
     const rawMood = initialSelection?.music_track?.raw_metadata?.mood;
     return typeof rawMood === "string" && rawMood.trim()
@@ -483,6 +488,10 @@ export function AudioTab({
         </PanelSection>
 
         <PanelSection title="Vocal Stems">
+          <CapabilityStatus
+            state={stemsCapability}
+            id="audio-tab-stems-status"
+          />
           <div className="mb-2 flex items-center justify-between gap-2">
             <Label className="mb-0">Source audio stem</Label>
             {stem?.result?.stem_provider === "fixture" ? (

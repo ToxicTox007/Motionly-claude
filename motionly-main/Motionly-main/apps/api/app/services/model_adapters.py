@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -18,6 +19,7 @@ from app.services.model_gateway import (
     GeneratedArtifact,
     GenerationOutput,
     GenerationRequest,
+    ImageEmbeddingsRequest,
     ModelRequest,
     ModelRoute,
     ModelUsage,
@@ -36,7 +38,13 @@ from app.services.provider_resilience import (
     classify_provider_status,
 )
 
+if TYPE_CHECKING:
+    from app.services.inference_http import AuthApplier
+
 _MAX_MULTIMODAL_AUDIO_BYTES = 25 * 1024 * 1024
+
+# Closed set of embedding input shapes (plan Section 2.10, Task 12).
+_EMBEDDINGS_INPUT_STYLES = frozenset({"openai", "typed_objects"})
 
 
 @dataclass(frozen=True)
@@ -48,6 +56,21 @@ class OpenAICompatibleAdapter:
     extra_headers: Mapping[str, str] = field(default_factory=dict)
     timeout_seconds: float = 60.0
     allow_insecure_http: bool = False
+    # Merged into every JSON request body (for example provider-specific routing
+    # hints). Request fields always win over these defaults.
+    extra_body: Mapping[str, object] = field(default_factory=dict)
+    # How embedding inputs are shaped (plan Section 2.10 closed option, Task 12):
+    #   "openai"        -> ``input`` is a flat list of strings (text only).
+    #   "typed_objects" -> ``input`` is a list of ``{"text": ...}`` / ``{"image": ...}``
+    #                      objects, so text and image embeddings share one vector
+    #                      space; the body also requests normalized float vectors.
+    # Only an adapter with ``typed_objects`` can serve image embeddings.
+    embeddings_input_style: str = "openai"
+    # Optional declarative-registry auth strategy (plan Task 5). When present it
+    # injects credentials into the request headers and ``api_key`` is ignored;
+    # when absent the legacy ``api_key`` header construction below applies. The
+    # registry-driven runtime (Task 6) passes this.
+    auth: AuthApplier | None = None
 
     def __post_init__(self) -> None:
         _validate_base_url(
@@ -56,6 +79,11 @@ class OpenAICompatibleAdapter:
         )
         if self.timeout_seconds <= 0:
             raise ValueError("adapter timeout_seconds must be positive")
+        if self.embeddings_input_style not in _EMBEDDINGS_INPUT_STYLES:
+            raise ValueError(
+                "embeddings_input_style must be one of "
+                f"{sorted(_EMBEDDINGS_INPUT_STYLES)}"
+            )
 
     def invoke(self, *, route: ModelRoute, request: ModelRequest) -> AdapterResult:
         if isinstance(request, PlanningRequest):
@@ -68,6 +96,8 @@ class OpenAICompatibleAdapter:
             return self._audio(route, request)
         if isinstance(request, EmbeddingsRequest):
             return self._embeddings(route, request)
+        if isinstance(request, ImageEmbeddingsRequest):
+            return self._image_embeddings(route, request)
         if isinstance(request, GenerationRequest):
             return self._generation(route, request)
         raise TypeError(f"unsupported request type: {type(request).__name__}")
@@ -181,14 +211,17 @@ class OpenAICompatibleAdapter:
             {"type": "image_url", "image_url": {"url": image_url}}
             for image_url in request.image_urls
         )
+        body: dict[str, object] = {
+            "model": route.model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": min(request.max_output_units, route.max_output_units),
+        }
+        if request.response_format is not None:
+            body["response_format"] = dict(request.response_format)
         payload, request_id = self._request_json(
             route=route,
             operation="chat/completions",
-            json={
-                "model": route.model,
-                "messages": [{"role": "user", "content": content}],
-                "max_tokens": min(request.max_output_units, route.max_output_units),
-            },
+            json=body,
         )
         return AdapterResult(
             output=VisionOutput(content=_chat_content(payload, route), raw_response=payload),
@@ -199,28 +232,31 @@ class OpenAICompatibleAdapter:
 
     def _audio(self, route: ModelRoute, request: AudioRequest) -> AdapterResult:
         encoded = _encode_audio(request.audio_path)
+        body: dict[str, object] = {
+            "model": route.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": request.prompt},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": encoded,
+                                "format": request.audio_format,
+                            },
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": min(request.max_output_units, route.max_output_units),
+        }
+        if request.response_format is not None:
+            body["response_format"] = dict(request.response_format)
         payload, request_id = self._request_json(
             route=route,
             operation="chat/completions",
-            json={
-                "model": route.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": request.prompt},
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": encoded,
-                                    "format": request.audio_format,
-                                },
-                            },
-                        ],
-                    }
-                ],
-                "max_tokens": min(request.max_output_units, route.max_output_units),
-            },
+            json=body,
         )
         return AdapterResult(
             output=AudioOutput(content=_chat_content(payload, route), raw_response=payload),
@@ -230,50 +266,89 @@ class OpenAICompatibleAdapter:
         )
 
     def _embeddings(self, route: ModelRoute, request: EmbeddingsRequest) -> AdapterResult:
-        body: dict[str, object] = {"model": route.model, "input": list(request.inputs)}
-        if request.dimensions is not None:
-            body["dimensions"] = request.dimensions
+        typed = self.embeddings_input_style == "typed_objects"
+        inputs: list[object] = (
+            [{"text": text} for text in request.inputs] if typed else list(request.inputs)
+        )
+        body = self._embeddings_body(route, inputs, dimensions=request.dimensions, typed=typed)
         payload, request_id = self._request_json(
             route=route,
             operation="embeddings",
             json=body,
         )
-        raw_data = payload.get("data")
-        if not isinstance(raw_data, list) or len(raw_data) != len(request.inputs):
-            raise _malformed(route)
-        vectors_by_index: list[tuple[int, tuple[float, ...]]] = []
-        seen_indices: set[int] = set()
-        vector_size: int | None = None
-        for default_index, item in enumerate(raw_data):
-            if not isinstance(item, Mapping) or not isinstance(item.get("embedding"), list):
-                raise _malformed(route)
-            try:
-                vector = tuple(float(value) for value in item["embedding"])
-                index = int(item.get("index", default_index))
-            except (TypeError, ValueError) as exc:
-                raise _malformed(route) from exc
-            if (
-                not vector
-                or any(not math.isfinite(value) for value in vector)
-                or index < 0
-                or index >= len(request.inputs)
-                or index in seen_indices
-                or (request.dimensions is not None and len(vector) != request.dimensions)
-                or (vector_size is not None and len(vector) != vector_size)
-            ):
-                raise _malformed(route)
-            seen_indices.add(index)
-            vector_size = len(vector)
-            vectors_by_index.append((index, vector))
-        if seen_indices != set(range(len(request.inputs))):
-            raise _malformed(route)
-        vectors = tuple(vector for _index, vector in sorted(vectors_by_index))
+        vectors = _parse_embedding_vectors(
+            payload,
+            route=route,
+            expected_count=len(request.inputs),
+            dimensions=request.dimensions,
+        )
         return AdapterResult(
             output=EmbeddingsOutput(vectors=vectors, raw_response=payload),
             usage=_usage(payload),
             usage_reported=_usage_reported(payload),
             provider_request_id=request_id,
         )
+
+    def _image_embeddings(
+        self, route: ModelRoute, request: ImageEmbeddingsRequest
+    ) -> AdapterResult:
+        # Image embeddings need the typed-objects shape so text and image vectors
+        # share one space (plan Section 2.10 / Task 12). An OpenAI-style adapter
+        # has no standard way to send image inputs.
+        if self.embeddings_input_style != "typed_objects":
+            raise ProviderCallFailure(
+                provider=route.provider,
+                error_info=ProviderErrorInfo(
+                    "provider_request_rejected",
+                    False,
+                    fallback_eligible=False,
+                    circuit_worthy=False,
+                    billable=False,
+                ),
+                message=(
+                    "image embeddings require embeddings_input_style: typed_objects"
+                ),
+            )
+        inputs: list[object] = [
+            {"image": _image_data_url(image, route)} for image in request.images
+        ]
+        body = self._embeddings_body(route, inputs, dimensions=None, typed=True)
+        payload, request_id = self._request_json(
+            route=route,
+            operation="embeddings",
+            json=body,
+        )
+        vectors = _parse_embedding_vectors(
+            payload,
+            route=route,
+            expected_count=len(request.images),
+            dimensions=None,
+        )
+        return AdapterResult(
+            output=EmbeddingsOutput(vectors=vectors, raw_response=_without_vectors(payload)),
+            usage=_usage(payload),
+            # Image token counts (by tile) are not knowable before the call, so
+            # when the provider reports none, billing uses the preflight estimate.
+            usage_reported=_usage_reported(payload),
+            provider_request_id=request_id,
+        )
+
+    def _embeddings_body(
+        self,
+        route: ModelRoute,
+        inputs: list[object],
+        *,
+        dimensions: int | None,
+        typed: bool,
+    ) -> dict[str, object]:
+        body: dict[str, object] = {"model": route.model, "input": inputs}
+        if typed:
+            # Shared, L2-normalized float vectors across text and image inputs.
+            body["normalized"] = True
+            body["embedding_type"] = "float"
+        if dimensions is not None:
+            body["dimensions"] = dimensions
+        return body
 
     def _generation(self, route: ModelRoute, request: GenerationRequest) -> AdapterResult:
         body: dict[str, object] = {
@@ -335,6 +410,8 @@ class OpenAICompatibleAdapter:
     ) -> tuple[dict[str, object], str | None]:
         headers = self._headers()
         url = self._operation_url(route=route, operation=operation)
+        if json is not None and self.extra_body:
+            json = {**self.extra_body, **json}
         try:
             with httpx.Client(
                 timeout=httpx.Timeout(
@@ -374,7 +451,9 @@ class OpenAICompatibleAdapter:
 
     def _headers(self) -> dict[str, str]:
         headers = {"accept": "application/json", **dict(self.extra_headers)}
-        if self.api_key:
+        if self.auth is not None:
+            self.auth.apply(headers)
+        elif self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
         return headers
 
@@ -391,7 +470,9 @@ class AzureOpenAIAdapter(OpenAICompatibleAdapter):
 
     def _headers(self) -> dict[str, str]:
         headers = {"accept": "application/json", **dict(self.extra_headers)}
-        if self.api_key:
+        if self.auth is not None:
+            self.auth.apply(headers)
+        elif self.api_key:
             headers["api-key"] = self.api_key
         return headers
 
@@ -401,6 +482,45 @@ class AzureOpenAIAdapter(OpenAICompatibleAdapter):
             f"{self.base_url.rstrip('/')}/openai/deployments/{deployment}/{operation.lstrip('/')}"
             f"?api-version={quote(self.api_version, safe='-.')}"
         )
+
+
+_IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _image_mime_type(image: bytes) -> str | None:
+    for signature, content_type in _IMAGE_SIGNATURES:
+        if image.startswith(signature):
+            return content_type
+    if image.startswith(b"RIFF") and image[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _image_data_url(image: bytes, route: ModelRoute) -> str:
+    mime = _image_mime_type(image)
+    if mime is None:
+        raise ProviderCallFailure(
+            provider=route.provider,
+            error_info=ProviderErrorInfo(
+                "provider_request_rejected",
+                False,
+                fallback_eligible=False,
+                circuit_worthy=False,
+                billable=False,
+            ),
+            message="Embedding images must be JPEG, PNG, GIF, or WebP.",
+        )
+    return f"data:{mime};base64,{base64.b64encode(image).decode('ascii')}"
+
+
+def _without_vectors(payload: Mapping[str, object]) -> dict[str, object]:
+    """Keep provider metadata (model, usage) without duplicating large vectors."""
+    return {key: value for key, value in payload.items() if key != "data"}
 
 
 def _validate_base_url(value: str, *, allow_insecure_http: bool) -> None:
@@ -522,6 +642,46 @@ def _encode_audio(path: Path) -> str:
             provider="model_gateway",
             error_info=ProviderErrorInfo("provider_request_rejected", False),
         ) from exc
+
+
+def _parse_embedding_vectors(
+    payload: Mapping[str, object],
+    *,
+    route: ModelRoute,
+    expected_count: int,
+    dimensions: int | None,
+) -> tuple[tuple[float, ...], ...]:
+    """Validate an OpenAI-style ``data`` list and return vectors in input order."""
+    raw_data = payload.get("data")
+    if not isinstance(raw_data, list) or len(raw_data) != expected_count:
+        raise _malformed(route)
+    vectors_by_index: list[tuple[int, tuple[float, ...]]] = []
+    seen_indices: set[int] = set()
+    vector_size: int | None = None
+    for default_index, item in enumerate(raw_data):
+        if not isinstance(item, Mapping) or not isinstance(item.get("embedding"), list):
+            raise _malformed(route)
+        try:
+            vector = tuple(float(value) for value in item["embedding"])
+            index = int(item.get("index", default_index))
+        except (TypeError, ValueError) as exc:
+            raise _malformed(route) from exc
+        if (
+            not vector
+            or any(not math.isfinite(value) for value in vector)
+            or index < 0
+            or index >= expected_count
+            or index in seen_indices
+            or (dimensions is not None and len(vector) != dimensions)
+            or (vector_size is not None and len(vector) != vector_size)
+        ):
+            raise _malformed(route)
+        seen_indices.add(index)
+        vector_size = len(vector)
+        vectors_by_index.append((index, vector))
+    if seen_indices != set(range(expected_count)):
+        raise _malformed(route)
+    return tuple(vector for _index, vector in sorted(vectors_by_index))
 
 
 def _malformed(route: ModelRoute) -> ProviderCallFailure:

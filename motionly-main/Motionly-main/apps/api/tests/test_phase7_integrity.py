@@ -97,7 +97,6 @@ def test_preference_learning_uses_latest_nonempty_feedback_per_layer() -> None:
         analytics_repository=None,
         editorial_learning_repository=learning,
         stem_separator=None,
-        runway_provider=None,
     )
 
     assert completed.result["preferences"]["cuts"] == {"pace": "fast"}
@@ -337,12 +336,18 @@ def test_selected_stock_video_is_streamed_into_owned_storage(monkeypatch, tmp_pa
 
 
 def test_feedback_endpoint_persists_without_mail_client() -> None:
+    from app.core.middleware import InMemoryRateLimiter
+
     state = SimpleNamespace(
         settings=SimpleNamespace(supabase_url=None, supabase_service_role_key=None),
         launch_feedback=[],
+        rate_limiter=InMemoryRateLimiter(),
     )
     request = SimpleNamespace(
-        app=SimpleNamespace(state=state), headers={"user-agent": "test-browser"}
+        app=SimpleNamespace(state=state),
+        headers={"user-agent": "test-browser"},
+        client=SimpleNamespace(host="203.0.113.7"),
+        state=SimpleNamespace(request_id="req_feedback"),
     )
 
     response = asyncio.run(

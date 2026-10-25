@@ -1,137 +1,13 @@
 import asyncio
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-import httpx
-import pytest
-
 from app.api.dependencies import Actor
 from app.api.health import dependencies
 from app.core.middleware import InMemoryRateLimiter
-from app.repositories.captions import TranscriptRecord
-from app.schemas.captions import LanguageHint, TranscriptWord
-from app.schemas.plans import EditPlanStyle, PlanCreateRequest
-from app.services.edit_planner import HttpEditPlannerProvider
-from app.services.provider_resilience import ProviderCallFailure
 from app.services.transcription_jobs import _run_audio_ml_providers
-from app.services.transcription_provider import WhisperCompatibleHttpProvider
 
-
-# 1. Groq retry test (transient error -> success)
-def test_groq_whisper_retry_success(monkeypatch) -> None:
-    calls = []
-    
-    def mock_post(*args, **kwargs):
-        calls.append(kwargs)
-        if len(calls) < 2:
-            # First attempt: transient 429
-            response = httpx.Response(429, request=httpx.Request("POST", args[0]))
-            raise httpx.HTTPStatusError(
-                "Too Many Requests",
-                request=response.request,
-                response=response,
-            )
-        # Second attempt: success
-        return httpx.Response(
-            200,
-            json={
-                "language": "en",
-                "confidence": 0.95,
-                "words": [
-                    {"word": "hello", "start": 0.1, "end": 0.5, "confidence": 0.9}
-                ]
-            },
-            request=httpx.Request("POST", args[0])
-        )
-
-    monkeypatch.setattr("httpx.post", mock_post)
-    monkeypatch.setattr("time.sleep", lambda seconds: None)
-
-    provider = WhisperCompatibleHttpProvider(
-        endpoint="https://api.groq.com/openai/v1/audio/transcriptions",
-        api_key="test-api-key",
-        model="whisper-large-v3-turbo",
-        provider_name="groq"
-    )
-
-    audio_file = Path(__file__) # just any valid path to exist
-    result = provider.transcribe(
-        audio_path=audio_file,
-        language_hint=LanguageHint.AUTO
-    )
-    
-    assert len(calls) == 2
-    assert result.language == "en"
-    assert len(result.words) == 1
-    assert result.words[0].text == "hello"
-
-# 2. Groq retry test (transient error -> max attempts reached)
-def test_groq_whisper_retry_fails_max_attempts(monkeypatch) -> None:
-    calls = []
-    
-    def mock_post(*args, **kwargs):
-        calls.append(kwargs)
-        response = httpx.Response(503, request=httpx.Request("POST", args[0]))
-        raise httpx.HTTPStatusError(
-            "Service Unavailable",
-            request=response.request,
-            response=response,
-        )
-
-    monkeypatch.setattr("httpx.post", mock_post)
-    monkeypatch.setattr("time.sleep", lambda seconds: None)
-
-    provider = WhisperCompatibleHttpProvider(
-        endpoint="https://api.groq.com/openai/v1/audio/transcriptions",
-        api_key="test-api-key",
-        model="whisper-large-v3-turbo",
-        provider_name="groq"
-    )
-
-    audio_file = Path(__file__)
-    
-    with pytest.raises(ProviderCallFailure) as exc_info:
-        provider.transcribe(
-            audio_path=audio_file,
-            language_hint=LanguageHint.AUTO
-        )
-
-    assert exc_info.value.error_info.code == "provider_unavailable"
-    assert exc_info.value.error_info.retryable is True
-    assert len(calls) == 3 # max_attempts = 3
-
-# 3. Groq 401/403/non-429 4xx does not retry
-def test_groq_whisper_non_transient_no_retry(monkeypatch) -> None:
-    calls = []
-    
-    def mock_post(*args, **kwargs):
-        calls.append(kwargs)
-        response = httpx.Response(401, request=httpx.Request("POST", args[0]))
-        raise httpx.HTTPStatusError("Unauthorized", request=response.request, response=response)
-
-    monkeypatch.setattr("httpx.post", mock_post)
-    monkeypatch.setattr("time.sleep", lambda seconds: None)
-
-    provider = WhisperCompatibleHttpProvider(
-        endpoint="https://api.groq.com/openai/v1/audio/transcriptions",
-        api_key="test-api-key",
-        model="whisper-large-v3-turbo",
-        provider_name="groq"
-    )
-
-    audio_file = Path(__file__)
-    
-    with pytest.raises(ProviderCallFailure) as exc_info:
-        provider.transcribe(
-            audio_path=audio_file,
-            language_hint=LanguageHint.AUTO
-        )
-
-    assert exc_info.value.error_info.code == "provider_auth_failed"
-    assert exc_info.value.error_info.retryable is False
-    assert len(calls) == 1 # No retry on 401!
 
 # 4. audio ML provider failure does not fail transcription job
 def test_audio_ml_provider_failure_isolation() -> None:
@@ -166,56 +42,6 @@ def test_audio_ml_provider_failure_isolation() -> None:
     assert insights["sound_classification"]["degraded"] is True
     assert insights["sound_classification"]["labels"] == []
 
-# 5. OpenRouter request fallback
-def test_openrouter_request_failure_fallback(monkeypatch) -> None:
-    def mock_post(*args, **kwargs):
-        raise httpx.ConnectError("Connection timed out")
-
-    monkeypatch.setattr("httpx.post", mock_post)
-
-    provider = HttpEditPlannerProvider(
-        endpoint="https://openrouter.ai/api/v1/chat/completions",
-        api_key="test-openrouter-key",
-        model="openrouter/free",
-        provider_name="openrouter"
-    )
-
-    transcript = TranscriptRecord(
-        id=uuid4(),
-        workspace_id=uuid4(),
-        project_id=uuid4(),
-        uploaded_video_id=uuid4(),
-        status="ready",
-        language="en",
-        language_hint=LanguageHint.AUTO,
-        provider="groq",
-        model="whisper",
-        confidence=1.0,
-        duration_ms=5000,
-        words=[TranscriptWord(index=0, text="hello", start_ms=0, end_ms=1000, confidence=1.0)],
-        raw_payload={}
-    )
-
-    payload = PlanCreateRequest(
-        style=EditPlanStyle.CLEAN_MINIMAL,
-        prompt="Make it clean"
-    )
-
-    result = provider.create_plan(
-        transcript=transcript,
-        payload=payload,
-        video_duration_ms=5000
-    )
-
-    assert result.raw_payload["fallback_used"] is True
-    assert any(
-        json.loads(err).get("code") == "provider_network_error"
-        for err in result.validation_errors
-        if err.startswith("{")
-    )
-    assert result.plan is not None
-
-# 6. health dependencies endpoint test with audio_ml
 def test_health_dependencies_endpoint_with_audio_ml(monkeypatch) -> None:
     class MockAudioMLProvider:
         def check_availability(self):

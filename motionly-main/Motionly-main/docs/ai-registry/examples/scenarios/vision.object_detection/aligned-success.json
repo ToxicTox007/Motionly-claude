@@ -1,0 +1,72 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "max_results": 12,
+    "images": [{ "b64": "/9j/wA==" }, { "b64": "/9j/wB==" }]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/images:annotate" },
+      "response": {
+        "status": 200,
+        "json": {
+          "responses": [
+            {
+              "localizedObjectAnnotations": [
+                {
+                  "name": "Laptop",
+                  "score": 0.91,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0.1, "y": 0.2 },
+                      { "x": 0.6, "y": 0.2 },
+                      { "x": 0.6, "y": 0.7 },
+                      { "x": 0.1, "y": 0.7 }
+                    ]
+                  }
+                },
+                {
+                  "name": "Mobile phone",
+                  "score": 0.55,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      {},
+                      { "x": 0.25 },
+                      { "x": 0.25, "y": 0.5 },
+                      { "y": 0.5 }
+                    ]
+                  }
+                }
+              ]
+            },
+            { "localizedObjectAnnotations": [] }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "output": {
+      "detections": [
+        [
+          { "label": "laptop", "score": 0.91, "box": [0.1, 0.2, 0.5, 0.5] },
+          { "label": "cell phone", "score": 0.55, "box": [0.0, 0.0, 0.25, 0.5] }
+        ],
+        []
+      ]
+    },
+    "usage": { "input_units": 2 },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "vision.googleapis.com",
+        "path": "/v1/images:annotate",
+        "header_names": ["accept", "x-goog-api-key"],
+        "body_keys": ["requests"]
+      }
+    ]
+  }
+}

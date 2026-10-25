@@ -24,6 +24,10 @@
           "run": "{python} -m ruff check app tests scripts"
         },
         {
+          "name": "vendor neutrality (enforce; Task 27 Tier 1 gate)",
+          "run": "{python} scripts/verify/vendor_neutrality.py --enforce"
+        },
+        {
           "name": "docs links",
           "run": "{pnpm} docs:check"
         },
@@ -410,6 +414,17 @@
           "name": "tear down the project and its secrets",
           "always": true,
           "run": "{python} scripts/verify/cpu_stage_stack.py down"
+        }
+      ]
+    },
+    {
+      "name": "tier1-gate",
+      "status": "implemented",
+      "note": "Provider-neutral inference Tier 1 gate (plan Task 27). Task 19 item 2 landed and the gated-item list is deleted, so the gate runs the Task 27 checks and exits 0 when met, 1 on any unexpected finding (there is no gated material left to report with exit 2). The step writes its evidence to test-results/tier1-gate.json ({results} resolves to test-results).",
+      "steps": [
+        {
+          "name": "tier1 neutrality gate",
+          "run": "{python} scripts/verify/tier1_gate.py --json {results}/tier1-gate.json"
         }
       ]
     }

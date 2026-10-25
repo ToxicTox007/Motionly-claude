@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
 
-from app.api.billing import build_billing_status
+from app.api.billing import build_billing_status_async
 from app.api.dependencies import (
     Actor,
     get_actor,
@@ -32,6 +32,7 @@ from app.services.layer_job_enqueue import (
     prepare_heavy_job_enqueue,
     serialize_layer_job_payload,
 )
+from app.services.offload import run_blocking
 from app.services.queue import EffectsQueue
 
 router = APIRouter(prefix="/projects/{project_id}/effects", tags=["Effects"])
@@ -92,9 +93,8 @@ async def update_effects(
     )
     if (
         request.app.state.settings.billing_enabled
-        and not build_billing_status(
-            actor.workspace_id,
-            billing_repository,
+        and not (
+            await build_billing_status_async(actor.workspace_id, billing_repository)
         ).entitlements.premium_effects
         and premium_requested
     ):
@@ -176,7 +176,8 @@ async def update_effects(
             )
 
     prepare_heavy_job_enqueue(request=request)
-    job = effects_queue.enqueue_effects_config(
+    job = await run_blocking(
+        effects_queue.enqueue_effects_config,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         edit_plan_id=active_plan.id if active_plan else None,

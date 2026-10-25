@@ -185,17 +185,42 @@ def _merge_ml_insights(
     ml_insights: dict[str, object],
 ) -> dict[str, Any]:
     merged = dict(audio_intelligence)
-    if isinstance(ml_insights.get("speaker_diarization"), dict):
-        merged["speaker_diarization"] = ml_insights["speaker_diarization"]
-    if isinstance(ml_insights.get("sound_classification"), dict):
-        merged["sound_classification"] = ml_insights["sound_classification"]
+    diarization = ml_insights.get("speaker_diarization")
+    if isinstance(diarization, dict):
+        if diarization.get("degraded") and diarization.get("heuristic_fallback"):
+            # A remote provider failed: keep the transcript-based estimate and
+            # record why the ML result is missing.
+            merged["speaker_diarization"] = {
+                **dict(merged.get("speaker_diarization") or {}),
+                "ml_provider": diarization.get("provider"),
+                "ml_status": diarization.get("status"),
+            }
+        else:
+            merged["speaker_diarization"] = diarization
+    sound = ml_insights.get("sound_classification")
+    if isinstance(sound, dict):
+        if sound.get("degraded") and sound.get("heuristic_fallback"):
+            merged["sound_classification"] = {
+                **dict(merged.get("sound_classification") or {}),
+                "ml_provider": sound.get("provider"),
+                "ml_status": sound.get("status"),
+            }
+        else:
+            merged["sound_classification"] = sound
+    emotion_ml = ml_insights.get("emotion_ml")
+    emotion_ml = emotion_ml if isinstance(emotion_ml, dict) else {}
     emotion_windows = ml_insights.get("emotion_windows")
     if isinstance(emotion_windows, list):
         emotion_pacing = dict(merged.get("emotion_pacing") or {})
-        emotion_pacing["provider"] = "wav2vec2_emotion"
+        emotion_pacing["provider"] = str(emotion_ml.get("provider") or "wav2vec2_emotion")
         emotion_pacing["windows"] = emotion_windows
         if emotion_windows:
             emotion_pacing["aggregate_emotion"] = _dominant_window_emotion(emotion_windows)
+        merged["emotion_pacing"] = emotion_pacing
+    elif emotion_ml.get("degraded"):
+        emotion_pacing = dict(merged.get("emotion_pacing") or {})
+        emotion_pacing["ml_provider"] = emotion_ml.get("provider")
+        emotion_pacing["ml_status"] = emotion_ml.get("status")
         merged["emotion_pacing"] = emotion_pacing
     return merged
 

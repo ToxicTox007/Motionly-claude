@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from app.api.billing import build_billing_status
+from app.api.billing import build_billing_status_async
 from app.api.dependencies import Actor, get_actor, require_role
 from app.api.errors import ApiError
 from app.schemas.billing import BillingPlanKey
@@ -208,6 +208,18 @@ async def separate_audio_stems(
     request.app.state.upload_repository.get_active_upload(
         project_id=project_id, workspace_id=actor.workspace_id
     )
+    # Task 17: refuse at once when no ``audio.stem_separation`` route is
+    # configured, instead of queuing a job that fails later in the worker with
+    # ``stem_gateway_route_required``. A CPU-local Demucs route, a remote
+    # ``async_job`` template route, or (until Task 19) the vendor route all
+    # populate ``stem_gateway_route``; the Audio tab keeps its existing no-stem
+    # hint and the full mix, and renders are unchanged.
+    if getattr(request.app.state, "stem_gateway_route", None) is None:
+        raise ApiError(
+            503,
+            "capability_unavailable",
+            "Configure an audio stem separation route to separate vocals and music.",
+        )
     record = request.app.state.scale_repository.create(
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -216,7 +228,8 @@ async def separate_audio_stems(
         status=ScaleResourceStatus.QUEUED,
         payload=payload.model_dump(mode="json"),
     )
-    request.app.state.scale_queue.enqueue_resource(
+    await run_blocking(
+        request.app.state.scale_queue.enqueue_resource,
         resource_id=record.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -315,7 +328,7 @@ async def select_audio_stem(
     response_model=ScaleResourceResponse,
     status_code=202,
 )
-async def generate_runway_broll(
+async def generate_broll_clip(
     project_id: UUID,
     payload: GeneratedBrollRequest,
     actor: ActorDep,
@@ -325,25 +338,30 @@ async def generate_runway_broll(
         project_id=project_id, workspace_id=actor.workspace_id
     )
     plan = (
-        build_billing_status(actor.workspace_id, request.app.state.billing_repository).current_plan
+        (
+            await build_billing_status_async(
+                actor.workspace_id, request.app.state.billing_repository
+            )
+        ).current_plan
         if request.app.state.settings.billing_enabled
         else PLAN_DEFINITIONS[BillingPlanKey.AGENCY]
     )
     if not plan.entitlements.premium_effects:
-        raise ApiError(402, "premium_feature_required", "Runway B-roll requires Pro or Agency.")
+        raise ApiError(
+            402, "premium_feature_required", "Generated B-roll requires Pro or Agency."
+        )
     if (
-        request.app.state.settings.app_env == "production"
-        and getattr(
+        getattr(
             request.app.state,
-            "runway_gateway_route",
+            "video_generation_route",
             None,
         )
         is None
     ):
         raise ApiError(
             503,
-            "runway_not_configured",
-            "Configure a generation.video_submit gateway route first.",
+            "capability_unavailable",
+            "Configure a video generation route to create generated B-roll.",
         )
     record = request.app.state.scale_repository.create(
         workspace_id=actor.workspace_id,
@@ -353,7 +371,8 @@ async def generate_runway_broll(
         status=ScaleResourceStatus.QUEUED,
         payload=payload.model_dump(mode="json"),
     )
-    request.app.state.scale_queue.enqueue_resource(
+    await run_blocking(
+        request.app.state.scale_queue.enqueue_resource,
         resource_id=record.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -870,7 +889,8 @@ async def train_style_profile(
         error_message=None,
         revision=profile.revision + 1,
     )
-    request.app.state.scale_queue.enqueue_resource(
+    await run_blocking(
+        request.app.state.scale_queue.enqueue_resource,
         resource_id=profile.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -1242,7 +1262,8 @@ async def start_model_training(
             "editorial_user_id": str(actor.user_id),
         },
     )
-    request.app.state.scale_queue.enqueue_resource(
+    await run_blocking(
+        request.app.state.scale_queue.enqueue_resource,
         resource_id=record.id,
         workspace_id=actor.workspace_id,
         project_id=project_id,
@@ -1275,7 +1296,8 @@ async def create_batch(
         request.app.state.project_repository.get_project(
             project_id=project_id, workspace_id=actor.workspace_id
         )
-    request.app.state.scale_queue.enqueue_resource(
+    await run_blocking(
+        request.app.state.scale_queue.enqueue_resource,
         resource_id=record.id,
         workspace_id=actor.workspace_id,
         project_id=payload.project_ids[0],
@@ -1295,8 +1317,8 @@ async def cancel_batch(batch_id: UUID, actor: ActorDep, request: Request) -> Sca
         raise ApiError(409, "batch_already_finished", "This batch has already finished.")
     job_id = f"phase5--{batch_id}"
     queue_registry = request.app.state.queue_registry
-    if queue_registry.get_job(job_id) is not None:
-        queue_registry.cancel(job_id)
+    if await run_blocking(queue_registry.get_job, job_id) is not None:
+        await run_blocking(queue_registry.cancel, job_id)
     return request.app.state.scale_repository.update(
         record=record,
         status=ScaleResourceStatus.CANCELED,

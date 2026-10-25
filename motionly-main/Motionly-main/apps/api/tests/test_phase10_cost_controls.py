@@ -18,35 +18,71 @@ from app.schemas.plans import EditPlan, EditPlanCut, EditPlanStyle, PlanCreateRe
 from app.services.ai_proposals import build_multimodal_context, request_identity
 from app.services.billing import check_quota
 from app.services.edit_planner import PlannerProviderResult
+from app.services.inference_fake import DeterministicInferenceAdapter
+from app.services.inference_operations import InMemoryInferenceOperationRepository, OperationState
 from app.services.job_engine import _execute_job
-from app.services.model_domain_adapters import register_runway_route
-from app.services.model_gateway import ModelGateway, OperationsGatewayTelemetry
+from app.services.model_gateway import (
+    ModelCapability,
+    ModelGateway,
+    ModelOperation,
+    ModelRoute,
+    OperationsGatewayTelemetry,
+)
 from app.services.operations import OperationsRepository
 from app.services.queue import EnqueuedJob
-from app.services.scale import FixtureRunwayProvider, _generate_broll
+from app.services.scale import _generate_broll
+
+VIDEO_ROUTE_ID = "video-generation-remote"
+VIDEO_REVISION = "video-generation-2026-07-14"
 
 
-class SpyRunwayProvider(FixtureRunwayProvider):
-    def __init__(self):
-        self.initiate_called_count = 0
-        self.poll_called_count = 0
+def _video_route() -> ModelRoute:
+    return ModelRoute(
+        route_id=VIDEO_ROUTE_ID,
+        capability=ModelCapability.GENERATION,
+        adapter="fake",
+        provider="generated",
+        model="video-generation-model",
+        model_revision=VIDEO_REVISION,
+        operations=(
+            ModelOperation.GENERATION_VIDEO_SUBMIT,
+            ModelOperation.GENERATION_VIDEO_POLL,
+        ),
+        fixed_cost_usd=0.0,
+    )
 
-    def initiate_generation(self, *, prompt, prompt_image_url, duration_s, ratio):
-        self.initiate_called_count += 1
-        return super().initiate_generation(
-            prompt=prompt,
-            prompt_image_url=prompt_image_url,
-            duration_s=duration_s,
-            ratio=ratio,
-        )
 
-    def poll_task(self, task_id):
-        self.poll_called_count += 1
-        return super().poll_task(task_id)
+def _video_gateway(adapter, operations):
+    route = _video_route()
+    gateway = ModelGateway(
+        adapters={"fake": adapter},
+        routes=[route],
+        request_budget_usd=100.0,
+        monthly_budget_usd=1000.0,
+        telemetry=OperationsGatewayTelemetry(
+            metrics_registry=None,
+            operations_repository=operations,
+        ),
+    )
+    return gateway, route
+
+
+class _FakeStreamResponse:
+    status_code = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def iter_bytes(self, chunk_size=0):
+        del chunk_size
+        yield b"generated-broll-bytes"
 
 
 class SpyPlannerProvider:
-    def __init__(self, provider_name="openrouter", model="openrouter/paid-model"):
+    def __init__(self, provider_name="provider-a", model="provider-a/paid-model"):
         self.provider_name = provider_name
         self.model = model
         self.create_plan_called_count = 0
@@ -66,11 +102,12 @@ class SpyPlannerProvider:
         if billing_repository is not None and operations_repository is not None:
             check_quota(
                 workspace_id=transcript.workspace_id,
-                provider="openrouter",
+                feature="planning",
                 category="tokens",
                 billing_repository=billing_repository,
                 operations_repository=operations_repository,
                 estimated_quantity=2000.0,
+                provider="provider-a",
             )
         return PlannerProviderResult(
             plan=EditPlan(
@@ -89,7 +126,7 @@ class SpyPlannerProvider:
         )
 
 
-def test_runway_over_quota_blocks_provider_call():
+def test_generated_broll_over_quota_blocks_provider_call():
     workspace_id = uuid4()
     billing_repo = InMemoryBillingRepository()
     billing_repo.upsert_subscription(
@@ -99,11 +136,11 @@ def test_runway_over_quota_blocks_provider_call():
     )
     operations_repo = OperationsRepository()
 
-    # Overlimit: Limit is 60s, record 60s of prior runway usage
+    # Overlimit: Limit is 60s, record 60s of prior generated video usage.
     operations_repo.record_cost(
         workspace_id=workspace_id,
         project_id=uuid4(),
-        provider="runway",
+        provider="generated",
         category="generated_seconds",
         quantity=60.0,
         unit="second",
@@ -113,9 +150,10 @@ def test_runway_over_quota_blocks_provider_call():
 
     settings = SimpleNamespace(
         app_env="test",
-        quota_runway_creator_limit_seconds=60.0,
+        quota_video_generation_creator_limit_seconds=60.0,
     )
-    runway_provider = SpyRunwayProvider()
+    adapter = DeterministicInferenceAdapter(app_env="test")
+    gateway, route = _video_gateway(adapter, operations_repo)
     record = ScaleResourceRecord(
         id=uuid4(),
         workspace_id=workspace_id,
@@ -131,16 +169,24 @@ def test_runway_over_quota_blocks_provider_call():
             record=record,
             settings=settings,
             broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
-            runway_provider=runway_provider,
+            model_gateway=gateway,
+            video_generation_route=route,
             operations_repository=operations_repo,
+            inference_operations_repository=InMemoryInferenceOperationRepository(),
             billing_repository=billing_repo,
         )
     assert exc_info.value.status_code == 402
-    assert exc_info.value.code == "runway_quota_exceeded"
-    assert runway_provider.initiate_called_count == 0
+    assert exc_info.value.code == "video_generation_quota_exceeded"
+    # The quota block happens before any submit reaches the gateway.
+    submits = [c for c in adapter.calls if c.request_type == "VideoGenerationSubmitRequest"]
+    assert submits == []
 
 
-def test_runway_under_quota_calls_provider_and_records_usage():
+def test_generated_broll_under_quota_calls_provider_and_records_usage(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.scale.safe_http_stream",
+        lambda url, timeout=0: _FakeStreamResponse(),
+    )
     workspace_id = uuid4()
     project_id = uuid4()
     billing_repo = InMemoryBillingRepository()
@@ -153,11 +199,14 @@ def test_runway_under_quota_calls_provider_and_records_usage():
 
     settings = SimpleNamespace(
         app_env="test",
-        media_work_dir="/var/data/test",
+        media_work_dir=str(tmp_path),
         upload_storage_bucket="test-bucket",
-        quota_runway_creator_limit_seconds=60.0,
+        supabase_url=None,
+        supabase_service_role_key=None,
+        quota_video_generation_creator_limit_seconds=60.0,
     )
-    runway_provider = SpyRunwayProvider()
+    adapter = DeterministicInferenceAdapter(app_env="test")
+    gateway, route = _video_gateway(adapter, operations_repo)
     record = ScaleResourceRecord(
         id=uuid4(),
         workspace_id=workspace_id,
@@ -167,23 +216,29 @@ def test_runway_under_quota_calls_provider_and_records_usage():
         status=ScaleResourceStatus.QUEUED,
         payload={"prompt": "test prompt", "duration_s": 5},
     )
+    adapter.script_video_poll(f"generated_broll:{record.id}", ["succeeded"])
 
     _generate_broll(
         record=record,
         settings=settings,
         broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
-        runway_provider=runway_provider,
+        model_gateway=gateway,
+        video_generation_route=route,
         operations_repository=operations_repo,
+        inference_operations_repository=InMemoryInferenceOperationRepository(),
         billing_repository=billing_repo,
     )
 
-    assert runway_provider.initiate_called_count == 1
-    assert runway_provider.poll_called_count == 1
+    submits = [c for c in adapter.calls if c.request_type == "VideoGenerationSubmitRequest"]
+    polls = [c for c in adapter.calls if c.request_type == "VideoGenerationPollRequest"]
+    assert len(submits) == 1
+    assert len(polls) >= 1
 
-    # Check that usage was recorded
+    # Usage is recorded under the neutral 'generated' provider label; the
+    # video_generation feature quota sums across providers.
     usage = operations_repo.count_usage(
         workspace_id=workspace_id,
-        provider="runway",
+        provider="generated",
         category="generated_seconds",
         period_start=datetime(2000, 1, 1, tzinfo=UTC),
         period_end=datetime(2100, 1, 1, tzinfo=UTC),
@@ -191,7 +246,7 @@ def test_runway_under_quota_calls_provider_and_records_usage():
     assert usage == 5.0
 
 
-def test_openrouter_over_quota_blocks_provider_call():
+def test_planning_over_quota_blocks_provider_call():
     workspace_id = uuid4()
     billing_repo = InMemoryBillingRepository()
     billing_repo.upsert_subscription(
@@ -201,11 +256,11 @@ def test_openrouter_over_quota_blocks_provider_call():
     )
     operations_repo = OperationsRepository()
 
-    # Limit is 500k tokens, record 500k of prior OpenRouter tokens usage
+    # Limit is 500k tokens, record 500k of prior planning tokens usage
     operations_repo.record_cost(
         workspace_id=workspace_id,
         project_id=uuid4(),
-        provider="openrouter",
+        provider="provider-a",
         category="tokens",
         quantity=500000.0,
         unit="token",
@@ -222,7 +277,7 @@ def test_openrouter_over_quota_blocks_provider_call():
         status=TranscriptStatus.READY,
         language="en",
         language_hint="en",
-        provider="groq",
+        provider="provider-b",
         model="whisper",
         confidence=1.0,
         duration_ms=5000,
@@ -238,11 +293,11 @@ def test_openrouter_over_quota_blocks_provider_call():
             operations_repository=operations_repo,
         )
     assert exc_info.value.status_code == 402
-    assert exc_info.value.code == "openrouter_quota_exceeded"
+    assert exc_info.value.code == "planning_quota_exceeded"
     assert planner_provider.create_plan_called_count == 1
 
 
-def test_openrouter_under_quota_calls_provider_and_records_usage():
+def test_planning_under_quota_calls_provider_and_records_usage():
     workspace_id = uuid4()
     billing_repo = InMemoryBillingRepository()
     billing_repo.upsert_subscription(
@@ -261,7 +316,7 @@ def test_openrouter_under_quota_calls_provider_and_records_usage():
         status=TranscriptStatus.READY,
         language="en",
         language_hint="en",
-        provider="groq",
+        provider="provider-b",
         model="whisper",
         confidence=1.0,
         duration_ms=5000,
@@ -280,7 +335,11 @@ def test_openrouter_under_quota_calls_provider_and_records_usage():
     assert result.raw_payload["usage"]["total_tokens"] == 2000
 
 
-def test_runway_retry_resumes_polling_without_calling_provider_again():
+def test_generated_broll_retry_resumes_polling_without_resubmitting(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.scale.safe_http_stream",
+        lambda url, timeout=0: _FakeStreamResponse(),
+    )
     workspace_id = uuid4()
     project_id = uuid4()
     billing_repo = InMemoryBillingRepository()
@@ -290,126 +349,73 @@ def test_runway_retry_resumes_polling_without_calling_provider_again():
         status=SubscriptionStatus.ACTIVE,
     )
     operations_repo = OperationsRepository()
+    inference_ops = InMemoryInferenceOperationRepository()
     scale_repo = InMemoryScaleRepository()
 
     settings = SimpleNamespace(
         app_env="test",
-        media_work_dir="/var/data/test",
+        media_work_dir=str(tmp_path),
         upload_storage_bucket="test-bucket",
+        supabase_url=None,
+        supabase_service_role_key=None,
+        quota_video_generation_creator_limit_seconds=600.0,
     )
-    runway_provider = SpyRunwayProvider()
+    adapter = DeterministicInferenceAdapter(app_env="test")
+    gateway, route = _video_gateway(adapter, operations_repo)
 
-    # Pre-populate record with existing task ID
     record = scale_repo.create(
         workspace_id=workspace_id,
         project_id=project_id,
         kind="generated_broll",
         name="test prompt",
         status=ScaleResourceStatus.QUEUED,
-        payload={"prompt": "test prompt", "duration_s": 5, "runway_task_id": "fixture-test-prompt"},
+        payload={"prompt": "test prompt", "duration_s": 5},
     )
+    idempotency_key = f"generated_broll:{record.id}"
+    # A prior attempt already submitted: the operation is past the submit
+    # boundary and the fake has a job registered for the recorded operation id.
+    operation, _ = inference_ops.reserve(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        capability="video.generation.submit",
+        idempotency_key=idempotency_key,
+        route_id=route.route_id,
+        model=route.model,
+        model_revision=route.model_revision,
+        route_snapshot={"adapter_id": route.adapter, "adapter_type": "async_submit"},
+    )
+    inference_ops.transition(
+        operation.id, to_state=OperationState.SUBMITTING, expected_from={OperationState.RESERVED}
+    )
+    inference_ops.transition(
+        operation.id,
+        to_state=OperationState.SUBMITTED,
+        expected_from={OperationState.SUBMITTING},
+        provider_operation_id="fake-op-resume",
+    )
+    from app.services.inference_fake import _VideoJob
 
-    res = _generate_broll(
+    adapter._jobs["fake-op-resume"] = _VideoJob(states=["succeeded"], operation_id="fake-op-resume")
+
+    _generate_broll(
         record=record,
         settings=settings,
         broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
-        runway_provider=runway_provider,
+        model_gateway=gateway,
+        video_generation_route=route,
         operations_repository=operations_repo,
+        inference_operations_repository=inference_ops,
         billing_repository=billing_repo,
         repository=scale_repo,
     )
 
-    # Initiate should NOT have been called, only poll
-    assert runway_provider.initiate_called_count == 0
-    assert runway_provider.poll_called_count == 1
-    assert res["task_id"] == "fixture-test-prompt"
-
-
-def test_production_legacy_runway_poll_binds_to_gateway_route() -> None:
-    workspace_id = uuid4()
-    project_id = uuid4()
-    scale_repo = InMemoryScaleRepository()
-    operations = OperationsRepository()
-    runway_provider = SpyRunwayProvider()
-    gateway = ModelGateway(
-        adapters={},
-        routes=[],
-        telemetry=OperationsGatewayTelemetry(
-            metrics_registry=None,
-            operations_repository=operations,
-        ),
-    )
-    route = register_runway_route(
-        gateway,
-        provider=runway_provider,
-        model="gen3a_turbo",
-        revision="gen3a_turbo-2024-11-06",
-        fixed_cost_usd=0.5,
-    )
-    record = scale_repo.create(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        kind="generated_broll",
-        name="legacy prompt",
-        status=ScaleResourceStatus.QUEUED,
-        payload={
-            "prompt": "legacy prompt",
-            "duration_s": 5,
-            "runway_task_id": "fixture-legacy-prompt",
-        },
-    )
-
-    result = _generate_broll(
-        record=record,
-        settings=SimpleNamespace(
-            app_env="production",
-            media_work_dir="/var/data/test",
-            upload_storage_bucket="test-bucket",
-        ),
-        broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
-        runway_provider=runway_provider,
-        model_gateway=gateway,
-        runway_gateway_route=route,
-        operations_repository=operations,
-        repository=scale_repo,
-    )
-
-    assert runway_provider.initiate_called_count == 0
-    assert runway_provider.poll_called_count == 1
-    assert result["model_gateway_route_id"] == route.route_id
-    assert result["model_revision"] == route.model_revision
-    assert operations.provider_events[0]["operation"] == "generation.video_poll"
-    persisted = scale_repo.get(resource_id=record.id, workspace_id=workspace_id)
-    assert persisted.payload["model_gateway_submit_state"] == "legacy_route_bound"
-
-
-def test_production_legacy_runway_poll_fails_closed_without_gateway() -> None:
-    runway_provider = SpyRunwayProvider()
-    record = ScaleResourceRecord(
-        id=uuid4(),
-        workspace_id=uuid4(),
-        project_id=uuid4(),
-        kind="generated_broll",
-        name="legacy prompt",
-        status=ScaleResourceStatus.QUEUED,
-        payload={
-            "prompt": "legacy prompt",
-            "duration_s": 5,
-            "runway_task_id": "fixture-legacy-prompt",
-        },
-    )
-
-    with pytest.raises(ApiError) as exc_info:
-        _generate_broll(
-            record=record,
-            settings=SimpleNamespace(app_env="production"),
-            broll_repository=InMemoryBrollRepository(InMemoryPlanRepository(None)),
-            runway_provider=runway_provider,
-        )
-
-    assert exc_info.value.code == "runway_legacy_route_unavailable"
-    assert runway_provider.initiate_called_count == 0
-    assert runway_provider.poll_called_count == 0
+    # Never resubmitted: only a poll reached the route; the fake records one submit
+    # call only if a submit happened.
+    submits = [c for c in adapter.calls if c.request_type == "VideoGenerationSubmitRequest"]
+    polls = [c for c in adapter.calls if c.request_type == "VideoGenerationPollRequest"]
+    assert submits == []
+    assert len(polls) >= 1
+    assert inference_ops.get(operation.id).state is OperationState.SUCCEEDED
 
 
 def test_planner_retry_attempts_cap():
@@ -432,7 +438,7 @@ def test_planner_retry_attempts_cap():
     app_state = SimpleNamespace(
         settings=settings,
         plan_repository=plan_repo,
-        edit_planner_provider=SpyPlannerProvider(provider_name="openrouter"),
+        edit_planner_provider=SpyPlannerProvider(provider_name="provider-a"),
         operations_repository=operations_repo,
         billing_repository=billing_repo,
     )
@@ -466,7 +472,7 @@ def test_planner_retry_attempts_cap():
         status="ready",
         language="en",
         language_hint="auto",
-        provider="groq",
+        provider="provider-b",
         model="whisper",
         confidence=1.0,
         duration_ms=5000,

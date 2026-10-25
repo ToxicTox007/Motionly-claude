@@ -1,6 +1,8 @@
 FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28
 
 ARG API_EXTRAS=""
+# Set to "true" with API_EXTRAS=cpu-vision; marks a GPU-free vision worker image.
+ARG CPU_VISION_ENABLED="false"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     NODE_ENV=production \
@@ -15,8 +17,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/tmp/motionly \
     HOME=/home/motionly
 
+# cpu-vision: MediaPipe's native task library links libEGL and libGLESv2 even on CPU.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 \
+    && if [ "$API_EXTRAS" = "cpu-vision" ]; then \
+         apt-get install -y --no-install-recommends libegl1 libgles2; \
+       fi \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 24 LTS from the pinned official image (Decision D1); Debian's
@@ -31,14 +37,49 @@ WORKDIR /app
 COPY apps/api/pyproject.toml ./pyproject.toml
 COPY apps/api/requirements.lock ./requirements.lock
 COPY apps/api/requirements-ml.lock ./requirements-ml.lock
+COPY apps/api/requirements-cpu-vision.lock ./requirements-cpu-vision.lock
 COPY apps/api/app ./app
 COPY apps/worker/package.json ./apps/worker/package.json
 COPY apps/worker/package-lock.json ./apps/worker/package-lock.json
 COPY apps/worker/src ./apps/worker/src
 
+# API_EXTRAS selects the Python dependency set:
+#   ""          -> requirements.lock (CPU FFmpeg/provider workers)
+#   cpu-vision  -> requirements-cpu-vision.lock: MediaPipe, OpenCV, NumPy and
+#                  Pillow for GPU-free visual/matte/sound work. No torch or
+#                  TensorFlow. The YAMNet TFLite model is baked in and verified.
+#   any other   -> requirements-ml.lock (full GPU/ML stack, unchanged)
 RUN cd apps/worker && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
-    && if [ -n "$API_EXTRAS" ]; then pip install --no-cache-dir --require-hashes -r /app/requirements-ml.lock; \
+    && if [ "$API_EXTRAS" = "cpu-vision" ]; then pip install --no-cache-dir --require-hashes -r /app/requirements-cpu-vision.lock; \
+       elif [ -n "$API_EXTRAS" ]; then pip install --no-cache-dir --require-hashes -r /app/requirements-ml.lock; \
        else pip install --no-cache-dir --require-hashes -r /app/requirements.lock; fi
+
+ARG YAMNET_TFLITE_URL=https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite
+ARG YAMNET_TFLITE_SHA256=4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf
+ARG SELFIE_SEGMENTER_URL=https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/1/selfie_segmenter_landscape.tflite
+ARG SELFIE_SEGMENTER_SHA256=490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e
+ARG BLAZE_FACE_URL=https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite
+ARG BLAZE_FACE_SHA256=3698b18f063835bc609069ef052228fbe86d9c9a6dc8dcb7c7c2d69aed2b181b
+RUN if [ "$API_EXTRAS" = "cpu-vision" ]; then \
+       mkdir -p /opt/motionly/models \
+       && for spec in \
+            "$YAMNET_TFLITE_URL|$YAMNET_TFLITE_SHA256|yamnet.tflite" \
+            "$SELFIE_SEGMENTER_URL|$SELFIE_SEGMENTER_SHA256|selfie_segmenter_landscape.tflite" \
+            "$BLAZE_FACE_URL|$BLAZE_FACE_SHA256|blaze_face_full_range.tflite"; do \
+            url="${spec%%|*}"; rest="${spec#*|}"; sha="${rest%%|*}"; name="${rest#*|}"; \
+            python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+              "$url" "/opt/motionly/models/$name" \
+            && echo "$sha  /opt/motionly/models/$name" | sha256sum -c - || exit 1; \
+          done \
+       && chmod 0644 /opt/motionly/models/*.tflite; \
+    fi
+ENV CPU_VISION_ENABLED=${CPU_VISION_ENABLED} \
+    YAMNET_TFLITE_MODEL_PATH=/opt/motionly/models/yamnet.tflite \
+    YAMNET_TFLITE_MODEL_SHA256=4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf \
+    MATTE_CPU_MODEL_PATH=/opt/motionly/models/selfie_segmenter_landscape.tflite \
+    MATTE_CPU_MODEL_SHA256=490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e \
+    VISUAL_CPU_FACE_MODEL_PATH=/opt/motionly/models/blaze_face_full_range.tflite \
+    VISUAL_CPU_FACE_MODEL_SHA256=3698b18f063835bc609069ef052228fbe86d9c9a6dc8dcb7c7c2d69aed2b181b
 
 RUN useradd --create-home --uid 10001 motionly \
     && mkdir -p /var/cache/motionly/huggingface \

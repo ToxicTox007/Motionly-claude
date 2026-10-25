@@ -1,0 +1,65 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "max_results": 12,
+    "images": [
+      { "b64": "/9j/wA==" },
+      { "b64": "/9j/wB==" },
+      { "b64": "/9j/wC==" }
+    ]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/images:annotate" },
+      "response": {
+        "status": 200,
+        "json": {
+          "responses": [
+            { "error": { "code": 3, "message": "Bad image data." } },
+            {
+              "localizedObjectAnnotations": [
+                {
+                  "name": "Laptop",
+                  "score": 0.8,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0.1, "y": 0.1 },
+                      { "x": 0.4, "y": 0.5 }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "localizedObjectAnnotations": [
+                {
+                  "name": "Television",
+                  "score": 0.7,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0.0, "y": 0.0 },
+                      { "x": 1.0, "y": 1.0 }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "output": {
+      "detections": [
+        [],
+        [{ "label": "laptop", "score": 0.8, "box": [0.1, 0.1, 0.3, 0.4] }],
+        [{ "label": "tv", "score": 0.7, "box": [0.0, 0.0, 1.0, 1.0] }]
+      ]
+    },
+    "usage": { "input_units": 2 }
+  }
+}

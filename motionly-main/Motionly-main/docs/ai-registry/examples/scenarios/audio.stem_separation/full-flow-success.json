@@ -1,0 +1,182 @@
+{
+  "registry": "stem-separation.json",
+  "route_id": "audio-stems-remote",
+  "capability": "audio.stem_separation",
+  "request": {
+    "type": "stem_separation",
+    "source": { "b64": "c291cmNlLW1lZGlh" },
+    "model": "htdemucs",
+    "duration_s": 89.2
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/api/v1/upload/" },
+      "response": {
+        "status": 200,
+        "json": {
+          "id": "2fe8f214-1771-4900-9e7e-570f823bd359",
+          "name": "motionly-audio.flac",
+          "size": 4,
+          "duration": 90
+        }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/split/stem_separator/" },
+      "response": {
+        "status": 200,
+        "json": { "task_id": "8cad7e3d-a5a3-4e79-9463-59cd4da16977" }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/check/" },
+      "response": {
+        "status": 200,
+        "json": {
+          "result": {
+            "8cad7e3d-a5a3-4e79-9463-59cd4da16977": {
+              "status": "progress",
+              "source_id": "2fe8f214-1771-4900-9e7e-570f823bd359",
+              "progress": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/check/" },
+      "response": {
+        "status": 200,
+        "json": {
+          "result": {
+            "8cad7e3d-a5a3-4e79-9463-59cd4da16977": {
+              "status": "progress",
+              "source_id": "2fe8f214-1771-4900-9e7e-570f823bd359",
+              "progress": 40
+            }
+          }
+        }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/check/" },
+      "response": {
+        "status": 200,
+        "json": {
+          "result": {
+            "8cad7e3d-a5a3-4e79-9463-59cd4da16977": {
+              "status": "success",
+              "source_id": "2fe8f214-1771-4900-9e7e-570f823bd359",
+              "result": {
+                "duration": 90,
+                "tracks": [
+                  {
+                    "label": "vocals",
+                    "type": "stem",
+                    "url": "https://d.lalal.ai/task/abcd/vocals"
+                  },
+                  {
+                    "label": "no_vocals",
+                    "type": "back",
+                    "url": "https://d.lalal.ai/task/abcd/no_vocals"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "match": { "method": "POST", "path": "/api/v1/delete/" },
+      "response": { "status": 200, "json": { "status": "success" } }
+    },
+    {
+      "match": {
+        "method": "GET",
+        "host": "d.lalal.ai",
+        "path": "/task/abcd/vocals"
+      },
+      "response": { "status": 200, "body_b64": "UklGRi12b2NhbHM=" }
+    },
+    {
+      "match": {
+        "method": "GET",
+        "host": "d.lalal.ai",
+        "path": "/task/abcd/no_vocals"
+      },
+      "response": { "status": 200, "body_b64": "UklGRi1iYWNr" }
+    }
+  ],
+  "expect": {
+    "output": { "stems": { "no_vocals": 9, "vocals": 11 } },
+    "usage": { "input_units": 90 },
+    "operation": { "state": "succeeded" },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "www.lalal.ai",
+        "path": "/api/v1/upload/",
+        "header_names": [
+          "accept",
+          "content-disposition",
+          "content-type",
+          "x-license-key"
+        ],
+        "is_upload": true
+      },
+      {
+        "method": "POST",
+        "host": "www.lalal.ai",
+        "path": "/api/v1/split/stem_separator/",
+        "header_names": ["accept", "x-license-key"],
+        "body_keys": ["idempotency_key", "presets", "source_id"]
+      },
+      {
+        "method": "POST",
+        "host": "www.lalal.ai",
+        "path": "/api/v1/check/",
+        "header_names": ["accept", "x-license-key"],
+        "body_keys": ["task_ids"]
+      },
+      {
+        "method": "POST",
+        "host": "www.lalal.ai",
+        "path": "/api/v1/check/",
+        "body_keys": ["task_ids"]
+      },
+      {
+        "method": "POST",
+        "host": "www.lalal.ai",
+        "path": "/api/v1/check/",
+        "body_keys": ["task_ids"]
+      },
+      {
+        "method": "GET",
+        "host": "d.lalal.ai",
+        "path": "/task/abcd/vocals",
+        "header_names": ["accept"]
+      },
+      {
+        "method": "GET",
+        "host": "d.lalal.ai",
+        "path": "/task/abcd/no_vocals",
+        "header_names": ["accept"]
+      },
+      {
+        "method": "POST",
+        "host": "www.lalal.ai",
+        "path": "/api/v1/delete/",
+        "header_names": ["accept", "x-license-key"],
+        "body_keys": ["source_id"]
+      }
+    ],
+    "cleanup": [
+      {
+        "method": "POST",
+        "path": "/api/v1/delete/",
+        "body_keys": ["source_id"]
+      }
+    ]
+  }
+}

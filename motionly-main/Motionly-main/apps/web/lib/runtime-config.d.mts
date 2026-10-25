@@ -12,6 +12,7 @@ export type ServerConfig = {
   supabaseUrl: string;
   supabaseAnonKey: string;
   billingEnabled: boolean;
+  billingMode: "disabled" | "demo";
   skipAuthMiddleware: boolean;
 };
 

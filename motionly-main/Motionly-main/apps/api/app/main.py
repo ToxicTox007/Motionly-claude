@@ -1,8 +1,16 @@
+from dataclasses import replace
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin import router as admin_router
+from app.api.admin_inference import (
+    build_admin_inference_registry_store,
+)
+from app.api.admin_inference import (
+    router as admin_inference_router,
+)
 from app.api.admin_music import router as admin_music_router
 from app.api.admin_users import router as admin_users_router
 from app.api.ai_proposals import router as ai_proposals_router
@@ -11,6 +19,7 @@ from app.api.api_keys import router as api_keys_router
 from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.broll import router as broll_router
+from app.api.capabilities import router as capabilities_router
 from app.api.captions import router as captions_router
 from app.api.clips import router as clips_router
 from app.api.creative_variants import router as creative_variants_router
@@ -27,6 +36,7 @@ from app.api.layer_jobs import router as layer_jobs_router
 from app.api.local_storage import router as local_storage_router
 from app.api.localized_publishing import router as localized_publishing_router
 from app.api.media import router as media_router
+from app.api.model_choice import router as model_choice_router
 from app.api.music import router as music_router
 from app.api.operations import router as operations_router
 from app.api.plans import router as plans_router
@@ -73,6 +83,10 @@ from app.repositories.localized_publishing import (
     InMemoryLocalizedPublishingRepository,
     SupabaseLocalizedPublishingRepository,
 )
+from app.repositories.model_choice import (
+    InMemoryModelChoiceRepository,
+    SupabaseModelChoiceRepository,
+)
 from app.repositories.music import InMemoryMusicRepository, SupabaseMusicRepository
 from app.repositories.plans import InMemoryPlanRepository, SupabasePlanRepository
 from app.repositories.projects import InMemoryProjectRepository, SupabaseProjectRepository
@@ -91,27 +105,39 @@ from app.repositories.workflows import (
     SupabaseWorkflowRepository,
 )
 from app.services.admin_user_directory import AdminUserDirectory
+from app.services.ai_features import audio_feature_provider as _audio_feature_provider
 from app.services.analytics_recovery import AnalyticsRecoveryQueue
+from app.services.audio_diarization import GatewayDiarizationProvider
 from app.services.audio_ml_providers import (
     PyannoteSpeakerDiarizationProvider,
     Wav2VecEmotionProvider,
     YamnetSoundClassifier,
+    YamnetTFLiteSoundClassifier,
 )
 from app.services.auth_admin import AuthAdminClient
+from app.services.billing import PlanFeatureQuotaGuard
 from app.services.collaboration import (
     notifier_from_settings as collaboration_notifier_from_settings,
 )
 from app.services.compute_backend import compute_backend_from_settings
-from app.services.edit_planner import FixtureEditPlannerProvider, HttpEditPlannerProvider
 from app.services.generic_media_upload import GenericMediaUploadSessionService
+from app.services.inference_runtime import (
+    RuntimeHolder,
+    build_inference_registry_store,
+    build_inference_runtime,
+)
+from app.services.inference_secrets import SecretResolver
 from app.services.local_storage import create_object_storage
+from app.services.model_choice import (
+    ModelChoiceGatewayResolver,
+    build_model_choice_service_for_app,
+)
 from app.services.model_domain_adapters import (
     GatewayAudioIntelligenceProvider,
     GatewayVisualIntelligenceProvider,
     bundle_revision,
     register_audio_route,
     register_clip_routes,
-    register_runway_route,
     register_stem_route,
     register_visual_route,
 )
@@ -121,7 +147,6 @@ from app.services.model_gateway import (
     route_catalog_fingerprint,
     validate_gateway_operations,
 )
-from app.services.model_gateway_factory import model_gateway_from_settings
 from app.services.model_provider_bridges import (
     GatewayEditPlannerProvider,
     GatewayTranscriptionProvider,
@@ -146,11 +171,10 @@ from app.services.queue import (
     TranscriptionQueue,
     VisualQueue,
 )
+from app.services.remote_audio_emotion import RemoteAudioEmotionProvider
 from app.services.scale import (
     DemucsStemSeparator,
-    FixtureRunwayProvider,
     FixtureStemSeparator,
-    RunwayGen3Provider,
 )
 from app.services.stock_video import (
     COMPATIBLE_CLIP_MODEL_VERSION,
@@ -163,18 +187,103 @@ from app.services.stock_video import (
 from app.services.storage import StorageSigner
 from app.services.storage_quota import StorageQuotaService
 from app.services.supabase import SupabaseRestClient
-from app.services.transcription_provider import (
-    FixtureTranscriptionProvider,
-    WhisperCompatibleHttpProvider,
-)
 from app.services.upload_session import UploadSessionService
 from app.services.visual_intelligence import (
     FixtureVisualIntelligenceProvider,
     WorkerOnlyVisualIntelligenceProvider,
 )
 
-GROQ_TRANSCRIPTION_ENDPOINT = "https://api.groq.com/openai/v1/audio/transcriptions"
-OPENROUTER_CHAT_COMPLETIONS_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+
+def _visual_manifest_identity(model_gateway) -> str:
+    """A neutral ``clip|blip|yolo`` manifest identity from the registry's local
+    visual routes (gpu-local.json, plan Task 14), never a config model-id
+    default. Falls back to neutral capability labels when a route is absent."""
+    clip, _ = _gateway_route_identity(
+        model_gateway, capability="embeddings.image", fallback="visual-embeddings"
+    )
+    blip, _ = _gateway_route_identity(
+        model_gateway, capability="vision.caption", fallback="visual-caption"
+    )
+    yolo, _ = _gateway_route_identity(
+        model_gateway, capability="vision.object_detection", fallback="visual-objects"
+    )
+    return "|".join((clip, blip, yolo))
+
+
+def _gateway_route_identity(
+    model_gateway, *, capability: str, fallback: str
+) -> tuple[str, str]:
+    """Model id and revision from the gateway's highest-priority route for a
+    capability (plan Task 14: identity comes from the registry, not a code
+    default). Returns neutral capability labels when no such route exists."""
+    if model_gateway is None:
+        return fallback, f"{fallback}-v1"
+    candidates = [
+        route
+        for route in model_gateway.routes
+        if route.capability.value == capability and route.enabled
+    ]
+    if not candidates:
+        return fallback, f"{fallback}-v1"
+    route = min(candidates, key=lambda item: item.priority)
+    return route.model, route.model_revision
+
+
+def _resolve_video_generation_route(model_gateway) -> object | None:
+    """The enabled route serving ``video.generation.submit`` (plan Task 18).
+
+    Generated B-roll is capability-driven: any enabled route whose operations
+    include ``GENERATION_VIDEO_SUBMIT`` serves it. ``None`` means the capability
+    is unavailable and the API returns ``capability_unavailable`` (503).
+    """
+    if model_gateway is None:
+        return None
+    for route in model_gateway.routes:
+        if ModelOperation.GENERATION_VIDEO_SUBMIT in route.operations:
+            return route
+    return None
+
+
+def _resolve_stem_separation_route(model_gateway) -> object | None:
+    """The enabled route serving ``audio.stem_separation`` (plan Task 17).
+
+    Stem jobs are capability-driven: any enabled route whose operations include
+    ``AUDIO_STEM_SEPARATION`` serves them — a CPU-local Demucs ``local`` route, a
+    remote ``async_job`` template route, or the still-present vendor route.
+    ``None`` means the capability is not configured by the registry; the caller
+    then falls back to the vendor/Demucs registration (removed in Task 19), and
+    the API returns ``capability_unavailable`` (503) when nothing serves it.
+    """
+    if model_gateway is None:
+        return None
+    for route in model_gateway.routes:
+        if ModelOperation.AUDIO_STEM_SEPARATION in route.operations:
+            return route
+    return None
+
+
+def _build_inference_operations_repository(settings, *, metrics_registry=None):
+    """A real async-operation repository (plan Task 16A) for app.state.
+
+    Supabase-backed when configured, otherwise the in-memory implementation for
+    dev and tests. This is distinct from the cost ledger (OperationsRepository);
+    generated B-roll reserves and transitions rows here.
+    """
+    from app.services.inference_operations import InMemoryInferenceOperationRepository
+
+    supabase_url = settings.supabase_url
+    service_key = settings.supabase_service_role_key
+    if supabase_url and service_key:
+        from app.repositories.inference_operations import (
+            SupabaseInferenceOperationRepository,
+        )
+
+        return SupabaseInferenceOperationRepository(
+            supabase_url=str(supabase_url),
+            service_role_key=str(service_key),
+            metrics_registry=metrics_registry,
+        )
+    return InMemoryInferenceOperationRepository()
 
 
 def create_app() -> FastAPI:
@@ -197,12 +306,52 @@ def create_app() -> FastAPI:
         supabase_url=str(settings.supabase_url) if settings.supabase_url else None,
         service_role_key=settings.supabase_service_role_key,
     )
-    app.state.model_gateway = model_gateway_from_settings(
-        settings,
-        metrics_registry=app.state.metrics_registry,
-        operations_repository=app.state.operations_repository,
-        live_effects_gate=app.state.local_audit_live_effects_gate,
+    # One registry-driven runtime (plan Task 6, Path B). The registry file is the
+    # only source of routes. The remaining vendor-specific register_* calls
+    # further down still add routes to this same gateway for now; Tasks 17 and 19
+    # remove them.
+    # The database registry source (plan Task 20) is additive and off unless
+    # AI_REGISTRY_DATABASE_ENABLED. When on, a store supplies the catalog
+    # (adapters/models/routes) and a RuntimeHolder reloads atomically when the
+    # ai_registry_version counter changes. The holder's accessor keeps
+    # app.state.inference_runtime / model_gateway pointing at the live runtime.
+    _registry_store = build_inference_registry_store(settings, app.state.metrics_registry)
+
+    # Admin registry store and db: secret opener (plan Tasks 20/21). The admin
+    # store carries the AES-256-GCM secret store so the admin API can create and
+    # open db: secrets; the catalog store above stays secret-less so ai_secrets
+    # is never reachable from worker code. The resolver's db_secret_opener is the
+    # ONLY path from a db: ref to a plaintext in the API process, and it lives on
+    # app.state.inference_registry_store, never on a worker-reachable object.
+    _admin_registry_store = build_admin_inference_registry_store(
+        settings, app.state.metrics_registry
     )
+    app.state.inference_registry_store = _admin_registry_store
+    _db_secret_opener = (
+        (lambda name: _admin_registry_store.open_secret(name=name))
+        if _admin_registry_store is not None
+        else None
+    )
+    _secret_resolver = SecretResolver(settings=settings, db_secret_opener=_db_secret_opener)
+
+    def _build_runtime() -> object:
+        return build_inference_runtime(
+            settings,
+            metrics_registry=app.state.metrics_registry,
+            operations_repository=app.state.operations_repository,
+            live_effects_gate=app.state.local_audit_live_effects_gate,
+            registry_store=_registry_store,
+            secret_resolver=_secret_resolver,
+        )
+
+    app.state.inference_runtime_holder = RuntimeHolder(
+        build=_build_runtime,
+        registry_store=_registry_store,
+        reload_interval_s=float(getattr(settings, "ai_registry_reload_interval_s", 30.0)),
+    )
+    app.state.inference_runtime = app.state.inference_runtime_holder.runtime
+    # Dozens of call sites read app.state.model_gateway; keep that attribute.
+    app.state.model_gateway = app.state.inference_runtime.gateway
     app.state.workflow_repository = (
         SupabaseWorkflowRepository(
             supabase_url=str(settings.supabase_url),
@@ -356,6 +505,37 @@ def create_app() -> FastAPI:
         if settings.supabase_url and settings.supabase_service_role_key
         else InMemoryBillingRepository()
     )
+    if app.state.model_gateway is not None:
+        # Per-plan quotas for remote AI features; routes without a metered
+        # budget_feature (every local GPU/CPU route) are unaffected.
+        app.state.model_gateway.set_quota_guard(
+            PlanFeatureQuotaGuard(
+                billing_repository=app.state.billing_repository,
+                operations_repository=app.state.operations_repository,
+                settings=settings,
+            )
+        )
+    # User model choice (plan Section 2.11, Tasks 30/31). The repository stores
+    # the per-workspace/per-project choices; the service resolves them against
+    # the live runtime (so a registry reload is honoured) and the workspace's
+    # lapsed-aware billing plan; the resolver fills the gateway's preferred route
+    # at call time, so API calls and background jobs follow the same choice.
+    app.state.model_choice_repository = (
+        SupabaseModelChoiceRepository(
+            supabase_url=str(settings.supabase_url),
+            service_role_key=settings.supabase_service_role_key,
+            metrics_registry=app.state.metrics_registry,
+        )
+        if settings.supabase_url and settings.supabase_service_role_key
+        else InMemoryModelChoiceRepository()
+    )
+    app.state.model_choice_service = build_model_choice_service_for_app(
+        app, repository=app.state.model_choice_repository
+    )
+    if app.state.model_gateway is not None:
+        app.state.model_gateway.set_choice_resolver(
+            ModelChoiceGatewayResolver(app.state.model_choice_service)
+        )
     app.state.api_key_repository = (
         SupabaseApiKeyRepository(
             supabase_url=str(settings.supabase_url),
@@ -501,9 +681,12 @@ def create_app() -> FastAPI:
     else:
         app.state.queue_registry = QueueRegistry()
     # The GPU capacity observer belongs to the GPU stage; CPU-stage
-    # (test_fixture) deployments have no GPU workers to observe.
+    # (test_fixture) and GPU-free (GPU_WORKERS_ENABLED=false) deployments have
+    # no GPU workers to observe.
     app.state.gpu_scaling_service = (
-        compute_backend_from_settings(settings) if settings.gpu_stage == "enabled" else None
+        compute_backend_from_settings(settings)
+        if settings.gpu_stage == "enabled" and settings.gpu_workers_enabled
+        else None
     )
     app.state.preprocess_queue = PreprocessQueue(app.state.queue_registry)
     app.state.transcription_queue = TranscriptionQueue(app.state.queue_registry)
@@ -514,39 +697,53 @@ def create_app() -> FastAPI:
     app.state.stock_asset_enrichment_queue = StockAssetEnrichmentQueue(app.state.queue_registry)
     app.state.render_queue = RenderQueue(app.state.queue_registry)
     app.state.scale_queue = ScaleQueue(app.state.queue_registry)
-    app.state.stem_separator = (
-        FixtureStemSeparator()
-        if settings.process_role == "api"
-        or settings.stem_separation_provider == "fixture"
+    stem_provider_key = settings.stem_separation_provider.strip().lower()
+    use_fixture_stems = (
+        settings.process_role == "api"
+        or stem_provider_key == "fixture"
         or (settings.app_env != "production" and settings.allow_fixture_providers)
-        else DemucsStemSeparator()
     )
+    if use_fixture_stems:
+        app.state.stem_separator = FixtureStemSeparator()
+    else:
+        app.state.stem_separator = DemucsStemSeparator()
     app.state.stem_gateway_route = None
     if app.state.model_gateway is not None and settings.process_role != "api":
-        app.state.stem_gateway_route = register_stem_route(
-            app.state.model_gateway,
-            separator=app.state.stem_separator,
-            model=settings.demucs_model,
-            revision=settings.demucs_model_revision,
-        )
-    app.state.runway_provider = (
-        RunwayGen3Provider(api_key=settings.runway_api_key, model=settings.runway_model)
-        if settings.runway_api_key
-        else FixtureRunwayProvider()
+        # Prefer whatever ``audio.stem_separation`` route the gateway already has
+        # from the declarative registry (plan Task 17): a CPU-local Demucs route
+        # (``cpu-local.json``, Task 14), a remote ``async_job`` template route, or
+        # — until Task 19 removes it — the still-present vendor route registered
+        # below. Resolving by capability keeps the worker vendor-neutral.
+        app.state.stem_gateway_route = _resolve_stem_separation_route(app.state.model_gateway)
+        if app.state.stem_gateway_route is None:
+            # Local Demucs identity comes from the registry's
+            # ``audio.stem_separation`` local route (cpu-local.json, Task 14);
+            # this legacy fallback registration uses a neutral capability
+            # label so no local model id remains a code default here.
+            app.state.stem_gateway_route = register_stem_route(
+                app.state.model_gateway,
+                separator=app.state.stem_separator,
+                model=getattr(app.state.stem_separator, "model", "stem-separation"),
+                revision=getattr(
+                    app.state.stem_separator, "model_revision", "local-stem-separation-v1"
+                ),
+            )
+    # Generated B-roll (Task 18) submits/polls through whichever enabled route
+    # serves ``video.generation.submit`` (ModelOperation.GENERATION_VIDEO_SUBMIT).
+    # Resolving by capability keeps the worker and API vendor-neutral: a
+    # registry-driven video route populates this the same way.
+    app.state.video_generation_route = _resolve_video_generation_route(app.state.model_gateway)
+    # The inference runtime's ``operations_repository`` must be a real
+    # InferenceOperationRepository (reserve/transition), not the cost ledger.
+    # build_inference_runtime receives the cost ledger for gateway cost
+    # telemetry, so swap in a dedicated async-operation repository here so
+    # app.state.inference_runtime.operations_repository works for Task 18.
+    app.state.inference_runtime = replace(
+        app.state.inference_runtime,
+        operations_repository=_build_inference_operations_repository(
+            settings, metrics_registry=app.state.metrics_registry
+        ),
     )
-    app.state.runway_gateway_route = None
-    if app.state.model_gateway is not None and settings.runway_api_key:
-        app.state.runway_gateway_route = register_runway_route(
-            app.state.model_gateway,
-            provider=app.state.runway_provider,
-            model=settings.runway_model,
-            revision=settings.runway_model_revision,
-            fixed_cost_usd=settings.runway_estimated_cost_per_request_usd,
-            endpoint_host="api.runwayml.com",
-            requires_live_effects_gate=True,
-        )
-    transcription_provider_key = settings.transcription_provider.strip().lower()
-    edit_planner_provider_key = settings.edit_planner_provider.strip().lower()
     audio_ml_provider_key = settings.audio_ml_provider.strip().lower()
 
     gateway_has_transcription = bool(
@@ -555,12 +752,21 @@ def create_app() -> FastAPI:
             route.capability.value == "transcription" for route in app.state.model_gateway.routes
         )
     )
-    if transcription_provider_key in {"groq", "openai_compatible"} and gateway_has_transcription:
+    if gateway_has_transcription:
+        # Gateway-only transcription (Task 10): production and dev route through
+        # the model gateway. In dev/test the built-in fake registry supplies a
+        # transcription route, so a gateway transcription route always exists
+        # unless production is misconfigured (which raises below). The model
+        # identity is read from the registry transcription route (plan Task 14:
+        # no model id remains a code default), not from a config default.
+        transcription_model, transcription_revision = _gateway_route_identity(
+            app.state.model_gateway, capability="transcription", fallback="transcription"
+        )
         app.state.transcription_provider = GatewayTranscriptionProvider(
             gateway=app.state.model_gateway,
-            provider_name=transcription_provider_key,
-            model=settings.transcription_model,
-            model_revision=settings.transcription_model_revision,
+            provider_name="gateway",
+            model=transcription_model,
+            model_revision=transcription_revision,
         )
     elif settings.app_env == "production":
         raise RuntimeError("Production transcription requires a configured model gateway route")
@@ -570,32 +776,30 @@ def create_app() -> FastAPI:
             "but no gateway transcription route is configured. "
             "Direct provider fallback is blocked to ensure live-effects gate coverage."
         )
-    elif transcription_provider_key in {"groq", "openai_compatible"} and settings.groq_api_key:
-        app.state.transcription_provider = WhisperCompatibleHttpProvider(
-            endpoint=GROQ_TRANSCRIPTION_ENDPOINT,
-            api_key=settings.groq_api_key,
-            model=settings.transcription_model,
-            provider_name="groq",
-        )
     else:
-        app.state.transcription_provider = FixtureTranscriptionProvider(
-            model=settings.transcription_model
+        raise RuntimeError(
+            "Transcription requires a configured model gateway route; the direct "
+            "provider fallbacks were removed in Task 10 (dev uses the fake route)."
         )
     app.state.audio_ml_providers = (
         {}
         if settings.process_role == "api"
-        else _audio_ml_providers(provider_key=audio_ml_provider_key, settings=settings)
+        else _audio_ml_providers(
+            provider_key=audio_ml_provider_key,
+            settings=settings,
+            model_gateway=app.state.model_gateway,
+            runtime=getattr(app.state, "inference_runtime", None),
+        )
     )
     app.state.audio_intelligence_provider = None
     if app.state.model_gateway is not None and app.state.audio_ml_providers:
         audio_route = register_audio_route(
             app.state.model_gateway,
             providers=app.state.audio_ml_providers,
-            revision=bundle_revision(
-                settings.pyannote_model_revision,
-                settings.wav2vec_emotion_model_revision,
-                settings.yamnet_model_url,
-            ),
+            # The bundle revision is derived from the constructed providers'
+            # own identities (sourced from the registry local routes, plan
+            # Task 14), not from config model-id defaults.
+            revision=bundle_revision(*_audio_bundle_revision_parts(app.state.audio_ml_providers)),
         )
         app.state.audio_intelligence_provider = GatewayAudioIntelligenceProvider(
             gateway=app.state.model_gateway,
@@ -605,16 +809,20 @@ def create_app() -> FastAPI:
         app.state.model_gateway
         and any(route.capability.value == "planning" for route in app.state.model_gateway.routes)
     )
-    if edit_planner_provider_key in {"openrouter", "openai_compatible"} and gateway_has_planning:
+    if gateway_has_planning:
+        # Gateway-only planning (Task 10): production and dev route through the
+        # model gateway. The dev/test fake registry supplies a planning route, so
+        # a gateway planning route always exists unless production is
+        # misconfigured (which raises below). The bridge takes only the gateway
+        # and typed requests; the planning token quota is recorded and (under
+        # AI_QUOTA_SCOPE=feature) enforced by the gateway's PlanFeatureQuotaGuard.
         app.state.edit_planner_provider = GatewayEditPlannerProvider(
-            endpoint=OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-            api_key=settings.openrouter_api_key or "gateway-managed",
             model=route_catalog_fingerprint(
                 app.state.model_gateway,
                 capability=ModelCapability.PLANNING,
                 operation=ModelOperation.PLANNING_CHAT,
             ),
-            provider_name=edit_planner_provider_key,
+            provider_name="gateway",
             gateway=app.state.model_gateway,
         )
     elif settings.app_env == "production":
@@ -625,32 +833,21 @@ def create_app() -> FastAPI:
             "but no gateway planning route is configured. "
             "Direct provider fallback is blocked to ensure live-effects gate coverage."
         )
-    elif (
-        edit_planner_provider_key in {"openrouter", "openai_compatible"}
-        and settings.openrouter_api_key
-    ):
-        app.state.edit_planner_provider = HttpEditPlannerProvider(
-            endpoint=OPENROUTER_CHAT_COMPLETIONS_ENDPOINT,
-            api_key=settings.openrouter_api_key,
-            model=settings.edit_planner_model,
-            provider_name="openrouter",
-        )
     else:
-        app.state.edit_planner_provider = FixtureEditPlannerProvider(
-            model=settings.edit_planner_model
+        raise RuntimeError(
+            "Planning requires a configured model gateway route; the direct "
+            "provider fallbacks were removed in Task 10 (dev uses the fake route)."
         )
     visual_provider_key = settings.visual_intelligence_provider.strip().lower()
+    # The local visual-manifest identity (CLIP|BLIP|YOLO) comes from the registry
+    # ``embeddings``/``vision.caption``/``vision.object_detection`` local routes
+    # (gpu-local.json, plan Task 14), not config model-id defaults.
+    visual_manifest_model = _visual_manifest_identity(app.state.model_gateway)
     app.state.visual_intelligence_provider = (
         FixtureVisualIntelligenceProvider()
         if visual_provider_key == "fixture"
         else WorkerOnlyVisualIntelligenceProvider(
-            model="|".join(
-                (
-                    settings.visual_clip_model,
-                    settings.visual_blip_model,
-                    settings.visual_yolo_model,
-                )
-            ),
+            model=visual_manifest_model,
         )
     )
     app.state.visual_gateway_provider = None
@@ -662,11 +859,7 @@ def create_app() -> FastAPI:
             app.state.model_gateway,
             provider=app.state.visual_intelligence_provider,
             model=app.state.visual_intelligence_provider.model,
-            revision=bundle_revision(
-                settings.visual_clip_model_revision,
-                settings.visual_blip_model_revision,
-                settings.visual_yolo_model_revision,
-            ),
+            revision=bundle_revision(app.state.visual_intelligence_provider.model),
             route_id="control-visual-manifest",
         )
         app.state.visual_gateway_provider = GatewayVisualIntelligenceProvider(
@@ -674,15 +867,27 @@ def create_app() -> FastAPI:
             route=visual_route,
         )
     app.state.embedding_gateway_provider = None
+    # Remote (text/image) embeddings are rewired to capability routes in Tier 2
+    # (plan Task 12); Task 19 removed the vendor embeddings wiring. Until then the
+    # gateway serves local CLIP embeddings (and, outside production, a hash test
+    # fallback); with no route, B-roll ranking falls back to lexical scoring.
     if app.state.model_gateway is not None:
+        # CLIP embedding identity comes from the registry ``embeddings.image``
+        # local route (gpu-local.json, plan Task 14), not a config model-id
+        # default.
+        clip_model, clip_revision = _gateway_route_identity(
+            app.state.model_gateway,
+            capability="embeddings.image",
+            fallback="local-clip-embeddings",
+        )
         register_clip_routes(
             app.state.model_gateway,
             primary_provider=CompatibleClipEmbeddingProvider(
-                model_name=settings.visual_clip_model,
+                model_name=clip_model,
                 allow_fallback=False,
-                revision=settings.visual_clip_model_revision,
+                revision=clip_revision,
             ),
-            primary_revision=settings.visual_clip_model_revision,
+            primary_revision=clip_revision,
             # Hash embeddings are a test fixture; production has no fallback.
             fallback_provider=(
                 HashClipEmbeddingProvider(model_name=COMPATIBLE_CLIP_MODEL_VERSION)
@@ -690,25 +895,24 @@ def create_app() -> FastAPI:
                 else None
             ),
         )
+    if app.state.model_gateway is not None:
         from app.services.model_domain_adapters import GatewayClipEmbeddingProvider
 
+        # Built after route registration: its cache version hashes the routes, so
+        # switching providers invalidates cached stock-asset embeddings.
         app.state.embedding_gateway_provider = GatewayClipEmbeddingProvider(
             gateway=app.state.model_gateway
         )
 
     if settings.app_env == "production":
+        # Plan Task 7: production requires only the two startup capabilities
+        # (planning.chat and transcription.speech_to_text). Every other
+        # capability is optional and validated by the registry startup decision
+        # (Section 2.6); it must never block startup here.
         required_operations = [
             ModelOperation.PLANNING_CHAT,
             ModelOperation.TRANSCRIPTION_SPEECH_TO_TEXT,
-            ModelOperation.EMBEDDINGS_TEXT,
-            ModelOperation.EMBEDDINGS_IMAGE,
-            ModelOperation.GENERATION_VIDEO_SUBMIT,
-            ModelOperation.GENERATION_VIDEO_POLL,
         ]
-        if settings.process_role != "api":
-            required_operations.append(ModelOperation.AUDIO_STEM_SEPARATION)
-            if app.state.audio_intelligence_provider is not None:
-                required_operations.append(ModelOperation.AUDIO_INTELLIGENCE)
         validate_gateway_operations(
             app.state.model_gateway,
             required=required_operations,
@@ -765,6 +969,8 @@ def create_app() -> FastAPI:
     )
     app.middleware("http")(security_headers_middleware)
     app.include_router(health_router)
+    app.include_router(capabilities_router)
+    app.include_router(model_choice_router)
     app.include_router(auth_router)
     app.include_router(operations_router)
     app.include_router(feedback_router)
@@ -801,6 +1007,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     app.include_router(admin_users_router)
     app.include_router(admin_music_router)
+    app.include_router(admin_inference_router)
     return app
 
 
@@ -811,25 +1018,188 @@ def _validate_production_settings(settings) -> None:
     validate_production_settings(settings)
 
 
-def _audio_ml_providers(*, provider_key: str, settings) -> dict[str, object]:
-    if provider_key in {"disabled", "none", "off"}:
-        return {}
-    if provider_key not in {"local_ml", "local", "full"}:
-        raise RuntimeError("AUDIO_ML_PROVIDER must be one of local_ml, disabled")
+def _audio_bundle_revision_parts(providers: dict[str, object]) -> list[str]:
+    """Identity parts for the local audio route's bundle revision (plan Task 14).
 
-    providers: dict[str, object] = {
-        "emotion": Wav2VecEmotionProvider(
-            model=settings.wav2vec_emotion_model,
-            revision=settings.wav2vec_emotion_model_revision,
-        ),
-        "sound": YamnetSoundClassifier(model_url=settings.yamnet_model_url),
-    }
-    if settings.pyannote_auth_token:
-        providers["speaker_diarization"] = PyannoteSpeakerDiarizationProvider(
-            model=settings.pyannote_model,
-            auth_token=settings.pyannote_auth_token,
-            revision=settings.pyannote_model_revision,
+    Each enabled provider contributes its own model identity (``model_revision``,
+    ``revision``, ``model`` or ``model_url`` — whichever it exposes), sourced from
+    the registry ``local`` route, never a config model-id default. The parts are
+    ordered by feature name so the bundle revision is deterministic, and switching
+    a provider (remote, CPU replacement, or a different registry route) changes
+    it, which invalidates the capability cache.
+    """
+    parts: list[str] = []
+    for name, provider in sorted(providers.items()):
+        identity = (
+            getattr(provider, "model_revision", None)
+            or getattr(provider, "revision", None)
+            or getattr(provider, "model", None)
+            or getattr(provider, "model_url", None)
+            or ""
         )
+        parts.append(f"{name}:{identity}")
+    return parts
+
+
+def _registry_sound_provider(runtime):
+    """Sound classifier built from the registry ``audio.sound_classification`` route.
+
+    Reads the local route's ``params.model_path``/``params.weights_sha256`` (plan
+    Task 33: the model path and SHA come from the registry route/model record,
+    not from settings). Returns ``None`` when no such local route is configured,
+    so sound classification degrades instead of being built from a code default.
+    """
+    if runtime is None:
+        return None
+    route_records = getattr(runtime, "route_records", None) or {}
+    adapter_records = getattr(runtime, "adapter_records", None) or {}
+    for route in route_records.values():
+        if route.capability.value != "audio.sound_classification":
+            continue
+        adapter = adapter_records.get(route.adapter_id)
+        if adapter is None or adapter.type != "local":
+            continue
+        params = dict(route.params)
+        model_path = params.get("model_path")
+        weights_sha256 = params.get("weights_sha256")
+        if not isinstance(model_path, str) or not isinstance(weights_sha256, str):
+            continue
+        return YamnetTFLiteSoundClassifier(
+            model_path=model_path, model_sha256=weights_sha256
+        )
+    return None
+
+
+def _gateway_diarization_provider(model_gateway):
+    """Neutral diarization over any registry ``audio.diarization`` route (Task 17).
+
+    Returns a :class:`GatewayDiarizationProvider` bound to the gateway's first
+    ``audio.diarization`` route (a template ``async_job``/``generic_http`` route,
+    or a local GPU route), or ``None`` when the gateway carries no such route so
+    the caller leaves ``speaker_diarization`` unconfigured. The wrapper itself
+    degrades to the transcript heuristic at call time regardless, matching the
+    archived vendor wrapper's degrade-instead-of-raise behaviour.
+    """
+    if model_gateway is None:
+        return None
+    route = next(
+        (
+            route
+            for route in model_gateway.routes
+            if ModelOperation.AUDIO_DIARIZATION in route.operations
+        ),
+        None,
+    )
+    if route is None:
+        return None
+    return GatewayDiarizationProvider(
+        gateway=model_gateway,
+        model=route.model,
+        model_revision=route.model_revision,
+    )
+
+
+def _gateway_emotion_provider(model_gateway):
+    """Neutral voice emotion over any registry ``audio.emotion`` route (Task 11).
+
+    Returns a :class:`RemoteAudioEmotionProvider` bound to the gateway's
+    highest-priority ``audio.emotion`` route (an ``openai_compatible`` audio-input
+    chat route or a local GPU route), or ``None`` when the gateway carries no such
+    route. The provider degrades to the transcript estimate at call time, so a
+    missing route never fails transcription (plan Section 3).
+    """
+    if model_gateway is None:
+        return None
+    route = next(
+        (
+            route
+            for route in model_gateway.routes
+            if ModelOperation.AUDIO_PROMPT in route.operations
+        ),
+        None,
+    )
+    if route is None:
+        return None
+    return RemoteAudioEmotionProvider(
+        gateway=model_gateway,
+        route_id=route.route_id,
+        model=route.model,
+        model_revision=route.model_revision,
+    )
+
+
+def _audio_ml_providers(
+    *, provider_key: str, settings, model_gateway=None, runtime=None
+) -> dict[str, object]:
+    group_disabled = provider_key in {"disabled", "none", "off"}
+    if not group_disabled and provider_key not in {"local_ml", "local", "full"}:
+        raise RuntimeError("AUDIO_ML_PROVIDER must be one of local_ml, disabled")
+    diarization_key = _audio_feature_provider(
+        settings.audio_diarization_provider,
+        group_disabled=group_disabled,
+    )
+    emotion_key = _audio_feature_provider(
+        settings.audio_emotion_provider,
+        group_disabled=group_disabled,
+    )
+    sound_key = _audio_feature_provider(
+        settings.audio_sound_provider,
+        group_disabled=group_disabled,
+    )
+
+    providers: dict[str, object] = {}
+    # Local model identity comes from the registry's ``local`` route for each
+    # capability (gpu-local.json/cpu-local.json, plan Task 14), never a config
+    # default. When no such route is configured, a neutral capability label is
+    # used so the provider still constructs for availability reporting.
+    if emotion_key == "local_ml":
+        emotion_model, emotion_revision = _gateway_route_identity(
+            model_gateway, capability="audio.emotion", fallback="audio-emotion"
+        )
+        providers["emotion"] = Wav2VecEmotionProvider(
+            model=emotion_model,
+            revision=emotion_revision,
+        )
+    elif not group_disabled:
+        # Task 11: with no local emotion model, drive whatever ``audio.emotion``
+        # route the registry configured (an openai_compatible audio-input chat
+        # route, or a local GPU route) through the neutral Motionly provider. It
+        # degrades to the transcript estimate when no such route exists.
+        gateway_emotion = _gateway_emotion_provider(model_gateway)
+        if gateway_emotion is not None:
+            providers["emotion"] = gateway_emotion
+    if sound_key == "yamnet_tflite":
+        # The YAMNet TFLite model path/sha come from the registry
+        # ``audio.sound_classification`` local route (cpu-local.json, plan Task
+        # 33), never from settings. A missing route leaves sound unconfigured.
+        sound_provider = _registry_sound_provider(runtime)
+        if sound_provider is not None:
+            providers["sound"] = sound_provider
+    elif sound_key == "local_ml":
+        sound_model, _sound_revision = _gateway_route_identity(
+            model_gateway,
+            capability="audio.sound_classification",
+            fallback="audio-sound-classification",
+        )
+        providers["sound"] = YamnetSoundClassifier(model_url=sound_model)
+    if diarization_key == "local_ml" and settings.pyannote_auth_token:
+        diarization_model, diarization_revision = _gateway_route_identity(
+            model_gateway, capability="audio.diarization", fallback="audio-diarization"
+        )
+        providers["speaker_diarization"] = PyannoteSpeakerDiarizationProvider(
+            model=diarization_model,
+            auth_token=settings.pyannote_auth_token,
+            revision=diarization_revision,
+        )
+    elif not group_disabled and "speaker_diarization" not in providers:
+        # Task 17: with no explicit vendor/local diarization provider, drive
+        # whatever ``audio.diarization`` route the registry configured (a
+        # template ``async_job``/``generic_http`` route or a local GPU route)
+        # through the neutral wrapper. It degrades to the transcript heuristic
+        # when no such route exists, so this never blocks audio intelligence.
+        gateway_diarization = _gateway_diarization_provider(model_gateway)
+        if gateway_diarization is not None:
+            providers["speaker_diarization"] = gateway_diarization
     return providers
 
 

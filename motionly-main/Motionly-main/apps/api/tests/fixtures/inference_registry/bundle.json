@@ -1,0 +1,4 @@
+{
+  "chat-endpoint": "test-chat-secret-value",
+  "stt-endpoint": "test-stt-secret-value"
+}

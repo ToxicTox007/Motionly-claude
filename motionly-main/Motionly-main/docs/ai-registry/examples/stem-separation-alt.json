@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "audio-stems-alt-endpoint",
+      "type": "async_job",
+      "base_url": "https://api.stemservice.example",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:audio-stems-alt-endpoint"
+      },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "Example stem-separation service",
+        "purpose": "Receives the audio track of your video to separate vocals from the backing track; deletes the upload after download.",
+        "data_categories": ["audio"],
+        "policy_url": "https://api.stemservice.example/privacy"
+      }
+    },
+    {
+      "id": "baseline-chat-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://chat.example.invalid/v1",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:baseline-chat-endpoint"
+      },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "Baseline chat and transcription endpoint",
+        "purpose": "Serves the required planning and transcription capabilities so this example is a complete, production-valid operator registry.",
+        "data_categories": ["text", "audio"],
+        "policy_url": "https://chat.example.invalid/policy"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "audio-stems-alt-model",
+      "model_id": "stemservice/separator-2",
+      "revision": "sep2-2026-02-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["audio.stem_separation"]
+    },
+    {
+      "id": "baseline-chat-model",
+      "model_id": "baseline-chat",
+      "revision": "baseline-2026-01-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "baseline-stt-model",
+      "model_id": "baseline-stt",
+      "revision": "baseline-2026-01-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["transcription.speech_to_text"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "baseline-planning",
+      "capability": "planning.chat",
+      "adapter_id": "baseline-chat-endpoint",
+      "model_id": "baseline-chat",
+      "model_ref": "baseline-chat-model",
+      "model_revision": "baseline-2026-01-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "input_per_million_usd": 1,
+        "output_per_million_usd": 2
+      },
+      "budget": {
+        "feature": "planning",
+        "monthly_usd": 10
+      },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "baseline-transcription",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "baseline-chat-endpoint",
+      "model_id": "baseline-stt",
+      "model_ref": "baseline-stt-model",
+      "model_revision": "baseline-2026-01-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "per_unit_usd": 0.0001
+      },
+      "budget": {
+        "feature": "transcription",
+        "monthly_usd": 10
+      },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "audio-stems-alt-remote",
+      "capability": "audio.stem_separation",
+      "adapter_id": "audio-stems-alt-endpoint",
+      "model_id": "stemservice/separator-2",
+      "model_ref": "audio-stems-alt-model",
+      "model_revision": "sep2-2026-02-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": 0.008
+      },
+      "budget": {
+        "feature": "audio_stems",
+        "monthly_usd": 50,
+        "hard_cap": {
+          "max_requests_per_month": 5
+        }
+      },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "upload_filename": "motionly-audio.wav",
+      "input_transform": {
+        "audio": {
+          "codec": "flac",
+          "sample_rate": 44100,
+          "channels": 2
+        }
+      },
+      "params": {
+        "mode": "two_stems"
+      },
+      "mapping": {
+        "steps": [
+          {
+            "method": "POST",
+            "path": "/v1/jobs",
+            "body": "input.file",
+            "capture": {
+              "job_id": "response.job_id"
+            },
+            "commit": true
+          }
+        ],
+        "poll": {
+          "method": "GET",
+          "path": "/v1/status/{vars.job_id}",
+          "status": "response.state",
+          "status_map": {
+            "queued": {
+              "state": "running"
+            },
+            "processing": {
+              "state": "running"
+            },
+            "ready": {
+              "state": "succeeded"
+            },
+            "failed": {
+              "state": "failed",
+              "fallback": false
+            },
+            "retry": {
+              "state": "retryable_failed",
+              "fallback": false
+            }
+          },
+          "tolerate_retryable": true,
+          "interval_s": 5,
+          "backoff": {
+            "factor": 1.5,
+            "max_interval_s": 30
+          },
+          "max_wait_s": 1800
+        },
+        "artifacts": {
+          "items": "response.outputs",
+          "name": "kind",
+          "url": "download_url",
+          "name_map": {
+            "vocal": "vocals",
+            "accompaniment": "no_vocals"
+          },
+          "required": ["vocals", "no_vocals"],
+          "max_bytes": 2147483648,
+          "allowed_hosts": [
+            "files.stemservice.example",
+            "*.cdn.stemservice.example"
+          ],
+          "force_https": true,
+          "auth": "none"
+        },
+        "cleanup": [
+          {
+            "method": "DELETE",
+            "path": "/v1/cleanup/{vars.job_id}"
+          }
+        ]
+      }
+    }
+  ]
+}

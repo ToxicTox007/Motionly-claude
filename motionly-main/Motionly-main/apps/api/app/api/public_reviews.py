@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
 
+from app.api.auth import enforce_hourly_limit
 from app.api.dependencies import get_review_repository
 from app.api.errors import ApiError
 from app.repositories.reviews import InMemoryReviewRepository, ResolvedShareLink
@@ -27,6 +28,16 @@ async def _repository_call(repository: Any, async_name: str, sync_name: str, **k
     if async_method is not None:
         return await async_method(**kwargs)
     return await run_blocking(getattr(repository, sync_name), **kwargs)
+
+
+async def _limit(request: Request) -> None:
+    settings = request.app.state.settings
+    await enforce_hourly_limit(
+        request,
+        action="public_review",
+        per_viewer=getattr(settings, "public_review_rate_limit_per_hour", 240),
+        overall=getattr(settings, "public_review_global_rate_limit_per_hour", 10000),
+    )
 
 
 async def _resolve(*, repository: Any, share_link_id: UUID, token: str) -> ResolvedShareLink:
@@ -116,6 +127,7 @@ async def resolve_public_review(
     repository: ReviewRepositoryDep,
 ) -> PublicReviewResponse:
     response.headers["Cache-Control"] = "no-store, private"
+    await _limit(request)
     resolved = await _resolve(
         repository=repository, share_link_id=share_link_id, token=payload.token
     )
@@ -136,8 +148,11 @@ async def create_public_review_comment(
     payload: PublicReviewCommentCreateRequest,
     response: Response,
     repository: ReviewRepositoryDep,
+    request: Request = None,  # type: ignore[assignment]
 ) -> PublicReviewCommentResponse:
     response.headers["Cache-Control"] = "no-store, private"
+    if request is not None:
+        await _limit(request)
     resolved = await _resolve(
         repository=repository, share_link_id=share_link_id, token=payload.token
     )
@@ -179,6 +194,7 @@ async def decide_public_review(
     repository: ReviewRepositoryDep,
 ) -> PublicReviewResponse:
     response.headers["Cache-Control"] = "no-store, private"
+    await _limit(request)
     resolved = await _resolve(
         repository=repository, share_link_id=share_link_id, token=payload.token
     )

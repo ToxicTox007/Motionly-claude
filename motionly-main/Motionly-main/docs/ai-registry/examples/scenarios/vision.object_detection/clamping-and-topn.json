@@ -1,0 +1,78 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "max_results": 3,
+    "images": [{ "b64": "/9j/wA==" }]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/images:annotate" },
+      "response": {
+        "status": 200,
+        "json": {
+          "responses": [
+            {
+              "localizedObjectAnnotations": [
+                {
+                  "name": "Box",
+                  "score": 1.7,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": -0.2, "y": 0.1 },
+                      { "x": 1.4, "y": 1.2 }
+                    ]
+                  }
+                },
+                {
+                  "name": "Item A",
+                  "score": 0.4,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0, "y": 0 },
+                      { "x": 0.1, "y": 0.1 }
+                    ]
+                  }
+                },
+                {
+                  "name": "Item B",
+                  "score": 0.3,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0, "y": 0 },
+                      { "x": 0.1, "y": 0.1 }
+                    ]
+                  }
+                },
+                {
+                  "name": "Item C",
+                  "score": 0.2,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0, "y": 0 },
+                      { "x": 0.1, "y": 0.1 }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "output": {
+      "detections": [
+        [
+          { "label": "box", "score": 1.0, "box": [0.0, 0.1, 1.0, 0.9] },
+          { "label": "item a", "score": 0.4, "box": [0.0, 0.0, 0.1, 0.1] },
+          { "label": "item b", "score": 0.3, "box": [0.0, 0.0, 0.1, 0.1] }
+        ]
+      ]
+    },
+    "usage": { "input_units": 1 }
+  }
+}

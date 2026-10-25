@@ -46,6 +46,7 @@ from app.services.model_gateway import (
     PlanningOutput,
     PlanningRequest,
 )
+from app.services.offload import run_blocking
 from app.services.queue import TranscriptionQueue
 from app.services.transcript_quality import is_transcript_usable_for_planning
 from app.services.transcription_jobs import queue_transcription_for_upload
@@ -179,7 +180,8 @@ async def generate_captions(
         )
 
     prepare_heavy_job_enqueue(request=request)
-    job = transcription_queue.enqueue_caption_generation(
+    job = await run_blocking(
+        transcription_queue.enqueue_caption_generation,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         transcript_id=transcript.id,

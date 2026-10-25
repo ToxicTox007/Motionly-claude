@@ -85,13 +85,10 @@ async def _seat_limit(billing_repository: Any, workspace_id: UUID) -> int:
         subscription = await run_blocking(
             billing_repository.get_subscription, workspace_id=workspace_id
         )
-    # plan_seat_limit downgrades an inactive subscription to Free via
-    # plan_for_subscription_status inside plan_limits.
-    from app.services.billing import plan_for_subscription_status
+    # An inactive (or past-due beyond its grace period) subscription counts as Free.
+    from app.services.billing import effective_plan_key
 
-    effective = plan_for_subscription_status(
-        plan=subscription.plan, status=subscription.status
-    )
+    effective = effective_plan_key(subscription)
     return plan_seat_limit(effective)
 
 

@@ -40,7 +40,10 @@ class ScaleResourceListResponse(BaseModel):
 
 
 class StemSeparationRequest(BaseModel):
-    model: str = Field(default="htdemucs", max_length=80)
+    # Model identity comes from the configured ``audio.stem_separation`` registry
+    # route (plan Task 14: no local model id remains as a code default). An
+    # explicit value still overrides the route; omitting it uses the route model.
+    model: str | None = Field(default=None, max_length=80)
 
 
 class StemSelectionUpdateRequest(BaseModel):

@@ -63,12 +63,73 @@ from app.services.edit_plan_validation import (
 )
 from app.services.edit_planner import (
     FixtureEditPlannerProvider,
-    HttpEditPlannerProvider,
     summarize_plan,
 )
+from app.services.model_provider_bridges import GatewayEditPlannerProvider
 from app.services.queue import PlanQueue
 from app.services.timeline_compiler import project_timeline_to_legacy_plan
 from app.services.transcription_provider import FixtureTranscriptionProvider
+
+
+def _scripted_gateway_planner(
+    contents: list[str], *, provider_name: str = "gateway"
+) -> GatewayEditPlannerProvider:
+    """A gateway-only planner whose chat route returns ``contents`` in order.
+
+    Task 10 routes planning only through the model gateway, so the retry and
+    deterministic-fallback behaviour is exercised against a real gateway and a
+    scripted adapter instead of a direct HTTP call.
+    """
+    from app.services.model_gateway import (
+        AdapterResult,
+        ModelCapability,
+        ModelGateway,
+        ModelOperation,
+        ModelRoute,
+        ModelUsage,
+        PlanningOutput,
+    )
+
+    scripted = iter(contents)
+
+    class _ScriptedPlanningAdapter:
+        def __init__(self) -> None:
+            self.requests: list[object] = []
+
+        def invoke(self, *, route: object, request: object) -> AdapterResult:  # noqa: ANN401
+            del route
+            self.requests.append(request)
+            content = next(scripted)
+            payload = {
+                "choices": [{"message": {"content": content}}],
+                "usage": {
+                    "prompt_tokens": 60,
+                    "completion_tokens": 40,
+                    "total_tokens": 100,
+                },
+            }
+            return AdapterResult(
+                output=PlanningOutput(content=content, raw_response=payload),
+                usage=ModelUsage(input_units=60, output_units=40),
+                provider_request_id="scripted",
+            )
+
+    adapter = _ScriptedPlanningAdapter()
+    route = ModelRoute(
+        route_id="scripted-planning",
+        capability=ModelCapability.PLANNING,
+        adapter="scripted",
+        provider=provider_name,
+        model="scripted-planner",
+        model_revision="2026-07-14",
+        operations=(ModelOperation.PLANNING_CHAT,),
+        explicitly_free=True,
+    )
+    gateway = ModelGateway(adapters={"scripted": adapter}, routes=[route])
+    planner = GatewayEditPlannerProvider(
+        model="scripted-planner", provider_name=provider_name, gateway=gateway
+    )
+    return planner, adapter
 
 
 async def create_plan(
@@ -1760,35 +1821,19 @@ def test_http_planner_receives_audio_intelligence(monkeypatch: pytest.MonkeyPatc
     )
     captured: dict[str, object] = {}
 
-    def fake_post(*args: object, **kwargs: object):
-        captured["json"] = kwargs["json"]
-        return SimpleNamespace(
-            status_code=200,
-            json=lambda: {
-                "choices": [
-                    {
-                        "message": {
-                            "content": json.dumps(
-                                valid_generated_plan_payload(
-                                    cuts=[{"start_ms": 240, "end_ms": 3500, "reason": "hook"}],
-                                    caption_highlights=[],
-                                    broll_requests=[],
-                                    zoom_moments=[],
-                                )
-                            )
-                        }
-                    }
-                ],
-                "usage": {"total_tokens": 100},
-            },
-        )
-
-    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
-    HttpEditPlannerProvider(
-        endpoint="https://planner.test",
-        api_key="test",
-        model="test-model",
-    ).create_plan(
+    planner, adapter = _scripted_gateway_planner(
+        [
+            json.dumps(
+                valid_generated_plan_payload(
+                    cuts=[{"start_ms": 240, "end_ms": 3500, "reason": "hook"}],
+                    caption_highlights=[],
+                    broll_requests=[],
+                    zoom_moments=[],
+                )
+            )
+        ]
+    )
+    planner.create_plan(
         transcript=transcript,
         payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
         video_duration_ms=12_000,
@@ -1803,9 +1848,11 @@ def test_http_planner_receives_audio_intelligence(monkeypatch: pytest.MonkeyPatc
         ),
     )
 
-    request_json = captured["json"]
-    assert isinstance(request_json, dict)
-    message = request_json["messages"][1]
+    captured["messages"] = [
+        {"role": message.role, "content": message.content}
+        for message in adapter.requests[0].messages
+    ]
+    message = captured["messages"][1]
     assert isinstance(message, dict)
     content = json.loads(str(message["content"]))
     assert content["audio_intelligence"]["keywords"][0]["text"] == "atelier"
@@ -1822,7 +1869,7 @@ def test_http_planner_retries_after_invalid_provider_shape(monkeypatch: pytest.M
     repository, project_id, workspace_id, _user_id = make_plan_repository()
     transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
     assert transcript is not None
-    responses = iter(
+    planner, _adapter = _scripted_gateway_planner(
         [
             """
             {
@@ -1845,25 +1892,10 @@ def test_http_planner_retries_after_invalid_provider_shape(monkeypatch: pytest.M
             }
             """,
             json.dumps(valid_generated_plan_payload()),
-        ]
+        ],
+        provider_name="gateway",
     )
-
-    def fake_post(*args: object, **kwargs: object):
-        return SimpleNamespace(
-            status_code=200,
-            json=lambda: {
-                "choices": [{"message": {"content": next(responses)}}],
-                "usage": {"total_tokens": 100},
-            },
-        )
-
-    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
-    result = HttpEditPlannerProvider(
-        endpoint="https://planner.test",
-        api_key="test",
-        model="test-model",
-        provider_name="openrouter",
-    ).create_plan(
+    result = planner.create_plan(
         transcript=transcript,
         payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
         video_duration_ms=12_000,
@@ -1885,19 +1917,8 @@ def test_http_planner_falls_back_and_records_validation_errors(
     transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
     assert transcript is not None
 
-    def fake_post(*args: object, **kwargs: object):
-        return SimpleNamespace(
-            status_code=200,
-            json=lambda: {"choices": [{"message": {"content": "not json"}}], "usage": {}},
-        )
-
-    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
-    result = HttpEditPlannerProvider(
-        endpoint="https://planner.test",
-        api_key="test",
-        model="test-model",
-        provider_name="openrouter",
-    ).create_plan(
+    planner, _adapter = _scripted_gateway_planner(["not json", "not json", "not json"])
+    result = planner.create_plan(
         transcript=transcript,
         payload=PlanCreateRequest(style=EditPlanStyle.FOUNDER, target_duration_s=10),
         video_duration_ms=12_000,
@@ -1916,26 +1937,10 @@ def test_http_planner_uses_strict_minimal_retry(monkeypatch: pytest.MonkeyPatch)
     repository, project_id, workspace_id, _user_id = make_plan_repository()
     transcript = repository.latest_transcript(project_id=project_id, workspace_id=workspace_id)
     assert transcript is not None
-    captured_requests: list[dict[str, object]] = []
-    responses = iter(["not json", "still not json", json.dumps(valid_generated_plan_payload())])
-
-    def fake_post(*args: object, **kwargs: object):
-        captured_requests.append(kwargs["json"])
-        return SimpleNamespace(
-            status_code=200,
-            json=lambda: {
-                "choices": [{"message": {"content": next(responses)}}],
-                "usage": {"total_tokens": 100},
-            },
-        )
-
-    monkeypatch.setattr("app.services.edit_planner.httpx.post", fake_post)
-    result = HttpEditPlannerProvider(
-        endpoint="https://planner.test",
-        api_key="test",
-        model="test-model",
-        provider_name="openrouter",
-    ).create_plan(
+    planner, adapter = _scripted_gateway_planner(
+        ["not json", "still not json", json.dumps(valid_generated_plan_payload())]
+    )
+    result = planner.create_plan(
         transcript=transcript,
         payload=PlanCreateRequest(style=EditPlanStyle.LUXURY, target_duration_s=10),
         video_duration_ms=12_000,
@@ -1944,7 +1949,7 @@ def test_http_planner_uses_strict_minimal_retry(monkeypatch: pytest.MonkeyPatch)
     assert result.planner_source == "llm_minimal"
     assert result.retry_count == 2
     assert result.fallback_reason is None
-    third_request_content = json.loads(str(captured_requests[2]["messages"][1]["content"]))
+    third_request_content = json.loads(str(adapter.requests[2].messages[1].content))
     assert third_request_content["minimal_plan"] is True
 
 
@@ -2067,7 +2072,7 @@ def test_async_planner_fast_path_and_polling() -> None:
     )
 
     # 1. POST /plans returns 202 on cache miss.
-    # 2. OpenRouter/httpx.post is not called (proved by MockFailurePlanner not throwing)
+    # 2. The planning provider is not called (proved by MockFailurePlanner not throwing)
     response = asyncio.run(
         _create_plan_api(
             project_id=project_id,
@@ -2227,7 +2232,7 @@ def test_async_planner_failed_job() -> None:
     class BrokenPlanner:
         provider_name = "broken"
         def create_plan(self, *args, **kwargs):
-            raise RuntimeError("OpenRouter failed!")
+            raise RuntimeError("Planning provider failed!")
             
     # Mock Request and Response
     class DummyResponse:
@@ -2529,31 +2534,15 @@ def test_phase9_repair_vs_fallback() -> None:
     assert any("validation_failed" in err for err in validation_errors)
 
 
-def test_phase9_http_provider_json_decode_failure(monkeypatch) -> None:
+def test_phase9_http_provider_json_decode_failure() -> None:
     from uuid import uuid4
 
     from app.repositories.captions import TranscriptRecord
     from app.schemas.captions import LanguageHint
     from app.schemas.plans import EditPlanStyle, PlanCreateRequest
-    from app.services.edit_planner import HttpEditPlannerProvider
 
-    class MockResponse:
-        def __init__(self, text: str, status_code: int = 200):
-            self.text = text
-            self.status_code = status_code
-        def json(self):
-            return {"choices": [{"message": {"content": self.text}}]}
-
-    def mock_post(*args, **kwargs):
-        return MockResponse("invalid json text { { {")
-
-    monkeypatch.setattr("httpx.post", mock_post)
-
-    provider = HttpEditPlannerProvider(
-        endpoint="https://openrouter.ai/api/v1/chat/completions",
-        api_key="test-openrouter-key",
-        model="openrouter/free",
-        provider_name="openrouter"
+    provider, _adapter = _scripted_gateway_planner(
+        ["invalid json text { { {"] * 3, provider_name="gateway"
     )
 
     transcript = TranscriptRecord(
@@ -2564,7 +2553,7 @@ def test_phase9_http_provider_json_decode_failure(monkeypatch) -> None:
         status="ready",
         language="en",
         language_hint=LanguageHint.AUTO,
-        provider="groq",
+        provider="fixture",
         model="whisper",
         confidence=1.0,
         duration_ms=5000,

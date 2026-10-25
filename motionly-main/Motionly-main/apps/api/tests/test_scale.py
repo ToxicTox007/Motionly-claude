@@ -56,7 +56,6 @@ from app.services.object_references import ObjectReferenceService
 from app.services.operations import OperationsRepository
 from app.services.queue import QueueRegistry, ScaleQueue
 from app.services.scale import (
-    FixtureRunwayProvider,
     FixtureStemSeparator,
     _remove_stem_temp_directory,
     _separate_stems,
@@ -600,7 +599,6 @@ def test_model_training_uses_frozen_consented_dataset_and_promoted_memory() -> N
         analytics_repository=None,
         editorial_learning_repository=learning,
         stem_separator=None,
-        runway_provider=None,
     )
     learning.promote(
         workspace_id=workspace_id,
@@ -674,17 +672,6 @@ def test_collaboration_manifest_rejects_stale_revision() -> None:
             )
         )
     assert error.value.code == "collaboration_revision_conflict"
-
-
-def test_fixture_runway_provider_returns_renderable_asset_url() -> None:
-    result = FixtureRunwayProvider().generate(
-        prompt="cinematic city sunrise",
-        prompt_image_url=None,
-        duration_s=5,
-        ratio="768:1280",
-    )
-    assert result.task_id.startswith("fixture-")
-    assert result.video_url.startswith("fixture://runway/")
 
 
 def _stem_context(tmp_path):
@@ -1508,3 +1495,89 @@ def test_style_reference_deletion_allows_replacement_and_training() -> None:
         )
     )
     assert trained.status == ScaleResourceStatus.QUEUED
+
+
+def test_remote_stem_job_passes_a_stable_idempotency_key(monkeypatch, tmp_path) -> None:
+    """Task 17 'one improvement': the stem resource id is the idempotency key.
+
+    A worker retry of the same stem job reserves the same async operation and
+    resumes polling instead of paying for a second submit. ``_separate_stems``
+    puts ``stem_separation:<resource_id>`` on the ModelCallContext.
+    """
+    uploads, record, settings = _stem_context(tmp_path)
+
+    def fake_materialize(**_kwargs):
+        return LocalObjectStorage(root=tmp_path).ensure_object(
+            bucket=uploads.get_active_upload(
+                project_id=record.project_id, workspace_id=record.workspace_id
+            ).storage_bucket,
+            path=uploads.get_active_upload(
+                project_id=record.project_id, workspace_id=record.workspace_id
+            ).storage_path,
+        )
+
+    monkeypatch.setattr("app.services.scale.materialize_upload_source", fake_materialize)
+    monkeypatch.setattr("app.services.scale.probe_duration_seconds", lambda _p: 30.0)
+
+    captured = {}
+
+    class _Gateway:
+        def invoke(self, request, *, context):
+            captured["idempotency_key"] = context.idempotency_key
+            captured["required_route_id"] = context.required_route_id
+            root = tmp_path / "async-out"
+            root.mkdir(exist_ok=True)
+            from app.services.model_gateway import StemSeparationOutput
+
+            stems = {}
+            for name in ("vocals", "no_vocals"):
+                p = root / f"{name}.wav"
+                p.write_bytes(b"stem")
+                stems[name] = p
+            metadata = SimpleNamespace(
+                as_dict=lambda: {
+                    "route_id": "audio-stems-remote",
+                    "model_revision": "andromeda-v6",
+                }
+            )
+            return SimpleNamespace(
+                output=StemSeparationOutput(stems=stems),
+                metadata=metadata,
+            )
+
+    route = SimpleNamespace(
+        route_id="audio-stems-remote",
+        model_revision="andromeda-v6",
+        input_cost_per_million_usd=10000.0,
+        budget_feature="audio_stems",
+    )
+
+    result = _separate_stems(
+        record=record,
+        settings=settings,
+        upload_repository=uploads,
+        stem_separator=FixtureStemSeparator(),
+        model_gateway=_Gateway(),
+        stem_gateway_route=route,
+    )
+
+    assert captured["idempotency_key"] == f"stem_separation:{record.id}"
+    assert captured["required_route_id"] == "audio-stems-remote"
+    assert result["model_gateway"]["route_id"] == "audio-stems-remote"
+
+
+def test_stem_cleanup_removes_async_job_temp_directory(tmp_path, monkeypatch) -> None:
+    """Task 17: the generic async-job temp prefix joins the cleanup allowlist."""
+    import tempfile as _tempfile
+
+    from app.services.async_job_adapter import ASYNC_JOB_TEMP_PREFIX
+
+    monkeypatch.setattr(_tempfile, "tempdir", str(tmp_path))
+    async_dir = tmp_path / f"{ASYNC_JOB_TEMP_PREFIX}abc123"
+    async_dir.mkdir()
+    vocals = async_dir / "vocals.bin"
+    vocals.write_bytes(b"stem")
+
+    _remove_stem_temp_directory({"vocals": vocals})
+
+    assert not async_dir.exists()

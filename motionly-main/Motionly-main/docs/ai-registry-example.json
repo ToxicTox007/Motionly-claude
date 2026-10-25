@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "operator-chat-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://inference.example.invalid/v1",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:operator-chat-endpoint"
+      },
+      "timeout_s": 60,
+      "health": { "method": "GET", "path": "/models" },
+      "data_processor": {
+        "display_name": "Operator-configured inference endpoint",
+        "purpose": "Inference request processing",
+        "data_categories": ["text"],
+        "policy_url": "https://inference.example.invalid/policy"
+      }
+    },
+    {
+      "id": "operator-chat-endpoint-economy",
+      "type": "openai_compatible",
+      "base_url": "https://economy.example.invalid/v1",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:operator-chat-endpoint-economy"
+      },
+      "timeout_s": 60,
+      "health": { "method": "GET", "path": "/models" },
+      "data_processor": {
+        "display_name": "Operator-configured economy inference endpoint",
+        "purpose": "Inference request processing",
+        "data_categories": ["text"],
+        "policy_url": "https://economy.example.invalid/policy"
+      }
+    },
+    {
+      "id": "operator-transcription-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://transcription.example.invalid/v1",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "file:operator-transcription-endpoint"
+      },
+      "timeout_s": 120,
+      "health": { "method": "GET", "path": "/models" },
+      "data_processor": {
+        "display_name": "Operator-configured transcription endpoint",
+        "purpose": "Speech-to-text processing",
+        "data_categories": ["audio", "text"],
+        "policy_url": "https://transcription.example.invalid/policy"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "operator-chat-model",
+      "model_id": "example-chat-medium",
+      "revision": "provider-managed",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "source_type": "remote_api",
+      "source_url": "https://inference.example.invalid/models/example-chat-medium",
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "operator-chat-model-economy",
+      "model_id": "example-chat-small",
+      "revision": "2026-02-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "source_type": "remote_api",
+      "source_url": "https://economy.example.invalid/models/example-chat-small",
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "operator-transcription-model",
+      "model_id": "example-speech-large",
+      "revision": "2026-01-15",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "source_type": "remote_api",
+      "source_url": "https://transcription.example.invalid/models/example-speech-large",
+      "capabilities": ["transcription.speech_to_text"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "planning-chat-remote",
+      "capability": "planning.chat",
+      "adapter_id": "operator-chat-endpoint",
+      "model_id": "example-chat-medium",
+      "model_ref": "operator-chat-model",
+      "model_revision": "provider-managed",
+      "allow_provider_managed_revision": true,
+      "priority": 100,
+      "strategy": "native",
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 0.5,
+        "output_per_million_usd": 1.5
+      },
+      "budget": { "feature": "planning", "monthly_usd": 100 },
+      "timeout_s": 60,
+      "compute_requirement": "remote",
+      "limits": { "max_output_units": 4096 },
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "High quality",
+        "description": "Slower, better edit plans",
+        "labels": ["quality"],
+        "plans": ["creator", "pro", "agency"],
+        "quota_weight": 2.0,
+        "default": true
+      }
+    },
+    {
+      "id": "planning-chat-remote-economy",
+      "capability": "planning.chat",
+      "adapter_id": "operator-chat-endpoint-economy",
+      "model_id": "example-chat-small",
+      "model_ref": "operator-chat-model-economy",
+      "model_revision": "2026-02-01",
+      "priority": 200,
+      "strategy": "native",
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 0.1,
+        "output_per_million_usd": 0.3
+      },
+      "budget": { "feature": "planning", "monthly_usd": 50 },
+      "timeout_s": 60,
+      "compute_requirement": "remote",
+      "limits": { "max_output_units": 4096 },
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "Fast and economical",
+        "description": "Quicker, cheaper edit plans",
+        "labels": ["economy", "fast"],
+        "quota_weight": 0.5,
+        "default": false
+      }
+    },
+    {
+      "id": "transcription-speech-to-text-remote",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "operator-transcription-endpoint",
+      "model_id": "example-speech-large",
+      "model_ref": "operator-transcription-model",
+      "model_revision": "2026-01-15",
+      "priority": 100,
+      "strategy": "native",
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": 0.0001
+      },
+      "budget": { "feature": "transcription", "monthly_usd": 50 },
+      "timeout_s": 120,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    }
+  ]
+}

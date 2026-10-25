@@ -226,12 +226,18 @@ web3 = 30
 # secret = ""
 
 [auth.email]
-# Allow/disallow new user signups via email to your project.
+# Must stay true even though [auth] enable_signup = false: in the CLI this key
+# turns the whole email provider on or off, so false would also disable
+# email/password sign-in (supabase/supabase#40582). Public self-signup stays
+# off through [auth] enable_signup; accounts are created by POST /auth/signup
+# (the API, via the Auth admin API). Asserted by tests/test_signup.py.
 enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
-# If enabled, users need to confirm their email address before signing in.
+# Off on purpose: the API creates accounts already confirmed and Motionly has no
+# outbound email (password resets are admin-issued links). Turning this on
+# requires an SMTP setup and a confirmation step in the sign-up flow.
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false

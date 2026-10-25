@@ -6,6 +6,7 @@ import { isAdminIdentityAllowed } from "../lib/admin-auth.mjs";
 const identity = {
   userId: "00000000-0000-4000-8000-000000000001",
   workspaceId: "00000000-0000-4000-8000-000000000002",
+  role: "owner",
 };
 
 test("rejects every authenticated identity when no admin allowlist is configured", () => {
@@ -44,6 +45,36 @@ test("accepts an explicitly allowed workspace", () => {
       adminUserIds: "",
       adminWorkspaceIds: identity.workspaceId,
     }),
+    true,
+  );
+});
+
+test("an allowed workspace admits its owner and admins only, never plain members", () => {
+  for (const [role, expected] of [
+    ["owner", true],
+    ["admin", true],
+    ["ADMIN", true],
+    ["member", false],
+    ["", false],
+    [undefined, false],
+  ]) {
+    assert.equal(
+      isAdminIdentityAllowed(
+        { ...identity, role },
+        { adminUserIds: "", adminWorkspaceIds: identity.workspaceId },
+      ),
+      expected,
+      `role ${String(role)}`,
+    );
+  }
+});
+
+test("an explicitly allowed user is an admin whatever their workspace role", () => {
+  assert.equal(
+    isAdminIdentityAllowed(
+      { ...identity, role: "member" },
+      { adminUserIds: identity.userId, adminWorkspaceIds: "" },
+    ),
     true,
   );
 });

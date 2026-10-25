@@ -27,6 +27,7 @@ from app.repositories.workflows import (
     InMemoryWorkflowRepository,
     SupabaseWorkflowRepository,
 )
+from app.services.api_key_access import require_api_access
 from app.services.auth import (
     WORKSPACE_ROLES,
     require_workspace_membership,
@@ -109,7 +110,8 @@ async def get_actor(
                     or not settings.supabase_service_role_key
                 ):
                     raise
-                verified = verify_supabase_token_with_auth_api(
+                verified = await run_blocking(
+                    verify_supabase_token_with_auth_api,
                     token=token,
                     supabase_url=str(settings.supabase_url),
                     service_role_key=settings.supabase_service_role_key,
@@ -146,6 +148,62 @@ def _route_template(request: Request) -> str:
     return request.url.path
 
 
+# Roles that may mint API keys (api_keys.py); a key never outlives its
+# creator's authority to have minted it.
+API_KEY_CREATOR_ROLES = frozenset({"owner", "admin"})
+
+
+async def _require_api_key_still_authorized(request: Request, record) -> None:
+    """Refuse a live key whose creator or workspace plan no longer allows it.
+
+    A key acts with owner-equivalent authority inside its route allow-list, so
+    it must stop working as soon as its creator could no longer mint it:
+
+    * the creator was removed, disabled, banned or deleted, or demoted below
+      owner/admin (checked with the same ban-aware membership resolver as
+      user requests, including its cache invalidation on membership changes);
+    * the workspace's effective plan lost the ``api_access`` entitlement
+      (downgrade, cancellation, lapsed payment).
+
+    Keys are refused rather than revoked, so a re-upgrade or re-promotion
+    restores them; revoking stays an explicit owner/admin action.
+    """
+    settings = request.app.state.settings
+    if settings.supabase_url and settings.supabase_service_role_key:
+        try:
+            role = await run_blocking(
+                require_workspace_membership,
+                supabase_url=str(settings.supabase_url),
+                service_role_key=settings.supabase_service_role_key,
+                user_id=record.created_by,
+                workspace_id=record.workspace_id,
+                metrics_registry=getattr(request.app.state, "metrics_registry", None),
+            )
+        except ApiError as exc:
+            if exc.code != "workspace_access_denied":
+                raise
+            role = None
+        if role not in API_KEY_CREATOR_ROLES:
+            raise ApiError(
+                403,
+                "api_key_creator_inactive",
+                "This API key's creator no longer manages this workspace.",
+            )
+
+    billing_repository = getattr(request.app.state, "billing_repository", None)
+    if billing_repository is None:
+        raise ApiError(503, "billing_unavailable", "API key authorization is unavailable.")
+    get_async = getattr(billing_repository, "get_subscription_async", None)
+    if get_async is not None:
+        subscription = await get_async(workspace_id=record.workspace_id)
+    else:
+        subscription = await run_blocking(
+            billing_repository.get_subscription, workspace_id=record.workspace_id
+        )
+    # Same gate as minting a key: 402 plan_feature_required without api_access.
+    require_api_access(subscription)
+
+
 async def _resolve_api_key_actor(request: Request, token: str) -> Actor:
     """Resolve a ``mtly_`` bearer token to an API-key Actor.
 
@@ -170,6 +228,8 @@ async def _resolve_api_key_actor(request: Request, token: str) -> Actor:
             "api_key_route_forbidden",
             "This endpoint is not available to API keys.",
         )
+
+    await _require_api_key_still_authorized(request, record)
 
     # Best-effort last-used stamp; never block the request on it.
     try:

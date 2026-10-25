@@ -1,0 +1,77 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "max_results": 12,
+    "images": [
+      { "b64": "/9j/wA==" },
+      { "b64": "/9j/wB==" },
+      { "b64": "/9j/wC==" },
+      { "b64": "/9j/wD==" }
+    ]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/images:annotate" },
+      "response": {
+        "status": 200,
+        "json": {
+          "responses": [
+            {
+              "localizedObjectAnnotations": [
+                {
+                  "name": "Car",
+                  "score": 0.9,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0.1, "y": 0.1 },
+                      { "x": 0.2, "y": 0.2 }
+                    ]
+                  }
+                }
+              ]
+            },
+            { "localizedObjectAnnotations": [] },
+            {
+              "localizedObjectAnnotations": [
+                {
+                  "name": "Woman",
+                  "score": 0.6,
+                  "boundingPoly": {
+                    "normalizedVertices": [
+                      { "x": 0.0, "y": 0.0 },
+                      { "x": 0.5, "y": 0.9 }
+                    ]
+                  }
+                }
+              ]
+            },
+            { "localizedObjectAnnotations": [] }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "output": {
+      "detections": [
+        [{ "label": "car", "score": 0.9, "box": [0.1, 0.1, 0.1, 0.1] }],
+        [],
+        [{ "label": "person", "score": 0.6, "box": [0.0, 0.0, 0.5, 0.9] }],
+        []
+      ]
+    },
+    "usage": { "input_units": 4 },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "vision.googleapis.com",
+        "path": "/v1/images:annotate",
+        "header_names": ["accept", "x-goog-api-key"],
+        "body_keys": ["requests"]
+      }
+    ]
+  }
+}

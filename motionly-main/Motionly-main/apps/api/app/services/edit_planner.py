@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import httpx
 from pydantic import ValidationError
 
 from app.api.errors import ApiError
@@ -35,12 +34,8 @@ from app.services.edit_plan_validation import (
     validate_generated_plan_payload,
 )
 from app.services.provider_resilience import (
-    ProviderCallFailure,
-    ProviderCircuitOpen,
     ProviderErrorInfo,
-    bounded_backoff_seconds,
     classify_provider_exception,
-    classify_provider_status,
     provider_circuit_breaker,
 )
 
@@ -174,10 +169,18 @@ class FixtureEditPlannerProvider:
 
 @dataclass(frozen=True)
 class HttpEditPlannerProvider:
-    endpoint: str
-    api_key: str
+    """Retry/validation loop for a chat-completion planner.
+
+    This base owns the attempt loop, plan validation, repair and deterministic
+    fallback. It performs no I/O of its own: a subclass supplies ``_request_plan``
+    to obtain a raw chat-completion response. The only concrete subclass today is
+    :class:`app.services.model_provider_bridges.GatewayEditPlannerProvider`, which
+    routes every request through the provider-neutral model gateway (Task 10:
+    planning goes only through the gateway, never a direct HTTP call).
+    """
+
     model: str
-    provider_name: str = "http_chat"
+    provider_name: str = "gateway_chat"
 
     def create_plan(
         self,
@@ -191,17 +194,6 @@ class HttpEditPlannerProvider:
         operations_repository: Any = None,
     ) -> PlannerProviderResult:
         started = time.perf_counter()
-
-        if billing_repository is not None and operations_repository is not None:
-            from app.services.billing import check_quota
-            check_quota(
-                workspace_id=transcript.workspace_id,
-                provider="openrouter",
-                category="tokens",
-                billing_repository=billing_repository,
-                operations_repository=operations_repository,
-                estimated_quantity=2000.0,
-            )
 
         style = _effective_payload_style(
             payload=payload,
@@ -296,14 +288,17 @@ class HttpEditPlannerProvider:
 
             usage = last_usage if isinstance(last_usage, dict) else {}
             tokens = int(usage.get("total_tokens") or 0)
-            is_free_model = self.model == "openrouter/free" or self.model.endswith(":free")
-            cost_estimate_usd = (
-                0
-                if is_free_model
-                else round(tokens * 0.000002, 6)
-                if tokens
-                else None
-            )
+            # Prefer the authoritative cost the gateway already reports for the
+            # selected route: a free route (``explicitly_free`` / zero pricing)
+            # reports ``actual_cost_usd`` of 0, so no vendor-specific model-name
+            # check is needed. Fall back to token pricing only when no gateway
+            # metadata is attached (the bridge overrides this value with the
+            # gateway's ``actual_cost_usd`` after ``create_plan`` returns).
+            gateway_metadata = usage.get("_motionly_gateway")
+            if isinstance(gateway_metadata, dict) and "actual_cost_usd" in gateway_metadata:
+                cost_estimate_usd = float(gateway_metadata.get("actual_cost_usd") or 0.0)
+            else:
+                cost_estimate_usd = round(tokens * 0.000002, 6) if tokens else None
             return PlannerProviderResult(
                 plan=plan,
                 provider=self.provider_name,
@@ -382,81 +377,15 @@ class HttpEditPlannerProvider:
         validation_errors: list[str],
         minimal: bool,
     ) -> dict[str, object]:
-        body = _planner_request_body(
-            model=self.model,
-            transcript=transcript,
-            payload=payload,
-            style=style,
-            video_duration_ms=video_duration_ms,
-            visual_manifest=visual_manifest,
-            style_classification=style_classification,
-            retry_instruction=retry_instruction,
-            validation_errors=validation_errors,
-            minimal=minimal,
+        """Return one raw chat-completion response for the planner.
+
+        The base class has no transport; a subclass routes the request through
+        the provider-neutral model gateway. Planning never issues a direct
+        provider HTTP call (Task 10).
+        """
+        raise NotImplementedError(
+            "HttpEditPlannerProvider is abstract; use GatewayEditPlannerProvider"
         )
-        started = time.perf_counter()
-        try:
-            provider_circuit_breaker.check(self.provider_name)
-            response = httpx.post(
-                self.endpoint,
-                headers={
-                    "authorization": f"Bearer {self.api_key}",
-                    "content-type": "application/json",
-                },
-                json=body,
-                timeout=httpx.Timeout(45.0, connect=5.0, read=40.0),
-            )
-            status_code = int(getattr(response, "status_code", 200) or 200)
-            if status_code >= 400:
-                error_info = classify_provider_status(status_code)
-                raise ProviderCallFailure(provider=self.provider_name, error_info=error_info)
-            raise_for_status = getattr(response, "raise_for_status", None)
-            if callable(raise_for_status):
-                raise_for_status()
-            try:
-                data = response.json()
-            except ValueError as exc:
-                raise ProviderCallFailure(
-                    provider=self.provider_name,
-                    error_info=ProviderErrorInfo("provider_malformed_response", False),
-                ) from exc
-        except (
-            httpx.TimeoutException,
-            httpx.NetworkError,
-            httpx.HTTPStatusError,
-            ProviderCallFailure,
-            ProviderCircuitOpen,
-        ) as exc:
-            error_info = classify_provider_exception(exc)
-            logger.warning(
-                "edit_planner_provider_request_failed",
-                extra={
-                    "provider": self.provider_name,
-                    "model": self.model,
-                    "error_code": error_info.code,
-                    "retryable": error_info.retryable,
-                    "status_code": error_info.status_code,
-                    "latency_ms": round((time.perf_counter() - started) * 1000),
-                },
-            )
-            if error_info.retryable:
-                time.sleep(bounded_backoff_seconds(max(1, len(validation_errors))))
-            raise ProviderCallFailure(provider=self.provider_name, error_info=error_info) from None
-        if not isinstance(data, dict):
-            raise ProviderCallFailure(
-                provider=self.provider_name,
-                error_info=ProviderErrorInfo("provider_malformed_response", False),
-            )
-        provider_circuit_breaker.record_success(self.provider_name)
-        logger.info(
-            "edit_planner_provider_succeeded",
-            extra={
-                "provider": self.provider_name,
-                "model": self.model,
-                "latency_ms": round((time.perf_counter() - started) * 1000),
-            },
-        )
-        return data
 
 
 def normalize_plan(*, plan: EditPlan, words: list[TranscriptWord], duration_ms: int) -> EditPlan:
@@ -642,6 +571,8 @@ def build_plan_cache_key(
     style_classification: StyleClassification | None = None,
     provider: str | None = None,
     model: str | None = None,
+    served_route_id: str | None = None,
+    served_model_revision: str | None = None,
 ) -> str:
     words_payload = [
         {"t": word.text, "s": word.start_ms, "e": word.end_ms} for word in transcript.words
@@ -690,6 +621,13 @@ def build_plan_cache_key(
         "visual_manifest_version": visual_manifest_version,
         "provider": provider,
         "model": model,
+        # Plan Section 2.11 / Task 31: the served route id and revision are part
+        # of the cache key, so plans produced by different user-chosen models (or
+        # a different route revision) never mix. Older callers that do not pass
+        # these keep their previous key because None folds into the same digest
+        # as before only when both are None.
+        "served_route_id": served_route_id,
+        "served_model_revision": served_model_revision,
     }
     return hashlib.sha256(
         json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

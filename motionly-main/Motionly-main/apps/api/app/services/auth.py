@@ -131,18 +131,19 @@ def require_workspace_membership(
     if metrics_registry is not None:
         metrics_registry.observe("auth_membership_cache_count", 1, result="miss")
 
+    # motionly_workspace_member_role (migration 202610230201) returns the
+    # active member's role, or no row for a non-member, an inactive member, or
+    # a user GoTrue has banned or deleted: a token issued before a ban stays
+    # valid until it expires, so the ban is enforced here too.
     response = httpx.get(
-        f"{supabase_url.rstrip('/')}/rest/v1/workspace_members",
+        f"{supabase_url.rstrip('/')}/rest/v1/rpc/motionly_workspace_member_role",
         headers={
             "apikey": service_role_key,
             "authorization": f"Bearer {service_role_key}",
         },
         params={
-            "workspace_id": f"eq.{workspace_id}",
-            "user_id": f"eq.{user_id}",
-            "status": "eq.active",
-            "select": "role",
-            "limit": "1",
+            "p_workspace_id": str(workspace_id),
+            "p_user_id": str(user_id),
         },
         timeout=10,
     )

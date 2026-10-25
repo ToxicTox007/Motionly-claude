@@ -361,3 +361,62 @@ test("Admin: a non-admin cannot reach the dead-letter-stuck control", async ({
     page.getByRole("button", { name: /Dead-letter stuck jobs/i }),
   ).toHaveCount(0);
 });
+
+// Task 9B: optional-capability controls are gated on the public /capabilities
+// contract. When a capability is not configured, its control shows the neutral
+// unavailable state (visible text + aria-disabled), while unrelated editing on
+// the same screen keeps working.
+test("Gating: an unavailable capability disables its control with a visible reason", async ({
+  page,
+  user,
+}) => {
+  test.setTimeout(120_000);
+  await openEditorWithStubs(page, user, [
+    [
+      /\/api\/capabilities$/,
+      json({
+        registry_version: "test-v1",
+        capabilities: [
+          {
+            id: "video.generation.submit",
+            status: "unavailable",
+            reason: "not_configured",
+            is_async: true,
+            compute_requirement: "remote",
+            route_count: 0,
+            required: false,
+          },
+          {
+            id: "audio.stem_separation",
+            status: "available",
+            reason: null,
+            is_async: false,
+            compute_requirement: "cpu",
+            route_count: 1,
+            required: false,
+          },
+        ],
+      }),
+    ],
+  ]);
+
+  await page.getByRole("tab", { name: /Scale|Intelligence/i }).click();
+
+  // The Generated B-roll control is marked unavailable with the exact copy and
+  // aria-disabled, and never the disabled attribute (focus is preserved).
+  const brollButton = page.getByRole("button", {
+    name: /Generate premium B-roll/i,
+  });
+  await expect(brollButton).toHaveAttribute("aria-disabled", "true");
+  await expect(
+    page
+      .locator('[data-capability="video.generation.submit"]')
+      .getByText(/Unavailable — not configured by your operator/),
+  ).toBeVisible();
+
+  // A sibling available capability's control is not marked unavailable.
+  const stemsButton = page.getByRole("button", {
+    name: /Separate vocals and music/i,
+  });
+  await expect(stemsButton).toHaveAttribute("aria-disabled", "false");
+});

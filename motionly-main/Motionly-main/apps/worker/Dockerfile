@@ -38,7 +38,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
-    REMOTION_DISABLE_SANDBOX=false \
     NODE_ENV=production \
     WORKER_QUEUES=render_remotion \
     HOME=/home/motionly \

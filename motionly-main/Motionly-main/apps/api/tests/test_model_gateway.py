@@ -33,7 +33,7 @@ from app.services.model_gateway import (
     ModelProvidersExhausted,
     ModelRoute,
     ModelUsage,
-    NoModelRoute,
+    OperationRouteUnavailable,
     OperationsGatewayTelemetry,
     PlanningOutput,
     PlanningRequest,
@@ -42,10 +42,8 @@ from app.services.model_gateway import (
     TranscriptWordOutput,
     VisionOutput,
     VisionRequest,
-    budget_scope,
     capability_for_request,
 )
-from app.services.model_gateway_factory import model_gateway_from_settings
 from app.services.model_provider_bridges import (
     GatewayEditPlannerProvider,
     GatewayTranscriptionProvider,
@@ -55,6 +53,12 @@ from app.services.provider_resilience import ProviderCallFailure, ProviderErrorI
 
 
 class FakeAdapter:
+    # Not replaced by app.services.inference_fake.FakeInferenceAdapter: these
+    # tests inject arbitrary per-route AdapterResult/Exception objects and
+    # assert on exact injected content and precise usage/cost numbers. The
+    # shared fake is deterministic and scripted by FakeOutcome, so it is not a
+    # drop-in here. New capability-contract coverage lives in
+    # tests/test_inference_fake_contract.py using the shared fake.
     def __init__(self, outcomes: dict[str, AdapterResult | Exception]) -> None:
         self.outcomes = outcomes
         self.calls: list[str] = []
@@ -560,59 +564,6 @@ def test_azure_adapter_uses_deployment_url_api_version_and_api_key(
     assert "authorization" not in captured["headers"]
 
 
-def test_factory_builds_azure_and_custom_openai_routes_with_explicit_revisions() -> None:
-    configured_routes = json.dumps(
-        [
-            {
-                "route_id": "azure-planning",
-                "capability": "planning",
-                "adapter": "azure",
-                "provider": "azure",
-                "model": "planner-deployment",
-                "model_revision": "planner-v7",
-                "priority": 1,
-            },
-            {
-                "route_id": "custom-planning",
-                "capability": "planning",
-                "adapter": "openai_compatible",
-                "provider": "private-gpu",
-                "model": "planner-70b",
-                "model_revision": "sha256:" + "a" * 64,
-                "priority": 2,
-            },
-        ]
-    )
-    settings = SimpleNamespace(
-        model_gateway_enabled=True,
-        model_gateway_routes=configured_routes,
-        model_gateway_openai_base_url="https://gpu.motionly.test/v1",
-        model_gateway_openai_api_key="custom-key",
-        azure_openai_endpoint="https://motionly-ai.openai.azure.com",
-        azure_openai_api_key="azure-key",
-        azure_openai_api_version="2026-01-01-preview",
-        openrouter_api_key=None,
-        groq_api_key=None,
-        redis_url=None,
-        model_gateway_failure_threshold=3,
-        model_gateway_circuit_cooldown_seconds=60,
-        model_gateway_monthly_budget_usd=100,
-        model_gateway_request_budget_usd=5,
-    )
-
-    gateway = model_gateway_from_settings(settings)
-
-    assert gateway is not None
-    assert [item.route_id for item in gateway.routes] == [
-        "azure-planning",
-        "custom-planning",
-    ]
-    assert [item.model_revision for item in gateway.routes] == [
-        "planner-v7",
-        "sha256:" + "a" * 64,
-    ]
-
-
 def test_transcription_bridge_persists_gateway_revision_in_raw_payload(tmp_path: Path) -> None:
     audio_path = tmp_path / "audio.wav"
     audio_path.write_bytes(b"RIFF-audio")
@@ -693,7 +644,7 @@ def test_caption_translation_uses_gateway_with_tenant_context() -> None:
 
 
 def test_planner_bridge_preserves_validation_and_returns_gateway_provenance() -> None:
-    fixture_path = Path(__file__).parent / "fixtures/providers/openrouter_plan.json"
+    fixture_path = Path(__file__).parent / "fixtures/providers/chat_completions_plan.json"
     payload = json.loads(fixture_path.read_text())
     content = payload["choices"][0]["message"]["content"]
     adapter = FakeAdapter(
@@ -709,8 +660,6 @@ def test_planner_bridge_preserves_validation_and_returns_gateway_provenance() ->
         routes=[route("planning", capability=ModelCapability.PLANNING)],
     )
     provider = GatewayEditPlannerProvider(
-        endpoint="https://unused.test/v1/chat/completions",
-        api_key="gateway-managed",
         model="legacy-cache-model",
         provider_name="openai_compatible",
         gateway=gateway,
@@ -870,180 +819,65 @@ def test_clip_failure_uses_explicit_hash_route_and_reports_revision() -> None:
     assert provider.model_version == "compatible-hash-clip-v1"
 
 
-def test_runway_local_rejection_is_terminal_nonbillable_and_not_circuit_worthy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.services.model_domain_adapters import register_runway_route
-    from app.services.model_gateway import VideoGenerationSubmitRequest
-    from app.services.scale import RunwayGen3Provider
-
-    def reject_network(*_args, **_kwargs):
-        raise AssertionError("local rejection must not make a network call")
-
-    monkeypatch.setattr("app.services.scale.httpx.post", reject_network)
-    ledger = InMemoryBudgetLedger()
-    circuits = InMemoryCircuitStore(failure_threshold=1, cooldown_seconds=60)
-    operations = OperationsRepository()
-    gateway = ModelGateway(
-        adapters={},
-        routes=[],
-        budget_ledger=ledger,
-        circuit_store=circuits,
-        telemetry=OperationsGatewayTelemetry(
-            metrics_registry=None,
-            operations_repository=operations,
-        ),
-        monthly_budget_usd=10.0,
-    )
-    route = register_runway_route(
-        gateway,
-        provider=RunwayGen3Provider(api_key="unused"),
-        model="gen3a_turbo",
-        revision="gen3a_turbo-2024-11-06",
-        fixed_cost_usd=1.0,
-    )
-    context = ModelCallContext(workspace_id="workspace-one", project_id=uuid4())
-    request = VideoGenerationSubmitRequest(
-        prompt="Founder enters office",
-        prompt_image_url=None,
-        duration_s=5,
-        ratio="768:1280",
-        idempotency_key="resource-123",
-    )
-
-    for _ in range(2):
-        with pytest.raises(ModelProvidersExhausted) as exc_info:
-            gateway.invoke(request, context=context)
-        assert exc_info.value.failures == (
-            {"route_id": route.route_id, "code": "provider_request_rejected"},
-        )
-
-    assert ledger.usage(budget_scope("workspace-one")) == 0.0
-    circuits.check(route.circuit_key)
-    assert [event["actual_cost_usd"] for event in operations.provider_events] == [0.0, 0.0]
-    assert all(
-        event["error_code"] == "provider_request_rejected"
-        for event in operations.provider_events
-    )
-
-
-@pytest.mark.parametrize(
-    ("status_code", "expected_code"),
-    [
-        (401, "provider_auth_failed"),
-        (402, "provider_quota_exceeded"),
-        (429, "provider_rate_limited"),
-        (503, "provider_unavailable"),
-    ],
-)
-def test_runway_remote_http_failures_keep_distinct_classifications(
-    monkeypatch: pytest.MonkeyPatch,
-    status_code: int,
-    expected_code: str,
-) -> None:
-    from app.services.scale import RunwayGen3Provider
-
-    response = httpx.Response(
-        status_code,
-        json={"error": "recorded"},
-        request=httpx.Request("POST", "https://api.dev.runwayml.com/v1/image_to_video"),
-    )
-    monkeypatch.setattr("app.services.scale.httpx.post", lambda *_a, **_k: response)
-
-    with pytest.raises(ProviderCallFailure) as exc_info:
-        RunwayGen3Provider(api_key="unused").initiate_generation(
-            prompt="Founder enters office",
-            prompt_image_url="https://cdn.test/frame.jpg",
-            duration_s=5,
-            ratio="768:1280",
-        )
-
-    assert exc_info.value.error_info.code == expected_code
-    assert exc_info.value.error_info.status_code == status_code
-
-
-@pytest.mark.parametrize(
-    ("failure", "expected_code"),
-    [
-        (
-            httpx.ReadTimeout(
-                "recorded timeout",
-                request=httpx.Request("POST", "https://api.dev.runwayml.com"),
-            ),
-            "provider_timeout",
-        ),
-        (
-            httpx.ConnectError(
-                "recorded network failure",
-                request=httpx.Request("POST", "https://api.dev.runwayml.com"),
-            ),
-            "provider_network_error",
-        ),
-    ],
-)
-def test_runway_remote_transport_failures_keep_distinct_classifications(
-    monkeypatch: pytest.MonkeyPatch,
-    failure: Exception,
-    expected_code: str,
-) -> None:
-    from app.services.scale import RunwayGen3Provider
-
-    def fail(*_args, **_kwargs):
-        raise failure
-
-    monkeypatch.setattr("app.services.scale.httpx.post", fail)
-    with pytest.raises(ProviderCallFailure) as exc_info:
-        RunwayGen3Provider(api_key="unused").initiate_generation(
-            prompt="Founder enters office",
-            prompt_image_url="https://cdn.test/frame.jpg",
-            duration_s=5,
-            ratio="768:1280",
-        )
-
-    assert exc_info.value.error_info.code == expected_code
-
-
-def test_runway_submit_and_poll_are_route_affine_and_poll_is_not_billed() -> None:
-    from app.services.model_domain_adapters import register_runway_route
+def test_video_submit_and_poll_are_route_affine_and_poll_is_not_billed() -> None:
+    # Gateway behaviour, provider-neutral (Task 19 removed the vendor adapter):
+    # a video.generation submit is billed once, the paired poll is bound to the
+    # same route by id and is never re-routed or re-billed.
     from app.services.model_gateway import (
         GenerationOperationOutput,
-        GenerationOutput,
         VideoGenerationPollRequest,
         VideoGenerationSubmitRequest,
     )
 
-    class RunwayTransport:
-        model = "gen3a_turbo"
-        api_version = "2024-11-06"
-
-        def __init__(self):
+    class _VideoAdapter:
+        def __init__(self) -> None:
             self.submits = 0
             self.polls = 0
-            self.idempotency_keys = []
+            self.idempotency_keys: list[str | None] = []
 
-        def initiate_generation(self, *, idempotency_key, **_kwargs):
-            self.submits += 1
-            self.idempotency_keys.append(idempotency_key)
-            return "task-123"
+        def invoke(self, *, route: ModelRoute, request: object) -> AdapterResult:
+            if isinstance(request, VideoGenerationSubmitRequest):
+                self.submits += 1
+                self.idempotency_keys.append(request.idempotency_key)
+                return AdapterResult(
+                    output=GenerationOperationOutput(
+                        operation_id="operation-123",
+                        raw_response={"route_id": route.route_id},
+                    ),
+                    usage=ModelUsage(output_units=request.duration_s),
+                )
+            if isinstance(request, VideoGenerationPollRequest):
+                self.polls += 1
+                return AdapterResult(
+                    output=GenerationOutput(
+                        artifacts=(GeneratedArtifact(url="https://cdn.test/operation-123.mp4"),),
+                        operation_id=request.operation_id,
+                        raw_response={},
+                    ),
+                    usage=ModelUsage(),
+                )
+            raise TypeError("video adapter requires a submit or poll request")
 
-        def poll_task(self, task_id):
-            self.polls += 1
-            assert task_id == "task-123"
-            return "https://cdn.test/task-123.mp4"
-
-    transport = RunwayTransport()
-    gateway = ModelGateway(adapters={}, routes=[], monthly_budget_usd=10)
-    runway_route = register_runway_route(
-        gateway,
-        provider=transport,
-        model=transport.model,
-        revision="gen3a_turbo-2024-11-06",
+    adapter = _VideoAdapter()
+    video_route = ModelRoute(
+        route_id="video-generation",
+        capability=ModelCapability.GENERATION,
+        adapter="video",
+        provider="generated",
+        model="video-generation-model",
+        model_revision="video-generation-2026-07-14",
+        operations=(
+            ModelOperation.GENERATION_VIDEO_SUBMIT,
+            ModelOperation.GENERATION_VIDEO_POLL,
+        ),
+        priority=10,
         fixed_cost_usd=0.5,
     )
+    gateway = ModelGateway(adapters={"video": adapter}, routes=[video_route], monthly_budget_usd=10)
     context = ModelCallContext(
         workspace_id=uuid4(),
         project_id=uuid4(),
-        required_route_id=runway_route.route_id,
+        required_route_id=video_route.route_id,
     )
 
     submitted = gateway.invoke(
@@ -1066,18 +900,24 @@ def test_runway_submit_and_poll_are_route_affine_and_poll_is_not_billed() -> Non
     assert submitted.metadata.actual_cost_usd == 0.5
     assert polled.metadata.actual_cost_usd == 0
     assert polled.metadata.route_id == submitted.metadata.route_id
-    assert transport.submits == 1
-    assert transport.polls == 1
-    assert transport.idempotency_keys == ["resource-123"]
+    assert adapter.submits == 1
+    assert adapter.polls == 1
+    assert adapter.idempotency_keys == ["resource-123"]
 
-    with pytest.raises(NoModelRoute):
+    # A poll bound to the route by id, but with a revision that no longer matches
+    # the recorded snapshot, is route-affine (plan Task 16A, invariant 6): it is
+    # never re-routed, so it raises OperationRouteUnavailable rather than silently
+    # resolving to another route or NoModelRoute.
+    with pytest.raises(OperationRouteUnavailable) as affine_exc:
         gateway.invoke(
-            VideoGenerationPollRequest(operation_id="task-123"),
+            VideoGenerationPollRequest(operation_id="operation-123"),
             context=ModelCallContext(
-                required_route_id=runway_route.route_id,
-                required_model_revision="gen3a_turbo-2025-01-01",
+                required_route_id=video_route.route_id,
+                required_model_revision="video-generation-2025-01-01",
             ),
         )
+    assert affine_exc.value.code == "operation_route_unavailable"
+    assert adapter.polls == 1
 
 
 @pytest.mark.parametrize(
@@ -1205,46 +1045,6 @@ def test_telemetry_sink_failures_are_isolated() -> None:
     assert "motionly_model_gateway_cost_usd_count" in rendered
 
 
-def test_factory_expands_http_operations_and_rejects_domain_operation_claims() -> None:
-    base_route = {
-        "route_id": "custom-vision",
-        "capability": "vision",
-        "adapter": "openai_compatible",
-        "provider": "private-gpu",
-        "model": "vision-model",
-        "model_revision": "vision-model-2026-07-14",
-        "fixed_cost_usd": 0.1,
-    }
-    settings = SimpleNamespace(
-        model_gateway_enabled=True,
-        model_gateway_routes=json.dumps([base_route]),
-        model_gateway_openai_base_url="https://gpu.motionly.test/v1",
-        model_gateway_openai_api_key="key",
-        azure_openai_endpoint=None,
-        openrouter_api_key=None,
-        groq_api_key=None,
-        redis_url=None,
-        model_gateway_failure_threshold=3,
-        model_gateway_circuit_cooldown_seconds=60,
-        model_gateway_monthly_budget_usd=100,
-        model_gateway_request_budget_usd=5,
-    )
-
-    gateway = model_gateway_from_settings(settings)
-
-    assert gateway is not None
-    assert gateway.routes[0].operations == (ModelOperation.VISION_PROMPT,)
-    incompatible = {**base_route, "operations": ["vision.video_manifest"]}
-    settings.model_gateway_routes = json.dumps([incompatible])
-    with pytest.raises(ValueError, match="supports only 'vision.prompt'"):
-        model_gateway_from_settings(settings)
-
-    malformed_boolean = {**base_route, "enabled": "false"}
-    settings.model_gateway_routes = json.dumps([malformed_boolean])
-    with pytest.raises(ValueError, match="enabled must be a JSON boolean"):
-        model_gateway_from_settings(settings)
-
-
 @pytest.mark.parametrize(
     ("gateway_request", "payload"),
     [
@@ -1358,63 +1158,6 @@ def test_audio_domain_wrapper_allows_central_route_fallback(tmp_path: Path) -> N
     assert adapter.calls == ["audio-primary", "audio-secondary"]
 
 
-def test_legacy_groq_and_openrouter_gateway_send_callable_model_ids(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_request(client, method, url, **kwargs):  # noqa: ANN001
-        del client, method
-        calls.append({"url": url, **kwargs})
-        if url.endswith("/audio/transcriptions"):
-            return _response({"text": "Build", "words": []}, url)
-        return _response(
-            {"choices": [{"message": {"content": "{}"}}], "usage": {}},
-            url,
-        )
-
-    monkeypatch.setattr(httpx.Client, "request", fake_request)
-    settings = SimpleNamespace(
-        model_gateway_enabled=True,
-        model_gateway_routes="",
-        model_gateway_openai_base_url=None,
-        azure_openai_endpoint=None,
-        openrouter_api_key="openrouter-key",
-        groq_api_key="groq-key",
-        edit_planner_provider="openrouter",
-        edit_planner_model="openai/gpt-4.1-mini",
-        edit_planner_model_revision="openai/gpt-4.1-mini-2025-04-14",
-        edit_planner_input_cost_per_million_usd=2,
-        edit_planner_output_cost_per_million_usd=2,
-        transcription_provider="groq",
-        transcription_model="whisper-large-v3-turbo",
-        transcription_model_revision="whisper-large-v3-turbo-2025-02-01",
-        transcription_estimated_cost_per_request_usd=0.25,
-        redis_url=None,
-        model_gateway_failure_threshold=3,
-        model_gateway_circuit_cooldown_seconds=60,
-        model_gateway_monthly_budget_usd=100,
-        model_gateway_request_budget_usd=5,
-    )
-    gateway = model_gateway_from_settings(settings)
-    assert gateway is not None
-    audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"RIFF")
-
-    planning = gateway.invoke(request())
-    transcription = gateway.invoke(TranscriptionRequest(audio_path=audio))
-
-    assert planning.metadata.model_revision == "openai/gpt-4.1-mini-2025-04-14"
-    assert transcription.metadata.model_revision == "whisper-large-v3-turbo-2025-02-01"
-    planning_call = next(call for call in calls if str(call["url"]).endswith("completions"))
-    transcription_call = next(
-        call for call in calls if str(call["url"]).endswith("transcriptions")
-    )
-    assert planning_call["json"]["model"] == "openai/gpt-4.1-mini"
-    assert transcription_call["data"]["model"] == "whisper-large-v3-turbo"
-
-
 def test_typed_requests_and_outputs_reject_invalid_shapes(tmp_path: Path) -> None:
     from app.services.model_gateway import (
         EmbeddingsOutput,
@@ -1453,9 +1196,9 @@ def test_video_generation_submit_never_falls_back_after_attempt() -> None:
         route_id="generation-primary",
         capability=ModelCapability.GENERATION,
         adapter="fake",
-        provider="runway-primary",
-        model="gen3a_turbo",
-        model_revision="gen3a_turbo-2024-11-06",
+        provider="video-primary",
+        model="video-gen-a",
+        model_revision="video-gen-a-2024-11-06",
         operations=(ModelOperation.GENERATION_VIDEO_SUBMIT,),
         priority=1,
         fixed_cost_usd=0.5,
@@ -1464,9 +1207,9 @@ def test_video_generation_submit_never_falls_back_after_attempt() -> None:
         route_id="generation-secondary",
         capability=ModelCapability.GENERATION,
         adapter="fake",
-        provider="runway-secondary",
-        model="gen4_turbo",
-        model_revision="gen4_turbo-2026-01-01",
+        provider="video-secondary",
+        model="video-gen-b",
+        model_revision="video-gen-b-2026-01-01",
         operations=(ModelOperation.GENERATION_VIDEO_SUBMIT,),
         priority=2,
         fixed_cost_usd=0.5,
@@ -1474,7 +1217,7 @@ def test_video_generation_submit_never_falls_back_after_attempt() -> None:
     adapter = FakeAdapter(
         {
             "generation-primary": ProviderCallFailure(
-                provider="runway-primary",
+                provider="video-primary",
                 error_info=ProviderErrorInfo("provider_timeout", True),
             ),
             "generation-secondary": RuntimeError("must not run"),

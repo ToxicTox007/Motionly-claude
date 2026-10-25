@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { bundle } from "@remotion/bundler";
 import { getCompositions, renderMedia } from "@remotion/renderer";
+import { assertProductionProps } from "./render-props-policy.js";
 import type { MotionlyRenderProps } from "./types";
 
 /** Path to the file that caches the last webpack bundle location. */
@@ -118,23 +119,6 @@ function parseArgs(args: string[]): CliArgs {
     outputPath: args[outputIndex + 1],
     propsPath: args[propsIndex + 1],
   };
-}
-
-function assertProductionProps(inputProps: MotionlyRenderProps) {
-  if (
-    !inputProps.sourceVideo?.src ||
-    inputProps.sourceVideo.src.startsWith("fixture://")
-  ) {
-    throw new Error("A real sourceVideo.src URL is required for rendering.");
-  }
-  const fixtureAsset = inputProps.assets.find((asset) =>
-    asset.src?.startsWith("fixture://"),
-  );
-  if (fixtureAsset) {
-    throw new Error(
-      `Fixture media is not allowed in render assets: ${fixtureAsset.id}`,
-    );
-  }
 }
 
 main().catch((error) => {

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from app.api.errors import ApiError
 from app.schemas.billing import BillingPlanKey
-from app.services.billing import PLAN_DEFINITIONS, plan_for_subscription_status
+from app.services.billing import PLAN_DEFINITIONS, effective_plan_key
 
 API_ACCESS_FEATURE = "api_access"
 
@@ -31,10 +31,7 @@ def require_api_access(subscription) -> BillingPlanKey:
     ``plan_feature_required`` otherwise. ``subscription`` is a billing
     ``SubscriptionRecord``.
     """
-    effective_plan = plan_for_subscription_status(
-        plan=subscription.plan,
-        status=subscription.status,
-    )
+    effective_plan = effective_plan_key(subscription)
 
     # Prefer Task 23's shared helper when it is on disk; it raises the canonical
     # 402 plan_feature_required. Import lazily so Task 24 does not hard-depend on

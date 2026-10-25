@@ -1,5 +1,4 @@
 import asyncio
-import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +16,25 @@ from app.main import _validate_production_settings
 from app.services.queue import StockAssetEnrichmentQueue
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def _match_vendors(text: str):
+    """Load the vendor-neutrality scanner's matcher (plan Task 2) so absence
+    tests assert neutrality without spelling the audited vendor names."""
+    import importlib.util
+    import sys
+
+    name = "motionly_vendor_neutrality"
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            name, ROOT / "scripts" / "verify" / "vendor_neutrality.py"
+        )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return module.match_vendors(text)
 
 
 def _production_settings(*, process_role: str = "api", **updates):
@@ -38,19 +56,11 @@ def _production_settings(*, process_role: str = "api", **updates):
         "model_gateway_enabled": True,
         "temporal_tls_enabled": True,
         "stem_separation_provider": "demucs",
-        "transcription_provider": "groq",
-        "groq_api_key": "groq-key",
-        "edit_planner_provider": "openrouter",
-        "edit_planner_model": "openai/gpt-4.1-mini",
-        "edit_planner_model_revision": "openai/gpt-4.1-mini-2025-04-14",
         "edit_planner_input_cost_per_million_usd": 2.0,
         "edit_planner_output_cost_per_million_usd": 2.0,
-        "transcription_model_revision": "whisper-large-v3-turbo-2025-02-01",
         "transcription_estimated_cost_per_request_usd": 0.25,
-        "openrouter_api_key": "openrouter-key",
         "visual_intelligence_provider": "local_ml",
         "audio_ml_provider": "local_ml",
-        "runway_api_key": "runway-key",
         "music_provider": "licensed_catalog",
         "stock_video_provider": "pexels_pixabay",
         "pexels_api_key": "pexels-key",
@@ -58,6 +68,17 @@ def _production_settings(*, process_role: str = "api", **updates):
         "billing_enabled": False,
         "billing_mode": "disabled",
         "force_local_media_storage": False,
+        # Path B (plan Task 6): production builds its gateway from the registry
+        # file, so production-validation tests point at a priced remote fixture
+        # with a matching secret bundle. The legacy vendor validation around the
+        # construction call is Task 7's to rewrite.
+        "ai_registry_file": str(
+            ROOT
+            / "apps/api/tests/fixtures/inference_registry/production_remote.json"
+        ),
+        "ai_secrets_bundle_file": str(
+            ROOT / "apps/api/tests/fixtures/inference_registry/bundle.json"
+        ),
     }
     values.update(updates)
     return get_settings().model_copy(update=values)
@@ -99,76 +120,6 @@ def test_production_requires_the_https_supabase_url_browsers_use() -> None:
                 _validate_production_settings(
                     _production_settings(**overrides, supabase_public_url=value)
                 )
-
-
-def _custom_gateway_route(*, capability: str, revision: str = "model-2026-07-14") -> dict:
-    return {
-        "route_id": f"custom-{capability}",
-        "capability": capability,
-        "adapter": "openai_compatible",
-        "provider": "private-gpu",
-        "model": f"{capability}-model",
-        "model_revision": revision,
-        "fixed_cost_usd": 0.1,
-    }
-
-
-def test_production_gateway_rejects_empty_and_incomplete_routes() -> None:
-    with pytest.raises(RuntimeError, match="missing capabilities: planning, transcription"):
-        _validate_production_settings(
-            _production_settings(
-                groq_api_key=None,
-                openrouter_api_key=None,
-                model_gateway_routes="[]",
-            )
-        )
-
-    planning_only = json.dumps([_custom_gateway_route(capability="planning")])
-    with pytest.raises(RuntimeError, match="missing capabilities: transcription"):
-        _validate_production_settings(
-            _production_settings(
-                groq_api_key=None,
-                openrouter_api_key=None,
-                model_gateway_routes=planning_only,
-                model_gateway_openai_base_url="https://models.example.com/v1",
-                model_gateway_openai_api_key="custom-key",
-            )
-        )
-
-
-def test_production_gateway_rejects_disabled_floating_and_plaintext_routes() -> None:
-    with pytest.raises(RuntimeError, match="MODEL_GATEWAY_ENABLED"):
-        _validate_production_settings(_production_settings(model_gateway_enabled=False))
-
-    routes = [
-        _custom_gateway_route(capability="planning", revision="model@latest"),
-        _custom_gateway_route(capability="transcription", revision="model-v2"),
-    ]
-    with pytest.raises(RuntimeError, match="pinned"):
-        _validate_production_settings(
-            _production_settings(
-                groq_api_key=None,
-                openrouter_api_key=None,
-                model_gateway_routes=json.dumps(routes),
-                model_gateway_openai_base_url="https://models.example.com/v1",
-                model_gateway_openai_api_key="custom-key",
-            )
-        )
-
-    pinned_routes = [
-        _custom_gateway_route(capability="planning"),
-        _custom_gateway_route(capability="transcription"),
-    ]
-    with pytest.raises(RuntimeError, match="HTTPS"):
-        _validate_production_settings(
-            _production_settings(
-                groq_api_key=None,
-                openrouter_api_key=None,
-                model_gateway_routes=json.dumps(pinned_routes),
-                model_gateway_openai_base_url="http://models.internal/v1",
-                model_gateway_openai_api_key="custom-key",
-            )
-        )
 
 
 def test_constant_time_token_comparison_uses_compare_digest(monkeypatch) -> None:
@@ -473,15 +424,14 @@ def test_environment_templates_contain_only_distinct_placeholders() -> None:
                 "visual_analysis",
                 "exports",
                 "raw-uploads",
-                "groq",
-                "openrouter",
+                # Provider labels are display labels only; credentials come from
+                # the registry secrets bundle (plan Task 26).
+                "openai_compatible",
                 "local_ml",
                 "demucs",
                 "licensed_catalog",
                 "pexels_pixabay",
-                "gen3a_turbo",
-                "openai/gpt-4.1-mini",
-                "whisper-large-v3-turbo",
+                "feature",
                 "your-namespace.tmprl.cloud:7233",
                 "your-namespace.your-account",
                 "motionly-workflows",
@@ -494,6 +444,8 @@ def test_environment_templates_contain_only_distinct_placeholders() -> None:
                 or "replace-with" in value
                 or value.startswith("https://your-")
                 or value.startswith("redis://default:replace-with")
+                # Absolute filesystem paths (AI registry/secrets mounts, Task 26).
+                or value.startswith("/")
                 or re.fullmatch(r"\d+(?:\.\d+)?", value)
                 or re.fullmatch(r"[0-9a-f]{40,64}", value)
                 or re.fullmatch(r"[A-Za-z0-9._/-]+-\d{4}-\d{2}-\d{2}", value)
@@ -501,46 +453,6 @@ def test_environment_templates_contain_only_distinct_placeholders() -> None:
                 or re.fullmatch(r"[A-Za-z0-9._-]+==\d+(?:\.\d+)*", value)
                 or value.startswith("https://github.com/ultralytics/assets/releases/download/")
             )
-
-
-def test_production_gateway_requires_explicit_external_and_runway_pricing() -> None:
-    unpriced = _custom_gateway_route(capability="planning")
-    unpriced.pop("fixed_cost_usd")
-    routes = [unpriced, _custom_gateway_route(capability="transcription")]
-    with pytest.raises(RuntimeError, match="explicit pricing"):
-        _validate_production_settings(
-            _production_settings(
-                groq_api_key=None,
-                openrouter_api_key=None,
-                model_gateway_routes=json.dumps(routes),
-                model_gateway_openai_base_url="https://models.example.com/v1",
-                model_gateway_openai_api_key="custom-key",
-            )
-        )
-
-    with pytest.raises(RuntimeError, match="RUNWAY_ESTIMATED_COST_PER_REQUEST_USD"):
-        _validate_production_settings(_production_settings(runway_estimated_cost_per_request_usd=0))
-
-
-def test_production_planning_route_cannot_bypass_budget_as_explicitly_free() -> None:
-    routes = [
-        {
-            **_custom_gateway_route(capability="planning"),
-            "fixed_cost_usd": 0,
-            "explicitly_free": True,
-        },
-        _custom_gateway_route(capability="transcription"),
-    ]
-    with pytest.raises(RuntimeError, match="planning routes cannot be explicitly free"):
-        _validate_production_settings(
-            _production_settings(
-                groq_api_key=None,
-                openrouter_api_key=None,
-                model_gateway_routes=json.dumps(routes),
-                model_gateway_openai_base_url="https://models.example.com/v1",
-                model_gateway_openai_api_key="custom-key",
-            )
-        )
 
 
 @pytest.mark.parametrize(
@@ -575,26 +487,40 @@ def test_task10_deployment_templates_expose_complete_gateway_contract() -> None:
     api_example = (ROOT / "apps/api/.env.example").read_text(encoding="utf-8")
     production_template = (ROOT / "prod.env.example").read_text(encoding="utf-8")
     compose = (ROOT / "infra/docker-compose.gpu.yml").read_text(encoding="utf-8")
+    # Task 26: the templates expose the generic registry/budget settings, not
+    # vendor model ids or env-driven custom/Azure endpoints (those live in the
+    # declarative registry file).
     required = {
         "MODEL_GATEWAY_ENABLED",
         "MODEL_GATEWAY_MONTHLY_BUDGET_USD",
         "MODEL_GATEWAY_REQUEST_BUDGET_USD",
-        "TRANSCRIPTION_MODEL_REVISION",
-        "EDIT_PLANNER_MODEL_REVISION",
         "AUDIO_ML_PROVIDER",
-        "VISUAL_CLIP_MODEL_REVISION",
-        "RUNWAY_API_KEY",
-        "RUNWAY_MODEL_REVISION",
-        "RUNWAY_ESTIMATED_COST_PER_REQUEST_USD",
+        "AI_REGISTRY_FILE",
+        "AI_SECRETS_BUNDLE_FILE",
     }
     for name in required:
         assert name in api_example, name
         assert name in production_template, name
         assert name in compose, name
-    assert "AZURE_OPENAI_ENDPOINT" in api_example
-    assert "AZURE_OPENAI_API_KEY" in api_example
-    assert "openrouter/free" not in api_example
-    assert "openrouter/free" not in production_template
+    # The vendor model-id defaults and env-driven custom/Azure endpoints are gone
+    # (plan Task 26).
+    for removed in (
+        "TRANSCRIPTION_MODEL_REVISION",
+        "EDIT_PLANNER_MODEL_REVISION",
+        "VISUAL_CLIP_MODEL_REVISION",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_KEY",
+        "MODEL_GATEWAY_ROUTES",
+        "MODEL_GATEWAY_OPENAI_BASE_URL",
+    ):
+        assert removed not in api_example, removed
+        assert removed not in production_template, removed
+    # No vendor env name or label may appear in these templates: assert with the
+    # vendor-neutrality matcher so this test does not spell the vendor name. The
+    # former Task 19 item 2 vendors (object detection, diarization, stems) are
+    # gone now; they are configured through registry routes.
+    for template in (api_example, production_template):
+        assert [v for v, _ in _match_vendors(template)] == []
 
 
 def _settings_from_environment_template(path: Path):
@@ -615,6 +541,16 @@ def _settings_from_environment_template(path: Path):
             assert re.fullmatch(r"[a-z][a-z0-9-]*/v[1-9]\d*", value), name
         if value:
             values[name] = value
+    # Path B (plan Task 6/Task 26): production builds its gateway from the
+    # registry file. The env templates now carry operator placeholder paths for
+    # AI_REGISTRY_FILE/AI_SECRETS_BUNDLE_FILE, so the startup-guard test overrides
+    # them with the priced remote fixture and its secret bundle.
+    values["AI_REGISTRY_FILE"] = str(
+        ROOT / "apps/api/tests/fixtures/inference_registry/production_remote.json"
+    )
+    values["AI_SECRETS_BUNDLE_FILE"] = str(
+        ROOT / "apps/api/tests/fixtures/inference_registry/bundle.json"
+    )
     return Settings(_env_file=None, **values)
 
 
@@ -640,9 +576,10 @@ def test_documented_production_api_and_worker_environments_pass_startup_guards(
         ModelCapability.PLANNING,
         ModelCapability.TRANSCRIPTION,
         ModelCapability.EMBEDDINGS,
-        ModelCapability.GENERATION,
     }
-    assert api_app.state.runway_gateway_route.fixed_cost_usd == 0.5
+    # Task 19 removed the vendor video-generation route; video generation is now
+    # driven by a registry route only, and none is configured here.
+    assert api_app.state.video_generation_route is None
     assert api_app.state.stem_gateway_route is None
     assert isinstance(api_app.state.stock_asset_enrichment_queue, StockAssetEnrichmentQueue)
     assert api_app.state.stock_asset_enrichment_queue.registry is api_app.state.queue_registry
@@ -652,8 +589,12 @@ def test_documented_production_api_and_worker_environments_pass_startup_guards(
     worker_capabilities = {route.capability for route in worker_app.state.model_gateway.routes}
     assert worker_capabilities == api_capabilities | {ModelCapability.AUDIO}
     assert worker_app.state.audio_intelligence_provider is not None
-    assert worker_app.state.stem_gateway_route.model_revision == "demucs==4.1.0"
-    assert worker_app.state.runway_gateway_route.fixed_cost_usd == 0.5
+    # With no ``audio.stem_separation`` route in the remote fixture registry, the
+    # worker registers the neutral local Demucs fallback route (plan Task 14: the
+    # real ``htdemucs`` id comes from the cpu-local registry route when composed,
+    # never a config model-id default).
+    assert worker_app.state.stem_gateway_route.model_revision == "local-stem-separation-v1"
+    assert worker_app.state.video_generation_route is None
 
 
 @pytest.mark.parametrize(
@@ -676,9 +617,6 @@ def test_production_orchestration_roles_use_only_role_specific_dependencies(
         temporal_task_queue="motionly-workflows",
         temporal_tls_enabled=True,
         redis_url=redis_url,
-        groq_api_key=None,
-        openrouter_api_key=None,
-        runway_api_key=None,
         pexels_api_key=None,
         pixabay_api_key=None,
         worker_api_base_url=(
@@ -727,9 +665,6 @@ def test_self_hosted_temporal_roles_allow_private_compose_without_api_key(
             "workflow-reconciler": "motionly-reconciler",
         }[process_role],
         redis_url=redis_url,
-        groq_api_key=None,
-        openrouter_api_key=None,
-        runway_api_key=None,
         pexels_api_key=None,
         pixabay_api_key=None,
         worker_api_base_url=("http://api:8000" if process_role == "temporal-worker" else None),

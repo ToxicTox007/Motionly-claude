@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from app.services.queue import EnqueuedJob
+from app.workers.executor_protocol import open_protocol_channel
 
 
 def main() -> None:
@@ -58,20 +59,21 @@ def _execute(payload: dict[str, object]) -> dict[str, object]:
 
 
 def _serve() -> None:
+    # Before anything else runs: only `channel` may write to the real stdout.
+    channel = open_protocol_channel()
     for line in sys.stdin:
         request: dict[str, object] = {}
         try:
             request = json.loads(line)
             if request.get("control") == "ping":
-                response = {"id": request.get("id"), "result": {"ok": True}}
-                print(json.dumps(response, default=str), flush=True)
+                channel.send({"id": request.get("id"), "result": {"ok": True}})
                 continue
             result = _execute(dict(request.get("payload") or {}))
             response = {"id": request.get("id"), "result": result}
         except Exception as exc:
             from app.core.logging import redact_string
             response = {"id": request.get("id"), "error": redact_string(str(exc))}
-        print(json.dumps(response, default=str), flush=True)
+        channel.send(response)
 
 
 def _arguments() -> argparse.Namespace:

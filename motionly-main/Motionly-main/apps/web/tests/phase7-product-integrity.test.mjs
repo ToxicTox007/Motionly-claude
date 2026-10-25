@@ -47,10 +47,20 @@ test("shell, dashboard, and feedback use live application paths", async () => {
   assert.doesNotMatch(feedback, /mailto:/);
 });
 
-test("shared stock provider type includes Runway", async () => {
+test("shared stock provider type is exactly the neutral key set, with generated", async () => {
   const shared = await readFile(
     new URL("packages/shared/src/index.ts", repoRoot),
     "utf8",
   );
-  assert.match(shared, /StockProviderKey[\s\S]*"runway"/);
+  const union = shared.match(/export type StockProviderKey =([^;]+);/);
+  assert.ok(union, "StockProviderKey type not found");
+  const keys = [...union[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+  // Generated clips use the neutral key; no vendor-named key may come back.
+  assert.deepEqual(keys, [
+    "fixture",
+    "generated",
+    "pexels",
+    "pixabay",
+    "user_library",
+  ]);
 });

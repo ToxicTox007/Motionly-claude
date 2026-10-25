@@ -6,6 +6,7 @@ from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
 from app.schemas.captions import LanguageHint, TranscriptQualityStatus, TranscriptStatus
 from app.services.audio_extraction import FFmpegAudioExtractor
 from app.services.audio_intelligence import merge_audio_intelligence
+from app.services.audio_ml_providers import emotion_insights
 from app.services.local_storage import create_object_storage
 from app.services.provider_resilience import ProviderCallFailure, classify_provider_exception
 from app.services.queue import TranscriptionQueue
@@ -315,7 +316,7 @@ def _run_audio_ml_providers(
     emotion = providers.get("emotion")
     if emotion is not None and hasattr(emotion, "classify_windows"):
         try:
-            insights["emotion_windows"] = emotion.classify_windows(audio_path=audio_path)
+            insights.update(emotion_insights(emotion, audio_path=audio_path))
         except Exception as exc:
             logger.error(
                 "audio_ml_provider_failed",

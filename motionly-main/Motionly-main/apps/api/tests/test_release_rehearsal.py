@@ -33,7 +33,7 @@ def test_secret_files_map_to_the_parameter_names_the_agent_reads(rehearsal, tmp_
     (secrets / "postgres_password").write_text("pg\n")
     (secrets / "edge_origin_verify").write_text("guard\n")
     (secrets / "edge_origin_verify_previous").write_text("")
-    (secrets / "groq_api_key").write_text("")
+    (secrets / "optional_provider_key").write_text("")
     (secrets / "temporal_ca_cert").write_text(
         "-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"
     )
@@ -49,7 +49,7 @@ def test_secret_files_map_to_the_parameter_names_the_agent_reads(rehearsal, tmp_
     assert parameters["edge/origin-verify"] == "guard"
     # SSM cannot store empty values; the agent treats them as optional.
     assert "edge/origin-verify-previous" not in parameters
-    assert "groq-api-key" not in parameters
+    assert "optional-provider-key" not in parameters
     # Multi-line material is base64, as in production.
     pem = base64.b64decode(parameters["temporal-ca-cert"]).decode()
     assert pem.startswith("-----BEGIN CERTIFICATE-----")

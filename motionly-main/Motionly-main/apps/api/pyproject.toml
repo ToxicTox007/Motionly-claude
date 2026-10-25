@@ -58,6 +58,17 @@ visual-ml = [
   "torch>=2.5.0,<2.6",
   "transformers>=4.48.0,<5.0",
 ]
+# GPU-free worker image (Dockerfile.python API_EXTRAS=cpu-vision): CPU MediaPipe
+# matting/face detection, OpenCV scene/motion analysis, Pillow colour sampling
+# and MediaPipe's TFLite YAMNet sound classifier. No torch, TensorFlow or
+# transformers. Pins come from requirements-cpu-vision.lock, which is compiled
+# with requirements-ml.lock as a constraint so versions match the GPU image.
+cpu-vision = [
+  "mediapipe>=0.10.18",
+  "numpy>=1.26.4,<2.0",
+  "opencv-python-headless>=4.10.0.84",
+  "Pillow>=11.0.0",
+]
 dev = [
   "pytest>=8.3.4",
   "ruff>=0.8.4",
@@ -79,6 +90,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
   "gpu_stage(id): needs real GPU hardware or GPU-stage infrastructure; runs only with RUN_GPU_STAGE_TESTS=1 and an id declared in tests/gpu-stage.json",
+  "live_provider: contacts a real inference provider; skipped unless MOTIONLY_LIVE_INFERENCE=1, the only case the no-network test guard stands down",
 ]
 
 [tool.ruff]

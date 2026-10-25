@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 from app.api.errors import ApiError
+from app.services.subprocess_env import media_tool_env
 
 
 def generate_selfie_segmentation_matte(
@@ -91,7 +92,9 @@ def _encode_matte_video(*, frame_dir: Path, output_path: Path, fps: float) -> No
         "yuv420p",
         str(output_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=600)
+    result = subprocess.run(
+        command, capture_output=True, text=True, check=False, timeout=600, env=media_tool_env()
+    )
     if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
         stderr = (result.stderr or "").strip()
         raise ApiError(

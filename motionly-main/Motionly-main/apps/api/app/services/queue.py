@@ -51,6 +51,11 @@ class EnqueuedJob:
     next_run_state: str | None = None
     # Render engine hint stored so the worker can route without a manifest fetch
     render_engine: str = "ffmpeg_basic"
+    # The inference catalog fingerprint the API stamped for this job's required
+    # capabilities (plan Task 6 worker fail-closed check). ``None`` when the
+    # enqueuer had no runtime (non-API process, dev/test); the worker accepts an
+    # unstamped payload. Carried end-to-end to the Python job payload.
+    registry_fingerprint: str | None = None
     trace_id: str | None = None
     error_code: str | None = None
     error_message: str | None = None
@@ -103,6 +108,7 @@ class QueueRegistry:
         next_run_state: str | None = None,
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
+        registry_fingerprint: str | None = None,
     ) -> EnqueuedJob:
         increment_queue_calls()
         job = EnqueuedJob(
@@ -124,6 +130,7 @@ class QueueRegistry:
             input_hash=input_hash,
             next_run_state=next_run_state,
             render_engine=render_engine,
+            registry_fingerprint=registry_fingerprint,
             trace_id=current_trace_id.get(),
         )
         self.jobs[job.id] = job
@@ -166,6 +173,7 @@ class QueueRegistry:
             input_hash=job.input_hash,
             next_run_state=job.next_run_state,
             render_engine=job.render_engine,
+            registry_fingerprint=job.registry_fingerprint,
             trace_id=job.trace_id,
             error_code=None,
             error_message=None,
@@ -224,6 +232,7 @@ class QueueRegistry:
             input_hash=job.input_hash,
             next_run_state=job.next_run_state,
             render_engine=job.render_engine,
+            registry_fingerprint=job.registry_fingerprint,
             trace_id=job.trace_id,
             error_code=error_code,
             error_message=error_message,
@@ -263,6 +272,7 @@ class QueueRegistry:
             input_hash=job.input_hash,
             next_run_state=job.next_run_state,
             render_engine=job.render_engine,
+            registry_fingerprint=job.registry_fingerprint,
             trace_id=job.trace_id,
             error_code=job.error_code,
             error_message=job.error_message,
@@ -301,6 +311,7 @@ class QueueRegistry:
                 input_hash=job.input_hash,
                 next_run_state=job.next_run_state,
                 render_engine=job.render_engine,
+                registry_fingerprint=job.registry_fingerprint,
                 trace_id=job.trace_id,
                 error_code=job.error_code,
                 error_message=job.error_message,
@@ -385,6 +396,7 @@ class QueueRegistry:
             input_hash=job.input_hash,
             next_run_state=job.next_run_state,
             render_engine=job.render_engine,
+            registry_fingerprint=job.registry_fingerprint,
             trace_id=job.trace_id,
             error_code=job.error_code,
             error_message=job.error_message,
@@ -470,6 +482,7 @@ class BullMQQueueRegistry:
         next_run_state: str | None = None,
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
+        registry_fingerprint: str | None = None,
     ) -> EnqueuedJob:
         increment_queue_calls()
         payload = {
@@ -491,6 +504,7 @@ class BullMQQueueRegistry:
             "next_run_state": next_run_state,
             "max_attempts": max_attempts or self.job_attempts,
             "render_engine": render_engine,
+            "registry_fingerprint": registry_fingerprint,
             "trace_id": current_trace_id.get(),
         }
         return self._job_from_bridge(self._bridge("enqueue", payload))
@@ -670,6 +684,9 @@ class BullMQQueueRegistry:
             input_hash=str(data["input_hash"]) if data.get("input_hash") else None,
             next_run_state=(str(data["next_run_state"]) if data.get("next_run_state") else None),
             render_engine=str(data.get("render_engine") or "ffmpeg_basic"),
+            registry_fingerprint=(
+                str(data["registry_fingerprint"]) if data.get("registry_fingerprint") else None
+            ),
             trace_id=str(data["trace_id"]) if data.get("trace_id") else None,
             error_code=str(data["error_code"]) if data.get("error_code") else None,
             error_message=str(data["error_message"]) if data.get("error_message") else None,
@@ -701,6 +718,7 @@ class BaseQueue:
         resource_id: UUID | None = None,
         render_engine: str = "ffmpeg_basic",
         queue_name: str | None = None,
+        registry_fingerprint: str | None = None,
     ) -> EnqueuedJob:
         target_queue_name = queue_name or self.queue_name
         duplicate = self._active_duplicate(job_id=job_id, queue_name=target_queue_name)
@@ -725,6 +743,7 @@ class BaseQueue:
             project_id=project_id,
             resource_id=resource_id,
             render_engine=render_engine,
+            registry_fingerprint=registry_fingerprint,
         )
 
     def _job_id(self, *parts: object) -> str:
@@ -818,12 +837,14 @@ class VisualQueue(BaseQueue):
         project_id: UUID,
         workspace_id: UUID,
         video_id: UUID,
+        registry_fingerprint: str | None = None,
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=self._job_id("visual", project_id, video_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=video_id,
+            registry_fingerprint=registry_fingerprint,
         )
 
 
@@ -838,6 +859,7 @@ class MatteQueue(BaseQueue):
         workspace_id: UUID,
         video_id: UUID,
         matte_id: UUID,
+        registry_fingerprint: str | None = None,
     ) -> EnqueuedJob:
         return self._enqueue(
             job_id=self._job_id("matte", project_id, video_id, workspace_id, matte_id),
@@ -845,6 +867,7 @@ class MatteQueue(BaseQueue):
             project_id=project_id,
             resource_id=video_id,
             render_engine=str(matte_id),
+            registry_fingerprint=registry_fingerprint,
         )
 
 

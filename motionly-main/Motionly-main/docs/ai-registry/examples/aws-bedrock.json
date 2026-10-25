@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "base-llm-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://api.openai.com/v1",
+      "network": "public",
+      "auth": { "type": "bearer", "secret_ref": "bundle:base-llm-endpoint" },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "OpenAI",
+        "purpose": "Planning chat and speech-to-text transcription so this example validates as a complete, required-capability-satisfying registry.",
+        "data_categories": ["text", "audio"],
+        "policy_url": "https://openai.com/policies/privacy-policy"
+      }
+    },
+    {
+      "id": "managed-chat-endpoint",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": { "type": "none" },
+      "timeout_s": 60,
+      "config": { "region": "us-east-1", "api": "converse" },
+      "data_processor": {
+        "display_name": "Amazon Bedrock",
+        "purpose": "Serves planning chat and image captions through the Converse API. Credentials come from the IAM credential chain (no static key is stored as an AI secret). Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
+        "data_categories": ["text", "image"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    },
+    {
+      "id": "managed-embeddings-endpoint",
+      "type": "aws_bedrock",
+      "network": "public",
+      "auth": { "type": "none" },
+      "timeout_s": 60,
+      "config": {
+        "region": "us-east-1",
+        "api": "invoke_model",
+        "embedding_family": "titan"
+      },
+      "data_processor": {
+        "display_name": "Amazon Bedrock",
+        "purpose": "Serves text embeddings through the InvokeModel API for B-roll ranking. Credentials come from the IAM credential chain.",
+        "data_categories": ["text"],
+        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "base-llm-model",
+      "model_id": "gpt-4o-mini",
+      "revision": "2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat", "transcription.speech_to_text"]
+    },
+    {
+      "id": "managed-chat-model",
+      "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "revision": "20241022-v2",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat", "vision.caption"]
+    },
+    {
+      "id": "managed-embeddings-model",
+      "model_id": "amazon.titan-embed-text-v2:0",
+      "revision": "v2-0",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["embeddings.text"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "planning-chat-base",
+      "capability": "planning.chat",
+      "adapter_id": "base-llm-endpoint",
+      "model_id": "gpt-4o-mini",
+      "model_ref": "base-llm-model",
+      "model_revision": "2026-10-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 0.15,
+        "output_per_million_usd": 0.6
+      },
+      "budget": { "feature": "planning", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "speech-to-text-base",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "base-llm-endpoint",
+      "model_id": "gpt-4o-mini",
+      "model_ref": "base-llm-model",
+      "model_revision": "2026-10-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": 0.0001
+      },
+      "budget": { "feature": "transcription", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "planning-chat-managed",
+      "capability": "planning.chat",
+      "adapter_id": "managed-chat-endpoint",
+      "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "model_ref": "managed-chat-model",
+      "model_revision": "20241022-v2",
+      "priority": 50,
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 3.0,
+        "output_per_million_usd": 15.0
+      },
+      "budget": { "feature": "planning", "monthly_usd": 100 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "Managed Claude 3.5 Sonnet",
+        "description": "A higher-quality plan model served through Amazon Bedrock with IAM credentials.",
+        "labels": ["quality"],
+        "quota_weight": 3.0
+      }
+    },
+    {
+      "id": "vision-caption-managed",
+      "capability": "vision.caption",
+      "adapter_id": "managed-chat-endpoint",
+      "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "model_ref": "managed-chat-model",
+      "model_revision": "20241022-v2",
+      "priority": 50,
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 3.0,
+        "output_per_million_usd": 15.0
+      },
+      "budget": { "feature": "vision_captions", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "embeddings-text-managed",
+      "capability": "embeddings.text",
+      "adapter_id": "managed-embeddings-endpoint",
+      "model_id": "amazon.titan-embed-text-v2:0",
+      "model_ref": "managed-embeddings-model",
+      "model_revision": "v2-0",
+      "priority": 50,
+      "embedding_space": "titan-embed-text-v2",
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "per_unit_usd": 0.00000002
+      },
+      "budget": { "feature": "embeddings", "monthly_usd": 20 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    }
+  ]
+}

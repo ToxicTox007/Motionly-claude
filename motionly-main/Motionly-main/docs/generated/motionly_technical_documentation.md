@@ -7,6 +7,8 @@
 
 ---
 
+> **Inference update (October 24, 2026):** AI providers are now configured through the provider-neutral inference registry ([registry guide](../ai-registry/README.md)). Where this snapshot names a specific provider for transcription, planning, objects, diarization, stems or video generation, read it as one example route: the deployed provider is whatever the operator's registry configures. Sections 2.13, 4.1 and the integration table below are current.
+
 ## 1. How to Read This Document
 
 This document is structured as an end-to-end technical reference and architectural blueprint for the Motionly platform. It is designed to serve a dual audience:
@@ -784,11 +786,11 @@ Heavy visual intelligence and rendering tasks can bottleneck standard CPU server
 
 ### 4.1 Provider-Neutral Model Gateway
 
-`app/services/model_gateway.py` is the single routing boundary for planning, transcription, vision, audio, embeddings, and generation. `model_adapters.py` supplies Azure and OpenAI-compatible HTTPS transports; `model_domain_adapters.py` registers local visual/audio/CLIP routes and route-affine Runway submit/poll operations. A route separates the provider-callable `model` or Azure deployment from immutable `model_revision` provenance.
+`app/services/model_gateway.py` is the single routing boundary for every AI capability. Routes come from the declarative registry (`AI_REGISTRY_FILE`), built by `app/services/inference_runtime.py`: `openai_compatible` and `azure_openai` adapters (`model_adapters.py`), template adapters `generic_http` and `async_job`, `local` CPU/GPU runners and, in development and tests only, a `fake` adapter. Async operations (diarization, stems, video generation) are persisted in `inference_operations` and are route-affine: once a submit may have been sent, retries poll the original route and never submit elsewhere. A route separates the provider-callable `model` from immutable `model_revision` provenance.
 
 Before a call, the gateway reserves a conservative dollar estimate against per-request and per-workspace/month limits. Production uses Redis for atomic cross-process budget leases and route+revision circuit state; expired crash leases are reclaimed on the next reservation. Route-local auth, quota, malformed-response, timeout, and availability failures may fall back to a compatible route, while request rejection terminates globally and video submission never fails over after a possibly accepted side effect. Every attempt emits low-cardinality metrics and independently persists typed usage, cost, tenant/request context, route, model, and revision to `provider_slo_events`.
 
-Production startup and standalone workers share `app/core/production.py` validation. They reject disabled or incomplete catalogs, unknown/incompatible adapters and operations, plaintext endpoints, floating revisions, unpriced external routes, free planning, zero-cost Runway, fixtures, and missing Redis/provider credentials. Model routing is intentionally separate from GPU placement in `compute_backend.py`.
+Startup validation (`app/services/inference_validation.py`) applies the registry rules by route locality: planning and transcription are the only required capabilities; an invalid optional route is dropped and its capability reported unavailable at `GET /capabilities`. Production rejects fake adapters, plaintext public endpoints, floating revisions, unpriced remote routes (unless capped), free remote planning and remote routes without data-processor metadata. Model routing is intentionally separate from GPU placement in `compute_backend.py`.
 
 ## 5. Render Pipelines: Basic vs Premium
 
@@ -1058,11 +1060,11 @@ graph TD
 - **Output Data:** Isolated vocal track `.wav` and background instrumental `.wav`.
 - **Founder Explanation:** "Cleans up noisy recordings. If it fails, background noise will remain in the output video."
 
-### 2.13 Generative B-Roll (Runway)
+### 2.13 Generated B-Roll
 
 - **Problem Solved:** Generates custom AI B-roll clips based on text descriptions.
-- **Model Name & Version:** `gen3a_turbo` (API hosted on Runway).
-- **Service Location:** Called from `app/services/scale.py` (`RunwayGen3Provider`).
+- **Model Name & Version:** whatever `video.generation.submit` route the registry configures; none by default.
+- **Service Location:** `app/services/scale.py` submits through the gateway and polls the same route; the operation is persisted in `inference_operations`. Without a route the API returns `503 capability_unavailable`.
 - **Input Data:** Prompt string describing the scene.
 - **Output Data:** Generated MP4 video URL.
 - **Founder Explanation:** "Creates AI video assets. If it fails, slots will revert to stock video search engines."
@@ -1522,18 +1524,18 @@ Below is a complete index of all active environment variables across the system,
 
 ### A.5 AI Models & API Integration Keys
 
-- **`TRANSCRIPTION_PROVIDER`** (Default: `"groq"`)
-  - _Purpose:_ Core audio transcription provider (e.g. `groq` or `local_ml` or `fixture`).
-- **`GROQ_API_KEY`** (Default: _None_)
-  - _Purpose:_ Auth token for Groq Whisper transcription.
-- **`EDIT_PLANNER_PROVIDER`** (Default: `"openrouter"`)
-  - _Purpose:_ Target LLM completion portal for timeline planning.
-- **`OPENROUTER_API_KEY`** (Default: _None_)
-  - _Purpose:_ Auth token for OpenRouter LLM queries.
+> Updated October 24, 2026 (provider-neutral inference, Tier 1). AI providers are no longer configured with per-vendor variables; see the [inference registry guide](../ai-registry/README.md).
+
+- **`AI_REGISTRY_FILE`** (Default: _None_; required in production and staging)
+  - _Purpose:_ Path to the declarative inference registry, or a comma-separated list of registry fragments. Every AI capability (planning, transcription, objects, diarization, stems, …) is a route in it.
+- **`AI_SECRETS_DIR`** (Default: `/run/secrets`) / **`AI_SECRETS_BUNDLE_FILE`** (Default: _None_)
+  - _Purpose:_ Where registry `file:` and `bundle:` secret references are read from.
+- **`AI_QUOTA_SCOPE`** (Default: `"feature"`)
+  - _Purpose:_ Plan quotas count by Motionly feature; `provider` is a temporary stop-gap that restores per-provider counting.
 - **`PEXELS_API_KEY`** / `PIXABAY_API_KEY` (Default: _None_)
   - _Purpose:_ Search tokens for stock B-roll retrieval.
 - **`ALLOW_FIXTURE_PROVIDERS`** (Default: `"false"`)
-  - _Purpose:_ Boolean flag. If `true`, runs mock responses for transcription, LLM, and B-roll searches (useful for isolated staging tests).
+  - _Purpose:_ Boolean flag. If `true`, runs mock responses for stock B-roll searches (useful for isolated staging tests). Development and test runs without a registry use built-in fake planning and transcription routes.
 
 ---
 
@@ -1594,13 +1596,13 @@ Below is a detailed inventory of directories and key files across the Motionly r
 
 Below is an overview of the third-party integrations required by the platform:
 
-| Integration          | Subsystem / Role        | What breaks if this service goes down?                                                             |
-| :------------------- | :---------------------- | :------------------------------------------------------------------------------------------------- |
-| **Supabase**         | DB and Object Storage   | The application goes offline. Users cannot log in, projects cannot load, and uploads fail.         |
-| **Stripe**           | Subscriptions & Billing | Stripe portal redirects fail, and webhook payments are delayed. Users cannot change pricing tiers. |
-| **Groq API**         | Whisper Transcription   | Video preprocessing is blocked, preventing speech transcription and AI edit planning.              |
-| **OpenRouter API**   | LLM Edit Planner        | Auto-cuts and AI edit plans fail, falling back to a rule-based silence cut list.                   |
-| **Pexels & Pixabay** | Stock B-roll            | stock video search fails. B-roll recommendations fall back to empty slots.                         |
-| **Runway API**       | AI Video Generation     | Generative AI B-roll generation fails, reverting slots to stock video search engines.              |
+| Integration                | Subsystem / Role               | What breaks if this service goes down?                                                                                                       |
+| :------------------------- | :----------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Supabase**               | DB and Object Storage          | The application goes offline. Users cannot log in, projects cannot load, and uploads fail.                                                   |
+| **Stripe**                 | Subscriptions & Billing        | Stripe portal redirects fail, and webhook payments are delayed. Users cannot change pricing tiers.                                           |
+| **Transcription route**    | Speech-to-text (registry)      | Video preprocessing is blocked, preventing speech transcription and AI edit planning; a second route by priority takes over when configured. |
+| **Planning route**         | LLM Edit Planner (registry)    | Auto-cuts and AI edit plans fail, falling back to a rule-based silence cut list.                                                             |
+| **Pexels & Pixabay**       | Stock B-roll                   | stock video search fails. B-roll recommendations fall back to empty slots.                                                                   |
+| **Video generation route** | AI Video Generation (optional) | Generated B-roll fails, reverting slots to stock video search engines.                                                                       |
 
 ---

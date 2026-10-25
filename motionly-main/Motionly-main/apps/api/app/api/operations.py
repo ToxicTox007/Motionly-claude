@@ -49,7 +49,7 @@ async def metrics(request: Request, authorization: str | None = Header(default=N
     snapshot_started_at = perf_counter()
     snapshots = []
     try:
-        snapshots = queue_registry.snapshots()
+        snapshots = await run_blocking(queue_registry.snapshots)
     except Exception as exc:
         metrics_registry.observe(
             "queue_snapshot_error_count",
@@ -172,6 +172,8 @@ async def run_gpu_autoscaling(
     await require_worker_token(request, x_motionly_worker_token)
     if request.app.state.settings.gpu_stage != "enabled":
         return {"status": "disabled", "reason": "gpu_stage_not_enabled"}
+    if not getattr(request.app.state.settings, "gpu_workers_enabled", True):
+        return {"status": "disabled", "reason": "gpu_workers_disabled"}
     service = getattr(request.app.state, "gpu_scaling_service", None)
     if service is None:
         return {"status": "disabled", "reason": "compute_backend_unconfigured"}

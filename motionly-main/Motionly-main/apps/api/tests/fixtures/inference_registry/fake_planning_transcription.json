@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "fake-endpoint",
+      "type": "fake",
+      "network": "private"
+    }
+  ],
+  "models": [
+    {
+      "id": "fake-plan-model",
+      "model_id": "fake-plan-model",
+      "revision": "2026-01-01",
+      "licence": "Apache-2.0",
+      "commercial_use": true
+    },
+    {
+      "id": "fake-stt-model",
+      "model_id": "fake-stt-model",
+      "revision": "2026-01-01",
+      "licence": "Apache-2.0",
+      "commercial_use": true
+    }
+  ],
+  "routes": [
+    {
+      "id": "planning-fake",
+      "capability": "planning.chat",
+      "adapter_id": "fake-endpoint",
+      "model_id": "fake-plan-model",
+      "model_ref": "fake-plan-model",
+      "model_revision": "2026-01-01",
+      "pricing": {"status": "free"},
+      "explicitly_free": true,
+      "budget": {"feature": "planning"}
+    },
+    {
+      "id": "transcription-fake",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "fake-endpoint",
+      "model_id": "fake-stt-model",
+      "model_ref": "fake-stt-model",
+      "model_revision": "2026-01-01",
+      "pricing": {"status": "free"},
+      "explicitly_free": true,
+      "budget": {"feature": "transcription"}
+    }
+  ]
+}

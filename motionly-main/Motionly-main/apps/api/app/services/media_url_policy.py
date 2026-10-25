@@ -348,10 +348,21 @@ def safe_http_stream(
     headers: dict[str, str] | None = None,
     resolver: Resolver | None = None,
     stream_factory: Callable[..., Any] | None = None,
+    method: str = "GET",
+    content: Any = None,
 ) -> Iterator[httpx.Response]:
-    """Open a media stream pinned to prevalidated addresses for every hop."""
+    """Open a media stream pinned to prevalidated addresses for every hop.
+
+    ``method`` and ``content`` let a caller send a body (for example an upload to
+    a pre-signed URL) over the same pinned connection. A request other than GET
+    never follows a redirect, so a body is never replayed to a new target. A
+    seekable ``content`` is rewound before each pinned address is tried.
+    """
     if max_redirects < 0 or max_redirects > 10:
         raise MediaUrlPolicyError("Media redirect limit is invalid.")
+    method = method.upper()
+    if method != "GET":
+        max_redirects = 0
     factory = stream_factory or _httpx_pinned_stream
     current = url
     for redirect_count in range(max_redirects + 1):
@@ -368,17 +379,20 @@ def safe_http_stream(
                 if target.sni_hostname is not None
                 else None
             )
+            request_kwargs: dict[str, Any] = {
+                "headers": request_headers,
+                "timeout": timeout,
+                "follow_redirects": False,
+                "extensions": extensions,
+            }
+            if content is not None:
+                if hasattr(content, "seek"):
+                    content.seek(0)
+                request_kwargs["content"] = content
             stack = ExitStack()
             try:
                 response = stack.enter_context(
-                    factory(
-                        "GET",
-                        target.request_url,
-                        headers=request_headers,
-                        timeout=timeout,
-                        follow_redirects=False,
-                        extensions=extensions,
-                    )
+                    factory(method, target.request_url, **request_kwargs)
                 )
             except httpx.TransportError as exc:
                 stack.close()

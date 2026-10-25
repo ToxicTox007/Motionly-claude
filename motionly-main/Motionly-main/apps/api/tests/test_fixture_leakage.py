@@ -41,12 +41,9 @@ STAND_IN = re.compile(
 # Settings that turn each production-rejected fixture on, as Settings fields.
 FIELDS = {
     "VISUAL_PROVIDER": "visual_intelligence_provider",
-    "TRANSCRIPTION_PROVIDER": "transcription_provider",
-    "EDIT_PLANNER_PROVIDER": "edit_planner_provider",
     "STEM_SEPARATION_PROVIDER": "stem_separation_provider",
     "ALLOW_FIXTURE_PROVIDERS": "allow_fixture_providers",
     "ML_EXECUTION_MODE": "ml_execution_mode",
-    "RUNWAY_API_KEY": "runway_api_key",
 }
 
 
@@ -208,8 +205,6 @@ def _enabling(variable: str, value: object) -> bool:
     text = str(value).strip().strip('"').lower()
     return {
         "VISUAL_PROVIDER": text == "fixture",
-        "TRANSCRIPTION_PROVIDER": text == "fixture",
-        "EDIT_PLANNER_PROVIDER": text == "fixture",
         "STEM_SEPARATION_PROVIDER": text == "fixture",
         "ALLOW_FIXTURE_PROVIDERS": text == "true",
         "ML_EXECUTION_MODE": text == "test_fixture",

@@ -14,6 +14,11 @@ class ProviderErrorInfo:
     fallback_eligible: bool | None = None
     circuit_worthy: bool | None = None
     billable: bool = True
+    # Whether the request may already have reached the provider. ``None`` means
+    # unknown; ``False`` only when the failure provably happened before send;
+    # ``True`` once the request may have left the client. Route-affine submits
+    # (plan invariant 6) may be retried only when this is provably ``False``.
+    sent: bool | None = None
 
     @property
     def can_fallback(self) -> bool:
@@ -100,18 +105,35 @@ def classify_provider_exception(exc: BaseException) -> ProviderErrorInfo:
         return exc.error_info
     if isinstance(exc, ProviderCircuitOpen):
         return exc.error_info
+    # Failures that provably happen before the request leaves the client. The
+    # submit cannot have reached the provider, so a route-affine submit may be
+    # retried (plan invariant 6). ConnectTimeout/PoolTimeout subclass
+    # TimeoutException and ConnectError subclasses NetworkError, so these are
+    # checked before the generic timeout/network branches below.
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)):
+        return ProviderErrorInfo("provider_timeout", True, sent=False)
+    if isinstance(exc, httpx.ConnectError):
+        return ProviderErrorInfo("provider_network_error", True, sent=False)
+    if isinstance(exc, (httpx.UnsupportedProtocol, httpx.InvalidURL)):
+        return ProviderErrorInfo("provider_network_error", False, sent=False)
+    # Read/write timeouts happen after the request has been written, and a
+    # remote protocol error means the server already responded, so the request
+    # may have been sent and the submit must not be retried on another route.
     if isinstance(exc, httpx.TimeoutException):
-        return ProviderErrorInfo("provider_timeout", True)
+        return ProviderErrorInfo("provider_timeout", True, sent=True)
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return ProviderErrorInfo("provider_network_error", True, sent=True)
     if isinstance(exc, httpx.NetworkError):
-        return ProviderErrorInfo("provider_network_error", True)
+        return ProviderErrorInfo("provider_network_error", True, sent=True)
     if isinstance(exc, httpx.HTTPStatusError):
         return classify_provider_status(exc.response.status_code)
     return ProviderErrorInfo("provider_error", True)
 
 
 def classify_provider_status(status_code: int) -> ProviderErrorInfo:
+    # A status code means the provider responded, so the request was sent.
     if status_code == 429:
-        return ProviderErrorInfo("provider_rate_limited", True, status_code)
+        return ProviderErrorInfo("provider_rate_limited", True, status_code, sent=True)
     if status_code in {401, 403}:
         return ProviderErrorInfo(
             "provider_auth_failed",
@@ -119,6 +141,7 @@ def classify_provider_status(status_code: int) -> ProviderErrorInfo:
             status_code,
             fallback_eligible=True,
             circuit_worthy=True,
+            sent=True,
         )
     if status_code == 402:
         return ProviderErrorInfo(
@@ -127,12 +150,23 @@ def classify_provider_status(status_code: int) -> ProviderErrorInfo:
             status_code,
             fallback_eligible=True,
             circuit_worthy=True,
+            sent=True,
         )
     if 500 <= status_code < 600:
-        return ProviderErrorInfo("provider_unavailable", True, status_code)
+        return ProviderErrorInfo("provider_unavailable", True, status_code, sent=True)
     if 400 <= status_code < 500:
-        return ProviderErrorInfo("provider_request_rejected", False, status_code)
-    return ProviderErrorInfo("provider_error", True, status_code)
+        return ProviderErrorInfo("provider_request_rejected", False, status_code, sent=True)
+    return ProviderErrorInfo("provider_error", True, status_code, sent=True)
+
+
+def may_have_been_sent(info: ProviderErrorInfo) -> bool:
+    """Whether the request may already have reached the provider.
+
+    ``True`` unless the failure provably happened before send. A route-affine
+    submit (plan invariant 6) may only be retried on another route when this is
+    ``False``.
+    """
+    return info.sent is not False
 
 
 def bounded_backoff_seconds(attempt: int, *, base: float = 0.5, cap: float = 8.0) -> float:

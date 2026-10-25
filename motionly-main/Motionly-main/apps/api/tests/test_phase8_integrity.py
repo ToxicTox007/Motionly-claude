@@ -170,9 +170,9 @@ def test_cost_summary_tracks_cost_per_approved_export() -> None:
 
 def test_metrics_heartbeats_and_trace_context_are_operational() -> None:
     metrics = MetricsRegistry()
-    metrics.observe("provider_latency_ms", 125, provider="openrouter", success="true")
+    metrics.observe("provider_latency_ms", 125, provider="provider-a", success="true")
     rendered = metrics.render()
-    assert 'provider="openrouter"' in rendered
+    assert 'provider="provider-a"' in rendered
     assert "motionly_provider_latency_ms_sum" in rendered
 
     operations = OperationsRepository()

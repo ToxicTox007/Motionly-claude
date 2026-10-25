@@ -1,0 +1,30 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "images": [{ "b64": "/9j/wA==" }, { "b64": "/9j/wB==" }]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/images:annotate" },
+      "response": {
+        "status": 200,
+        "json": {
+          "responses": [
+            { "error": { "code": 3, "message": "Bad image data." } },
+            { "error": { "code": 9, "message": "Failed precondition." } }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": "provider_request_rejected",
+      "fallback_eligible": false,
+      "billable": false
+    }
+  }
+}

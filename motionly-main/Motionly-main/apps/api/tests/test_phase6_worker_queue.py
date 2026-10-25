@@ -132,8 +132,6 @@ def test_generate_broll_enqueues_and_worker_executes_stock_search() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "expected_name"),
     [
-        ("transcription_provider", "mystery_whisper", "TRANSCRIPTION_PROVIDER"),
-        ("edit_planner_provider", "mystery_planner", "EDIT_PLANNER_PROVIDER"),
         ("visual_intelligence_provider", "mystery_visual", "VISUAL_PROVIDER"),
     ],
 )
@@ -155,16 +153,11 @@ def test_production_worker_rejects_unknown_ai_provider(
             "worker_api_token": "worker-secret",
             "allow_fixture_providers": False,
             "stem_separation_provider": "demucs",
-            "transcription_provider": "groq",
-            "groq_api_key": "groq-key",
-            "edit_planner_provider": "openrouter",
-            "openrouter_api_key": "openrouter-key",
             "visual_intelligence_provider": "local_ml",
             "audio_ml_provider": "local_ml",
             "music_provider": "licensed_catalog",
             "stock_video_provider": "pixabay",
             "pixabay_api_key": "pixabay-key",
-            "runway_api_key": "runway-key",
             field: value,
         }
     )
@@ -174,18 +167,28 @@ def test_production_worker_rejects_unknown_ai_provider(
 
 
 @pytest.mark.parametrize(
-    ("key_field", "expected_name"),
+    "registry_fixture",
     [
-        ("groq_api_key", "GROQ_API_KEY"),
-        ("openrouter_api_key", "OPENROUTER_API_KEY"),
+        "production_missing_transcription.json",
     ],
 )
-def test_production_worker_rejects_missing_ai_provider_credentials(
-    key_field: str,
-    expected_name: str,
+def test_production_worker_rejects_registry_missing_a_required_capability(
+    registry_fixture: str,
 ) -> None:
-    from app.main import _validate_production_settings
+    """Task 7: production validation is capability-driven, not vendor-key-driven.
 
+    The legacy per-vendor auth-key requirements are gone. The registry-driven
+    equivalent is that production must have a valid enabled route for every
+    required capability (planning.chat and transcription.speech_to_text); a
+    registry missing transcription fails startup with a clear
+    InferenceStartupError.
+    """
+    from pathlib import Path
+
+    from app.main import _validate_production_settings
+    from app.services.inference_validation import InferenceStartupError
+
+    root = Path(__file__).resolve().parents[3]
     settings = get_settings().model_copy(
         update={
             "app_env": "production",
@@ -197,19 +200,19 @@ def test_production_worker_rejects_missing_ai_provider_credentials(
             "worker_api_token": "worker-secret",
             "allow_fixture_providers": False,
             "stem_separation_provider": "demucs",
-            "transcription_provider": "groq",
-            "groq_api_key": "groq-key",
-            "edit_planner_provider": "openrouter",
-            "openrouter_api_key": "openrouter-key",
             "visual_intelligence_provider": "local_ml",
             "audio_ml_provider": "local_ml",
             "music_provider": "licensed_catalog",
             "stock_video_provider": "pixabay",
             "pixabay_api_key": "pixabay-key",
-            "runway_api_key": "runway-key",
-            key_field: None,
+            "ai_registry_file": str(
+                root / "apps/api/tests/fixtures/inference_registry" / registry_fixture
+            ),
+            "ai_secrets_bundle_file": str(
+                root / "apps/api/tests/fixtures/inference_registry/bundle.json"
+            ),
         }
     )
 
-    with pytest.raises(RuntimeError, match=expected_name):
+    with pytest.raises(InferenceStartupError, match="transcription.speech_to_text"):
         _validate_production_settings(settings)

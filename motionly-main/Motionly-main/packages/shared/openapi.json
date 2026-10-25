@@ -2821,6 +2821,175 @@
         "title": "CancelSubscriptionResponse",
         "type": "object"
       },
+      "CapabilitiesResponse": {
+        "description": "The public capability contract.\n\n``registry_version`` identifies the live catalog so a consumer can invalidate\na cached response when the registry changes (plan Task 9B).",
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilitySummary"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "registry_version": {
+            "description": "Opaque identity of the live inference registry catalog.",
+            "title": "Registry Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "registry_version",
+          "capabilities"
+        ],
+        "title": "CapabilitiesResponse",
+        "type": "object"
+      },
+      "CapabilityOptions": {
+        "description": "The options and effective choice for one capability.",
+        "properties": {
+          "capability": {
+            "description": "The Section 2.1 capability id.",
+            "title": "Capability",
+            "type": "string"
+          },
+          "effective_option_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The option that would serve a call now (for the workspace or project).",
+            "title": "Effective Option Id"
+          },
+          "effective_source": {
+            "description": "Where the effective choice came from: project, workspace or operator.",
+            "title": "Effective Source",
+            "type": "string"
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the effective option differs from the request (e.g. plan_not_allowed).",
+            "title": "Fallback Reason"
+          },
+          "operator_default_option_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The operator default option id for the capability.",
+            "title": "Operator Default Option Id"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/ModelOption"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "requested_option_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The user's highest-priority requested option, when set.",
+            "title": "Requested Option Id"
+          }
+        },
+        "required": [
+          "capability",
+          "options",
+          "effective_source"
+        ],
+        "title": "CapabilityOptions",
+        "type": "object"
+      },
+      "CapabilitySummary": {
+        "description": "One capability's public availability (plan Section 2.6).\n\nCapability-level only: no base URL, model id, secret or provider label.",
+        "properties": {
+          "compute_requirement": {
+            "description": "Aggregated placement of the active routes.",
+            "enum": [
+              "cpu",
+              "gpu",
+              "remote",
+              "any"
+            ],
+            "title": "Compute Requirement",
+            "type": "string"
+          },
+          "id": {
+            "description": "The stable Section 2.1 capability id.",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_async": {
+            "description": "Whether the capability is asynchronous (route-affine submit).",
+            "title": "Is Async",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Machine-readable reason when not fully available (e.g. not_configured, all_routes_invalid, gpu_disabled, circuit_open); null when available.",
+            "title": "Reason"
+          },
+          "required": {
+            "description": "Whether this is a startup-required capability (planning.chat, transcription.speech_to_text).",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "route_count": {
+            "description": "Number of active (valid, enabled) routes for the capability.",
+            "minimum": 0.0,
+            "title": "Route Count",
+            "type": "integer"
+          },
+          "status": {
+            "description": "available, degraded (e.g. the only route's circuit is open), or unavailable.",
+            "enum": [
+              "available",
+              "degraded",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "is_async",
+          "compute_requirement",
+          "route_count",
+          "required"
+        ],
+        "title": "CapabilitySummary",
+        "type": "object"
+      },
       "CaptionAnimation": {
         "enum": [
           "fade_up",
@@ -4369,6 +4538,59 @@
         "title": "CutSegment",
         "type": "object"
       },
+      "DataProcessorEntry": {
+        "description": "One distinct data processor of the enabled remote routes (plan Task 9A).\n\nDisplay metadata only: no base URL, model id, route id, provider label or\nsecret. These are the only fields the privacy page needs to render a\nprocessor section.",
+        "properties": {
+          "data_categories": {
+            "description": "The categories of content the processor receives (e.g. audio, images, text).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Data Categories",
+            "type": "array"
+          },
+          "display_name": {
+            "description": "The processor's display name, as the operator configured it.",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "policy_url": {
+            "description": "The processor's privacy/data-handling policy URL.",
+            "title": "Policy Url",
+            "type": "string"
+          },
+          "purpose": {
+            "description": "What the processor does with the data Motionly sends it.",
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "purpose",
+          "data_categories",
+          "policy_url"
+        ],
+        "title": "DataProcessorEntry",
+        "type": "object"
+      },
+      "DataProcessorsResponse": {
+        "description": "The public data-processor privacy contract (plan Task 9A).\n\nOne entry per distinct data processor (deduped by display name + policy URL)\nof the enabled remote routes in the live registry. Self-hosted routes are\nexcluded; vendor routes still registered directly in ``main.py`` (until Task\n19) carry no registry ``data_processor`` metadata and therefore never appear.",
+        "properties": {
+          "processors": {
+            "items": {
+              "$ref": "#/components/schemas/DataProcessorEntry"
+            },
+            "title": "Processors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "processors"
+        ],
+        "title": "DataProcessorsResponse",
+        "type": "object"
+      },
       "DeepHealthResponse": {
         "properties": {
           "components": {
@@ -4414,6 +4636,38 @@
         "title": "DeepHealthResponse",
         "type": "object"
       },
+      "DeletionResponse": {
+        "properties": {
+          "committed": {
+            "title": "Committed",
+            "type": "boolean"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationDiagnostic"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "registry_version": {
+            "title": "Registry Version",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationDiagnostic"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "committed",
+          "registry_version"
+        ],
+        "title": "DeletionResponse",
+        "type": "object"
+      },
       "DependencyHealth": {
         "properties": {
           "message": {
@@ -4439,6 +4693,17 @@
       },
       "DependencyHealthResponse": {
         "properties": {
+          "catalog_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Fingerprint"
+          },
           "dependencies": {
             "additionalProperties": {
               "$ref": "#/components/schemas/DependencyHealth"
@@ -4457,6 +4722,17 @@
             ],
             "title": "Gpu Stage",
             "type": "string"
+          },
+          "registry_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registry Version"
           },
           "request_id": {
             "title": "Request Id",
@@ -7583,6 +7859,112 @@
         "title": "MemberResponse",
         "type": "object"
       },
+      "ModelOption": {
+        "description": "One selectable option for a capability, with this workspace's eligibility.",
+        "properties": {
+          "allowed": {
+            "description": "Whether this workspace may pick the option right now.",
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Operator description of the option.",
+            "title": "Description"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Operator display name; may name a model or vendor.",
+            "title": "Display Name"
+          },
+          "labels": {
+            "description": "Closed-set labels: fast, balanced, quality, economy, local.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "array"
+          },
+          "option_id": {
+            "description": "The option id (an opaque registry route id).",
+            "title": "Option Id",
+            "type": "string"
+          },
+          "quota_weight": {
+            "description": "Multiplies the feature-quota units of calls this option serves.",
+            "title": "Quota Weight",
+            "type": "number"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the option may not be picked (plan_not_allowed, workspace_restricted); null when allowed.",
+            "title": "Reason"
+          },
+          "required_plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cheapest plan that could pick a plan-locked option (for 'Requires <plan>').",
+            "title": "Required Plan"
+          },
+          "status": {
+            "description": "Live availability: available, degraded or unavailable.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "option_id",
+          "quota_weight",
+          "status",
+          "allowed"
+        ],
+        "title": "ModelOption",
+        "type": "object"
+      },
+      "ModelOptionsResponse": {
+        "description": "The GET /model-options contract (plan Section 2.11).",
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilityOptions"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          }
+        },
+        "required": [
+          "capabilities"
+        ],
+        "title": "ModelOptionsResponse",
+        "type": "object"
+      },
       "ModelTrainingRequest": {
         "properties": {
           "minimum_examples": {
@@ -8704,6 +9086,49 @@
           "created_at"
         ],
         "title": "MusicTrackResponse",
+        "type": "object"
+      },
+      "MutationResponse": {
+        "description": "The result of a write: the stored record plus validation findings.\n\n``committed`` is ``false`` for a dry-run or a rejected change; the registry\nversion is unchanged in that case.",
+        "properties": {
+          "committed": {
+            "title": "Committed",
+            "type": "boolean"
+          },
+          "entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RegistryEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationDiagnostic"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "registry_version": {
+            "title": "Registry Version",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationDiagnostic"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "committed",
+          "registry_version"
+        ],
+        "title": "MutationResponse",
         "type": "object"
       },
       "ObjectDetection": {
@@ -9923,6 +10348,61 @@
           "projects"
         ],
         "title": "ProjectListResponse",
+        "type": "object"
+      },
+      "ProjectModelSettingItem": {
+        "properties": {
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "option_id": {
+            "title": "Option Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "option_id"
+        ],
+        "title": "ProjectModelSettingItem",
+        "type": "object"
+      },
+      "ProjectModelSettingUpdate": {
+        "description": "PUT body for one project capability override.",
+        "properties": {
+          "capability": {
+            "description": "The Section 2.1 capability id.",
+            "title": "Capability",
+            "type": "string"
+          },
+          "option_id": {
+            "description": "The option id (a registry route id) to pin for the project.",
+            "title": "Option Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "option_id"
+        ],
+        "title": "ProjectModelSettingUpdate",
+        "type": "object"
+      },
+      "ProjectModelSettingsResponse": {
+        "properties": {
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectModelSettingItem"
+            },
+            "title": "Settings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "title": "ProjectModelSettingsResponse",
         "type": "object"
       },
       "ProjectResponse": {
@@ -11514,6 +11994,7 @@
           "amount_paise": {
             "anyOf": [
               {
+                "exclusiveMinimum": 0.0,
                 "type": "integer"
               },
               {
@@ -11525,6 +12006,7 @@
           "reason": {
             "anyOf": [
               {
+                "maxLength": 500,
                 "type": "string"
               },
               {
@@ -11671,6 +12153,103 @@
         ],
         "title": "RegenerationLayer",
         "type": "string"
+      },
+      "RegistryEntry": {
+        "description": "A single adapter/model/route record with its management metadata.\n\n``managed`` is ``\"file\"`` for an entry that came from the declarative file\nregistry (read-only in the UI) or ``\"database\"`` for an admin-editable one.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "managed": {
+            "enum": [
+              "file",
+              "database"
+            ],
+            "title": "Managed",
+            "type": "string"
+          },
+          "record": {
+            "additionalProperties": true,
+            "title": "Record",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "managed"
+        ],
+        "title": "RegistryEntry",
+        "type": "object"
+      },
+      "RegistryRecordRequest": {
+        "description": "A create/update body: the raw adapter/model/route record object.",
+        "properties": {
+          "record": {
+            "additionalProperties": true,
+            "title": "Record",
+            "type": "object"
+          }
+        },
+        "required": [
+          "record"
+        ],
+        "title": "RegistryRecordRequest",
+        "type": "object"
+      },
+      "RegistrySnapshotResponse": {
+        "description": "The merged file+database registry view for the admin UI.",
+        "properties": {
+          "adapters": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryEntry"
+            },
+            "title": "Adapters",
+            "type": "array"
+          },
+          "database_enabled": {
+            "title": "Database Enabled",
+            "type": "boolean"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationDiagnostic"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryEntry"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "registry_version": {
+            "title": "Registry Version",
+            "type": "integer"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryEntry"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationDiagnostic"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "database_enabled",
+          "registry_version"
+        ],
+        "title": "RegistrySnapshotResponse",
+        "type": "object"
       },
       "RenderAdjustmentAction": {
         "enum": [
@@ -13078,6 +13657,312 @@
         "title": "ReviewStatus",
         "type": "string"
       },
+      "RouteHealthEntry": {
+        "properties": {
+          "capability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capability"
+          },
+          "circuit_state": {
+            "default": "unknown",
+            "title": "Circuit State",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "error_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Rate"
+          },
+          "fallback_count": {
+            "default": 0,
+            "title": "Fallback Count",
+            "type": "integer"
+          },
+          "hard_cap_max_requests": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Cap Max Requests"
+          },
+          "hard_cap_max_units": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Cap Max Units"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_failure_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure At"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "managed": {
+            "default": "file",
+            "enum": [
+              "file",
+              "database"
+            ],
+            "title": "Managed",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "model_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Revision"
+          },
+          "p50_latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Latency Ms"
+          },
+          "p95_latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Latency Ms"
+          },
+          "pricing_status": {
+            "default": "priced",
+            "title": "Pricing Status",
+            "type": "string"
+          },
+          "route_id": {
+            "title": "Route Id",
+            "type": "string"
+          },
+          "total_calls": {
+            "default": 0,
+            "title": "Total Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "route_id"
+        ],
+        "title": "RouteHealthEntry",
+        "type": "object"
+      },
+      "RouteHealthResponse": {
+        "properties": {
+          "database_enabled": {
+            "title": "Database Enabled",
+            "type": "boolean"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/RouteHealthEntry"
+            },
+            "title": "Routes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "database_enabled"
+        ],
+        "title": "RouteHealthResponse",
+        "type": "object"
+      },
+      "RouteTestRequest": {
+        "description": "Options for a synthetic route test. No user data is sent.",
+        "properties": {
+          "allow_paid": {
+            "default": false,
+            "title": "Allow Paid",
+            "type": "boolean"
+          },
+          "max_cost_usd": {
+            "default": 0.5,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Max Cost Usd",
+            "type": "number"
+          }
+        },
+        "title": "RouteTestRequest",
+        "type": "object"
+      },
+      "RouteTestResponse": {
+        "description": "The outcome of one synthetic route test (plan Task 22).",
+        "properties": {
+          "actual_cost_usd": {
+            "default": 0.0,
+            "title": "Actual Cost Usd",
+            "type": "number"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "circuit_state": {
+            "default": "unknown",
+            "title": "Circuit State",
+            "type": "string"
+          },
+          "cost_unknown": {
+            "default": false,
+            "title": "Cost Unknown",
+            "type": "boolean"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "estimated_cost_usd": {
+            "default": 0.0,
+            "title": "Estimated Cost Usd",
+            "type": "number"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "paid_confirmation_required": {
+            "default": false,
+            "title": "Paid Confirmation Required",
+            "type": "boolean"
+          },
+          "route_id": {
+            "title": "Route Id",
+            "type": "string"
+          },
+          "schema_valid": {
+            "title": "Schema Valid",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "schema_invalid",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "usage": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "required": [
+          "route_id",
+          "capability",
+          "status",
+          "schema_valid"
+        ],
+        "title": "RouteTestResponse",
+        "type": "object"
+      },
       "SavedTemplateCreateRequest": {
         "properties": {
           "name": {
@@ -13377,6 +14262,142 @@
         "title": "SceneType",
         "type": "string"
       },
+      "SecretListResponse": {
+        "properties": {
+          "secrets": {
+            "items": {
+              "$ref": "#/components/schemas/SecretMetadataResponse"
+            },
+            "title": "Secrets",
+            "type": "array"
+          }
+        },
+        "title": "SecretListResponse",
+        "type": "object"
+      },
+      "SecretMetadataResponse": {
+        "description": "What a secret read may expose (plan Section 2.4): never a value.",
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "key_version": {
+            "title": "Key Version",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rotated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rotated At"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "fingerprint",
+          "key_version"
+        ],
+        "title": "SecretMetadataResponse",
+        "type": "object"
+      },
+      "SecretRotateRequest": {
+        "properties": {
+          "scope": {
+            "default": "global",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Scope",
+            "type": "string"
+          },
+          "value": {
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "SecretRotateRequest",
+        "type": "object"
+      },
+      "SecretWriteRequest": {
+        "description": "Create or rotate a secret. The value is write-only and never returned.",
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "scope": {
+            "default": "global",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Scope",
+            "type": "string"
+          },
+          "value": {
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "SecretWriteRequest",
+        "type": "object"
+      },
       "SegmentationMatte": {
         "properties": {
           "bucket": {
@@ -13426,7 +14447,7 @@
             "type": "integer"
           },
           "model": {
-            "default": "mediapipe-selfie-segmentation",
+            "default": "matte.segmentation",
             "maxLength": 120,
             "title": "Model",
             "type": "string"
@@ -13806,10 +14827,16 @@
       "StemSeparationRequest": {
         "properties": {
           "model": {
-            "default": "htdemucs",
-            "maxLength": 80,
-            "title": "Model",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           }
         },
         "title": "StemSeparationRequest",
@@ -13841,7 +14868,7 @@
           "pexels",
           "pixabay",
           "user_library",
-          "runway"
+          "generated"
         ],
         "title": "StockProviderKey",
         "type": "string"
@@ -14347,6 +15374,18 @@
               }
             ],
             "title": "Gateway Subscription Id"
+          },
+          "past_due_grace_ends_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Past Due Grace Ends At"
           },
           "payment_issue": {
             "default": false,
@@ -15664,6 +16703,49 @@
           }
         },
         "title": "UserControlSettings",
+        "type": "object"
+      },
+      "ValidationDiagnostic": {
+        "description": "One Section 2.6 validation finding surfaced to the operator.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "object_id": {
+            "title": "Object Id",
+            "type": "string"
+          },
+          "object_kind": {
+            "title": "Object Kind",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_kind",
+          "object_id",
+          "severity",
+          "code",
+          "message",
+          "path"
+        ],
+        "title": "ValidationDiagnostic",
         "type": "object"
       },
       "ValidationError": {
@@ -17189,6 +18271,115 @@
         "title": "WorkspaceMemberNamesResponse",
         "type": "object"
       },
+      "WorkspaceModelSettingItem": {
+        "description": "One workspace capability setting.",
+        "properties": {
+          "allowed_option_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Options members may pick; null means every option the plan allows.",
+            "title": "Allowed Option Ids"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "default_option_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Option Id"
+          },
+          "locked": {
+            "default": false,
+            "title": "Locked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "capability"
+        ],
+        "title": "WorkspaceModelSettingItem",
+        "type": "object"
+      },
+      "WorkspaceModelSettingUpdate": {
+        "description": "PUT body for one workspace capability setting.",
+        "properties": {
+          "allowed_option_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The options members may pick; null means every option the plan allows.",
+            "title": "Allowed Option Ids"
+          },
+          "capability": {
+            "description": "The Section 2.1 capability id.",
+            "title": "Capability",
+            "type": "string"
+          },
+          "default_option_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The workspace default option id; null clears it.",
+            "title": "Default Option Id"
+          },
+          "locked": {
+            "default": false,
+            "description": "When true, projects cannot override.",
+            "title": "Locked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "capability"
+        ],
+        "title": "WorkspaceModelSettingUpdate",
+        "type": "object"
+      },
+      "WorkspaceModelSettingsResponse": {
+        "properties": {
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceModelSettingItem"
+            },
+            "title": "Settings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "title": "WorkspaceModelSettingsResponse",
+        "type": "object"
+      },
       "ZoomMoment": {
         "properties": {
           "intensity": {
@@ -17771,6 +18962,1565 @@
         "summary": "Get Deployment",
         "tags": [
           "editorial learning"
+        ]
+      }
+    },
+    "/admin/inference/adapters": {
+      "post": {
+        "operationId": "create_adapter_admin_inference_adapters_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryRecordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Adapter",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/adapters/{adapter_id}": {
+      "delete": {
+        "operationId": "delete_adapter_admin_inference_adapters__adapter_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "adapter_id",
+            "required": true,
+            "schema": {
+              "title": "Adapter Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Adapter",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "update_adapter_admin_inference_adapters__adapter_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "adapter_id",
+            "required": true,
+            "schema": {
+              "title": "Adapter Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryRecordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Adapter",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/models": {
+      "post": {
+        "operationId": "create_model_admin_inference_models_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryRecordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Model",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/models/{model_id}": {
+      "delete": {
+        "operationId": "delete_model_admin_inference_models__model_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Model",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "update_model_admin_inference_models__model_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_id",
+            "required": true,
+            "schema": {
+              "title": "Model Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryRecordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Model",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/registry": {
+      "get": {
+        "operationId": "get_registry_admin_inference_registry_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrySnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Registry",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/routes": {
+      "post": {
+        "operationId": "create_route_admin_inference_routes_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryRecordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Route",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/routes/health": {
+      "get": {
+        "operationId": "routes_health_admin_inference_routes_health_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteHealthResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Routes Health",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/routes/{route_id}": {
+      "delete": {
+        "operationId": "delete_route_admin_inference_routes__route_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "route_id",
+            "required": true,
+            "schema": {
+              "title": "Route Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Route",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "update_route_admin_inference_routes__route_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "route_id",
+            "required": true,
+            "schema": {
+              "title": "Route Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Dry Run",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryRecordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Route",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/routes/{route_id}/test": {
+      "post": {
+        "operationId": "test_route_admin_inference_routes__route_id__test_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "route_id",
+            "required": true,
+            "schema": {
+              "title": "Route Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Route",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/secrets": {
+      "get": {
+        "operationId": "list_secrets_admin_inference_secrets_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Secrets",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "create_secret_admin_inference_secrets_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Secret",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/secrets/{name}": {
+      "delete": {
+        "operationId": "delete_secret_admin_inference_secrets__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "global",
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Secret",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/inference/secrets/{name}/rotate": {
+      "post": {
+        "operationId": "rotate_secret_admin_inference_secrets__name__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretRotateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretMetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rotate Secret",
+        "tags": [
+          "admin"
         ]
       }
     },
@@ -20418,9 +23168,25 @@
     },
     "/billing/refunds": {
       "post": {
-        "description": "Issue a refund for a workspace. Owner/admin only; audit-logged.",
+        "description": "Refund a workspace's most recent captured payment. Platform admin only.\n\nThe target workspace comes from the request body, so a role in the\ncaller's own workspace is not sufficient authority: ``require_admin`` gates\nthe route. The amount defaults to (and may not exceed) what was captured on\nthat gateway order minus refunds already recorded. The gateway performs the\nrefund first; the ledger row is keyed by the gateway refund id so the\nmatching ``payment.refunded`` webhook cannot double-count it. Audit-logged.",
         "operationId": "issue_refund_billing_refunds_post",
         "parameters": [
+          {
+            "in": "header",
+            "name": "x-motionly-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Admin-Token"
+            }
+          },
           {
             "in": "header",
             "name": "authorization",
@@ -20718,6 +23484,28 @@
         "tags": [
           "billing",
           "webhooks"
+        ]
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "description": "Public capability availability (plan Task 8).\n\nReads the registry-driven runtime on ``app.state``; it never probes the\nnetwork and never returns provider-identifying data.",
+        "operationId": "capabilities_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities",
+        "tags": [
+          "capabilities"
         ]
       }
     },
@@ -22128,6 +24916,89 @@
         "summary": "Metrics",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/model-options": {
+      "get": {
+        "description": "Per-capability selectable options and the effective choice (any member).",
+        "operationId": "model_options_model_options_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelOptionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Options",
+        "tags": [
+          "model choice"
         ]
       }
     },
@@ -26219,6 +29090,251 @@
         ]
       }
     },
+    "/projects/{project_id}/model-settings": {
+      "delete": {
+        "description": "Clear a project override (any member who can edit the project).",
+        "operationId": "delete_project_model_settings_projects__project_id__model_settings_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The capability override to clear.",
+            "in": "query",
+            "name": "capability",
+            "required": true,
+            "schema": {
+              "description": "The capability override to clear.",
+              "title": "Capability",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Project Model Settings",
+        "tags": [
+          "model choice"
+        ]
+      },
+      "get": {
+        "description": "The project's model choice overrides (any member who can edit the project).",
+        "operationId": "get_project_model_settings_projects__project_id__model_settings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Model Settings",
+        "tags": [
+          "model choice"
+        ]
+      },
+      "put": {
+        "description": "Pin a project override (any member who can edit the project).\n\nRefused with 409 ``model_choice_locked`` when the workspace is locked, and\nwith 422 when the option is not a current selectable option allowed by the\nplan and the workspace allow-list.",
+        "operationId": "put_project_model_settings_projects__project_id__model_settings_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectModelSettingUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectModelSettingItem"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Project Model Settings",
+        "tags": [
+          "model choice"
+        ]
+      }
+    },
     "/projects/{project_id}/music/regions": {
       "patch": {
         "operationId": "update_music_regions_projects__project_id__music_regions_patch",
@@ -26885,7 +30001,7 @@
     },
     "/projects/{project_id}/phase5/generated-broll": {
       "post": {
-        "operationId": "generate_runway_broll_projects__project_id__phase5_generated_broll_post",
+        "operationId": "generate_broll_clip_projects__project_id__phase5_generated_broll_post",
         "parameters": [
           {
             "in": "path",
@@ -26962,7 +30078,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Generate Runway Broll",
+        "summary": "Generate Broll Clip",
         "tags": [
           "Phase 5 intelligence and scale"
         ]
@@ -31822,6 +34938,28 @@
         ]
       }
     },
+    "/public/data-processors": {
+      "get": {
+        "description": "Public data-processor privacy metadata (plan Task 9A).\n\nReads the registry-driven runtime on ``app.state`` exactly as\n``/capabilities`` does; it never probes the network and never returns a base\nURL, model id, route id, provider label or secret. The privacy page renders\none section per entry.",
+        "operationId": "public_data_processors_public_data_processors_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataProcessorsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Public Data Processors",
+        "tags": [
+          "capabilities"
+        ]
+      }
+    },
     "/public/exports/resolve": {
       "post": {
         "operationId": "resolve_public_export_public_exports_resolve_post",
@@ -32718,6 +35856,146 @@
         "summary": "Transfer Ownership",
         "tags": [
           "team"
+        ]
+      }
+    },
+    "/workspaces/current/model-settings": {
+      "get": {
+        "description": "The workspace's model choice settings (any member may view).",
+        "operationId": "get_workspace_model_settings_workspaces_current_model_settings_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Workspace Model Settings",
+        "tags": [
+          "model choice"
+        ]
+      },
+      "put": {
+        "description": "Set the workspace default, allow-list and lock (owner or admin only).",
+        "operationId": "put_workspace_model_settings_workspaces_current_model_settings_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-motionly-workspace-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Motionly-Workspace-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceModelSettingUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceModelSettingItem"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Workspace Model Settings",
+        "tags": [
+          "model choice"
         ]
       }
     }

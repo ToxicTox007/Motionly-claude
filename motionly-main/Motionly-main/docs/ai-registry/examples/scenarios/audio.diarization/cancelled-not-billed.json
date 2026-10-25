@@ -1,0 +1,57 @@
+{
+  "registry": "diarization.json",
+  "route_id": "audio-diarization-remote",
+  "capability": "audio.diarization",
+  "request": {
+    "type": "diarization",
+    "model": "precision-3",
+    "audio": { "b64": "UklGRi4uLi5mYWtlLXdhdi1ieXRlcy1mb3ItZGlhcml6YXRpb24=" },
+    "duration_s": 30.0
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/media/input" },
+      "response": {
+        "status": 201,
+        "json": { "url": "https://storage.pyannote.test/upload?signature=abc" }
+      }
+    },
+    {
+      "match": {
+        "method": "PUT",
+        "host": "storage.pyannote.test",
+        "path": "/upload"
+      },
+      "response": { "status": 200 }
+    },
+    {
+      "match": { "method": "POST", "path": "/v1/diarize" },
+      "response": {
+        "status": 200,
+        "json": {
+          "jobId": "3c8a89a5-dcc6-4edb-a75d-ffd64739674d",
+          "status": "created"
+        }
+      }
+    },
+    {
+      "match": { "method": "GET", "path_prefix": "/v1/jobs/" },
+      "response": {
+        "status": 200,
+        "json": {
+          "jobId": "3c8a89a5-dcc6-4edb-a75d-ffd64739674d",
+          "status": "canceled"
+        }
+      },
+      "repeat": "always"
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": "provider_job_failed",
+      "fallback_eligible": false,
+      "billable": false
+    }
+  },
+  "differential": true
+}

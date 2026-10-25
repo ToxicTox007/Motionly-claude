@@ -29,3 +29,8 @@ export function planLabel(plan: unknown): string | null;
 export function formatDate(value: unknown): string;
 
 export function validateRefundRupees(input: unknown): RefundAmountValidation;
+
+export function pastDueGraceMessage(
+  graceEndsAt: string | null | undefined,
+  now?: Date,
+): string;

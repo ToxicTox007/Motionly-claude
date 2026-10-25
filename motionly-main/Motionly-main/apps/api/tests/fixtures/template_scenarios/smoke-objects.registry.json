@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "smoke-objects-endpoint",
+      "type": "generic_http",
+      "base_url": "https://objects.smoke.invalid/v1",
+      "network": "public",
+      "auth": { "type": "bearer", "secret_ref": "bundle:smoke-objects-endpoint" },
+      "timeout_s": 30,
+      "data_processor": {
+        "display_name": "Smoke object-detection endpoint",
+        "purpose": "Harness self-test only",
+        "data_categories": ["image"],
+        "policy_url": "https://objects.smoke.invalid/policy"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "smoke-objects-model",
+      "model_id": "smoke-detector",
+      "revision": "smoke-2026-01-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["vision.object_detection"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "smoke-objects-remote",
+      "capability": "vision.object_detection",
+      "adapter_id": "smoke-objects-endpoint",
+      "model_id": "smoke-detector",
+      "model_ref": "smoke-objects-model",
+      "model_revision": "smoke-2026-01-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "images",
+        "per_request_usd": 0.001
+      },
+      "budget": { "feature": "vision_objects", "monthly_usd": 10 },
+      "compute_requirement": "remote",
+      "limits": { "max_batch": 16, "max_request_bytes": 9437184 },
+      "enabled": true,
+      "scope": "global",
+      "label_aliases": { "automobile": "car" },
+      "mapping": {
+        "request": {
+          "method": "POST",
+          "path": "/detect",
+          "body": {
+            "images": {
+              "$map": {
+                "over": "input.images",
+                "each": { "content": { "$fn": "data_url", "args": [{ "$ref": "item" }] } }
+              }
+            }
+          }
+        },
+        "items": "response.results",
+        "aligned_to_input": true,
+        "fields": {
+          "detections": "objects",
+          "label": "name",
+          "score": "confidence",
+          "box": "box"
+        },
+        "box_format": "xywh_norm",
+        "item_error": "error_code",
+        "item_error_codes": { "3": "rejected" },
+        "error_map": { "400": "rejected", "401": "auth", "403": "auth", "429": "quota" },
+        "usage": "count_ok_items"
+      }
+    }
+  ]
+}

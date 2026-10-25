@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "self-hosted-tei",
+      "type": "huggingface_endpoint",
+      "base_url": "http://tei.internal.invalid:8080",
+      "network": "private",
+      "auth": { "type": "none" },
+      "config": { "mode": "tei" }
+    },
+    {
+      "id": "self-hosted-chat",
+      "type": "openai_compatible",
+      "base_url": "http://llm.internal.invalid:8000/v1",
+      "network": "private",
+      "auth": { "type": "none" }
+    },
+    {
+      "id": "self-hosted-stt",
+      "type": "openai_compatible",
+      "base_url": "http://stt.internal.invalid:9000/v1",
+      "network": "private",
+      "auth": { "type": "none" }
+    }
+  ],
+  "models": [
+    {
+      "id": "tei-embeddings-model",
+      "model_id": "BAAI/bge-base-en-v1.5",
+      "revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+      "licence": "MIT",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/BAAI/bge-base-en-v1.5",
+      "capabilities": ["embeddings.text"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "chat-model",
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "revision": "bb46c15ee4bb56c5b63245ef50fd7637234d6f75",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct",
+      "capabilities": ["planning.chat"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "stt-model",
+      "model_id": "openai/whisper-large-v3",
+      "revision": "06538b2a1e1df32bfb468dc24d8b74142a335a6c",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/openai/whisper-large-v3",
+      "capabilities": ["transcription.speech_to_text"],
+      "verified_at": "2026-10-24"
+    }
+  ],
+  "routes": [
+    {
+      "id": "embeddings-text-tei",
+      "capability": "embeddings.text",
+      "adapter_id": "self-hosted-tei",
+      "model_id": "BAAI/bge-base-en-v1.5",
+      "model_ref": "tei-embeddings-model",
+      "model_revision": "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
+      "priority": 10,
+      "embedding_space": "bge-base-en-v1.5",
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "Self-hosted TEI embeddings",
+        "description": "Text embeddings served by your own Text Embeddings Inference server.",
+        "labels": ["local"],
+        "quota_weight": 1.0
+      }
+    },
+    {
+      "id": "planning-chat-selfhosted",
+      "capability": "planning.chat",
+      "adapter_id": "self-hosted-chat",
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "model_ref": "chat-model",
+      "model_revision": "bb46c15ee4bb56c5b63245ef50fd7637234d6f75",
+      "priority": 10,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "speech-to-text-selfhosted",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "self-hosted-stt",
+      "model_id": "openai/whisper-large-v3",
+      "model_ref": "stt-model",
+      "model_revision": "06538b2a1e1df32bfb468dc24d8b74142a335a6c",
+      "priority": 10,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    }
+  ]
+}

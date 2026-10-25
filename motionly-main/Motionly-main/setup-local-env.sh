@@ -47,11 +47,11 @@ ADMIN_API_TOKEN=dev-admin-token-456
 # Temporal
 TEMPORAL_BOOTSTRAP_ADMIN_UNTIL=2099-12-31T23:59:59Z
 
-# External API keys (optional - leave empty for fixture mode)
-GROQ_API_KEY=
-OPENROUTER_API_KEY=
-RUNWAY_API_KEY=
-AZURE_OPENAI_API_KEY=
+# Inference registry (plan Task 26): the only source of inference routes. Local
+# dev runs in fixture mode, so no vendor key is needed; credentials would live
+# in the registry secrets bundle, never as vendor env variables.
+AI_REGISTRY_FILE=
+AI_SECRETS_BUNDLE_FILE=
 EOF
 
 echo "✓ Created infra/.env.local"
@@ -74,13 +74,10 @@ echo "dev-metrics-token" > metrics_bearer_token
 echo "dev-origin-verify-0123456789abcdefghijkl" > edge_origin_verify
 touch edge_origin_verify_previous
 
-# Create empty API key files (for fixture mode)
-touch groq_api_key
-touch openrouter_api_key
-touch runway_api_key
-touch azure_openai_api_key
+# Create the generic inference secrets bundle file (empty in fixture mode)
+touch ai_secrets_bundle
 
-echo "✓ Created core secrets (14 files)"
+echo "✓ Created core secrets (11 files)"
 
 # Create empty Temporal cert files (for local dev without TLS)
 echo "[3/3] Creating Temporal certificate placeholders..."

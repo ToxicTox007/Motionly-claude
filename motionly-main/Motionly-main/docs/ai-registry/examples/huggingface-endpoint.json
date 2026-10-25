@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "base-llm-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://api.openai.com/v1",
+      "network": "public",
+      "auth": { "type": "bearer", "secret_ref": "bundle:base-llm-endpoint" },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "OpenAI",
+        "purpose": "Planning chat and speech-to-text transcription so this example validates as a complete, required-capability-satisfying registry.",
+        "data_categories": ["text", "audio"],
+        "policy_url": "https://openai.com/policies/privacy-policy"
+      }
+    },
+    {
+      "id": "dedicated-chat-endpoint",
+      "type": "huggingface_endpoint",
+      "base_url": "https://abc123.endpoints.example.invalid",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:dedicated-chat-endpoint"
+      },
+      "timeout_s": 60,
+      "config": { "mode": "tgi" },
+      "data_processor": {
+        "display_name": "Hugging Face Inference Endpoints (TGI)",
+        "purpose": "Serves a dedicated Text Generation Inference container for planning chat. Requests are processed by the operator's own endpoint and are not retained by the hosting platform beyond request handling.",
+        "data_categories": ["text"],
+        "policy_url": "https://huggingface.co/docs/inference-endpoints/index"
+      }
+    },
+    {
+      "id": "dedicated-embeddings-endpoint",
+      "type": "huggingface_endpoint",
+      "base_url": "https://def456.endpoints.example.invalid",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:dedicated-embeddings-endpoint"
+      },
+      "timeout_s": 60,
+      "config": { "mode": "tei" },
+      "data_processor": {
+        "display_name": "Hugging Face Inference Endpoints (TEI)",
+        "purpose": "Serves a dedicated Text Embeddings Inference container for text embeddings used in B-roll ranking.",
+        "data_categories": ["text"],
+        "policy_url": "https://huggingface.co/docs/inference-endpoints/index"
+      }
+    },
+    {
+      "id": "dedicated-caption-endpoint",
+      "type": "huggingface_endpoint",
+      "base_url": "https://ghi789.endpoints.example.invalid",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:dedicated-caption-endpoint"
+      },
+      "timeout_s": 60,
+      "config": { "mode": "pipeline", "pipeline_task": "image-to-text" },
+      "data_processor": {
+        "display_name": "Hugging Face Inference Endpoints (pipeline)",
+        "purpose": "Serves a dedicated image-to-text pipeline container for keyframe captions.",
+        "data_categories": ["image"],
+        "policy_url": "https://huggingface.co/docs/inference-endpoints/index"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "base-llm-model",
+      "model_id": "gpt-4o-mini",
+      "revision": "2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat", "transcription.speech_to_text"]
+    },
+    {
+      "id": "dedicated-chat-model",
+      "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "revision": "0e9e39f249a16976918f6564b8830bc894c89659",
+      "licence": "Llama-3.1-Community",
+      "commercial_use": true,
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "dedicated-embeddings-model",
+      "model_id": "BAAI/bge-small-en-v1.5",
+      "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+      "licence": "MIT",
+      "commercial_use": true,
+      "capabilities": ["embeddings.text"]
+    },
+    {
+      "id": "dedicated-caption-model",
+      "model_id": "Salesforce/blip-image-captioning-large",
+      "revision": "2227ac38c9f16105cb0412e7cab4759978a8fd90",
+      "licence": "BSD-3-Clause",
+      "commercial_use": true,
+      "capabilities": ["vision.caption"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "planning-chat-base",
+      "capability": "planning.chat",
+      "adapter_id": "base-llm-endpoint",
+      "model_id": "gpt-4o-mini",
+      "model_ref": "base-llm-model",
+      "model_revision": "2026-10-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 0.15,
+        "output_per_million_usd": 0.6
+      },
+      "budget": { "feature": "planning", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "speech-to-text-base",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "base-llm-endpoint",
+      "model_id": "gpt-4o-mini",
+      "model_ref": "base-llm-model",
+      "model_revision": "2026-10-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": 0.0001
+      },
+      "budget": { "feature": "transcription", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "planning-chat-dedicated",
+      "capability": "planning.chat",
+      "adapter_id": "dedicated-chat-endpoint",
+      "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "model_ref": "dedicated-chat-model",
+      "model_revision": "0e9e39f249a16976918f6564b8830bc894c89659",
+      "priority": 50,
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 0.2,
+        "output_per_million_usd": 0.2
+      },
+      "budget": { "feature": "planning", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "Self-hosted Llama 3.1 8B",
+        "description": "A dedicated Text Generation Inference endpoint you run.",
+        "labels": ["quality"],
+        "quota_weight": 1.0
+      }
+    },
+    {
+      "id": "embeddings-text-dedicated",
+      "capability": "embeddings.text",
+      "adapter_id": "dedicated-embeddings-endpoint",
+      "model_id": "BAAI/bge-small-en-v1.5",
+      "model_ref": "dedicated-embeddings-model",
+      "model_revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+      "priority": 50,
+      "embedding_space": "bge-small-en-v1.5",
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "per_unit_usd": 0.00000002
+      },
+      "budget": { "feature": "embeddings", "monthly_usd": 20 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "vision-caption-dedicated",
+      "capability": "vision.caption",
+      "adapter_id": "dedicated-caption-endpoint",
+      "model_id": "Salesforce/blip-image-captioning-large",
+      "model_ref": "dedicated-caption-model",
+      "model_revision": "2227ac38c9f16105cb0412e7cab4759978a8fd90",
+      "priority": 50,
+      "pricing": {
+        "status": "priced",
+        "unit": "images",
+        "per_request_usd": 0.0005
+      },
+      "budget": { "feature": "vision_captions", "monthly_usd": 20 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "registry": "stem-separation.json",
+  "route_id": "audio-stems-remote",
+  "capability": "audio.stem_separation",
+  "request": {
+    "type": "stem_separation",
+    "source": { "b64": "c291cmNlLW1lZGlh" },
+    "model": "htdemucs",
+    "duration_s": 1
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/api/v1/upload/" },
+      "response": { "status": 403, "json": { "detail": "forbidden" } }
+    }
+  ],
+  "expect": {
+    "error": { "code": "provider_auth_failed" },
+    "requests": [
+      { "method": "POST", "path": "/api/v1/upload/", "is_upload": true }
+    ],
+    "cleanup": []
+  }
+}

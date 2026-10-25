@@ -1,0 +1,110 @@
+{
+  "registry": "stem-separation-alt.json",
+  "route_id": "audio-stems-alt-remote",
+  "capability": "audio.stem_separation",
+  "differential": false,
+  "differential_skip_reason": "Second, differently-shaped provider (single upload+commit step, GET poll on /v1/jobs/{id}, an outputs array keyed by kind/download_url). No archived vendor adapter implements this shape, so only conformance applies.",
+  "request": {
+    "type": "stem_separation",
+    "source": { "b64": "c291cmNlLW1lZGlh" },
+    "model": "htdemucs",
+    "duration_s": 61
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/jobs" },
+      "response": { "status": 200, "json": { "job_id": "job-1f2e3d" } }
+    },
+    {
+      "match": { "method": "GET", "path": "/v1/status/job-1f2e3d" },
+      "response": { "status": 200, "json": { "state": "processing" } }
+    },
+    {
+      "match": { "method": "GET", "path": "/v1/status/job-1f2e3d" },
+      "response": {
+        "status": 200,
+        "json": {
+          "state": "ready",
+          "outputs": [
+            {
+              "kind": "vocal",
+              "download_url": "https://files.stemservice.example/job-1f2e3d/vocal.wav"
+            },
+            {
+              "kind": "accompaniment",
+              "download_url": "https://files.stemservice.example/job-1f2e3d/accompaniment.wav"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "match": { "method": "DELETE", "path": "/v1/cleanup/job-1f2e3d" },
+      "response": { "status": 204 }
+    },
+    {
+      "match": {
+        "method": "GET",
+        "host": "files.stemservice.example",
+        "path": "/job-1f2e3d/vocal.wav"
+      },
+      "response": { "status": 200, "body_b64": "UklGRi12b2NhbHM=" }
+    },
+    {
+      "match": {
+        "method": "GET",
+        "host": "files.stemservice.example",
+        "path": "/job-1f2e3d/accompaniment.wav"
+      },
+      "response": { "status": 200, "body_b64": "UklGRi1iYWNr" }
+    }
+  ],
+  "expect": {
+    "output": { "stems": { "no_vocals": 9, "vocals": 11 } },
+    "usage": { "input_units": 61 },
+    "operation": { "state": "succeeded" },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "api.stemservice.example",
+        "path": "/v1/jobs",
+        "is_upload": true,
+        "header_names": [
+          "accept",
+          "authorization",
+          "content-disposition",
+          "content-type"
+        ]
+      },
+      {
+        "method": "GET",
+        "host": "api.stemservice.example",
+        "path": "/v1/status/job-1f2e3d",
+        "header_names": ["accept", "authorization"]
+      },
+      {
+        "method": "GET",
+        "host": "api.stemservice.example",
+        "path": "/v1/status/job-1f2e3d"
+      },
+      {
+        "method": "GET",
+        "host": "files.stemservice.example",
+        "path": "/job-1f2e3d/vocal.wav",
+        "header_names": ["accept"]
+      },
+      {
+        "method": "GET",
+        "host": "files.stemservice.example",
+        "path": "/job-1f2e3d/accompaniment.wav",
+        "header_names": ["accept"]
+      },
+      {
+        "method": "DELETE",
+        "host": "api.stemservice.example",
+        "path": "/v1/cleanup/job-1f2e3d"
+      }
+    ],
+    "cleanup": [{ "method": "DELETE", "path": "/v1/cleanup/job-1f2e3d" }]
+  }
+}

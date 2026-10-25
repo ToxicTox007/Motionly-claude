@@ -87,16 +87,14 @@
       "locations": [
         "apps/api/app/services/transcription_provider.py#WhisperCompatibleHttpProvider",
         "apps/api/app/services/scale.py#DemucsStemSeparator",
-        "apps/api/app/services/scale.py#RunwayGen3Provider",
         "apps/api/app/services/stock_video.py#PexelsStockVideoProvider",
         "apps/api/app/services/stock_video.py#PixabayStockVideoProvider",
         "apps/api/app/services/stock_video.py#CompatibleClipEmbeddingProvider",
         "apps/api/app/services/model_domain_adapters.py#LocalClipEmbeddingsAdapter",
         "apps/api/app/services/model_domain_adapters.py#GatewayClipEmbeddingProvider",
-        "apps/api/app/services/model_domain_adapters.py#RunwayVideoGenerationAdapter",
         "apps/api/app/services/model_adapters.py#AzureOpenAIAdapter"
       ],
-      "reason": "The real external/GPU model providers (Whisper STT, Demucs stems, Runway Gen-3 video, Pexels/Pixabay stock, CLIP embeddings, Azure OpenAI). The CPU stage selects the Fixture* stand-ins for every one of these (fixtures/registry.json), so the real providers are constructed only when their API keys / GPU are present, which the CPU stage never configures. They are selected by the model_gateway factory and provider config in the GPU stage or with live provider accounts.",
+      "reason": "The real external/GPU model providers (Whisper STT, Demucs stems, Pexels/Pixabay stock, CLIP embeddings, Azure OpenAI). The CPU stage selects the Fixture* stand-ins for every one of these (fixtures/registry.json), so the real providers are constructed only when their API keys / GPU are present, which the CPU stage never configures. They are selected by the model_gateway factory and provider config in the GPU stage or with live provider accounts.",
       "exercised_by": "apps/api/tests/test_provider_contracts.py (recorded/contract), optional[live-provider-contracts] (live), gpu-stage[local-audit-gpu-inference-smoke]/[local-audit-matte-smoke]"
     }
   ]

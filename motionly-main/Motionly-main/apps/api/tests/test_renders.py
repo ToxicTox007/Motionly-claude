@@ -42,9 +42,11 @@ from app.repositories.renders import (
     RENDER_JOB_COLUMNS,
     RENDER_JOB_EVENT_COLUMNS,
     InMemoryRenderRepository,
+    RenderJobRecord,
     SupabaseRenderRepository,
 )
 from app.repositories.uploads import InMemoryUploadRepository
+from app.schemas.billing import UsageEventType
 from app.schemas.broll import BrollSlotStatus, StockOrientation, StockProviderKey
 from app.schemas.captions import CaptionPresetKey, LanguageHint
 from app.schemas.effects import (
@@ -232,11 +234,12 @@ def seed_broll_slot(
     broll_repository: InMemoryBrollRepository,
     project_id,
     workspace_id,
+    provider: StockProviderKey = StockProviderKey.PEXELS,
 ):
     asset = broll_repository.upsert_asset(
         workspace_id=workspace_id,
         project_id=project_id,
-        provider=StockProviderKey.PEXELS,
+        provider=provider,
         provider_asset_id="pexels-vertical-1",
         title="Founder workspace vertical clip",
         thumbnail_url="https://cdn.example.com/thumb.jpg",
@@ -387,6 +390,29 @@ def make_real_render_request(tmp_path, *, music_repository=None, effects_reposit
     if effects_repository is not None:
         request.app.state.effects_repository = effects_repository
     return request
+
+
+def test_existing_generated_broll_asset_still_renders() -> None:
+    # Task 18: a B-roll asset stored under the neutral 'generated' provider key
+    # (what generated clips now use, and what the migration backfilled legacy
+    # rows to) is selectable and carries a renderable download URL, so existing
+    # generated B-roll still renders.
+    plan_repository = InMemoryPlanRepository(None)
+    broll_repository = InMemoryBrollRepository(plan_repository)
+    project_id = uuid4()
+    workspace_id = uuid4()
+    slot = seed_broll_slot(
+        broll_repository=broll_repository,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        provider=StockProviderKey.GENERATED,
+    )
+    response = broll_repository.response_for_slot(slot)
+    assert response.provider is StockProviderKey.GENERATED
+    assert response.selected_asset is not None
+    assert response.selected_asset.provider is StockProviderKey.GENERATED
+    assert response.selected_asset.download_url
+    assert response.status is BrollSlotStatus.READY
 
 
 def test_render_create_completes_export_and_events() -> None:
@@ -685,7 +711,14 @@ def test_render_timeline_retimes_captions_and_broll_after_cuts() -> None:
     )
 
     assert retimed_segments
-    assert retimed_segments[0].start_ms == 0
+    # The first caption starts with its first word (240 ms into the kept
+    # section), not snapped to the start of the section. A caption that
+    # straddles a cut starts at the cut, never earlier than its own words.
+    assert retimed_segments[0].start_ms == 240
+    assert retimed_segments[0].start_ms == retimed_segments[0].words[0].start_ms
+    for segment in retimed_segments:
+        if segment.words:
+            assert segment.start_ms <= segment.words[0].start_ms
     assert retimed_broll == (1500, 2300)
 
     request = make_request()
@@ -703,8 +736,10 @@ def test_render_timeline_retimes_captions_and_broll_after_cuts() -> None:
     )
 
     first_caption = response.job.manifest["render_props"]["captions"][0]
-    assert first_caption["start_ms"] == 0
-    assert "Dialogue: 0,0:00:00." in response.job.manifest["caption_ass"]
+    # Keep segment 90-7000 ms; the first word is at 240 ms in the source, so
+    # 150 ms in the output, and the caption appears with it (not at 0).
+    assert first_caption["start_ms"] == first_caption["words"][0]["start_ms"] == 150
+    assert "Dialogue: 0,0:00:00.15," in response.job.manifest["caption_ass"]
 
 
 def test_source_timeline_maps_cuts_and_manual_elements_to_output_time() -> None:
@@ -2056,7 +2091,21 @@ def test_render_manifest_applies_motion_auto_reframe_to_export_framing() -> None
     assert response.job.manifest["export_settings"]["framing"] == framing
 
 
-def test_render_manifest_includes_selected_broll_assets() -> None:
+def test_render_manifest_includes_selected_broll_assets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Hermetic under the no-network guard (Task 1): the selected B-roll asset uses
+    # an https://cdn.example.com URL that the render preflight would otherwise
+    # download over the real network. Stub materialization to a local file so the
+    # test exercises manifest shaping without any outbound connection.
+    def _local_media(value, *, storage, max_bytes):  # noqa: ANN001
+        del value, max_bytes
+        target = storage.object_path(bucket="tmp", path="outbound-media/stub.mp4")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"\x00" * 16)
+        return target
+
+    monkeypatch.setattr("app.services.render_jobs._materialize_external_media", _local_media)
     repository, project_id, workspace_id, user_id = make_render_repository()
     plan_repository = InMemoryPlanRepository(repository.caption_repository)
     broll_repository = InMemoryBrollRepository(plan_repository)
@@ -2724,9 +2773,7 @@ def test_post_upload_cancellation_deletes_uncommitted_export(
         render_job_id=response.job_id,
         workspace_id=workspace_id,
     )
-    _seed_render_source(
-        settings=SimpleNamespace(media_work_dir=str(tmp_path)), job=queued_job
-    )
+    _seed_render_source(settings=SimpleNamespace(media_work_dir=str(tmp_path)), job=queued_job)
 
     class QuietRenderer:
         def render(self, *, output_path, **_kwargs):
@@ -2756,13 +2803,13 @@ def test_post_upload_cancellation_deletes_uncommitted_export(
         renderer=QuietRenderer(),
     )
 
-    export_path = (
-        f"workspaces/{workspace_id}/projects/{project_id}/exports/{queued_job.id}.mp4"
-    )
+    export_path = f"workspaces/{workspace_id}/projects/{project_id}/exports/{queued_job.id}.mp4"
     assert result.status == RenderJobStatus.CANCELED
-    assert not LocalObjectStorage(root=tmp_path).object_path(
-        bucket="exports", path=export_path
-    ).exists()
+    assert (
+        not LocalObjectStorage(root=tmp_path)
+        .object_path(bucket="exports", path=export_path)
+        .exists()
+    )
     assert repository.list_exports(project_id=project_id, workspace_id=workspace_id) == []
 
 
@@ -2841,3 +2888,645 @@ def _async_return(flag: dict):
         return bool(flag["value"])
 
     return _is_disconnected
+
+
+# --------------------------------------------------------------------------
+# Monthly render limit: queued renders hold a slot (free plan = 3 per month)
+# --------------------------------------------------------------------------
+
+
+def _queue_render(repository, project_id, workspace_id, user_id, billing_repository):
+    # force=True: these tests need separate renders of the same props, which
+    # are otherwise de-duplicated while one is in flight.
+    return asyncio.run(
+        create_render_api(
+            project_id=project_id,
+            payload=RenderCreateRequest(force=True),
+            request=make_request(complete_locally=False),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=billing_repository,
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=RenderQueue(),
+        )
+    )
+
+
+def _workspace_jobs(repository, workspace_id):
+    return [job for job in repository.render_jobs.values() if job.workspace_id == workspace_id]
+
+
+def test_queued_renders_count_against_the_monthly_limit() -> None:
+    """Renders are counted when created, not only when they finish."""
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    billing = InMemoryBillingRepository()
+    for _ in range(3):
+        assert _queue_render(repository, project_id, workspace_id, user_id, billing).status == (
+            "queued"
+        )
+
+    with pytest.raises(ApiError) as exc_info:
+        _queue_render(repository, project_id, workspace_id, user_id, billing)
+
+    assert exc_info.value.status_code == 402
+    assert exc_info.value.code == "render_limit_exceeded"
+    assert len(_workspace_jobs(repository, workspace_id)) == 3
+
+
+def test_failed_and_canceled_renders_give_their_slot_back() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    billing = InMemoryBillingRepository()
+    jobs = [_queue_render(repository, project_id, workspace_id, user_id, billing) for _ in range(3)]
+    record = repository.render_jobs[jobs[0].job_id]
+    repository.transition_job(
+        job=record,
+        status=RenderJobStatus.FAILED,
+        progress_pct=record.progress_pct,
+        message="failed",
+    )
+
+    assert _queue_render(repository, project_id, workspace_id, user_id, billing).status == "queued"
+
+
+def test_completed_renders_count_even_without_ledger_usage() -> None:
+    """Premium (worker-completed) renders record no ledger usage; they still count."""
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    billing = InMemoryBillingRepository()
+    for _ in range(3):
+        queued = _queue_render(repository, project_id, workspace_id, user_id, billing)
+        record = repository.render_jobs[queued.job_id]
+        record.status = RenderJobStatus.COMPLETE
+    assert (
+        billing.count_usage(
+            workspace_id=workspace_id,
+            event_type=UsageEventType.RENDER_SUCCEEDED,
+        )
+        == 0
+    )
+
+    with pytest.raises(ApiError) as exc_info:
+        _queue_render(repository, project_id, workspace_id, user_id, billing)
+    assert exc_info.value.code == "render_limit_exceeded"
+
+
+def test_concurrent_render_that_loses_the_last_slot_is_canceled_and_not_queued() -> None:
+    """Both requests pass the up-front check; the later-created render loses."""
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    billing = InMemoryBillingRepository()
+    for _ in range(2):
+        _queue_render(repository, project_id, workspace_id, user_id, billing)
+
+    original_create = repository.create_render_job
+    competitor: dict[str, object] = {}
+
+    def create_after_a_competitor(**values):
+        # A parallel request that also passed the up-front check (2 of 3 used)
+        # creates its render first.
+        competitor["job"] = original_create(**values)
+        repository.create_render_job = original_create
+        return original_create(**values)
+
+    repository.create_render_job = create_after_a_competitor
+    queue = RenderQueue()
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            create_render_api(
+                project_id=project_id,
+                payload=RenderCreateRequest(force=True),
+                request=make_request(complete_locally=False),
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                billing_repository=billing,
+                plan_repository=InMemoryPlanRepository(repository.caption_repository),
+                render_queue=queue,
+            )
+        )
+
+    assert exc_info.value.code == "render_limit_exceeded"
+    holding_slot = [
+        job
+        for job in _workspace_jobs(repository, workspace_id)
+        if job.status not in {RenderJobStatus.FAILED, RenderJobStatus.CANCELED}
+    ]
+    assert len(holding_slot) == 3
+    assert competitor["job"] in holding_slot
+    lost = [job for job in _workspace_jobs(repository, workspace_id) if job not in holding_slot]
+    assert len(lost) == 1
+    assert lost[0].status == RenderJobStatus.CANCELED
+    assert lost[0].error_code == "render_limit_exceeded"
+    # The losing render was never handed to the queue (the simulated
+    # competitor was inserted directly, so this request enqueued nothing).
+    assert queue.registry.jobs == {}
+
+
+def test_render_slot_ranking_keeps_the_earliest_renders() -> None:
+    from app.api.billing import render_slots_in_use
+
+    first, second, third = uuid4(), uuid4(), uuid4()
+    slot_jobs = [
+        (first, RenderJobStatus.QUEUED),
+        (second, RenderJobStatus.RENDERING),
+        (third, RenderJobStatus.QUEUED),
+    ]
+    assert render_slots_in_use(renders_succeeded=1, slot_jobs=slot_jobs) == 4
+    # Confirming a just-created render counts only in-progress renders ahead of it.
+    assert render_slots_in_use(renders_succeeded=1, slot_jobs=slot_jobs, ahead_of=first) == 1
+    assert render_slots_in_use(renders_succeeded=1, slot_jobs=slot_jobs, ahead_of=third) == 3
+    # Not in the (truncated) list: it is past the limit.
+    assert render_slots_in_use(renders_succeeded=0, slot_jobs=slot_jobs, ahead_of=uuid4()) is None
+    # Completed renders count from whichever source is larger.
+    done = [(uuid4(), RenderJobStatus.COMPLETE), (uuid4(), RenderJobStatus.COMPLETE)]
+    assert render_slots_in_use(renders_succeeded=1, slot_jobs=done) == 2
+    assert render_slots_in_use(renders_succeeded=5, slot_jobs=done) == 5
+
+
+def test_bulk_render_that_does_not_fit_creates_nothing() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    billing = InMemoryBillingRepository()
+    _queue_render(repository, project_id, workspace_id, user_id, billing)
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            create_bulk_render(
+                project_id=project_id,
+                payload=RenderBulkCreateRequest(
+                    export_targets=[
+                        ExportOptions(platform_preset=PlatformPreset.TIKTOK),
+                        ExportOptions(platform_preset=PlatformPreset.INSTAGRAM),
+                        ExportOptions(platform_preset=PlatformPreset.SHORTS),
+                    ]
+                ),
+                request=make_request(complete_locally=False),
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                billing_repository=billing,
+                plan_repository=InMemoryPlanRepository(repository.caption_repository),
+                render_queue=RenderQueue(),
+            )
+        )
+
+    assert exc_info.value.code == "render_limit_exceeded"
+    assert len(_workspace_jobs(repository, workspace_id)) == 1
+
+
+def test_retrying_a_failed_render_is_subject_to_the_limit() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    billing = InMemoryBillingRepository()
+    jobs = [_queue_render(repository, project_id, workspace_id, user_id, billing) for _ in range(3)]
+    failed = repository.render_jobs[jobs[0].job_id]
+    repository.transition_job(
+        job=failed,
+        status=RenderJobStatus.FAILED,
+        progress_pct=failed.progress_pct,
+        message="failed",
+    )
+    # The freed slot is taken by a new render before the retry.
+    _queue_render(repository, project_id, workspace_id, user_id, billing)
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            retry_render(
+                project_id=project_id,
+                render_job_id=failed.id,
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                render_queue=RenderQueue(),
+                request=make_request(complete_locally=False),
+                billing_repository=billing,
+            )
+        )
+    assert exc_info.value.code == "render_limit_exceeded"
+    assert failed.status == RenderJobStatus.FAILED
+
+
+def test_render_limit_is_not_applied_when_billing_is_disabled() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    request = make_request(complete_locally=False)
+    request.app.state.settings.billing_enabled = False
+    for _ in range(5):
+        asyncio.run(
+            create_render_api(
+                project_id=project_id,
+                payload=RenderCreateRequest(force=True),
+                request=request,
+                actor=Actor(user_id=user_id, workspace_id=workspace_id),
+                repository=repository,
+                billing_repository=InMemoryBillingRepository(),
+                plan_repository=InMemoryPlanRepository(repository.caption_repository),
+                render_queue=RenderQueue(),
+            )
+        )
+    assert len(_workspace_jobs(repository, workspace_id)) == 5
+
+
+@pytest.mark.anyio
+async def test_supabase_render_slot_query_is_workspace_scoped_bounded_and_ordered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = make_supabase_render_repository()
+    workspace_id = uuid4()
+    first, second = uuid4(), uuid4()
+    rows = [
+        {"id": str(first), "status": "running", "progress_pct": 40},
+        {"id": str(second), "status": "succeeded", "progress_pct": 100},
+    ]
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return _supabase_response(rows)
+
+    async def fake_async_request(_self, method, path, **kwargs):
+        return fake_request(_self, method, path, **kwargs)
+
+    monkeypatch.setattr("app.repositories.renders.SupabaseRestClient.request", fake_request)
+    monkeypatch.setattr(
+        "app.repositories.renders.SupabaseRestClient.async_request", fake_async_request
+    )
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    end = datetime(2026, 11, 1, tzinfo=UTC)
+
+    sync_rows = repository.list_render_slot_jobs(
+        workspace_id=workspace_id, period_start=start, period_end=end, limit=4
+    )
+    async_rows = await repository.list_render_slot_jobs_async(
+        workspace_id=workspace_id, period_start=start, period_end=end, limit=4
+    )
+
+    # Legacy DB statuses map onto the app statuses the slot count relies on.
+    expected = [(first, RenderJobStatus.PREPARING), (second, RenderJobStatus.COMPLETE)]
+    assert sync_rows == async_rows == expected
+    for method, path, kwargs in calls:
+        assert (method, path) == ("GET", "/render_jobs")
+        assert kwargs["params"] == {
+            "workspace_id": f"eq.{workspace_id}",
+            "created_at": [f"gte.{start.isoformat()}", f"lt.{end.isoformat()}"],
+            "status": "not.in.(failed,canceled)",
+            "select": "id,status,progress_pct",
+            "order": "created_at.asc,id.asc",
+            "limit": "4",
+        }
+
+
+# --------------------------------------------------------------------------
+# Cancel vs. worker completion: a finished render is never overwritten
+# --------------------------------------------------------------------------
+
+
+def _complete_concurrently(repository, job_id, *, artifact_path="exports/done.mp4"):
+    stored = repository.render_jobs[job_id]
+    stored.artifact_path = artifact_path
+    repository.transition_job(
+        job=stored,
+        status=RenderJobStatus.COMPLETE,
+        progress_pct=100,
+        message="Export is ready to download.",
+        event_type="completed",
+    )
+
+
+def test_cancel_does_not_overwrite_a_render_the_worker_just_completed() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    billing = InMemoryBillingRepository()
+    queued = _queue_render(repository, project_id, workspace_id, user_id, billing)
+    actor = Actor(user_id=user_id, workspace_id=workspace_id)
+
+    class _CompletingQueue(RenderQueue):
+        """The worker finishes the render while the cancel request is in flight."""
+
+        def cancel(self, job_id: str):
+            _complete_concurrently(repository, queued.job_id)
+            return super().cancel(job_id)
+
+    with pytest.raises(ApiError) as exc_info:
+        asyncio.run(
+            cancel_render(
+                project_id=project_id,
+                render_job_id=queued.job_id,
+                actor=actor,
+                repository=repository,
+                render_queue=_CompletingQueue(),
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == "render_not_cancelable"
+    stored = repository.render_jobs[queued.job_id]
+    assert stored.status == RenderJobStatus.COMPLETE
+    assert stored.artifact_path == "exports/done.mp4"
+    assert stored.error_code is None
+    events = [event.event_type for event in repository.events_for_job(stored.id)]
+    assert "cancelled" not in events
+
+
+def test_admin_cancel_does_not_overwrite_a_completed_render() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    queued = _queue_render(
+        repository, project_id, workspace_id, user_id, InMemoryBillingRepository()
+    )
+    original_get = repository.get_render_job_by_id
+
+    def stale_read(*, render_job_id):
+        # Another API process reads the job as queued, then the worker completes it.
+        job = original_get(render_job_id=render_job_id)
+        snapshot = RenderJobRecord(**{**job.__dict__})
+        _complete_concurrently(repository, render_job_id)
+        return snapshot
+
+    repository.get_render_job_by_id = stale_read
+
+    with pytest.raises(ApiError) as exc_info:
+        repository.cancel_render_job_by_id(render_job_id=queued.job_id)
+
+    assert exc_info.value.code == "render_not_cancelable"
+    assert repository.render_jobs[queued.job_id].status == RenderJobStatus.COMPLETE
+
+
+def test_supabase_cancel_is_a_conditional_patch_that_keeps_worker_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = make_supabase_render_repository()
+    workspace_id, project_id, render_job_id = uuid4(), uuid4(), uuid4()
+    job = repository._job_from_row(_render_job_row(render_job_id, project_id, workspace_id))
+    job.artifact_path = "stale/request/copy.mp4"
+    calls = []
+    responses = {"/render_jobs": []}
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/render_job_events":
+            return _supabase_response([_render_event_row(render_job_id, project_id, workspace_id)])
+        return _supabase_response(responses[path])
+
+    monkeypatch.setattr("app.repositories.renders.SupabaseRestClient.request", fake_request)
+
+    # The worker completed the row first: the conditional PATCH matches nothing.
+    with pytest.raises(ApiError) as exc_info:
+        repository.transition_job(
+            job=job,
+            status=RenderJobStatus.CANCELED,
+            progress_pct=40,
+            message="Render canceled.",
+            event_type="cancelled",
+            require_active=True,
+        )
+    assert exc_info.value.code == "render_not_cancelable"
+    method, path, kwargs = calls[0]
+    assert (method, path) == ("PATCH", "/render_jobs")
+    assert kwargs["params"]["status"] == "not.in.(complete,succeeded,failed,canceled)"
+    for worker_owned in ("artifact_path", "benchmark_ms", "logs"):
+        assert worker_owned not in kwargs["json"]
+    # No event is written for a cancel that did not happen.
+    assert [call[1] for call in calls] == ["/render_jobs"]
+
+    # Still active: the cancel applies.
+    responses["/render_jobs"] = [
+        {**_render_job_row(render_job_id, project_id, workspace_id), "status": "canceled"}
+    ]
+    calls.clear()
+    canceled = repository.transition_job(
+        job=job,
+        status=RenderJobStatus.CANCELED,
+        progress_pct=40,
+        message="Render canceled.",
+        require_active=True,
+    )
+    assert canceled.status == RenderJobStatus.CANCELED
+    assert [call[1] for call in calls] == ["/render_jobs", "/render_job_events"]
+
+
+def test_unconditional_supabase_transitions_are_unchanged(monkeypatch) -> None:
+    """Worker-driven transitions still persist the artifact and logs they carry."""
+    repository = make_supabase_render_repository()
+    workspace_id, project_id, render_job_id = uuid4(), uuid4(), uuid4()
+    row = _render_job_row(render_job_id, project_id, workspace_id)
+    job = repository._job_from_row(row)
+    job.artifact_path = "exports/final.mp4"
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/render_job_events":
+            return _supabase_response([_render_event_row(render_job_id, project_id, workspace_id)])
+        return _supabase_response([row])
+
+    monkeypatch.setattr("app.repositories.renders.SupabaseRestClient.request", fake_request)
+    repository.transition_job(
+        job=job,
+        status=RenderJobStatus.COMPLETE,
+        progress_pct=100,
+        message="Export is ready to download.",
+    )
+    _, _, kwargs = calls[0]
+    assert "status" not in kwargs["params"]
+    assert kwargs["json"]["artifact_path"] == "exports/final.mp4"
+    assert "logs" in kwargs["json"]
+
+
+# --------------------------------------------------------------------------
+# Caption retiming after cuts
+# --------------------------------------------------------------------------
+
+
+def _caption(start_ms, end_ms, words):
+    from app.schemas.captions import CaptionSegment, TranscriptWord
+
+    return CaptionSegment(
+        index=0,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        text=" ".join(text for text, _s, _e in words),
+        words=[
+            TranscriptWord(index=i, text=text, start_ms=s, end_ms=e, confidence=None)
+            for i, (text, s, e) in enumerate(words)
+        ],
+    )
+
+
+def test_first_caption_in_a_kept_section_keeps_its_offset() -> None:
+    """Regression: the first caption per kept section was snapped to its start."""
+    retimed = retime_caption_segments_for_keep_segments(
+        segments=[_caption(5000, 6000, [("hello", 5000, 6000)])],
+        keep_segments=[CutSegment(start_ms=2000, end_ms=10000, reason="keep")],
+    )
+    assert (retimed[0].start_ms, retimed[0].end_ms) == (3000, 4000)
+    assert (retimed[0].words[0].start_ms, retimed[0].words[0].end_ms) == (3000, 4000)
+
+
+def test_every_kept_section_maps_captions_by_offset() -> None:
+    segments = [
+        _caption(1500, 2500, [("one", 1500, 2500)]),
+        _caption(6200, 7000, [("two", 6200, 7000)]),
+    ]
+    keeps = [
+        CutSegment(start_ms=1000, end_ms=3000, reason="a"),
+        CutSegment(start_ms=6000, end_ms=8000, reason="b"),
+    ]
+    retimed = retime_caption_segments_for_keep_segments(segments=segments, keep_segments=keeps)
+    # Section a: output 0-2000; section b: output 2000-4000.
+    assert [(s.start_ms, s.end_ms) for s in retimed] == [(500, 1500), (2200, 3000)]
+
+
+def test_caption_retiming_matches_the_timeline_compiler() -> None:
+    from app.schemas.plans import TimelineSourceClip
+    from app.services.timeline_compiler import _caption_layers
+
+    segments = [
+        _caption(1500, 2500, [("one", 1500, 2500)]),
+        _caption(2800, 6400, [("across", 2800, 3000), ("the", 6000, 6400)]),
+    ]
+    keeps = [
+        CutSegment(start_ms=1000, end_ms=3000, reason="a"),
+        CutSegment(start_ms=6000, end_ms=8000, reason="b"),
+    ]
+    clips = []
+    cursor = 0
+    for index, keep in enumerate(keeps):
+        length = keep.end_ms - keep.start_ms
+        clips.append(
+            TimelineSourceClip(
+                id=f"cut-{index}",
+                source_video_id=None,
+                source_start_ms=keep.start_ms,
+                source_end_ms=keep.end_ms,
+                output_start_ms=cursor,
+                output_end_ms=cursor + length,
+                reason=keep.reason,
+            )
+        )
+        cursor += length
+
+    retimed = retime_caption_segments_for_keep_segments(segments=segments, keep_segments=keeps)
+    layers = _caption_layers(segments, clips=clips, style={})
+    # The compiler iterates captions then clips; the render path keeps then
+    # captions. Compare as sets of output ranges.
+    assert sorted((s.start_ms, s.end_ms) for s in retimed) == sorted(
+        (layer.start_ms, layer.end_ms) for layer in layers
+    )
+
+
+# --------------------------------------------------------------------------
+# Duplicate-render protection (identical props while one is in flight)
+# --------------------------------------------------------------------------
+
+
+def _create(repository, project_id, workspace_id, user_id, queue, *, force=False):
+    return asyncio.run(
+        create_render_api(
+            project_id=project_id,
+            payload=RenderCreateRequest(force=force),
+            request=make_request(complete_locally=False),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=queue,
+        )
+    )
+
+
+def test_a_repeated_identical_render_returns_the_one_in_flight() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    queue = RenderQueue()
+
+    first = _create(repository, project_id, workspace_id, user_id, queue)
+    second = _create(repository, project_id, workspace_id, user_id, queue)
+
+    assert second.job_id == first.job_id
+    assert second.queue_job_id == first.queue_job_id
+    assert len(_workspace_jobs(repository, workspace_id)) == 1
+    assert len(queue.registry.jobs) == 1
+
+
+def test_force_creates_a_separate_render() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    queue = RenderQueue()
+
+    first = _create(repository, project_id, workspace_id, user_id, queue)
+    forced = _create(repository, project_id, workspace_id, user_id, queue, force=True)
+
+    assert forced.job_id != first.job_id
+    assert len(queue.registry.jobs) == 2
+
+
+def test_a_finished_or_failed_render_does_not_block_a_new_identical_one() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    queue = RenderQueue()
+    first = _create(repository, project_id, workspace_id, user_id, queue)
+    record = repository.render_jobs[first.job_id]
+    repository.transition_job(
+        job=record, status=RenderJobStatus.FAILED, progress_pct=5, message="failed"
+    )
+
+    again = _create(repository, project_id, workspace_id, user_id, queue)
+    assert again.job_id != first.job_id
+
+
+def test_different_render_settings_are_not_duplicates() -> None:
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    queue = RenderQueue()
+    first = _create(repository, project_id, workspace_id, user_id, queue)
+    other = asyncio.run(
+        create_render_api(
+            project_id=project_id,
+            payload=RenderCreateRequest(include_captions=False),
+            request=make_request(complete_locally=False),
+            actor=Actor(user_id=user_id, workspace_id=workspace_id),
+            repository=repository,
+            billing_repository=InMemoryBillingRepository(),
+            plan_repository=InMemoryPlanRepository(repository.caption_repository),
+            render_queue=queue,
+        )
+    )
+    assert other.job_id != first.job_id
+
+
+def test_concurrent_identical_renders_keep_only_the_oldest() -> None:
+    """Both requests pass the pre-check; the later-created render is canceled."""
+    repository, project_id, workspace_id, user_id = make_render_repository()
+    original_create = repository.create_render_job
+    competitor: dict[str, object] = {}
+
+    def create_after_a_competitor(**values):
+        competitor["job"] = original_create(**values)
+        repository.create_render_job = original_create
+        return original_create(**values)
+
+    repository.create_render_job = create_after_a_competitor
+    queue = RenderQueue()
+
+    response = _create(repository, project_id, workspace_id, user_id, queue)
+
+    assert response.job_id == competitor["job"].id
+    jobs = _workspace_jobs(repository, workspace_id)
+    assert len(jobs) == 2
+    loser = next(job for job in jobs if job.id != competitor["job"].id)
+    assert loser.status == RenderJobStatus.CANCELED
+    assert loser.error_code == "render_duplicate"
+    # This request queued nothing: the competitor's request queues its own job.
+    assert queue.registry.jobs == {}
+
+
+def test_supabase_duplicate_lookup_is_scoped_and_ordered(monkeypatch) -> None:
+    repository = make_supabase_render_repository()
+    workspace_id, project_id = uuid4(), uuid4()
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return _supabase_response([])
+
+    monkeypatch.setattr("app.repositories.renders.SupabaseRestClient.request", fake_request)
+    assert (
+        repository.list_inflight_duplicate_jobs(
+            workspace_id=workspace_id, project_id=project_id, props_hash="a" * 64, limit=1
+        )
+        == []
+    )
+    params = calls[0][2]["params"]
+    assert params["workspace_id"] == f"eq.{workspace_id}"
+    assert params["project_id"] == f"eq.{project_id}"
+    assert params["props_hash"] == f"eq.{'a' * 64}"
+    assert params["workflow_run_id"] == "is.null"
+    assert params["status"] == "not.in.(complete,succeeded,failed,canceled)"
+    assert params["order"] == "created_at.asc,id.asc"

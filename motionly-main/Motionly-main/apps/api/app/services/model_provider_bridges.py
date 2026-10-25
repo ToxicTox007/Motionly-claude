@@ -26,7 +26,13 @@ from app.services.transcription_provider import (
 
 @dataclass(frozen=True, kw_only=True)
 class GatewayEditPlannerProvider(HttpEditPlannerProvider):
-    """Compatibility bridge that keeps plan validation while centralizing model I/O."""
+    """Gateway-only planner bridge: keeps plan validation while routing model I/O.
+
+    Planning runs only through the provider-neutral model gateway (Task 10). The
+    gateway's :class:`PlanFeatureQuotaGuard` records and (under
+    ``AI_QUOTA_SCOPE=feature``) enforces the ``planning`` feature quota on each
+    call, so the bridge no longer needs a billing repository of its own.
+    """
 
     gateway: ModelGateway = field(repr=False, compare=False)
 
@@ -41,25 +47,37 @@ class GatewayEditPlannerProvider(HttpEditPlannerProvider):
         billing_repository: Any = None,
         operations_repository: Any = None,
     ) -> PlannerProviderResult:
+        # Planning quota is metered inside the gateway (the route carries the
+        # ``planning`` budget_feature), not by the planner bridge. The repository
+        # arguments are accepted for the EditPlannerProvider protocol only.
         result = super().create_plan(
             transcript=transcript,
             payload=payload,
             video_duration_ms=video_duration_ms,
             visual_manifest=visual_manifest,
             style_classification=style_classification,
-            billing_repository=None,
-            operations_repository=None,
+            billing_repository=billing_repository,
+            operations_repository=operations_repository,
         )
         usage = result.raw_payload.get("usage")
         metadata = usage.get("_motionly_gateway") if isinstance(usage, dict) else None
         if not isinstance(metadata, dict):
             return result
-        clean_usage = {key: value for key, value in usage.items() if key != "_motionly_gateway"}
+        model_choice = usage.get("_motionly_model_choice") if isinstance(usage, dict) else None
+        clean_usage = {
+            key: value
+            for key, value in usage.items()
+            if key not in {"_motionly_gateway", "_motionly_model_choice"}
+        }
         raw_payload = {
             **result.raw_payload,
             "usage": clean_usage,
             "model_gateway": metadata,
         }
+        if isinstance(model_choice, dict):
+            # Plan response provenance (plan Section 2.11): the user's chosen vs.
+            # served model and any fallback reason.
+            raw_payload["model_choice"] = model_choice
         return result.model_copy(
             update={
                 "provider": str(metadata.get("provider") or result.provider),
@@ -132,6 +150,11 @@ class GatewayEditPlannerProvider(HttpEditPlannerProvider):
             }
         )
         typed_usage["_motionly_gateway"] = result.metadata.as_dict()
+        # Plan Section 2.11 / Task 31: carry the model choice provenance into the
+        # plan response so the UI can tell the user which model served, and when
+        # a fallback happened.
+        if result.model_choice is not None:
+            typed_usage["_motionly_model_choice"] = result.model_choice.as_dict()
         raw_response["usage"] = typed_usage
         return raw_response
 

@@ -2,7 +2,6 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
-import httpx
 import pytest
 
 from app.api.dependencies import Actor
@@ -22,17 +21,12 @@ from app.schemas.uploads import UploadStatus, VideoMetadata
 from app.services.job_engine import run_queue_job
 from app.services.local_storage import LocalObjectStorage
 from app.services.ml_failures import CudaOomFailure, clear_cuda_cache, is_cuda_oom_error
-from app.services.provider_resilience import (
-    ProviderCallFailure,
-    provider_circuit_breaker,
-)
 from app.services.queue import PlanQueue, QueueRegistry, VisualQueue
 from app.services.transcript_quality import assess_transcript_quality
 from app.services.transcription_jobs import run_transcription_for_upload
 from app.services.transcription_provider import (
     FixtureTranscriptionProvider,
     TranscriptionResult,
-    WhisperCompatibleHttpProvider,
 )
 
 
@@ -61,7 +55,7 @@ class EmptyTranscriptionProvider(FixtureTranscriptionProvider):
 
 
 class AudioHttpProvider:
-    provider_name = "groq"
+    provider_name = "provider-b"
     model = "whisper-test"
 
     def transcribe(self, *, audio_path, language_hint):  # noqa: ANN001
@@ -295,137 +289,6 @@ def test_valid_transcript_still_proceeds_normally(tmp_path) -> None:
     assert transcript.status == "ready"
     assert transcript.quality_status == TranscriptQualityStatus.OK
     assert transcript.words
-
-
-def test_transcription_provider_timeout_retries_with_bounded_backoff(monkeypatch, tmp_path) -> None:
-    provider_circuit_breaker.reset()
-    audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"RIFF")
-    calls = 0
-    sleeps: list[float] = []
-
-    def timeout(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        raise httpx.TimeoutException("timed out")
-
-    monkeypatch.setattr("app.services.transcription_provider.httpx.post", timeout)
-    monkeypatch.setattr("app.services.transcription_provider.time.sleep", sleeps.append)
-
-    with pytest.raises(ProviderCallFailure) as exc_info:
-        WhisperCompatibleHttpProvider(
-            endpoint="https://groq.test/transcribe",
-            api_key="secret",
-            model="whisper",
-            provider_name="groq-timeout",
-        ).transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
-
-    assert calls == 3
-    assert sleeps == [0.5, 1.0]
-    assert exc_info.value.error_info.code == "provider_timeout"
-
-
-def test_transcription_provider_maps_rate_limit_auth_and_malformed(monkeypatch, tmp_path) -> None:
-    provider_circuit_breaker.reset()
-    audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"RIFF")
-    monkeypatch.setattr("app.services.transcription_provider.time.sleep", lambda _seconds: None)
-
-    def http_response(
-        status_code: int,
-        *,
-        json_body: dict[str, object] | None = None,
-    ) -> httpx.Response:
-        return httpx.Response(
-            status_code,
-            json=json_body if json_body is not None else {"words": []},
-            request=httpx.Request("POST", "https://groq.test/transcribe"),
-        )
-
-    monkeypatch.setattr(
-        "app.services.transcription_provider.httpx.post",
-        lambda *_args, **_kwargs: http_response(429),
-    )
-    with pytest.raises(ProviderCallFailure) as rate_limit:
-        WhisperCompatibleHttpProvider(
-            endpoint="https://groq.test/transcribe",
-            api_key="secret",
-            model="whisper",
-            provider_name="groq-rate",
-        ).transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
-    assert rate_limit.value.error_info.code == "provider_rate_limited"
-    assert rate_limit.value.error_info.retryable is True
-
-    provider_circuit_breaker.reset()
-    auth_calls = 0
-
-    def auth_failed(*_args, **_kwargs):
-        nonlocal auth_calls
-        auth_calls += 1
-        return http_response(401)
-
-    monkeypatch.setattr("app.services.transcription_provider.httpx.post", auth_failed)
-    with pytest.raises(ProviderCallFailure) as auth:
-        WhisperCompatibleHttpProvider(
-            endpoint="https://groq.test/transcribe",
-            api_key="secret",
-            model="whisper",
-            provider_name="groq-auth",
-        ).transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
-    assert auth.value.error_info.code == "provider_auth_failed"
-    assert auth.value.error_info.retryable is False
-    assert auth_calls == 1
-
-    provider_circuit_breaker.reset()
-    monkeypatch.setattr(
-        "app.services.transcription_provider.httpx.post",
-        lambda *_args, **_kwargs: httpx.Response(
-            200,
-            content=b"not-json",
-            request=httpx.Request("POST", "https://groq.test/transcribe"),
-        ),
-    )
-    with pytest.raises(ProviderCallFailure) as malformed:
-        WhisperCompatibleHttpProvider(
-            endpoint="https://groq.test/transcribe",
-            api_key="secret",
-            model="whisper",
-            provider_name="groq-malformed",
-        ).transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
-    assert malformed.value.error_info.code == "provider_malformed_response"
-
-
-def test_provider_circuit_breaker_prevents_queue_flooding(monkeypatch, tmp_path) -> None:
-    provider_circuit_breaker.reset()
-    audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"RIFF")
-    calls = 0
-
-    def network_down(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        raise httpx.NetworkError("network down")
-
-    monkeypatch.setattr("app.services.transcription_provider.httpx.post", network_down)
-    monkeypatch.setattr("app.services.transcription_provider.time.sleep", lambda _seconds: None)
-    provider = WhisperCompatibleHttpProvider(
-        endpoint="https://groq.test/transcribe",
-        api_key="secret",
-        model="whisper",
-        provider_name="groq-outage",
-    )
-
-    for _ in range(3):
-        with pytest.raises(ProviderCallFailure) as failure:
-            provider.transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
-        assert failure.value.error_info.code == "provider_network_error"
-    assert calls == 9
-
-    with pytest.raises(ProviderCallFailure) as circuit_open:
-        provider.transcribe(audio_path=audio, language_hint=LanguageHint.AUTO)
-    assert circuit_open.value.error_info.code == "provider_circuit_open"
-    assert calls == 9
-    provider_circuit_breaker.reset()
 
 
 def _make_caption_context(tmp_path) -> tuple[

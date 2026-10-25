@@ -39,7 +39,7 @@
       "id": "live-provider-contracts",
       "match": "Live provider contracts are disabled",
       "enable_env": "RUN_LIVE_PROVIDER_CONTRACTS",
-      "reason": "Calls real Groq, OpenRouter, Pexels, Pixabay and Runway accounts; outside the CPU-stage proof."
+      "reason": "Calls real remote provider accounts (planning, transcription and stock video); outside the CPU-stage proof."
     },
     {
       "id": "redis-contracts",

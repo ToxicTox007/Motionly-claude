@@ -176,6 +176,9 @@ def api_key_app(monkeypatch):
         created_by=_USER_ID,
     )
     app.state.api_key_repository = repo
+    # Keys exist only for workspaces whose plan has api_access (Agency), and the
+    # entitlement is re-checked on every keyed request.
+    app.state.billing_repository.subscriptions[_WORKSPACE_ID] = _agency_subscription()
     client = TestClient(app, raise_server_exceptions=False)
     yield client, app, repo, raw_key, record
     get_settings.cache_clear()
@@ -206,7 +209,7 @@ def test_api_key_allowed_on_list_projects(api_key_app):
     # GET /projects is allow-listed: the key authenticates (not a 401/403 auth
     # error). The route then runs as the key's workspace actor.
     response = client.get("/projects", headers=_auth(raw_key))
-    assert response.status_code not in (401, 403), response.text
+    assert response.status_code == 200, response.text
 
 
 def test_unknown_key_is_rejected(api_key_app):
@@ -220,7 +223,7 @@ def test_unknown_key_is_rejected(api_key_app):
 def test_revoked_key_stops_working_immediately(api_key_app):
     client, _app, repo, raw_key, record = api_key_app
     # Works before revoke.
-    assert client.get("/projects", headers=_auth(raw_key)).status_code not in (401, 403)
+    assert client.get("/projects", headers=_auth(raw_key)).status_code == 200
     repo.revoke_key(workspace_id=_WORKSPACE_ID, key_id=record.id)
     after = client.get("/projects", headers=_auth(raw_key))
     assert after.status_code == 401

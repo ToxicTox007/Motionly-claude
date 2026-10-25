@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from app.core.logging import RedactingJsonFormatter, redact_data, redact_string
 from app.services.retention import RetentionService
+from tests.support.vendor_names import names_vendor
 
 
 def test_redact_string_bearer_tokens() -> None:
@@ -60,9 +61,9 @@ def test_redacting_formatter() -> None:
 
 
 def test_provider_failures_redacted() -> None:
-    # Test Groq whisper exception scrubbing simulated
+    # A transcription provider exception carrying a bearer token is scrubbed.
     try:
-        raise ValueError("Failed connecting to Groq with Bearer gsk_abc123")
+        raise ValueError("Failed connecting to the provider with Bearer gsk_abc123")
     except Exception as exc:
         err_msg = redact_string(str(exc))
         assert "gsk_abc123" not in err_msg
@@ -168,8 +169,10 @@ def test_data_handling_documentation_exists() -> None:
     doc_path = Path(__file__).resolve().parents[3] / "docs" / "security" / "data-handling.md"
     assert doc_path.exists()
     content = doc_path.read_text()
-    assert "Groq" in content
-    assert "OpenRouter" in content
-    assert "Runway" in content
+    # Processors come from registry ``data_processor`` metadata (Task 9A); the
+    # document explains that rule instead of hard-coding vendor sections.
+    assert "data_processor" in content
+    assert "/public/data-processors" in content
+    assert not names_vendor(content.split("## External media providers")[0])
     assert "Pexels" in content or "Stock Providers" in content
     assert "Internal Storage" in content

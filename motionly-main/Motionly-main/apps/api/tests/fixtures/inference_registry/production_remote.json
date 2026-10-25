@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "chat-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://chat.example.invalid/v1",
+      "network": "public",
+      "auth": {"type": "bearer", "secret_ref": "bundle:chat-endpoint"},
+      "data_processor": {
+        "display_name": "Operator chat endpoint",
+        "purpose": "Planning inference",
+        "data_categories": ["text"],
+        "policy_url": "https://chat.example.invalid/policy"
+      }
+    },
+    {
+      "id": "stt-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://stt.example.invalid/v1",
+      "network": "public",
+      "auth": {"type": "bearer", "secret_ref": "bundle:stt-endpoint"},
+      "data_processor": {
+        "display_name": "Operator transcription endpoint",
+        "purpose": "Speech-to-text inference",
+        "data_categories": ["audio"],
+        "policy_url": "https://stt.example.invalid/policy"
+      }
+    }
+  ],
+  "models": [],
+  "routes": [
+    {
+      "id": "planning-remote",
+      "capability": "planning.chat",
+      "adapter_id": "chat-endpoint",
+      "model_id": "chat-model-x",
+      "model_revision": "2026-01-01",
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 0.5,
+        "output_per_million_usd": 1.0
+      },
+      "budget": {"feature": "planning"}
+    },
+    {
+      "id": "transcription-remote",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "stt-endpoint",
+      "model_id": "stt-model-x",
+      "model_revision": "2026-01-01",
+      "pricing": {"status": "priced", "per_request_usd": 0.25},
+      "budget": {"feature": "transcription"}
+    }
+  ]
+}

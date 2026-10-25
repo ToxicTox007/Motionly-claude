@@ -222,10 +222,11 @@ def write_cpu_stage_inputs(stack_path: Path, env_file: Path, secrets_dir: Path) 
     for name, value in secret_values.items():
         _write_private(secrets_dir / name, value + "\n", SECRET_FILE_MODE)
     for name in (
-        "groq_api_key",
-        "openrouter_api_key",
-        "runway_api_key",
-        "azure_openai_api_key",
+        # The declarative inference registry is the only source of routes (plan
+        # Task 26); the CPU stage uses fake routes with no secret refs, so the
+        # generic secrets bundle the base topology mounts is an empty JSON
+        # object. No vendor-named provider key is written.
+        "ai_secrets_bundle",
         "edge_origin_verify_previous",
     ):
         _write_private(secrets_dir / name, "", SECRET_FILE_MODE)
@@ -277,9 +278,6 @@ def main() -> int:
         "supabase_jwt_secret": JWT_SECRET,
         "admin_api_token": "release-integration-admin-token",
         "worker_api_token": "release-integration-worker-token",
-        "groq_api_key": "release-integration-groq-key",
-        "openrouter_api_key": "release-integration-openrouter-key",
-        "runway_api_key": "release-integration-runway-key",
         "azure_openai_api_key": "",
         "metrics_bearer_token": "release-integration-metrics-token",
         "edge_origin_verify": "release-integration-origin-verify-0123456789",

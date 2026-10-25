@@ -18,6 +18,7 @@ import {
   listBillingAdjustments,
   ownedWorkspaceId,
   seedPaymentCharge,
+  seedPaymentRefund,
   setSubscription,
 } from "./support/workspace.mjs";
 
@@ -242,13 +243,13 @@ test("the payment history table shows a payment after an upgrade, with a receipt
   await gates.checkAccessibility(page);
 });
 
-test("an admin refund reverses a payment and the reversal shows in history", async ({
+test("a workspace owner cannot issue refunds, and a recorded refund shows in history", async ({
   page,
   user,
   stack,
   gates,
 }) => {
-  // Seed the captured payment to be reversed.
+  // Seed the captured payment.
   const workspaceId = await ownedWorkspaceId(stack, user.id);
   await setSubscription(stack, workspaceId, {
     plan: "agency",
@@ -261,24 +262,24 @@ test("an admin refund reverses a payment and the reversal shows in history", asy
 
   await signIn(page, user, "/billing");
 
-  // The refund is an owner/admin action (POST /billing/refunds). The admin
-  // surface lives on the admin users page behind the platform-admin guard,
-  // which the CPU stage cannot grant a per-test user (ADMIN_USER_IDS is set at
-  // container start). The workspace owner, however, is authorised for the same
-  // route, so the refund is issued through the API as the signed-in owner —
-  // exercising the exact endpoint the admin RefundPanel calls — and the
-  // reversal is then asserted in the owner's in-app payment history.
-  const refund = await page.request.post("/api/billing/refunds", {
+  // POST /billing/refunds names its target workspace in the body, so it is a
+  // platform-admin action (require_admin) — owning a workspace is not enough.
+  // The CPU stage cannot grant a per-test user platform admin (ADMIN_USER_IDS
+  // is set at container start), so the admin path itself is covered by the API
+  // end-to-end test against the real mock gateway; here we assert the owner is
+  // refused and nothing is written.
+  const refused = await page.request.post("/api/billing/refunds", {
     headers: { "x-motionly-workspace-id": workspaceId },
     data: { workspace_id: workspaceId, amount_paise: 49900, reason: "Spec" },
   });
-  expect(refund.status(), await refund.text()).toBe(200);
+  expect(refused.status(), await refused.text()).toBe(403);
+  expect((await refused.json()).error.code).toBe("admin_access_denied");
+  const before = await listBillingAdjustments(stack, workspaceId);
+  expect(before.some((row) => row.adjustment_type === "refund")).toBe(false);
 
-  // The store now holds the charge and a matching negative refund.
-  const adjustments = await listBillingAdjustments(stack, workspaceId);
-  const refundRow = adjustments.find((row) => row.adjustment_type === "refund");
-  expect(refundRow, "a refund adjustment was recorded").toBeTruthy();
-  expect(refundRow.amount_paise).toBe(-49900);
+  // A refund the gateway reports (payment.refunded webhook) is recorded as a
+  // negative adjustment; seed one and check the owner sees the reversal.
+  await seedPaymentRefund(stack, workspaceId, { amountPaise: 49900 });
 
   // In the billing page history the reversal appears as a Refunded row showing
   // the returned amount with a leading minus.

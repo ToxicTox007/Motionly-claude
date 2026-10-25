@@ -47,11 +47,18 @@ def test_static_compose_retirement_removes_managed_provider_surfaces() -> None:
 
 def test_azure_openai_model_provider_remains_supported() -> None:
     adapter_source = (ROOT / "apps/api/app/services/model_adapters.py").read_text(encoding="utf-8")
-    gateway_source = (ROOT / "apps/api/app/services/model_gateway_factory.py").read_text(
+    # Path B (plan Task 6/Task 26): adapters are built by the registry-driven
+    # runtime, not the env-driven factory. Azure OpenAI stays supported purely as
+    # the ``azure_openai`` adapter type; the ``AZURE_OPENAI_*`` env settings were
+    # removed from config.py in Task 26 (the registry carries endpoint/auth).
+    runtime_source = (ROOT / "apps/api/app/services/inference_runtime.py").read_text(
         encoding="utf-8"
     )
-    config_source = (ROOT / "apps/api/app/core/config.py").read_text(encoding="utf-8")
+    registry_source = (ROOT / "apps/api/app/services/inference_registry.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "AzureOpenAIAdapter" in adapter_source
-    assert 'adapters["azure"] = AzureOpenAIAdapter' in gateway_source
-    assert "azure_openai_endpoint" in config_source
+    assert "AzureOpenAIAdapter" in runtime_source
+    assert "azure_openai" in runtime_source
+    assert "azure_openai" in registry_source

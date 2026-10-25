@@ -1,0 +1,56 @@
+# Vendor-neutrality scanner allowlist (plan Task 2).
+#
+# Line format (pipe-separated, whitespace around fields is trimmed):
+#
+#     <glob> | <category> | <reason> [| expires:<YYYY-MM-DD>]
+#
+#   <glob>      fnmatch glob against the repo-relative path (e.g. docs/**, *.md).
+#   <category>  short label printed with every allowlisted match.
+#   <reason>    REQUIRED human reason; entries without a reason are rejected.
+#   expires:    optional; Path A Task 6L is not built in revision 4, so no
+#               entry needs one today. Supported for completeness.
+#
+# A single cutoff line records the historical-migration timestamp boundary:
+#
+#     cutoff: <timestamp-prefix>
+#
+# Migrations under supabase/migrations/ whose numeric filename prefix is <= the
+# cutoff are reported as HISTORICAL (immutable applied migrations). A match in a
+# newer migration is ACTIVE.
+#
+# NOT allowlisted (intentionally ACTIVE findings): today's vendor adapter files
+# such as apps/api/app/services/google_vision.py, pyannoteai_diarization.py and
+# lalal_stems.py. They are removed by Task 19, not allowlisted. Registry JSON
+# under infra/ai-registry/ and docs/ai-registry/ is handled by the per-field
+# registry rule in the scanner, not by this file.
+
+# Historical-migration cutoff: the newest migration present today.
+cutoff: 202610230301
+
+# Documentation: prose and plan files name vendors as context.
+docs/** | docs | documentation prose names vendors as context
+*.md | docs | markdown prose names vendors as context
+
+# Lock files: generated, pinned dependency graphs; vendor names are package ids.
+pnpm-lock.yaml | lockfile | generated dependency lock, not source
+**/pnpm-lock.yaml | lockfile | generated dependency lock, not source
+*.lock | lockfile | generated lock file, not source
+**/*.lock | lockfile | generated lock file, not source
+requirements*.lock | lockfile | generated python requirements lock, not source
+**/requirements*.lock | lockfile | generated python requirements lock, not source
+
+# Migration M4 (Task 18, Changelog rev 4 item 7): the single new migration
+# allowed to contain an audited vendor token. It names the legacy enum value
+# only to move rows off it and forbid it from then on. Any other new migration
+# with a vendor token still fails the scanner.
+supabase/migrations/202610240202_neutral_generated_broll.sql | migration | names the legacy enum value only to move rows off it and forbid it afterwards (Task 18 M4)
+
+# The scanner, its data files and its own test own the vendor patterns and
+# fixtures by definition.
+scripts/verify/vendor_neutrality.py | scanner | scanner patterns/fixtures
+scripts/verify/vendor-neutrality-allowlist.txt | scanner | scanner patterns/fixtures
+scripts/verify/vendor-neutrality-baseline.json | scanner | scanner baseline data
+apps/api/tests/test_vendor_neutrality_scanner.py | scanner | scanner patterns/fixtures
+# The Task 27 gate restates the plan's grep patterns.
+scripts/verify/tier1_gate.py | scanner | Task 27 gate patterns (the plan's grep checks)
+apps/api/tests/test_tier1_gate.py | scanner | Task 27 gate fixtures

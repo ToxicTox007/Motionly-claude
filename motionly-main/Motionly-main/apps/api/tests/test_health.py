@@ -58,7 +58,6 @@ def test_public_readiness_is_cheap_and_does_not_probe_dependencies(monkeypatch, 
             "supabase_url": None,
             "supabase_service_role_key": None,
             "media_work_dir": str(tmp_path),
-            "openrouter_api_key": "configured",
         }
     )
 

@@ -47,11 +47,11 @@ ADMIN_API_TOKEN=dev-admin-token-456
 # Temporal
 TEMPORAL_BOOTSTRAP_ADMIN_UNTIL=2099-12-31T23:59:59Z
 
-# External API keys (optional - leave empty for fixture mode)
-GROQ_API_KEY=
-OPENROUTER_API_KEY=
-RUNWAY_API_KEY=
-AZURE_OPENAI_API_KEY=
+# Inference registry (plan Task 26): the only source of inference routes. Local
+# dev runs in fixture mode, so no vendor key is needed; credentials would live
+# in the registry secrets bundle, never as vendor env variables.
+AI_REGISTRY_FILE=
+AI_SECRETS_BUNDLE_FILE=
 "@
 
 $envContent | Out-File -FilePath "infra\.env.local" -Encoding UTF8 -NoNewline
@@ -75,13 +75,10 @@ Set-Location "infra\secrets"
 "dev-origin-verify-0123456789abcdefghijkl" | Out-File -FilePath "edge_origin_verify" -Encoding ascii -NoNewline
 New-Item -ItemType File -Force -Path "edge_origin_verify_previous" | Out-Null
 
-# Create empty API key files
-New-Item -ItemType File -Force -Path "groq_api_key" | Out-Null
-New-Item -ItemType File -Force -Path "openrouter_api_key" | Out-Null
-New-Item -ItemType File -Force -Path "runway_api_key" | Out-Null
-New-Item -ItemType File -Force -Path "azure_openai_api_key" | Out-Null
+# Create the generic inference secrets bundle file (empty in fixture mode)
+New-Item -ItemType File -Force -Path "ai_secrets_bundle" | Out-Null
 
-Write-Host "[OK] Created core secrets (14 files)" -ForegroundColor Green
+Write-Host "[OK] Created core secrets (11 files)" -ForegroundColor Green
 
 # Create empty Temporal cert files
 Write-Host "[3/3] Creating Temporal certificate placeholders..." -ForegroundColor Yellow

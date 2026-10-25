@@ -1,0 +1,36 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "images": [
+      { "b64": "/9j/wA==" },
+      { "b64": "/9j/wB==" },
+      { "b64": "/9j/wC==" },
+      { "b64": "/9j/wD==" },
+      { "b64": "/9j/wE==" },
+      { "b64": "/9j/wF==" },
+      { "b64": "/9j/wG==" },
+      { "b64": "/9j/wH==" },
+      { "b64": "/9j/wI==" },
+      { "b64": "/9j/wJ==" },
+      { "b64": "/9j/wK==" },
+      { "b64": "/9j/wL==" },
+      { "b64": "/9j/wM==" },
+      { "b64": "/9j/wN==" },
+      { "b64": "/9j/wO==" },
+      { "b64": "/9j/wP==" },
+      { "b64": "/9j/wQ==" }
+    ]
+  },
+  "exchanges": [],
+  "expect": {
+    "error": {
+      "code": "provider_request_rejected",
+      "fallback_eligible": false,
+      "billable": false
+    },
+    "requests": []
+  }
+}

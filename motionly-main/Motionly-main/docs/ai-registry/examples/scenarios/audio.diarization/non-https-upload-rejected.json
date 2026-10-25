@@ -1,0 +1,37 @@
+{
+  "registry": "diarization.json",
+  "route_id": "audio-diarization-remote",
+  "capability": "audio.diarization",
+  "request": {
+    "type": "diarization",
+    "model": "precision-3",
+    "audio": { "b64": "UklGRi4uLi5mYWtlLXdhdi1ieXRlcy1mb3ItZGlhcml6YXRpb24=" },
+    "duration_s": 30.0
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/media/input" },
+      "response": {
+        "status": 201,
+        "json": { "url": "http://storage.pyannote.test/upload" }
+      }
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": "provider_malformed_response",
+      "fallback_eligible": true,
+      "billable": true
+    },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "api.pyannote.ai",
+        "path": "/v1/media/input",
+        "header_names": ["accept", "authorization"],
+        "body_keys": ["url"]
+      }
+    ]
+  },
+  "differential": true
+}

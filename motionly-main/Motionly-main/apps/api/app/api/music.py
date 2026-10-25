@@ -29,6 +29,7 @@ from app.services.layer_job_enqueue import (
     serialize_layer_job_payload,
 )
 from app.services.music import MusicProvider, MusicTrackCandidate
+from app.services.offload import run_blocking
 from app.services.queue import MusicQueue
 from app.services.storage import StorageSigner
 
@@ -145,7 +146,8 @@ async def select_music(
             )
 
     prepare_heavy_job_enqueue(request=request)
-    job = music_queue.enqueue_music_selection(
+    job = await run_blocking(
+        music_queue.enqueue_music_selection,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         edit_plan_id=plan.id,

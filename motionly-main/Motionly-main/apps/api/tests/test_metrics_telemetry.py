@@ -36,8 +36,8 @@ async def test_metrics_telemetry_rendering() -> None:
     metrics_reg.observe(
         "fallback_degraded_mode_count",
         1,
-        provider="openrouter",
-        model="openrouter/free",
+        provider="provider-a",
+        model="provider-a/free",
         reason="edit_plan_fallback",
     )
 
@@ -53,7 +53,7 @@ async def test_metrics_telemetry_rendering() -> None:
     ops_repo.record_cost(
         workspace_id=workspace_id,
         project_id=uuid4(),
-        provider="openrouter",
+        provider="provider-a",
         category="tokens",
         quantity=5000,
         unit="token",
@@ -78,10 +78,10 @@ async def test_metrics_telemetry_rendering() -> None:
     assert 'motionly_job_failure_count_count{error_code="ValueError",kind="plan"} 1' in output
     assert (
         "motionly_fallback_degraded_mode_count_count"
-        '{model="openrouter/free",provider="openrouter",reason="edit_plan_fallback"} 1' in output
+        '{model="provider-a/free",provider="provider-a",reason="edit_plan_fallback"} 1' in output
     )
     assert (
-        f'motionly_cost_usd{{workspace_id="{workspace_id}",provider="openrouter"}} 0.010000'
+        f'motionly_cost_usd{{workspace_id="{workspace_id}",provider="provider-a"}} 0.010000'
         in output
     )
     assert 'motionly_queue_snapshot_duration_ms_count{backend="in_memory"} 1' in output

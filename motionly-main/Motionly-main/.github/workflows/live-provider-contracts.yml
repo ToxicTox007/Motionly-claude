@@ -1,7 +1,15 @@
 name: Live Provider Contracts
 
-# NOTE: 3 consecutive clean weekly or scheduled runs are required before GA,
-# or a caveat must be recorded if not yet completed.
+# Manual, operator-approved and paid. It never runs on a schedule or a push
+# (plan invariant 9): a maintainer dispatches it with explicit authorization.
+#
+# Two independent surfaces run here:
+#   1. Registry-driven live inference (plan Tasks 17/26): the template routes run
+#      once against the real services from one operator registry and ONE generic
+#      secrets bundle, both supplied as GitHub secrets and written to 0600 temp
+#      files. This is the Tier-1 gate recorded in docs/ai-registry/live-runs.md
+#      before Task 19 deletes a vendor adapter. No vendor env key is used.
+#   2. The non-inference stock-provider contracts (Pexels/Pixabay), kept working.
 
 on:
   workflow_dispatch:
@@ -11,6 +19,13 @@ on:
         required: true
         type: boolean
         default: false
+      capabilities:
+        description: >-
+          Optional comma list of inference capabilities to run
+          (objects,diarization,stems). Empty runs all configured ones.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -21,7 +36,63 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
-  live-contracts:
+  live-inference:
+    if: inputs.authorize_external_provider_contracts == true
+    runs-on: ubuntu-latest
+    environment: external-provider-verification
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - name: Install locked dependencies
+        run: python -m pip install --disable-pip-version-check './apps/api[dev]'
+      - name: Write the operator registry and secrets bundle to 0600 temp files
+        id: live-inputs
+        env:
+          # The registry (real base URLs and bundle:<key> secret refs) and ONE
+          # generic JSON secrets bundle, both from GitHub secrets. No per-vendor
+          # secret is referenced here; the registry maps its refs into the bundle.
+          MOTIONLY_LIVE_REGISTRY_JSON: ${{ secrets.MOTIONLY_LIVE_REGISTRY }}
+          MOTIONLY_LIVE_SECRETS_BUNDLE_JSON: ${{ secrets.MOTIONLY_LIVE_SECRETS_BUNDLE }}
+        run: |
+          workdir="$(mktemp -d)"
+          umask 077
+          registry="$workdir/registry.json"
+          bundle="$workdir/ai_secrets_bundle.json"
+          printf '%s' "$MOTIONLY_LIVE_REGISTRY_JSON" >"$registry"
+          printf '%s' "$MOTIONLY_LIVE_SECRETS_BUNDLE_JSON" >"$bundle"
+          chmod 600 "$registry" "$bundle"
+          echo "registry=$registry" >>"$GITHUB_OUTPUT"
+          echo "bundle=$bundle" >>"$GITHUB_OUTPUT"
+          echo "results=$workdir/results" >>"$GITHUB_OUTPUT"
+      - name: Run live inference template routes
+        env:
+          MOTIONLY_LIVE_INFERENCE: "1"
+          MOTIONLY_LIVE_REGISTRY: ${{ steps.live-inputs.outputs.registry }}
+          AI_SECRETS_BUNDLE_FILE: ${{ steps.live-inputs.outputs.bundle }}
+          AI_SECRETS_DIR: /run/secrets
+          # Samples (objects.jpg, two-speakers.wav, voice-over-music.wav) are
+          # operator-supplied and never committed. Provide them on the runner at
+          # MOTIONLY_LIVE_SAMPLES_DIR (for example a pre-provisioned self-hosted
+          # path or a prior protected download step); missing samples skip.
+          MOTIONLY_LIVE_SAMPLES_DIR: ${{ vars.MOTIONLY_LIVE_SAMPLES_DIR }}
+          MOTIONLY_LIVE_CAPABILITIES: ${{ inputs.capabilities }}
+          MOTIONLY_LIVE_RESULTS_DIR: ${{ steps.live-inputs.outputs.results }}
+        run: |
+          cd apps/api
+          APP_ENV=test python -m pytest -v -m live_provider tests/live
+      - name: Upload machine-readable results (no secrets or media)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-inference-results
+          path: ${{ steps.live-inputs.outputs.results }}
+          if-no-files-found: ignore
+
+  stock-provider-contracts:
     if: inputs.authorize_external_provider_contracts == true
     runs-on: ubuntu-latest
     environment: external-provider-verification
@@ -48,12 +119,9 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           python -m pip install --disable-pip-version-check './apps/api[dev]'
-      - name: Run live provider contracts
+      - name: Run non-inference stock-provider contracts
         run: |
           cd apps/api
-          OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" \
-          GROQ_API_KEY="${{ secrets.GROQ_API_KEY }}" \
-          RUNWAY_API_KEY="${{ secrets.RUNWAY_API_KEY }}" \
           PEXELS_API_KEY="${{ secrets.PEXELS_API_KEY }}" \
           PIXABAY_API_KEY="${{ secrets.PIXABAY_API_KEY }}" \
           APP_ENV=test python -m pytest -v tests/test_provider_contracts.py

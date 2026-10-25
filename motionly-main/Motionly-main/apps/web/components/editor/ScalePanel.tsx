@@ -44,7 +44,10 @@ import {
   shouldApplyRevision,
 } from "@/lib/collaboration-reload.mjs";
 import { cn } from "@/lib/utils";
+import { useCapabilities } from "@/hooks/useCapabilities";
+import { CAPABILITY_IDS, capabilityControlProps } from "@/lib/capabilities";
 import { BrandKitPanel, type BrandKitResource } from "./BrandKitPanel";
+import { CapabilityStatus } from "./CapabilityGate";
 import { CreativeVariantsPanel } from "./CreativeVariantsPanel";
 
 type Resource = {
@@ -101,6 +104,15 @@ interface ScalePanelProps {
 
 export function ScalePanel(props: ScalePanelProps) {
   const { projectId, workspaceId, userId, activePlan, onPlanUpdated } = props;
+  const { resolve: resolveCapabilityState } = useCapabilities(workspaceId);
+  const stemsCapability = resolveCapabilityState(CAPABILITY_IDS.stemSeparation);
+  const videoGenerationCapability = resolveCapabilityState(
+    CAPABILITY_IDS.videoGeneration,
+  );
+  const stemsControl = capabilityControlProps(stemsCapability);
+  const videoGenerationControl = capabilityControlProps(
+    videoGenerationCapability,
+  );
   const [resources, setResources] = useState<Resource[]>([]);
   const [templates, setTemplates] = useState<Resource[]>([]);
   const [audio, setAudio] = useState<Record<string, unknown>>({});
@@ -116,8 +128,8 @@ export function ScalePanel(props: ScalePanelProps) {
   >([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [runwayPrompt, setRunwayPrompt] = useState("");
-  const [runwayImage, setRunwayImage] = useState("");
+  const [generatedPrompt, setGeneratedPrompt] = useState("");
+  const [generatedImage, setGeneratedImage] = useState("");
   const [profileName, setProfileName] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [batchProjects, setBatchProjects] = useState(projectId);
@@ -977,9 +989,16 @@ export function ScalePanel(props: ScalePanelProps) {
         </div>
         <Button
           disabled={busy}
+          aria-disabled={stemsControl["aria-disabled"]}
+          aria-describedby={
+            stemsControl.statusText ? "scale-stems-status" : undefined
+          }
+          data-capability={stemsControl["data-capability"]}
+          data-capability-status={stemsControl["data-capability-status"]}
           variant="secondary"
           className="mt-3.5 w-full text-xs gap-1.5"
-          onClick={() =>
+          onClick={() => {
+            if (stemsControl.blocked) return;
             action(
               () =>
                 editorApiRequest(
@@ -991,32 +1010,44 @@ export function ScalePanel(props: ScalePanelProps) {
                   },
                 ),
               "Demucs separation queued.",
-            )
-          }
+            );
+          }}
         >
           Separate vocals and music
         </Button>
+        <CapabilityStatus state={stemsCapability} id="scale-stems-status" />
       </Section>
 
-      <Section title="Runway Gen-3 B-roll" icon={Film}>
+      <Section title="Generated B-roll" icon={Film}>
         <div className="space-y-2">
           <input
             className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
             placeholder="Describe the generated shot"
-            value={runwayPrompt}
-            onChange={(event) => setRunwayPrompt(event.target.value)}
+            value={generatedPrompt}
+            onChange={(event) => setGeneratedPrompt(event.target.value)}
           />
           <input
             className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
-            placeholder="Public prompt image URL (required by Gen-3)"
-            value={runwayImage}
-            onChange={(event) => setRunwayImage(event.target.value)}
+            placeholder="Public prompt image URL"
+            value={generatedImage}
+            onChange={(event) => setGeneratedImage(event.target.value)}
           />
         </div>
         <Button
-          disabled={busy || runwayPrompt.length < 3 || !runwayImage}
+          disabled={busy || generatedPrompt.length < 3 || !generatedImage}
+          aria-disabled={videoGenerationControl["aria-disabled"]}
+          aria-describedby={
+            videoGenerationControl.statusText
+              ? "scale-generated-broll-status"
+              : undefined
+          }
+          data-capability={videoGenerationControl["data-capability"]}
+          data-capability-status={
+            videoGenerationControl["data-capability-status"]
+          }
           className="mt-3 w-full text-xs"
-          onClick={() =>
+          onClick={() => {
+            if (videoGenerationControl.blocked) return;
             action(
               () =>
                 editorApiRequest(
@@ -1025,19 +1056,23 @@ export function ScalePanel(props: ScalePanelProps) {
                     ...auth(props, lifecycleController.signal),
                     method: "POST",
                     body: {
-                      prompt: runwayPrompt,
-                      prompt_image_url: runwayImage,
+                      prompt: generatedPrompt,
+                      prompt_image_url: generatedImage,
                       duration_s: 5,
                       ratio: "768:1280",
                     },
                   },
                 ),
-              "Runway generation queued.",
-            )
-          }
+              "Generated B-roll queued.",
+            );
+          }}
         >
           Generate premium B-roll
         </Button>
+        <CapabilityStatus
+          state={videoGenerationCapability}
+          id="scale-generated-broll-status"
+        />
       </Section>
 
       <Section title="Reference style analysis" icon={BrainCircuit}>

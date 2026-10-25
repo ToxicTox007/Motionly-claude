@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "self-hosted-stt-server",
+      "type": "openai_compatible",
+      "base_url": "http://whisper.internal.invalid:9000/v1",
+      "network": "private",
+      "auth": { "type": "none" }
+    },
+    {
+      "id": "self-hosted-chat",
+      "type": "openai_compatible",
+      "base_url": "http://llm.internal.invalid:8000/v1",
+      "network": "private",
+      "auth": { "type": "none" }
+    }
+  ],
+  "models": [
+    {
+      "id": "stt-server-model",
+      "model_id": "Systran/faster-whisper-large-v3",
+      "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+      "licence": "MIT",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/Systran/faster-whisper-large-v3",
+      "capabilities": ["transcription.speech_to_text"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "chat-model",
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "revision": "bb46c15ee4bb56c5b63245ef50fd7637234d6f75",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct",
+      "capabilities": ["planning.chat"],
+      "verified_at": "2026-10-24"
+    }
+  ],
+  "routes": [
+    {
+      "id": "speech-to-text-server",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "self-hosted-stt-server",
+      "model_id": "Systran/faster-whisper-large-v3",
+      "model_ref": "stt-server-model",
+      "model_revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+      "priority": 10,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "Self-hosted Whisper server",
+        "description": "Speech-to-text served by your own OpenAI-compatible transcription server.",
+        "labels": ["local"],
+        "quota_weight": 1.0
+      }
+    },
+    {
+      "id": "planning-chat-selfhosted",
+      "capability": "planning.chat",
+      "adapter_id": "self-hosted-chat",
+      "model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "model_ref": "chat-model",
+      "model_revision": "bb46c15ee4bb56c5b63245ef50fd7637234d6f75",
+      "priority": 10,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    }
+  ]
+}

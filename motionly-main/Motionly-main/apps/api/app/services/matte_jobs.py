@@ -18,11 +18,74 @@ from app.services.model_gateway import (
 )
 from app.services.queue import MatteQueue
 from app.services.segmentation_matte import generate_selfie_segmentation_matte
+from app.services.subprocess_env import media_tool_env
 from app.services.worker_media import materialize_upload_source
 
 logger = logging.getLogger(__name__)
 
-MATTE_MODEL_VERSION = "mediapipe-selfie-segmentation:v1:model_selection=1"
+# The matte model identity is NOT a code constant any more (plan Task 33: "the
+# matte model identity and version come from the route"). It is derived from the
+# active ``matte.segmentation`` registry route, or from the executed gateway
+# route at completion time. ``_FALLBACK_MATTE_MODEL_VERSION`` is used only when
+# no runtime/route is available (a test or a non-registry enqueue path) so the
+# pending cache key and the stored identity still agree with each other.
+_FALLBACK_MATTE_MODEL_VERSION = "matte.segmentation"
+
+
+def matte_model_version(runtime: object | None) -> str:
+    """The matte identity from the active ``matte.segmentation`` route.
+
+    Returns ``"<route_id>@<model_revision>"`` for the highest-priority enabled
+    matte route in the runtime, so the cache key and provenance follow the
+    registry (never a code-bound model name). Falls back to a neutral capability
+    label when no runtime or route is available, which keeps the pending cache
+    key stable for test/no-registry enqueue paths.
+    """
+    if runtime is None:
+        return _FALLBACK_MATTE_MODEL_VERSION
+    gateway = getattr(runtime, "gateway", None)
+    routes = getattr(gateway, "routes", None) if gateway is not None else None
+    if not routes:
+        return _FALLBACK_MATTE_MODEL_VERSION
+    candidates = [
+        route
+        for route in routes
+        if getattr(route, "capability_id", None) == "matte.segmentation"
+        and getattr(route, "enabled", True)
+    ]
+    if not candidates:
+        # ``capability_id`` may be absent on some route objects; fall back to a
+        # ``route_id`` prefix match for a matte route.
+        candidates = [
+            route
+            for route in routes
+            if getattr(route, "route_id", "").startswith("matte")
+        ]
+    if not candidates:
+        return _FALLBACK_MATTE_MODEL_VERSION
+    route = min(candidates, key=lambda item: getattr(item, "priority", 100))
+    return f"{route.route_id}@{route.model_revision}"
+
+
+def _matte_registry_fingerprint(runtime: object | None) -> str | None:
+    """Stamp for an enqueued matte job (plan Task 6 worker fail-closed check).
+
+    Uses the SAME capability-set constant the matte worker checks
+    (``MATTE_CAPABILITY_IDS``), imported lazily so the queue path does not pull
+    the inference runtime into module import. ``None`` when no runtime is
+    available (a non-API enqueue path): the payload is left unstamped and the
+    worker accepts it.
+    """
+    if runtime is None:
+        return None
+    from app.workers.inference_fingerprint import (
+        MATTE_CAPABILITY_IDS,
+        registry_fingerprint_for,
+    )
+
+    return registry_fingerprint_for(runtime, MATTE_CAPABILITY_IDS)
+
+
 MATTE_PENDING_SOURCE_HASH = "pending-source-hash"
 
 # fixture-matte:v1 — the CPU-stage test matte. It is a visible, deterministic
@@ -55,7 +118,7 @@ def build_matte_cache_key(
     upload_id: UUID,
     source_file_hash: str,
     segmentation_settings: dict[str, object],
-    model_version: str = MATTE_MODEL_VERSION,
+    model_version: str = _FALLBACK_MATTE_MODEL_VERSION,
 ) -> str:
     canonical_settings = json.dumps(segmentation_settings, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(
@@ -84,6 +147,7 @@ def enqueue_matte_for_upload(
     upload_id: UUID,
     background_removal: BackgroundRemovalSettings | dict[str, object] | None = None,
     force: bool = False,
+    runtime: object | None = None,
 ) -> tuple[MatteRecord, object | None]:
     upload = repository.get_upload(
         project_id=project_id,
@@ -91,11 +155,15 @@ def enqueue_matte_for_upload(
         workspace_id=workspace_id,
     )
     settings = matte_segmentation_settings(background_removal)
+    # The matte identity comes from the active registry route (plan Task 33), so
+    # the pending cache key and stored model_version follow the configured model.
+    version = matte_model_version(runtime)
     if not settings["enabled"]:
         cache_key = build_matte_cache_key(
             upload_id=upload_id,
             source_file_hash=MATTE_PENDING_SOURCE_HASH,
             segmentation_settings=settings,
+            model_version=version,
         )
         record = repository.create_matte(
             workspace_id=workspace_id,
@@ -105,7 +173,7 @@ def enqueue_matte_for_upload(
             cache_key=cache_key,
             source_file_hash=None,
             segmentation_settings=settings,
-            model_version=MATTE_MODEL_VERSION,
+            model_version=version,
         )
         return record, None
     if upload.status != UploadStatus.READY:
@@ -119,6 +187,7 @@ def enqueue_matte_for_upload(
         upload_id=upload_id,
         source_file_hash=MATTE_PENDING_SOURCE_HASH,
         segmentation_settings=settings,
+        model_version=version,
     )
     existing = repository.find_matte_by_cache_key(
         workspace_id=workspace_id,
@@ -147,7 +216,7 @@ def enqueue_matte_for_upload(
             and latest.status == MatteStatus.COMPLETED
             and latest.matte
             and latest.segmentation_settings == settings
-            and latest.model_version == MATTE_MODEL_VERSION
+            and latest.model_version == version
         ):
             return latest, None
 
@@ -159,13 +228,14 @@ def enqueue_matte_for_upload(
         cache_key=pending_cache_key,
         source_file_hash=None,
         segmentation_settings=settings,
-        model_version=MATTE_MODEL_VERSION,
+        model_version=version,
     )
     job = matte_queue.enqueue_matte(
         project_id=project_id,
         workspace_id=workspace_id,
         video_id=upload_id,
         matte_id=record.id,
+        registry_fingerprint=_matte_registry_fingerprint(runtime),
     )
     logger.info(
         "matte_job_enqueued",
@@ -204,6 +274,14 @@ def run_matte_for_upload(
         )
     )
     if record is None:
+        # The matte identity comes from the executed gateway route (plan Task
+        # 33); without one (a degraded/fixture path) the neutral fallback keeps
+        # the pending and final cache keys consistent.
+        fallback_version = (
+            f"{matte_gateway_route.route_id}@{matte_gateway_route.model_revision}"
+            if matte_gateway_route is not None
+            else _FALLBACK_MATTE_MODEL_VERSION
+        )
         record = repository.create_matte(
             workspace_id=workspace_id,
             project_id=project_id,
@@ -213,10 +291,11 @@ def run_matte_for_upload(
                 upload_id=video_id,
                 source_file_hash=MATTE_PENDING_SOURCE_HASH,
                 segmentation_settings=matte_segmentation_settings(),
+                model_version=fallback_version,
             ),
             source_file_hash=None,
             segmentation_settings=matte_segmentation_settings(),
-            model_version=MATTE_MODEL_VERSION,
+            model_version=fallback_version,
         )
     if record.status == MatteStatus.COMPLETED and record.matte:
         return record
@@ -283,9 +362,7 @@ def run_matte_for_upload(
                     "height": segmented.output.height,
                     "frame_count": segmented.output.frame_count,
                 }
-                matte_model = (
-                    f"{segmented.metadata.route_id}@{segmented.metadata.model_revision}"
-                )
+                matte_model = f"{segmented.metadata.route_id}@{segmented.metadata.model_revision}"
             elif production:
                 raise ApiError(
                     503,
@@ -324,6 +401,7 @@ def run_matte_for_upload(
                         str(local_matte),
                     ],
                     check=True,
+                    env=media_tool_env(),
                 )
                 matte_model = FIXTURE_MATTE_MODEL
                 matte_provenance = FIXTURE_MATTE_LABEL

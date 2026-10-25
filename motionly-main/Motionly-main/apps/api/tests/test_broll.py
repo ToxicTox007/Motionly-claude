@@ -291,9 +291,7 @@ def test_user_broll_library_upload_list_and_delete() -> None:
         complete_user_broll_multipart_upload(
             project_id=project_id,
             session_id=initialized.session.session_id,
-            payload=MediaUploadCompleteRequest(
-                sha256_hash=hashlib.sha256(content).hexdigest()
-            ),
+            payload=MediaUploadCompleteRequest(sha256_hash=hashlib.sha256(content).hexdigest()),
             request=request,
             actor=actor,
             repository=repository,
@@ -445,7 +443,7 @@ def test_supabase_broll_async_reads_use_bounded_projections(monkeypatch) -> None
             "params": {
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "provider": "in.(user_library,runway)",
+                "provider": "in.(user_library,generated)",
                 "select": STOCK_ASSET_COLUMNS,
                 "order": "created_at.desc",
                 "limit": "25",
@@ -582,9 +580,7 @@ def test_broll_api_prefers_async_repository_methods() -> None:
         complete_user_broll_multipart_upload(
             project_id=project_id,
             session_id=initialized.session.session_id,
-            payload=MediaUploadCompleteRequest(
-                sha256_hash=hashlib.sha256(content).hexdigest()
-            ),
+            payload=MediaUploadCompleteRequest(sha256_hash=hashlib.sha256(content).hexdigest()),
             request=request,
             actor=actor,
             repository=repository,
@@ -1012,6 +1008,48 @@ def test_embedding_similarity_outranks_lexical_only_match() -> None:
 
     assert semantic_score.total > lexical_score.total
     assert lexical_score.confidence_label == BrollConfidenceLabel.LEXICAL_FALLBACK
+
+
+def test_missing_embeddings_route_falls_back_to_lexical_ranking() -> None:
+    # Task 19: with no embeddings.text route configured, B-roll ranking must use
+    # its lexical fallback (an empty query embedding) instead of failing.
+    from app.services.model_domain_adapters import GatewayClipEmbeddingProvider
+    from app.services.model_gateway import ModelGateway
+
+    gateway = ModelGateway(adapters={}, routes=[])
+    provider = GatewayClipEmbeddingProvider(gateway=gateway)
+
+    # No embeddings route -> no vector, no exception.
+    embedding = query_embedding(
+        semantic_query="founder using laptop in modern office",
+        embedding_provider=provider,
+    )
+    assert embedding == []
+
+    # Ranking still completes and marks the result as the lexical fallback.
+    candidate = StockVideoCandidate(
+        provider=StockProviderKey.PEXELS,
+        provider_asset_id="lexical-match",
+        title="founder using laptop in modern office",
+        thumbnail_url="https://example.com/lexical.jpg",
+        preview_video_url=None,
+        download_url=None,
+        license="pexels_license",
+        width=1080,
+        height=1920,
+        duration_ms=3200,
+        relevance_rank=1,
+        raw_metadata={},
+    )
+    score = score_candidate_details(
+        candidate=candidate,
+        slot_duration_ms=3000,
+        duplicate_provider_asset_ids=set(),
+        semantic_query="founder using laptop in modern office",
+        semantic_embedding=embedding,
+    )
+    assert score.total > 0
+    assert score.confidence_label == BrollConfidenceLabel.LEXICAL_FALLBACK
 
 
 def test_orientation_and_duration_affect_ranking_after_embedding_similarity() -> None:

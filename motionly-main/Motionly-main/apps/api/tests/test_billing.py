@@ -560,4 +560,347 @@ def test_apply_gateway_event_requires_workspace() -> None:
     assert exc.value.code == "gateway_workspace_missing"
 
 
+# --------------------------------------------------------------------------
+# Admin refunds (POST /billing/refunds)
+# --------------------------------------------------------------------------
+
+
+def test_workspace_owner_cannot_refund_another_workspace() -> None:
+    """A workspace owner is not a platform admin; the body names any workspace."""
+    from fastapi.testclient import TestClient
+
+    from app.api.dependencies import get_actor
+    from app.main import create_app
+
+    app = create_app()
+    attacker_workspace = uuid4()
+    victim_workspace = uuid4()
+    app.dependency_overrides[get_actor] = lambda: Actor(
+        user_id=uuid4(), workspace_id=attacker_workspace, role="owner"
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/billing/refunds",
+        headers={"x-motionly-workspace-id": str(attacker_workspace)},
+        json={"workspace_id": str(victim_workspace), "amount_paise": 100},
+    )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "admin_access_denied"
+    assert (
+        app.state.billing_repository.list_billing_adjustments(workspace_id=victim_workspace) == []
+    )
+
+
+class _RefundRequest(_WebhookRequest):
+    def __init__(self) -> None:
+        super().__init__(payload=b"")
+        self.audit: list[dict] = []
+        self.app.state.audit_logger = SimpleNamespace(record=self.audit.append)
+
+
+class _RecordingGateway:
+    def __init__(self, *, refund_id: str = "rfnd_x") -> None:
+        self.calls: list[dict] = []
+        self.refund_id = refund_id
+
+    def refund_order(self, *, order_id: str, amount_paise: int | None) -> dict:
+        self.calls.append({"order_id": order_id, "amount_paise": amount_paise})
+        return {"id": self.refund_id, "order_id": order_id, "amount_paise": amount_paise}
+
+
+_ADMIN = Actor(user_id=uuid4(), workspace_id=uuid4(), role="owner")
+
+
+def _issue_refund(repository, gateway, workspace_id, amount_paise=None):
+    from app.api.billing import issue_refund
+    from app.schemas.billing import RefundRequest
+
+    request = _RefundRequest()
+    response = asyncio.run(
+        issue_refund(
+            payload=RefundRequest(workspace_id=workspace_id, amount_paise=amount_paise),
+            request=request,
+            actor=_ADMIN,
+            repository=repository,
+            gateway=gateway,
+        )
+    )
+    return response, request
+
+
+def test_refund_is_capped_at_the_captured_amount_minus_prior_refunds() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    _run_webhook(
+        _captured_order_envelope(event_id="evt_cap", workspace_id=workspace_id), repository
+    )
+
+    first_gateway = _RecordingGateway(refund_id="rfnd_1")
+    _issue_refund(repository, first_gateway, workspace_id, amount_paise=150000)
+    assert first_gateway.calls == [{"order_id": "order_abc", "amount_paise": 150000}]
+
+    # 199900 captured - 150000 refunded = 49900 left; more than that is refused
+    # before the gateway is called.
+    over_gateway = _RecordingGateway(refund_id="rfnd_2")
+    with pytest.raises(ApiError) as exc:
+        _issue_refund(repository, over_gateway, workspace_id, amount_paise=49901)
+    assert exc.value.status_code == 409
+    assert exc.value.code == "refund_exceeds_captured"
+    assert over_gateway.calls == []
+
+    # An omitted amount refunds exactly what is left.
+    rest_gateway = _RecordingGateway(refund_id="rfnd_3")
+    _issue_refund(repository, rest_gateway, workspace_id)
+    assert rest_gateway.calls == [{"order_id": "order_abc", "amount_paise": 49900}]
+
+    # Fully refunded: nothing left to refund.
+    with pytest.raises(ApiError) as exc:
+        _issue_refund(repository, _RecordingGateway(refund_id="rfnd_4"), workspace_id)
+    assert exc.value.code == "refund_no_captured_payment"
+
+    refunds = [
+        row
+        for row in repository.list_billing_adjustments(workspace_id=workspace_id)
+        if row.adjustment_type == "refund"
+    ]
+    assert sorted(row.amount_paise for row in refunds) == [-150000, -49900]
+
+
+def test_refund_requires_a_captured_payment() -> None:
+    repository = InMemoryBillingRepository()
+    gateway = _RecordingGateway()
+    with pytest.raises(ApiError) as exc:
+        _issue_refund(repository, gateway, uuid4(), amount_paise=100)
+    assert exc.value.code == "refund_no_captured_payment"
+    assert gateway.calls == []
+
+
+def test_refund_amount_must_be_positive() -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.billing import RefundRequest
+
+    for amount in (0, -1):
+        with pytest.raises(ValidationError):
+            RefundRequest(workspace_id=uuid4(), amount_paise=amount)
+
+
+def test_admin_refund_moves_money_on_the_gateway_and_its_webhook_is_not_double_counted() -> None:
+    """Real mock gateway: capture → admin refund → payment.refunded webhook."""
+    from fastapi.testclient import TestClient
+
+    from app.services.payment_gateway import DemoGatewayClient
+
+    workspace_id = uuid4()
+    repository = InMemoryBillingRepository()
+    captured_events: list[WebhookEnvelope] = []
+
+    class _CapturingDeliverer(WebhookDeliverer):
+        def __init__(self) -> None:
+            super().__init__(secret=WEBHOOK_SECRET, url=None, transport=None)
+
+        async def deliver(self, envelope: WebhookEnvelope) -> None:
+            captured_events.append(envelope)
+
+    gateway_app = create_gateway_app(_gateway_config(), deliverer=_CapturingDeliverer())
+    gateway_http = TestClient(gateway_app)
+    merchant = {"Authorization": "Bearer test-merchant-key"}
+    order_id = gateway_http.post(
+        "/v1/orders",
+        headers=merchant,
+        json={
+            "amount_paise": 199900,
+            "currency": "INR",
+            "receipt": "r",
+            "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
+        },
+    ).json()["id"]
+    gateway_http.post(
+        f"/pay/checkout/{order_id}/upi",
+        content=b"action=approve",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    for envelope in list(captured_events):
+        _run_webhook(envelope, repository)
+    captured_events.clear()
+
+    gateway = DemoGatewayClient(
+        base_url="http://gateway",
+        merchant_api_key="test-merchant-key",
+        transport=gateway_http._transport,
+    )
+    response, request = _issue_refund(repository, gateway, workspace_id, amount_paise=50000)
+
+    order = gateway_http.get(f"/v1/orders/{order_id}", headers=merchant).json()
+    assert order["amount_refunded_paise"] == 50000
+    assert order["status"] == "partially_refunded"
+    assert response.receipt.kind == "refund"
+    assert response.receipt.amount_paise == 50000
+    assert request.audit and request.audit[0]["action"] == "billing.refund"
+    assert request.audit[0]["order_id"] == order_id
+
+    # The gateway's own payment.refunded webhook for the same refund lands too.
+    refund_events = [e for e in captured_events if e.event == "payment.refunded"]
+    assert len(refund_events) == 1
+    _run_webhook(refund_events[0], repository)
+
+    refunds = [
+        row
+        for row in repository.list_billing_adjustments(workspace_id=workspace_id)
+        if row.adjustment_type == "refund"
+    ]
+    assert len(refunds) == 1
+    assert refunds[0].amount_paise == -50000
+
+
+# --------------------------------------------------------------------------
+# Past due: paid features last for a bounded grace period only
+# --------------------------------------------------------------------------
+
+
+def _past_due(*, period_end, plan=BillingPlanKey.AGENCY, updated_at=None):
+    from datetime import UTC, datetime
+
+    return SubscriptionRecord(
+        workspace_id=uuid4(),
+        plan=plan,
+        status=SubscriptionStatus.PAST_DUE,
+        current_period_end=period_end,
+        updated_at=updated_at or datetime.now(UTC),
+    )
+
+
+def test_past_due_keeps_the_plan_only_during_the_grace_period(monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.billing import effective_plan_key, past_due_grace_ends_at
+
+    monkeypatch.setenv("BILLING_PAST_DUE_GRACE_DAYS", "7")
+    period_end = datetime(2026, 10, 1, tzinfo=UTC)
+    subscription = _past_due(period_end=period_end)
+
+    assert past_due_grace_ends_at(subscription) == period_end + timedelta(days=7)
+    inside = period_end + timedelta(days=6, hours=23)
+    after = period_end + timedelta(days=7, seconds=1)
+    assert effective_plan_key(subscription, now=inside) == BillingPlanKey.AGENCY
+    assert effective_plan_key(subscription, now=after) == BillingPlanKey.FREE
+
+
+def test_past_due_without_a_period_counts_from_the_last_update(monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.billing import effective_plan_key
+
+    monkeypatch.setenv("BILLING_PAST_DUE_GRACE_DAYS", "3")
+    updated = datetime(2026, 10, 10, tzinfo=UTC)
+    subscription = _past_due(period_end=None, updated_at=updated)
+    assert effective_plan_key(subscription, now=updated + timedelta(days=2)) == (
+        BillingPlanKey.AGENCY
+    )
+    assert effective_plan_key(subscription, now=updated + timedelta(days=4)) == (
+        BillingPlanKey.FREE
+    )
+
+
+def test_grace_days_setting_is_bounded(monkeypatch) -> None:
+    from app.services.billing import past_due_grace_days
+
+    for raw, expected in (("0", 0), ("14", 14), ("9999", 60), ("-5", 0), ("x", 7)):
+        monkeypatch.setenv("BILLING_PAST_DUE_GRACE_DAYS", raw)
+        assert past_due_grace_days() == expected
+
+
+def test_a_lapsed_past_due_plan_loses_every_paid_entitlement(monkeypatch) -> None:
+    """Status, render limits, feature gates, quotas, seats and API keys agree."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.team import _seat_limit
+    from app.services.api_key_access import require_api_access
+    from app.services.billing import quota_plan_and_period
+    from app.services.plan_limits import require_plan_feature
+
+    monkeypatch.setenv("BILLING_PAST_DUE_GRACE_DAYS", "7")
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    repository.subscriptions[workspace_id] = SubscriptionRecord(
+        workspace_id=workspace_id,
+        plan=BillingPlanKey.AGENCY,
+        status=SubscriptionStatus.PAST_DUE,
+        current_period_end=datetime.now(UTC) - timedelta(days=30),
+    )
+    subscription = repository.subscriptions[workspace_id]
+
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.FREE
+    assert status.usage.renders_limit == 3
+    assert status.entitlements.api_access is False
+    assert status.subscription.payment_issue is True
+    assert status.subscription.past_due_grace_ends_at < datetime.now(UTC)
+    with pytest.raises(ApiError):
+        require_plan_feature(subscription, "brand_kits")
+    with pytest.raises(ApiError):
+        require_api_access(subscription)
+    plan_key, _start, _end = quota_plan_and_period(
+        workspace_id=workspace_id, billing_repository=repository
+    )
+    assert plan_key == BillingPlanKey.FREE
+    assert asyncio.run(_seat_limit(repository, workspace_id)) == 1
+
+    # Within the grace period everything still says Agency.
+    subscription.current_period_end = datetime.now(UTC) - timedelta(days=1)
+    status = build_billing_status(workspace_id, repository)
+    assert status.current_plan.key == BillingPlanKey.AGENCY
+    require_api_access(subscription)
+    assert asyncio.run(_seat_limit(repository, workspace_id)) > 1
+
+
+def test_entitlement_code_never_bypasses_the_grace_period() -> None:
+    """plan_for_subscription_status is internal; callers use effective_plan_key."""
+    import ast
+    from pathlib import Path
+
+    app_root = Path(__file__).resolve().parents[1] / "app"
+    callers = []
+    for path in app_root.rglob("*.py"):
+        if path.name == "billing.py" and path.parent.name == "services":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            name = getattr(node, "id", None) or getattr(node, "attr", None)
+            if name == "plan_for_subscription_status":
+                callers.append(f"{path.relative_to(app_root)}:{node.lineno}")
+    assert callers == []
+
+
+def test_a_failed_upgrade_checkout_does_not_mark_a_paid_plan_past_due() -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    repository.upsert_subscription(
+        workspace_id=workspace_id, plan=BillingPlanKey.PRO, status=SubscriptionStatus.ACTIVE
+    )
+    failed = WebhookEnvelope.model_validate(
+        {
+            "id": "evt_upgrade_failed",
+            "event": "payment.failed",
+            "created_at": "2026-10-19T00:00:00Z",
+            "order": {
+                "id": "order_upgrade",
+                "status": "failed",
+                "amount_paise": 199900,
+                "currency": "INR",
+                "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
+                "created_at": "2026-10-19T00:00:00Z",
+            },
+        }
+    )
+    _run_webhook(failed, repository)
+    status = build_billing_status(workspace_id, repository)
+    assert status.subscription.status == SubscriptionStatus.ACTIVE
+    assert status.subscription.payment_issue is False
+    assert status.current_plan.key == BillingPlanKey.PRO
+
+
+
 _ = json  # keep import referenced for readers scanning payload shapes

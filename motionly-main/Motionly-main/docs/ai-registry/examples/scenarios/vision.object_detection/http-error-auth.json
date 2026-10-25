@@ -1,0 +1,22 @@
+{
+  "registry": "object-detection.json",
+  "route_id": "vision-objects-remote",
+  "capability": "vision.object_detection",
+  "request": {
+    "type": "object_detection",
+    "images": [{ "b64": "/9j/wA==" }]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/images:annotate" },
+      "response": { "status": 401, "json": { "error": { "code": 401 } } }
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": "provider_auth_failed",
+      "fallback_eligible": true,
+      "billable": true
+    }
+  }
+}

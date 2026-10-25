@@ -140,7 +140,6 @@ FIXTURE_VALIDATION: dict[str, str] = {
     "stock-video": "live provider contracts (Pexels, Pixabay)",
     "stock-embeddings": "GPU stage / live CLIP embeddings",
     "stem-separation": "GPU stage (demucs-worker)",
-    "video-generation": "live Runway Gen-3 provider contract",
     "music": "the licensed catalog import (Task 27/28) with real rights-cleared tracks",
     "music-test-track": "the licensed catalog import with real rights-cleared tracks",
     "fixture-media-in-renders": "real media renders in the media stage and GPU stage",

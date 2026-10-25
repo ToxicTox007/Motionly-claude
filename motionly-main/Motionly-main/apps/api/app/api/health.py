@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.api.dependencies import Actor, get_actor
 from app.api.errors import ApiError
+from app.services.ai_features import ai_feature_report, unconfigured_features
 
 router = APIRouter(prefix="/health", tags=["health"])
 ActorDep = Annotated[Actor, Depends(get_actor)]
@@ -35,6 +36,10 @@ class DependencyHealth(BaseModel):
 
 class DependencyHealthResponse(HealthResponse):
     dependencies: dict[str, DependencyHealth]
+    # Registry-driven runtime identities (plan Task 6), exposed additively so the
+    # authenticated diagnostics report can show which inference catalog is live.
+    registry_version: str | None = None
+    catalog_fingerprint: str | None = None
 
 
 class ComponentHealth(BaseModel):
@@ -123,6 +128,7 @@ async def dependencies(request: Request, actor: ActorDep) -> DependencyHealthRes
     await _allow_diagnostics_request(request, actor)
     checks = await _cached_dependency_checks(request)
     aggregate = "ok" if all(item.status == "ok" for item in checks.values()) else "degraded"
+    runtime = getattr(request.app.state, "inference_runtime", None)
     return DependencyHealthResponse(
         status=aggregate,
         service="motionly-api",
@@ -130,6 +136,8 @@ async def dependencies(request: Request, actor: ActorDep) -> DependencyHealthRes
         gpu_stage=request.app.state.settings.gpu_stage,
         request_id=request.state.request_id,
         dependencies=checks,
+        registry_version=getattr(runtime, "registry_version", None),
+        catalog_fingerprint=getattr(runtime, "catalog_fingerprint", None),
     )
 
 
@@ -187,6 +195,7 @@ async def _cached_dependency_checks(request: Request) -> dict[str, DependencyHea
 
 async def _collect_dependency_checks(request: Request) -> dict[str, DependencyHealth]:
     settings = request.app.state.settings
+    runtime = getattr(request.app.state, "inference_runtime", None)
     names = ("redis", "supabase", "storage", "renderer", "workers", "temporal", "providers")
     results = await asyncio.gather(
         _probe_redis(settings),
@@ -195,7 +204,7 @@ async def _collect_dependency_checks(request: Request) -> dict[str, DependencyHe
         _probe_renderer(settings),
         _probe_workers(request),
         _probe_temporal(settings),
-        _provider_dependency_health(settings),
+        _provider_dependency_health(settings, runtime),
         return_exceptions=True,
     )
     checks = {
@@ -210,6 +219,8 @@ async def _collect_dependency_checks(request: Request) -> dict[str, DependencyHe
         "api": DependencyHealth(status="ok", message="API process is responding."),
         **checks,
     }
+    checks["ai_features"] = _ai_feature_health(settings)
+    checks["inference"] = _inference_health(request)
     audio_ml_providers = getattr(request.app.state, "audio_ml_providers", None)
     if not audio_ml_providers:
         checks["audio_ml"] = DependencyHealth(
@@ -233,6 +244,125 @@ async def _collect_dependency_checks(request: Request) -> dict[str, DependencyHe
             metadata=states,
         )
     return checks
+
+
+def _ai_feature_health(settings) -> DependencyHealth:
+    """Provider, execution site and credential presence per AI feature (no values)."""
+    report = ai_feature_report(settings)
+    missing = unconfigured_features(report)
+    metadata: dict[str, object] = {
+        "gpu_workers": (
+            "enabled" if getattr(settings, "gpu_workers_enabled", True) else "disabled"
+        ),
+        "features": report,
+    }
+    if missing:
+        return DependencyHealth(
+            status="degraded",
+            message="Selected remote AI providers have no credentials: " + ", ".join(missing),
+            metadata=metadata,
+        )
+    return DependencyHealth(
+        status="ok", message="Every selected AI provider is configured.", metadata=metadata
+    )
+
+
+def _inference_health(request: Request) -> DependencyHealth:
+    """The registry-driven inference diagnostics entry (plan Task 8, Section 2.6).
+
+    Admin-only (served from the authenticated ``/health/dependencies`` report),
+    it adds per-capability availability, validation warnings (route id + code),
+    dropped routes, the read-only circuit state per route id, and the count of
+    operations stuck in ``submit_unknown``. An open circuit never makes this
+    entry (or the API) unhealthy; it surfaces as a degraded capability only.
+
+    No base URL, model id, secret or provider label is returned.
+    """
+    runtime = getattr(request.app.state, "inference_runtime", None)
+    if runtime is None:
+        return DependencyHealth(
+            status="ok", message="Inference runtime is not configured."
+        )
+
+    from app.services.inference_capability_report import build_capability_report
+
+    report = build_capability_report(runtime)
+    capability_states = {
+        capability.capability: {
+            "status": capability.status,
+            "reason": capability.reason,
+            "route_count": capability.route_count,
+            "required": capability.required,
+        }
+        for capability in report.capabilities
+    }
+
+    startup = runtime.startup_validation
+    warnings = (
+        startup.warning_fields() if hasattr(startup, "warning_fields") else []
+    )
+    dropped = (
+        startup.dropped_fields() if hasattr(startup, "dropped_fields") else []
+    )
+
+    # Read-only circuit state per active route id.
+    circuit_states: dict[str, str] = {}
+    for route_id in runtime.route_records:
+        route = next(
+            (r for r in runtime.gateway.all_routes if r.route_id == route_id), None
+        )
+        if route is not None:
+            circuit_states[route_id] = runtime.gateway.circuit_state(route)
+
+    submit_unknown = _submit_unknown_count(request, runtime)
+
+    metadata: dict[str, object] = {
+        "registry_version": report.registry_version,
+        "capabilities": capability_states,
+        "validation_warnings": warnings,
+        "dropped_routes": dropped,
+        "circuit_state": circuit_states,
+        "submit_unknown": submit_unknown,
+    }
+
+    # A missing *required* capability is a genuine degradation; an open circuit
+    # or an unavailable optional capability is not.
+    required_unavailable = sorted(
+        capability.capability
+        for capability in report.capabilities
+        if capability.required and capability.status == "unavailable"
+    )
+    if required_unavailable:
+        return DependencyHealth(
+            status="degraded",
+            message="Required inference capabilities are unavailable: "
+            + ", ".join(required_unavailable),
+            metadata=metadata,
+        )
+    return DependencyHealth(
+        status="ok",
+        message="Inference registry capabilities reported.",
+        metadata=metadata,
+    )
+
+
+def _submit_unknown_count(request: Request, runtime) -> int:
+    """Count operations stuck in ``submit_unknown`` (plan Section 2.5/2.6).
+
+    Uses the inference operations repository: the runtime's own repository, or
+    the app-state operations repository, whichever exposes ``count_by_state``. A
+    repository without that method, or any error, yields 0 so the probe never
+    crashes the report.
+    """
+    from app.services.inference_operations import OperationState
+
+    repository = getattr(runtime, "operations_repository", None)
+    if repository is None or not hasattr(repository, "count_by_state"):
+        return 0
+    try:
+        return int(repository.count_by_state(OperationState.SUBMIT_UNKNOWN))
+    except Exception:
+        return 0
 
 
 async def _probe_temporal(settings) -> DependencyHealth:
@@ -325,63 +455,148 @@ async def _probe_renderer(settings) -> DependencyHealth:
     )
 
 
-async def _probe_providers(settings) -> DependencyHealth:
-    probes: list[tuple[str, str, dict[str, str]]] = []
-    if settings.openrouter_api_key:
-        probes.append(
-            (
-                "openrouter",
-                "https://openrouter.ai/api/v1/models",
-                {"authorization": f"Bearer {settings.openrouter_api_key}"},
-            )
-        )
-    if settings.groq_api_key:
-        probes.append(
-            (
-                "groq",
-                "https://api.groq.com/openai/v1/models",
-                {"authorization": f"Bearer {settings.groq_api_key}"},
-            )
-        )
-    if settings.pexels_api_key:
-        probes.append(
-            (
-                "pexels",
-                "https://api.pexels.com/v1/curated?per_page=1",
-                {"authorization": settings.pexels_api_key},
-            )
-        )
-    if settings.pixabay_api_key:
-        probes.append(
-            (
-                "pixabay",
-                f"https://pixabay.com/api/videos/?key={settings.pixabay_api_key}&per_page=3",
-                {},
-            )
-        )
-    if settings.runway_api_key:
-        probes.append(
-            (
-                "runway",
-                "https://api.dev.runwayml.com/v1/tasks",
-                {
-                    "authorization": f"Bearer {settings.runway_api_key}",
-                    "x-runway-version": "2024-11-06",
-                },
-            )
-        )
-    if not probes:
+async def _probe_providers(settings, runtime=None, *, transport=None) -> DependencyHealth:
+    """Probe each configured adapter's declared health request (plan Task 8).
+
+    Vendor URLs are gone. For every registry adapter with a ``health``
+    ``{method, path}`` spec, probe ``base_url + path`` with the adapter's auth
+    applier, a short timeout and no body. An adapter without a health spec
+    reports ``not_probed``. Async submit endpoints are never called. Stock-media
+    providers (not inference adapters) keep their lightweight probes.
+
+    No base URL, model id, secret or provider label is returned; the metadata is
+    keyed by the neutral adapter id and carries only the HTTP status or a neutral
+    state.
+    """
+    adapter_probes = _adapter_health_probes(settings, runtime)
+    media_probes = _stock_media_probes(settings)
+    if not adapter_probes and not media_probes:
         return DependencyHealth(status="ok", message="No remote providers configured.")
-    statuses: dict[str, int] = {}
-    async with httpx.AsyncClient(timeout=settings.readiness_timeout_seconds) as client:
-        for name, url, headers in probes:
-            result = await client.get(url, headers=headers)
+
+    statuses: dict[str, object] = {}
+    unhealthy = False
+    async with httpx.AsyncClient(
+        timeout=settings.readiness_timeout_seconds, transport=transport
+    ) as client:
+        for probe in adapter_probes:
+            if probe.method is None:
+                statuses[probe.name] = "not_probed"
+                continue
+            try:
+                result = await client.request(
+                    probe.method, probe.url, headers=probe.headers
+                )
+            except Exception:
+                statuses[probe.name] = "unreachable"
+                unhealthy = True
+                continue
+            statuses[probe.name] = result.status_code
+            if result.status_code >= 500 or result.status_code in {401, 403}:
+                unhealthy = True
+        for name, url, headers in media_probes:
+            try:
+                result = await client.get(url, headers=headers)
+            except Exception:
+                statuses[name] = "unreachable"
+                unhealthy = True
+                continue
             statuses[name] = result.status_code
-    if any(status >= 500 or status in {401, 403} for status in statuses.values()):
+            if result.status_code >= 500 or result.status_code in {401, 403}:
+                unhealthy = True
+    if unhealthy:
         return DependencyHealth(
             status="down", message="A provider probe failed.", metadata=statuses
         )
     return DependencyHealth(status="ok", message="Provider probes responded.", metadata=statuses)
+
+
+@dataclass
+class _AdapterProbe:
+    name: str
+    method: str | None
+    url: str
+    headers: dict[str, str]
+
+
+def _adapter_health_probes(settings, runtime) -> list[_AdapterProbe]:
+    """Build an adapter-declared health probe per registry adapter.
+
+    Reads the runtime's adapter records (neutral ``{method, path}`` health spec,
+    base URL, network, auth). The auth applier is rebuilt through the same
+    secret resolver the runtime uses; a resolution or auth-build failure makes
+    the adapter ``not_probed`` rather than leaking a value. ``auth: none`` and
+    adapters without a health spec are handled too.
+    """
+    if runtime is None:
+        return []
+    adapter_records = getattr(runtime, "adapter_records", None)
+    if not adapter_records:
+        return []
+    from app.services.inference_auth import build_auth
+    from app.services.inference_secrets import SecretResolver
+
+    resolver = None
+    probes: list[_AdapterProbe] = []
+    for adapter_id, record in adapter_records.items():
+        if record.type in {"local", "fake"} or not record.base_url:
+            # Local/fake adapters make no outbound call; nothing to probe.
+            continue
+        if not record.health_method or not record.health_path:
+            probes.append(
+                _AdapterProbe(name=adapter_id, method=None, url="", headers={})
+            )
+            continue
+        headers: dict[str, str] = {"accept": "application/json"}
+        headers.update(record.extra_headers)
+        try:
+            if resolver is None:
+                resolver = SecretResolver(settings=settings)
+            applier = build_auth(record.auth, resolver, provider=adapter_id)
+            applier.apply(headers)
+        except Exception:
+            # A missing secret or bad auth config: report not_probed, never the
+            # value or the reason text.
+            probes.append(
+                _AdapterProbe(name=adapter_id, method=None, url="", headers={})
+            )
+            continue
+        url = f"{str(record.base_url).rstrip('/')}/{str(record.health_path).lstrip('/')}"
+        probes.append(
+            _AdapterProbe(
+                name=adapter_id,
+                method=str(record.health_method).upper(),
+                url=url,
+                headers=headers,
+            )
+        )
+    return probes
+
+
+def _stock_media_probes(settings) -> list[tuple[str, str, dict[str, str]]]:
+    """Lightweight probes for the stock-media providers (not inference adapters).
+
+    These are stock search/footage providers, outside the inference registry.
+    They keep their existing cheap probes so the ``providers`` dependency entry
+    still reflects their health.
+    """
+    probes: list[tuple[str, str, dict[str, str]]] = []
+    if getattr(settings, "pexels_api_key", None):
+        probes.append(
+            (
+                "stock_curated",
+                "https://api.pexels.com/v1/curated?per_page=1",
+                {"authorization": settings.pexels_api_key},
+            )
+        )
+    if getattr(settings, "pixabay_api_key", None):
+        probes.append(
+            (
+                "stock_footage",
+                f"https://pixabay.com/api/videos/?key={settings.pixabay_api_key}&per_page=3",
+                {},
+            )
+        )
+    return probes
 
 
 async def _probe_workers(request: Request) -> DependencyHealth:
@@ -398,9 +613,9 @@ async def _probe_workers(request: Request) -> DependencyHealth:
     )
 
 
-async def _provider_dependency_health(settings) -> DependencyHealth:
+async def _provider_dependency_health(settings, runtime=None) -> DependencyHealth:
     try:
-        result = await _probe_providers(settings)
+        result = await _probe_providers(settings, runtime)
     except Exception as exc:
         return DependencyHealth(
             status="degraded",

@@ -18,6 +18,7 @@
 10. [Ongoing Release Flow](#10-ongoing-release-flow)
 11. [Environment Variables Reference](#11-environment-variables-reference)
 12. [Minimal / Budget Setup (No GPU)](#12-minimal--budget-setup-no-gpu)
+13. [GPU-free Remote AI Mode](#13-gpu-free-remote-ai-mode)
 
 ---
 
@@ -90,15 +91,17 @@ The project is **designed and documented for exactly one deployment target**:
 |---|---|---|
 | **AWS** | EC2, CloudFront, S3, SSM, IAM, CloudFormation | aws.amazon.com |
 | **Supabase** | Auth JWT keys + self-hosted config (or cloud project for keys only) | supabase.com |
-| **Groq** | Audio transcription (Whisper large-v3-turbo) | console.groq.com |
-| **OpenRouter** | AI edit planning (GPT-4.1-mini and others) | openrouter.ai |
+| **A transcription endpoint** | Speech-to-text with word timestamps. Any OpenAI-compatible `audio/transcriptions` API works | your choice |
+| **A planning endpoint** | AI edit planning. Any OpenAI-compatible `chat/completions` API works | your choice |
 | **GitHub** | Container registry (GHCR) + CI/CD | github.com |
+
+AI providers are not built in. You choose them and declare them as routes in the inference registry ([registry guide](motionly-main/Motionly-main/docs/ai-registry/README.md)). One provider can serve both planning and transcription.
 
 ### Required for premium rendering (B-roll, visual effects)
 
 | Service | Purpose | Where to sign up |
 |---|---|---|
-| **Runway** | AI video generation (gen3a_turbo) | runwayml.com |
+| **A video-generation API** (optional) | Generated B-roll, configured as a `video.generation.submit` registry route | your choice |
 | **Pexels** | Stock video search | pexels.com/api |
 | **Pixabay** | Stock video search (fallback) | pixabay.com/api |
 
@@ -106,7 +109,7 @@ The project is **designed and documented for exactly one deployment target**:
 
 | Service | Purpose |
 |---|---|
-| **Azure OpenAI** | Alternative LLM provider for planning |
+| **Azure OpenAI** | Supported as an `azure_openai` registry adapter for planning |
 | **Temporal Cloud** | Managed workflow orchestration (instead of self-hosted Temporal in Docker) |
 | **OTEL-compatible backend** | Observability (e.g. Grafana Cloud, Datadog) |
 
@@ -158,12 +161,16 @@ SUPABASE_JWT_SECRET=$(openssl rand -hex 40)
 
 ### 4.3 — AI / ML provider keys (from third-party APIs)
 
-| SSM Parameter Name | Where to get it |
+All inference credentials live in **one** SSM parameter, a JSON object:
+
+| SSM Parameter Name | Contents |
 |---|---|
-| `groq-api-key` | console.groq.com → API Keys |
-| `openrouter-api-key` | openrouter.ai → Keys |
-| `runway-api-key` | app.runwayml.com → API |
-| `azure-openai-api-key` | Azure Portal → Azure OpenAI resource |
+| `ai-secrets-bundle` | `{"<key>": "<credential>", …}`. Each registry route names its key as `bundle:<key>`. Store it minified, on one line |
+
+The routes themselves live in the inference registry, a JSON file shipped with the release as `infra/ai-registry/registry.json` (see [Compose VM deployment](motionly-main/Motionly-main/docs/ops/compose-vm-deployment.md#inference-registry)). The registry holds secret *references*, never values.
+
+> [!IMPORTANT]
+> **Upgrading from a release with per-vendor keys:** once the new release is healthy, delete these SSM parameters and secret files. They are no longer read: `groq-api-key`, `openrouter-api-key`, `runway-api-key`, `azure-openai-api-key`, `jina-api-key`, and the object-detection, diarization and stem-separation keys `google-vision-api-key`, `pyannoteai-api-key`, `lalal-license-key` (secret files `google_vision_api_key`, `pyannoteai_api_key`, `lalal_license_key`). Also remove these variables from env files: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `RUNWAY_API_KEY`, `JINA_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `MODEL_GATEWAY_ROUTES`, `MODEL_GATEWAY_OPENAI_BASE_URL`, `MODEL_GATEWAY_OPENAI_API_KEY`, `TRANSCRIPTION_PROVIDER`, `EDIT_PLANNER_PROVIDER`, `VISUAL_CAPTIONS_PROVIDER`, `VISUAL_EMBEDDINGS_PROVIDER`, `EMBEDDINGS_PROVIDER`, every `QUOTA_OPENROUTER_*` / `QUOTA_RUNWAY_*` (now `QUOTA_PLANNING_*` / `QUOTA_VIDEO_GENERATION_*`), and the object-detection, diarization and stem-separation vendor variables removed in the provider-neutral release (plan Task 19 item 2): `VISUAL_OBJECTS_PROVIDER`, `GOOGLE_VISION_API_KEY`, `GOOGLE_VISION_OBJECTS_MODEL`, `GOOGLE_VISION_OBJECTS_MODEL_REVISION`, `GOOGLE_VISION_COST_PER_IMAGE_USD`, `PYANNOTEAI_API_KEY`, `PYANNOTEAI_MODEL`, `PYANNOTEAI_COST_PER_HOUR_USD`, `PYANNOTEAI_POLL_INTERVAL_SECONDS`, `PYANNOTEAI_TIMEOUT_SECONDS`, `LALAL_LICENSE_KEY`, `LALAL_SPLITTER`, `LALAL_COST_PER_MINUTE_USD`, `LALAL_POLL_INTERVAL_SECONDS`, `LALAL_TIMEOUT_SECONDS`. `AUDIO_DIARIZATION_PROVIDER` now accepts only `local_ml`/`disabled` (its `pyannoteai` value is gone) and `STEM_SEPARATION_PROVIDER` only `demucs`/`fixture` (its `lalal` value is gone); object detection, diarization and stem separation are configured through registry routes whose credentials live in `ai-secrets-bundle`.
 
 ### 4.4 — Stock media keys
 
@@ -409,7 +416,7 @@ This triggers `.github/workflows/supply-chain.yml`, which:
    - Reads all SSM parameters
    - Pulls images by digest
    - Runs `docker compose up --profile gpu -d --wait`
-   - Runs `db-migrate` (applies all 108 migrations under advisory lock)
+   - Runs `db-migrate` (applies every migration under `supabase/migrations/` under an advisory lock)
    - Waits for all health checks to pass
    - **Rolls back automatically** if any service fails to become healthy
 
@@ -436,6 +443,14 @@ Every subsequent deploy is the same: push a `v*` tag → supply chain runs → d
 sudo /opt/motionly/agent/bin/apply-release --rollback
 ```
 
+### 10.1 Upgrading to the provider-neutral inference release
+
+This release moves every AI provider into the inference registry and adds forward-only migrations: `202610240101`–`202610240103`, `202610240201`, `202610240202` and `202610240301`. Migration `202610240202` rewrites generated B-roll rows to neutral fields once. Before tagging:
+
+1. Write and validate `infra/ai-registry/registry.json` and store its credentials in `ai-secrets-bundle` (Section 4.3).
+2. Take a database backup ([Backups and restore](motionly-main/Motionly-main/docs/backups-restore.md)). Rollback means restoring that backup and redeploying the previous release; the automatic rollback cannot undo the data rewrite.
+3. After the release is healthy, delete the old per-vendor parameters and variables listed in Section 4.3.
+
 ---
 
 ## 11. Environment Variables Reference
@@ -461,13 +476,13 @@ All of these come from [`.env.example`](file:///workspaces/Motionly-claude/motio
 
 | Variable | Description |
 |---|---|
-| `GROQ_API_KEY` | Groq API key (transcription) |
-| `OPENROUTER_API_KEY` | OpenRouter API key (planning) |
-| `RUNWAY_API_KEY` | Runway API key (video generation) |
+| `AI_REGISTRY_FILE` | Inference registry path, or a comma-separated list of fragments. Required in production; production Compose sets `/opt/motionly/ai-registry/registry.json` |
+| `AI_SECRETS_BUNDLE_FILE` | JSON object of route credentials for `bundle:` refs. Production Compose mounts the `ai_secrets_bundle` secret |
+| `AI_SECRETS_DIR` | Directory for `file:` refs (default `/run/secrets`) |
+| `AI_QUOTA_SCOPE` | `feature` (default) or `provider` (temporary stop-gap) |
+| `AI_BLOCK_NONCOMMERCIAL` | `true` makes non-commercial local model licences an error |
 | `PEXELS_API_KEY` | Pexels stock video |
 | `PIXABAY_API_KEY` | Pixabay stock video |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint (optional) |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI key (optional) |
 
 ### Temporal Workflow
 
@@ -481,13 +496,7 @@ All of these come from [`.env.example`](file:///workspaces/Motionly-claude/motio
 
 ### Model Revisions (pinned — do not change without testing)
 
-| Variable | Value |
-|---|---|
-| `PYANNOTE_MODEL_REVISION` | `84fd25912480287da0247647c3d2b4853cb3ee5d` |
-| `WAV2VEC_EMOTION_MODEL_REVISION` | `441a7599c3b22107314dcbd9166621c5c83f2cc5` |
-| `VISUAL_CLIP_MODEL_REVISION` | `3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268` |
-| `VISUAL_BLIP_MODEL_REVISION` | `59a1ef6c1e5117b3f65523d1c6066825bcf315e3` |
-| `DEMUCS_MODEL_REVISION` | `demucs==4.1.0` |
+Model ids, pinned revisions, licences and weight hashes are no longer environment variables. They are registry records: local CPU models in `infra/ai-registry/cpu-local.json` (MediaPipe matte, YAMNet, Demucs) and local GPU models in `infra/ai-registry/gpu-local.json` (CLIP, BLIP, YOLO, pyannote, wav2vec2). The old `*_MODEL` / `*_MODEL_REVISION` variables are ignored and can be removed.
 
 ### Security / Admin
 
@@ -532,14 +541,124 @@ If you want to run it cheaply without GPU (no background removal, no visual AI a
 | **Instance** | `m7i.2xlarge` (`ComputeProfile=cpu` in CloudFormation) |
 | **GPU workers** | Skip — set `AUDIO_ML_PROVIDER=disabled`, `VISUAL_PROVIDER=disabled` |
 | **Temporal** | Use **Temporal Cloud** free tier instead of self-hosting |
-| **Transcription** | Groq (very cheap — ~$0.25/request) |
-| **Planning** | OpenRouter GPT-4.1-mini (cheap) |
-| **Video generation** | Skip Runway (set `REMOTION_ENABLED=false`) |
+| **Transcription** | Any low-cost OpenAI-compatible transcription route |
+| **Planning** | Any low-cost OpenAI-compatible chat route |
+| **Video generation** | Configure no `video.generation.submit` route (the feature reports unavailable) |
 | **Docker Compose profile** | Use `--profile slim` instead of `--profile gpu` |
 
-**Estimated cost: ~$200–400/month** (m7i.2xlarge ~$300/mo + Groq/OpenRouter usage)
+**Estimated cost: ~$200–400/month** (m7i.2xlarge ~$300/mo + planning and transcription API usage)
 
 **GPU production cost: ~$1,500–2,500/month** (g6.12xlarge ~$2,000/mo in Mumbai + AI API usage)
+
+> [!NOTE]
+> To keep visual analysis, background removal and audio intelligence without a GPU, use [Section 13](#13-gpu-free-remote-ai-mode) instead: GPU work goes to remote APIs and CPU work stays local.
+
+---
+
+## 13. GPU-free Remote AI Mode
+
+Every feature that needs a GPU calls a remote API; everything that runs on a CPU stays local. Each feature has its own switch, and the defaults (no switch set) are the GPU topology above, unchanged.
+
+### 13.1 Feature switches
+
+Remote AI features are registry routes ([registry guide](motionly-main/Motionly-main/docs/ai-registry/README.md)). A capability without a route reports `unavailable` at `GET /capabilities`, and editing continues with its fallback. The switches below place the work that stays local.
+
+| Feature | GPU-free setup | Runs on | Fallback without a route |
+|---|---|---|---|
+| Visual analysis (frames, scenes, faces, colours, motion) | `VISUAL_PROVIDER=remote` | `cpu-vision-worker` (OpenCV + MediaPipe) | — |
+| Keyframe objects | a `vision.object_detection` route (example: `docs/ai-registry/examples/object-detection.json`) | the configured remote API | empty detections, `objects: unavailable:not_configured` |
+| Keyframe captions, voice emotion, embeddings | not available until Tier 2 (registry routes, plan Tasks 11–12) | — | captions and emotion degraded; B-roll ranks by keywords |
+| Background matte | `MATTE_PROVIDER=local_cpu`, or the matte route in `infra/ai-registry/cpu-local.json` | `cpu-vision-worker` (MediaPipe selfie segmenter) | matte effects disabled |
+| Speaker diarization | an `audio.diarization` route (example: `docs/ai-registry/examples/diarization.json`) | the configured remote API | heuristic speaker labels, marked degraded |
+| Sound classification | `AUDIO_SOUND_PROVIDER=yamnet_tflite` | `cpu-vision-worker` (YAMNet TFLite) | labels empty |
+| Stem separation | an `audio.stem_separation` route: CPU Demucs from `cpu-local.json`, or a remote API (example: `docs/ai-registry/examples/stem-separation.json`) | `demucs-worker` (profile `local-stems`) or the remote API | stem request refused with `503 capability_unavailable` |
+| Rendering | `FFMPEG_GPU_ENABLED=false` (libx264 on `cpu-ffmpeg-worker`) | — | — |
+| GPU workers present | `GPU_WORKERS_ENABLED=false` | — | — |
+
+Only scene keyframes (at most `VISUAL_REMOTE_MAX_KEYFRAMES`, default 24 per video) go to remote vision APIs; the video never leaves the deployment. With `GPU_WORKERS_ENABLED=false` the GPU capacity observer, its maintenance job and GPU model prefetch are off, and routes with `requires_gpu: true` are dropped at startup.
+
+### 13.2 Accounts, keys and prices
+
+For each remote feature, create an account with any provider whose API fits the example route, copy the example into your registry, and set:
+
+- `base_url` and the auth header the provider expects;
+- `secret_ref: "bundle:<key>"`, with the credential stored under that key in `ai-secrets-bundle`;
+- `pricing` in the route's billing unit (per image, per second of audio, …), or `explicitly_free: true`, or `pricing.status: unknown` with a `budget.hard_cap`;
+- `data_processor` metadata (display name, purpose, data categories, policy URL). The privacy page lists exactly these processors, and production refuses a remote route without them.
+
+Validate before deploying: `cd apps/api && python -m app.ops.validate_inference_registry <registry.json> --app-env production`.
+
+### 13.3 Bring-up
+
+1. **Image.** The supply-chain workflow builds the `cpu-vision-worker` component. To build it yourself:
+   `docker build -f apps/worker/Dockerfile.python --build-arg API_EXTRAS=cpu-vision --build-arg CPU_VISION_ENABLED=true -t <registry>/cpu-vision-worker .`
+   It bakes in the YAMNet, selfie-segmenter and BlazeFace models, each checked against a pinned SHA-256. Set `MOTIONLY_CPU_VISION_WORKER_IMAGE=<name>@sha256:<digest>`.
+2. **Database.** Migration `202610220101_remote_ai_feature_quota_categories.sql` must be applied (`db-migrate` runs it on start). Without it, quota usage rows are rejected.
+3. **Inputs.** Add the image and any switch overrides to the Compose env file (template: `infra/production-compose.env.example`), the registry (with any remote routes) to `infra/ai-registry/registry.json`, and the route credentials to the secrets bundle.
+4. **Start**, without `--profile gpu`:
+   ```bash
+   docker compose --project-name motionly --env-file compose.env \
+     -f infra/docker-compose.gpu.yml -f infra/docker-compose.remote-ai.yml up -d --wait
+   ```
+   No GPU service and no `demucs-worker` start. `cpu-vision-worker` serves `visual_analysis,transcription,matte_extraction,audio_demucs`.
+5. **Check.** `GET /api/capabilities` lists every capability as `available`, `degraded` or `unavailable` with a reason. `GET /api/health/dependencies` (authenticated) has an `inference` entry with validation warnings, dropped routes and circuit state; it never contains key values. Worker heartbeats from `cpu-vision-worker` list `cpu_vision_queues: [visual_analysis, matte_extraction]`.
+
+> [!IMPORTANT]
+> The signed release flow (`scripts/deploy/apply_release.sh`) deploys only `infra/docker-compose.gpu.yml` and refuses `MOTIONLY_COMPOSE_OVERLAY` outside rehearsal. The release manifest does not carry the cpu-vision image. Until it does, run this mode with operator-run Compose as above. The agent does fetch `ai-secrets-bundle`, so registry routes need no extra SSM parameters.
+
+### 13.4 Cost controls and failure behaviour
+
+| Control | Setting | Scope |
+|---|---|---|
+| Monthly budget | `MODEL_GATEWAY_MONTHLY_BUDGET_USD` | per workspace, all features |
+| Request budget | `MODEL_GATEWAY_REQUEST_BUDGET_USD` | per call |
+| Monthly cap per feature | `MODEL_GATEWAY_FEATURE_BUDGETS_USD`, e.g. `{"vision_captions":20,"audio_stems":15}` | whole deployment |
+| Plan quota per feature | `QUOTA_<FEATURE>_<PLAN>_LIMIT_<UNIT>` | per workspace, per billing period |
+
+Plan quota defaults (free / creator / pro / agency):
+
+| Feature | Unit | Defaults |
+|---|---|---|
+| `VISION_OBJECTS`, `VISION_CAPTIONS` | images | 120 / 1,000 / 3,000 / 7,500 |
+| `EMBEDDINGS` | inputs | 1,000 / 8,000 / 24,000 / 60,000 |
+| `AUDIO_DIARIZATION`, `AUDIO_EMOTION` | seconds | 1,800 / 14,400 / 43,200 / 108,000 |
+| `AUDIO_STEMS` | seconds | 600 / 3,600 / 10,800 / 36,000 |
+
+Example: `QUOTA_VISION_CAPTIONS_FREE_LIMIT_IMAGES=60`. Only remote calls count. Usage is recorded once per successful call in `cost_attribution_events`. If the quota cannot be checked, the paid call is refused.
+
+When a provider fails, its circuit is open, or a budget or quota runs out:
+
+- **Visual analysis** completes and lists the missing part in `summary.degraded_capabilities` (for example `objects: unavailable:quota_exceeded`). The other capabilities still run.
+- **Diarization, voice emotion, sound** keep the transcript-based estimate and record `ml_status`.
+- **B-roll** ranks a slot by keywords when its query embedding is refused, and does not cache that slot set.
+- **Stems** fail visibly so the user can retry: HTTP 402 `audio_stems_quota_exceeded` when the quota is used up, and a failed job for provider errors or budgets.
+
+### 13.5 Switching a feature back to the GPU
+
+General rules:
+
+- Set `GPU_WORKERS_ENABLED=true` as soon as any GPU service runs; production refuses local GPU switches while it is `false`.
+- Set switches in the Compose env file; the overlay passes them to the API and every worker, so they always agree.
+- Remove a queue from `CPU_VISION_WORKER_QUEUES` when a GPU worker takes it over. A cpu-vision worker subscribed to `visual_analysis` or `matte_extraction` refuses to start if the matching switch is a GPU value.
+- `--profile gpu` still starts every GPU service at once.
+
+| Feature | Set | Start | Notes |
+|---|---|---|---|
+| Visual analysis | `VISUAL_PROVIDER=local_ml`, `GPU_WORKERS_ENABLED=true`, add `infra/ai-registry/gpu-local.json` to `AI_REGISTRY_FILE`, `CPU_VISION_WORKER_QUEUES=transcription,matte_extraction,audio_demucs` | `--profile gpu-inference` (serves `GPU_INFERENCE_WORKER_QUEUES`, default `visual_analysis`) | Text and image embedding routes used together must share one `embedding_space`; the validator refuses a mix. The visual cache identity changes, so new analyses are not served from remote-mode cache entries. |
+| Matte | `MATTE_PROVIDER=local_ml`, drop `matte_extraction` from `CPU_VISION_WORKER_QUEUES` | `--profile gpu-matte` | |
+| Diarization / voice emotion / sound | `AUDIO_DIARIZATION_PROVIDER`, `AUDIO_EMOTION_PROVIDER`, `AUDIO_SOUND_PROVIDER` = `local_ml` (or empty); drop `transcription` from `CPU_VISION_WORKER_QUEUES`; `GPU_INFERENCE_WORKER_QUEUES=visual_analysis,transcription` | `--profile gpu-inference` | The local models run inside transcription jobs, so the transcription queue moves with them. Diarization also needs `PYANNOTE_AUTH_TOKEN`. |
+| Stems | the Demucs route from `infra/ai-registry/cpu-local.json` (`STEM_SEPARATION_PROVIDER=demucs`), drop `audio_demucs` from `CPU_VISION_WORKER_QUEUES` | `--profile local-stems` (Demucs runs on CPU) | |
+| B-roll embeddings only | the CLIP route from `infra/ai-registry/gpu-local.json` | — | CLIP runs inside the process that ranks B-roll (`planning-worker`), which needs `torch`; see the known issues. |
+| Rendering | `FFMPEG_GPU_ENABLED=true` on the API | `--profile gpu-render` | |
+
+To go fully back to the original topology, drop the overlay file and start with `--profile gpu`.
+
+### 13.6 Known issues
+
+- **MediaPipe legacy API (pre-existing).** The locked `mediapipe==0.10.35` no longer ships `mp.solutions`. The GPU visual provider (`LocalMLVisualIntelligenceProvider._load_models`) and the GPU matte loader still call `mp.solutions.face_detection` / `selfie_segmentation`, so they would fail to load on the GPU image too. The CPU path uses the MediaPipe Tasks API and is not affected. Fix the GPU path before switching visual analysis or matte back.
+- **Local CLIP on the planning worker (pre-existing, from the lock files).** `torch` and `transformers` are only in `requirements-ml.lock`, while `planning-worker` (which runs B-roll generation) uses the `cpu-worker` image. With a local CLIP route, B-roll embeddings would fail there; ranking then falls back to keywords. Not tested at runtime.
+- **Not verified against live providers.** The registry template routes were tested against recorded API shapes and differential tests against the previous adapters, not live accounts. One live run per remote capability is mandatory before the previous adapters are removed ([live-run log](motionly-main/Motionly-main/docs/ai-registry/live-runs.md)).
+- **Privacy page.** `apps/web/app/privacy/page.tsx` renders the `data_processor` metadata of the enabled remote routes. Confirm each processor's retention terms before publishing.
 
 ---
 
@@ -548,9 +667,9 @@ If you want to run it cheaply without GPU (no background removal, no visual AI a
 ```
 [ ] AWS account with ap-south-1 access
 [ ] GitHub repo with GHCR access
-[ ] Groq API key (required)
-[ ] OpenRouter API key (required)
-[ ] Runway API key (for premium rendering)
+[ ] Planning and transcription endpoints chosen; registry written to infra/ai-registry/registry.json and validated
+[ ] ai-secrets-bundle SSM parameter holds every bundle: key the registry references
+[ ] Video-generation route (optional)
 [ ] Pexels + Pixabay API keys (for stock video)
 [ ] Generate all random secrets (postgres, redis, admin tokens, etc.)
 [ ] Deploy CloudFormation stack

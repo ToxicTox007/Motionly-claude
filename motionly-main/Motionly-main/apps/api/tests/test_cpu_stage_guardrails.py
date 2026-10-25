@@ -38,6 +38,9 @@ VERIFY_STAGES = (
     "aws",
     "deadcode",
     "perf",
+    # Provider-neutral inference Tier 1 gate (plan Task 27); implemented now that
+    # Task 19 item 2 landed. Runs scripts/verify/tier1_gate.py.
+    "tier1-gate",
 )
 
 

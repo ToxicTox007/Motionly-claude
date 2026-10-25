@@ -7,11 +7,21 @@ Motionly production has exactly one supported runtime: the digest-only `infra/do
 ## One-time host bootstrap
 
 1. Deploy the `infra/aws` stack. Its first-boot script mounts the data volume at `/srv/motionly` and installs Docker, a pinned Docker Compose plugin and Cosign; the AWS CLI and Python 3 come with Amazon Linux 2023. The instance has no SSH: operators use SSM Session Manager and GitHub uses SSM Run Command.
-2. Create the SSM SecureString parameters under `/motionly/<environment>/`: `postgres-password`, `redis-password`, `temporal-db-password`, `supabase-jwt-secret`, `supabase-anon-key`, `supabase-service-role-key`, `supabase-worker-key` (the restricted `motionly_worker` JWT), the Realtime secrets (`realtime-db-enc-key`, `realtime-secret-key-base`, `realtime-metrics-jwt-secret`), `admin-api-token`, `worker-api-token`, `metrics-bearer-token`, the provider keys production uses (`groq-api-key`, `openrouter-api-key`, `runway-api-key`, optional `azure-openai-api-key`), `edge/origin-verify` (the CloudFront origin secret; `edge/origin-verify-previous` only during a rotation), the base64-encoded Temporal certificate and key parameters (`temporal-ca-cert` through `temporal-diagnostics-key`), and `registry-read-token`, a read-only GHCR token. The instance role can read only this path.
+2. Create the SSM SecureString parameters under `/motionly/<environment>/`: `postgres-password`, `redis-password`, `temporal-db-password`, `supabase-jwt-secret`, `supabase-anon-key`, `supabase-service-role-key`, `supabase-worker-key` (the restricted `motionly_worker` JWT), the Realtime secrets (`realtime-db-enc-key`, `realtime-secret-key-base`, `realtime-metrics-jwt-secret`), `admin-api-token`, `worker-api-token`, `metrics-bearer-token`, `ai-secrets-bundle` (the JSON object of inference route credentials referenced by the registry as `bundle:<key>`; see the [registry guide](../ai-registry/README.md)), `edge/origin-verify` (the CloudFront origin secret; `edge/origin-verify-previous` only during a rotation), the base64-encoded Temporal certificate and key parameters (`temporal-ca-cert` through `temporal-diagnostics-key`), and `registry-read-token`, a read-only GHCR token. The instance role can read only this path.
 3. From a checkout of the release tag on the instance, run `sudo scripts/deploy/bootstrap_compose_host.sh`. It installs `/opt/motionly/agent/bin/apply-release` and creates `/etc/motionly/host.env` if absent.
 4. Fill only non-secret values in `/etc/motionly/host.env` (`root:root`, `0600`): `MOTIONLY_ENVIRONMENT`, `MOTIONLY_RELEASE_BUCKET` (the stack's `ReleasesBucketName` output), `MOTIONLY_COMPUTE_PROFILE` (the stack's `ComputeProfile`), `MOTIONLY_REGISTRY_USERNAME`, and `MOTIONLY_APP_DOMAIN`, the CloudFront domain from the stack's `PublicOrigin` output. That domain is the one public origin: the agent writes `PUBLIC_ORIGIN=https://<app domain>`, and the ingress routes `/api` and `/supabase` on it.
 
 The agent reads the parameters only through the instance role, writes them to per-release `0700` directories as read-only `0444` files, and mounts them as Compose secrets. No secret is ever an SSM Run Command argument.
+
+## Inference registry
+
+The stack reads its AI routes from `AI_REGISTRY_FILE=/opt/motionly/ai-registry/registry.json`. Compose bind-mounts `infra/ai-registry/` read-only at that path, so the release bundle carries whatever that directory holds. The registry contains secret references only, never values.
+
+1. Write the production registry as `infra/ai-registry/registry.json` on the release branch. It needs routes for `planning.chat` and `transcription.speech_to_text`, with pricing, a pinned or opted-in revision and `data_processor` metadata. Follow the [registry guide](../ai-registry/README.md).
+2. Validate it before tagging: `cd apps/api && python -m app.ops.validate_inference_registry ../../infra/ai-registry/registry.json --app-env production`.
+3. Store the credentials it references in the `ai-secrets-bundle` SSM parameter as one JSON object.
+
+Production refuses to start without a valid registry. No GPU service is required: the GPU-free remote overlay serves the remaining capabilities from remote or CPU routes, and its `demucs-worker` (Compose profile `local-stems`) is needed only when the registry includes the CPU Demucs route from `infra/ai-registry/cpu-local.json`.
 
 ## Release flow
 

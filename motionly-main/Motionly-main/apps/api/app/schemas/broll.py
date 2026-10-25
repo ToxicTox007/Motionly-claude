@@ -22,7 +22,10 @@ class StockProviderKey(StrEnum):
     PEXELS = "pexels"
     PIXABAY = "pixabay"
     USER_LIBRARY = "user_library"
-    RUNWAY = "runway"
+    # Neutral provider key for generated B-roll clips (Task 18). New generated
+    # assets are written with GENERATED; the legacy vendor value was removed in
+    # Task 19 after its rows were backfilled to GENERATED.
+    GENERATED = "generated"
 
 
 class StockOrientation(StrEnum):

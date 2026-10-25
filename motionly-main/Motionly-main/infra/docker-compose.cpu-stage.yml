@@ -23,9 +23,12 @@ x-cpu-stage-environment: &cpu-stage-environment
   BILLING_MODE: demo
   ML_EXECUTION_MODE: test_fixture
   ALLOW_FIXTURE_PROVIDERS: "true"
+  # Fake planning and transcription routes (plan Task 26), valid for APP_ENV=
+  # cpu-stage: the registry is the only source of inference routes, so the stage
+  # serves both required capabilities with no vendor key and no network. Served
+  # read-only from the ai-registry volume the base topology mounts.
+  AI_REGISTRY_FILE: /opt/motionly/ai-registry/cpu-stage.json
   VISUAL_PROVIDER: fixture
-  TRANSCRIPTION_PROVIDER: fixture
-  EDIT_PLANNER_PROVIDER: fixture
   STEM_SEPARATION_PROVIDER: fixture
   STOCK_VIDEO_PROVIDER: fixture
   # Audio intelligence models (pyannote, wav2vec, YAMNet) ship only in the ML

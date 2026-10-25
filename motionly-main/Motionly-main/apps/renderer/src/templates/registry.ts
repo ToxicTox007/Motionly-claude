@@ -145,6 +145,17 @@ export const templates: Record<RenderTemplateId, TemplateDefinition> = {
   },
 };
 
-export function getTemplate(templateId: RenderTemplateId): TemplateDefinition {
-  return templates[templateId];
+// Used when render props name a template this renderer does not know (an
+// older or newer manifest): rendering with the default beats failing every
+// attempt and dead-lettering the job. Matches the worker's default.
+export const DEFAULT_TEMPLATE_ID: RenderTemplateId = "founder_reel_v1";
+
+export function getTemplate(templateId: unknown): TemplateDefinition {
+  if (
+    typeof templateId === "string" &&
+    Object.prototype.hasOwnProperty.call(templates, templateId)
+  ) {
+    return templates[templateId as RenderTemplateId];
+  }
+  return templates[DEFAULT_TEMPLATE_ID];
 }

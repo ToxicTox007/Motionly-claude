@@ -35,6 +35,8 @@ from app.main import create_app  # noqa: E402
 PUBLIC: set[tuple[str, str]] = {
     ("GET", "/health/live"),
     ("GET", "/health/ready"),
+    ("GET", "/capabilities"),
+    ("GET", "/public/data-processors"),
     ("GET", "/metrics"),
     ("GET", "/plans"),
     ("POST", "/auth/signup"),
@@ -61,6 +63,9 @@ INTERNAL_WORKER: set[tuple[str, str]] = {
 }
 
 ADMIN_OPS: set[tuple[str, str]] = {
+    # Refunds target a workspace named in the body, so a workspace role is not
+    # enough: only a platform admin may issue them (audit-logged).
+    ("POST", "/billing/refunds"),
     ("GET", "/admin/ops/overview"),
     ("GET", "/admin/queues"),
     ("GET", "/admin/queues/jobs/{queue_job_id}"),
@@ -81,6 +86,23 @@ ADMIN_OPS: set[tuple[str, str]] = {
     ("POST", "/admin/editorial-learning/datasets/{dataset_id}/promote"),
     ("POST", "/admin/editorial-learning/deployments/{project_id}/rollback"),
     ("GET", "/admin/music/tracks"),
+    # Admin inference registry, route test and health (plan Tasks 21/22).
+    ("GET", "/admin/inference/registry"),
+    ("POST", "/admin/inference/adapters"),
+    ("PUT", "/admin/inference/adapters/{adapter_id}"),
+    ("DELETE", "/admin/inference/adapters/{adapter_id}"),
+    ("POST", "/admin/inference/models"),
+    ("PUT", "/admin/inference/models/{model_id}"),
+    ("DELETE", "/admin/inference/models/{model_id}"),
+    ("POST", "/admin/inference/routes"),
+    ("PUT", "/admin/inference/routes/{route_id}"),
+    ("DELETE", "/admin/inference/routes/{route_id}"),
+    ("GET", "/admin/inference/secrets"),
+    ("POST", "/admin/inference/secrets"),
+    ("POST", "/admin/inference/secrets/{name}/rotate"),
+    ("DELETE", "/admin/inference/secrets/{name}"),
+    ("POST", "/admin/inference/routes/{route_id}/test"),
+    ("GET", "/admin/inference/routes/health"),
 }
 
 OWNER: set[tuple[str, str]] = {
@@ -99,8 +121,6 @@ OWNER_ADMIN: set[tuple[str, str]] = {
     ("POST", "/api-keys"),
     ("GET", "/api-keys"),
     ("POST", "/api-keys/{key_id}/revoke"),
-    # Refunds: owner or admin may issue them (audit-logged).
-    ("POST", "/billing/refunds"),
     ("GET", "/phase5/brand-kits"),
     ("POST", "/phase5/brand-kits"),
     ("PATCH", "/phase5/brand-kits/{brand_kit_id}"),

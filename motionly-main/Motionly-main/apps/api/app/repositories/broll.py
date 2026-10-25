@@ -33,6 +33,13 @@ DEFAULT_BROLL_SLOT_LIMIT = 100
 DEFAULT_BROLL_LIBRARY_LIMIT = 100
 MAX_CACHED_BROLL_SLOT_ROWS = 500
 
+# Providers whose assets are user-owned library items: uploads, and generated
+# clips. The legacy vendor value was backfilled to ``generated`` and removed
+# from the enum in Task 19.
+OWNED_LIBRARY_PROVIDERS = frozenset(
+    {StockProviderKey.USER_LIBRARY, StockProviderKey.GENERATED}
+)
+
 
 @dataclass
 class StockAssetRecord:
@@ -268,7 +275,7 @@ class InMemoryBrollRepository:
                 for asset in self.assets.values()
                 if asset.project_id == project_id
                 and asset.workspace_id == workspace_id
-                and asset.provider in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}
+                and asset.provider in OWNED_LIBRARY_PROVIDERS
             ],
             key=lambda asset: asset.created_at,
             reverse=True,
@@ -358,7 +365,7 @@ class InMemoryBrollRepository:
 
     def delete_library_asset(self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID) -> None:
         asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
-        if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
+        if asset.provider not in OWNED_LIBRARY_PROVIDERS:
             raise ApiError(409, "library_asset_required", "Only owned assets can be deleted.")
         self.assets.pop(asset_id, None)
 
@@ -713,7 +720,7 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "provider": "in.(user_library,runway)",
+                "provider": "in.(user_library,generated)",
                 "select": STOCK_ASSET_COLUMNS,
                 "order": "created_at.desc",
                 "limit": str(limit),
@@ -736,7 +743,7 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
             params={
                 "workspace_id": f"eq.{workspace_id}",
                 "project_id": f"eq.{project_id}",
-                "provider": "in.(user_library,runway)",
+                "provider": "in.(user_library,generated)",
                 "select": STOCK_ASSET_COLUMNS,
                 "order": "created_at.desc",
                 "limit": str(limit),
@@ -1008,7 +1015,7 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
 
     def delete_library_asset(self, *, project_id: UUID, workspace_id: UUID, asset_id: UUID) -> None:
         asset = self.get_asset(project_id=project_id, workspace_id=workspace_id, asset_id=asset_id)
-        if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
+        if asset.provider not in OWNED_LIBRARY_PROVIDERS:
             raise ApiError(409, "library_asset_required", "Only owned assets can be deleted.")
         response = self.client.request(
             "DELETE",
@@ -1024,7 +1031,7 @@ class SupabaseBrollRepository(InMemoryBrollRepository):
         asset = await self.get_asset_async(
             project_id=project_id, workspace_id=workspace_id, asset_id=asset_id
         )
-        if asset.provider not in {StockProviderKey.USER_LIBRARY, StockProviderKey.RUNWAY}:
+        if asset.provider not in OWNED_LIBRARY_PROVIDERS:
             raise ApiError(409, "library_asset_required", "Only owned assets can be deleted.")
         response = await self.client.async_request(
             "DELETE",

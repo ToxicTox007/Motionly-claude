@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "audio-diarization-endpoint",
+      "type": "async_job",
+      "base_url": "https://api.pyannote.ai/v1",
+      "network": "public",
+      "auth": {
+        "type": "bearer",
+        "secret_ref": "bundle:audio-diarization-endpoint"
+      },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "pyannoteAI",
+        "purpose": "Receives the speech track of your video to tell speakers apart. pyannoteAI deletes uploaded audio within 48 hours and job results after 24 hours, and does not train on customer data.",
+        "data_categories": ["audio"],
+        "policy_url": "https://www.pyannote.ai/privacy"
+      }
+    },
+    {
+      "id": "base-chat-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://api.example.invalid/v1",
+      "network": "public",
+      "auth": { "type": "bearer", "secret_ref": "bundle:base-chat-endpoint" },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "Example Inference",
+        "purpose": "Planning and transcription for the required startup capabilities.",
+        "data_categories": ["text", "audio"],
+        "policy_url": "https://example.invalid/privacy"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "audio-diarization-model",
+      "model_id": "precision-3",
+      "revision": "precision-v3",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["audio.diarization"]
+    },
+    {
+      "id": "base-chat-model",
+      "model_id": "chat-small",
+      "revision": "2026-01-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat"]
+    },
+    {
+      "id": "base-stt-model",
+      "model_id": "stt-small",
+      "revision": "2026-01-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["transcription.speech_to_text"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "audio-diarization-remote",
+      "capability": "audio.diarization",
+      "adapter_id": "audio-diarization-endpoint",
+      "model_id": "precision-3",
+      "model_ref": "audio-diarization-model",
+      "model_revision": "precision-v3",
+      "priority": 10,
+      "strategy": "async_job",
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "input_per_million_usd": 500.0,
+        "minimum_billable_units": 20
+      },
+      "budget": {
+        "feature": "audio_diarization",
+        "monthly_usd": 50,
+        "hard_cap": { "max_requests_per_month": 5 }
+      },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "mapping": {
+        "vars": {
+          "media_url": {
+            "$fn": "concat",
+            "args": ["media://motionly-", { "$fn": "uuid", "args": [] }]
+          }
+        },
+        "steps": [
+          {
+            "method": "POST",
+            "path": "/media/input",
+            "body": { "url": { "$ref": "vars.media_url" } },
+            "capture": { "upload_url": "response.url" },
+            "require": { "upload_url": "https" }
+          },
+          {
+            "method": "PUT",
+            "url": "vars.upload_url",
+            "auth": "none",
+            "body": "input.file"
+          },
+          {
+            "method": "POST",
+            "path": "/diarize",
+            "body": {
+              "url": { "$ref": "vars.media_url" },
+              "model": { "$ref": "params.model" }
+            },
+            "capture": { "job_id": "response.jobId" },
+            "commit": true
+          }
+        ],
+        "poll": {
+          "method": "GET",
+          "path": "/jobs/{vars.job_id}",
+          "status": "response.status",
+          "status_map": {
+            "created": { "state": "running" },
+            "pending": { "state": "running" },
+            "running": { "state": "running" },
+            "succeeded": { "state": "succeeded" },
+            "failed": {
+              "state": "failed",
+              "billable": false,
+              "fallback": false
+            },
+            "canceled": {
+              "state": "failed",
+              "billable": false,
+              "fallback": false
+            }
+          },
+          "tolerate_retryable": true,
+          "interval_s": 5,
+          "backoff": { "factor": 1.5, "max_interval_s": 30 },
+          "max_wait_s": 900
+        },
+        "result": {
+          "items": "response.output.diarization",
+          "fields": {
+            "speaker": "speaker",
+            "start_ms": { "$fn": "to_ms", "args": [{ "$ref": "item.start" }] },
+            "end_ms": { "$fn": "to_ms", "args": [{ "$ref": "item.end" }] }
+          }
+        }
+      },
+      "params": { "model": "precision-3" }
+    },
+    {
+      "id": "base-planning",
+      "capability": "planning.chat",
+      "adapter_id": "base-chat-endpoint",
+      "model_id": "chat-small",
+      "model_ref": "base-chat-model",
+      "model_revision": "2026-01-01",
+      "priority": 10,
+      "pricing": {
+        "status": "priced",
+        "input_per_million_usd": 1.0,
+        "output_per_million_usd": 2.0
+      },
+      "budget": { "feature": "planning" },
+      "compute_requirement": "remote"
+    },
+    {
+      "id": "base-transcription",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "base-chat-endpoint",
+      "model_id": "stt-small",
+      "model_ref": "base-stt-model",
+      "model_revision": "2026-01-01",
+      "priority": 10,
+      "pricing": { "status": "priced", "input_per_million_usd": 1.0 },
+      "budget": { "feature": "transcription" },
+      "compute_requirement": "remote"
+    }
+  ]
+}

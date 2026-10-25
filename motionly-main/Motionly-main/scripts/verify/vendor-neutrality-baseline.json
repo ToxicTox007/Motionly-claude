@@ -1,0 +1,5 @@
+{
+  "active_counts": {},
+  "description": "Per-file ACTIVE vendor-neutrality counts. The ratchet fails if any file's count rises or a new file gains findings. Regenerate with scripts/verify/vendor_neutrality.py --update-baseline.",
+  "schema_version": 1
+}

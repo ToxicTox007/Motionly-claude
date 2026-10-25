@@ -15,6 +15,11 @@
   "entries": [
     {
       "method": "GET",
+      "path": "/capabilities",
+      "reason": "External: public capability contract (plan Task 8). Tier 2 Task 9B consumer; the web app's capability hook/UI gating calls it next wave, and external operators/monitors poll it. No in-repo product caller exists yet."
+    },
+    {
+      "method": "GET",
       "path": "/health/live",
       "reason": "External: liveness probe. Called by the container orchestrator / load balancer health check and the CDN, not by application code."
     },
@@ -72,6 +77,116 @@
       "method": "POST",
       "path": "/projects/{project_id}/workflows/{workflow_run_id}/retry",
       "reason": "Dynamic dispatch: apps/web/hooks/useWorkflowStatus.ts posts to `.../workflows/${id}/${command}`; the literal argument \"retry\" is passed at workflowStatus.runCommand(\"retry\") in apps/web/components/editor-client.tsx. The static scanner cannot resolve the computed final segment."
+    },
+    {
+      "method": "GET",
+      "path": "/admin/inference/registry",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/inference/adapters",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/inference/adapters/{adapter_id}",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/admin/inference/adapters/{adapter_id}",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/inference/models",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/inference/models/{model_id}",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/admin/inference/models/{model_id}",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/inference/routes",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "PUT",
+      "path": "/admin/inference/routes/{route_id}",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/admin/inference/routes/{route_id}",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/inference/secrets",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/inference/secrets",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/inference/secrets/{name}/rotate",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/admin/inference/secrets/{name}",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "POST",
+      "path": "/admin/inference/routes/{route_id}/test",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "GET",
+      "path": "/admin/inference/routes/health",
+      "reason": "Task 23 admin AI UI (next wave)"
+    },
+    {
+      "method": "GET",
+      "path": "/model-options",
+      "reason": "Task 32 model picker UI (next wave)"
+    },
+    {
+      "method": "GET",
+      "path": "/workspaces/current/model-settings",
+      "reason": "Task 32 model picker UI (next wave)"
+    },
+    {
+      "method": "PUT",
+      "path": "/workspaces/current/model-settings",
+      "reason": "Task 32 model picker UI (next wave)"
+    },
+    {
+      "method": "GET",
+      "path": "/projects/{project_id}/model-settings",
+      "reason": "Task 32 model picker UI (next wave)"
+    },
+    {
+      "method": "PUT",
+      "path": "/projects/{project_id}/model-settings",
+      "reason": "Task 32 model picker UI (next wave)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/projects/{project_id}/model-settings",
+      "reason": "Task 32 model picker UI (next wave)"
     }
   ]
 }

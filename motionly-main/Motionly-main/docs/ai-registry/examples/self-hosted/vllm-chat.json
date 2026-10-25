@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "self-hosted-vllm",
+      "type": "openai_compatible",
+      "base_url": "http://vllm.internal.invalid:8000/v1",
+      "network": "private",
+      "auth": { "type": "none" }
+    },
+    {
+      "id": "self-hosted-stt",
+      "type": "openai_compatible",
+      "base_url": "http://stt.internal.invalid:9000/v1",
+      "network": "private",
+      "auth": { "type": "none" }
+    }
+  ],
+  "models": [
+    {
+      "id": "vllm-chat-model",
+      "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "revision": "0e9e39f249a16976918f6564b8830bc894c89659",
+      "licence": "Llama-3.1-Community",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "capabilities": ["planning.chat"],
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "stt-model",
+      "model_id": "openai/whisper-large-v3",
+      "revision": "06538b2a1e1df32bfb468dc24d8b74142a335a6c",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "huggingface_hub",
+      "source_url": "https://huggingface.co/openai/whisper-large-v3",
+      "capabilities": ["transcription.speech_to_text"],
+      "verified_at": "2026-10-24"
+    }
+  ],
+  "routes": [
+    {
+      "id": "planning-vllm",
+      "capability": "planning.chat",
+      "adapter_id": "self-hosted-vllm",
+      "model_id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "model_ref": "vllm-chat-model",
+      "model_revision": "0e9e39f249a16976918f6564b8830bc894c89659",
+      "priority": 10,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global",
+      "offering": {
+        "selectable": true,
+        "display_name": "Self-hosted vLLM",
+        "description": "Planning chat served by your own vLLM OpenAI-compatible server.",
+        "labels": ["local"],
+        "quota_weight": 1.0
+      }
+    },
+    {
+      "id": "speech-to-text-selfhosted",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "self-hosted-stt",
+      "model_id": "openai/whisper-large-v3",
+      "model_ref": "stt-model",
+      "model_revision": "06538b2a1e1df32bfb468dc24d8b74142a335a6c",
+      "priority": 10,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    }
+  ]
+}

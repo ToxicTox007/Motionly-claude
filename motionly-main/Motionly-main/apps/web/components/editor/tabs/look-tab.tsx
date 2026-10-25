@@ -28,6 +28,9 @@ import type {
 import { editorApiRequest, resolveQueuedLayer } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
+import { useCapabilities } from "@/hooks/useCapabilities";
+import { CAPABILITY_IDS, capabilityControlProps } from "@/lib/capabilities";
+import { CapabilityStatus } from "../CapabilityGate";
 import { useEditorHistory } from "../history-context";
 import type { PreviewLookState } from "../preview/VideoPreview";
 
@@ -170,6 +173,9 @@ export function LookTab({
   onPreviewLookUpdated,
 }: LookTabProps) {
   const { pushHistory } = useEditorHistory();
+  const { resolve: resolveCapabilityState } = useCapabilities(workspaceId);
+  const matteCapability = resolveCapabilityState(CAPABILITY_IDS.matte);
+  const matteControl = capabilityControlProps(matteCapability);
   const [preset, setPreset] = useState<VisualPresetKey>(
     initialConfig?.preset ?? suggestedPreset ?? "clean_founder",
   );
@@ -1275,16 +1281,27 @@ export function LookTab({
             <input
               type="checkbox"
               aria-label="Enable subject segmentation"
+              aria-disabled={matteControl["aria-disabled"]}
+              aria-describedby={
+                matteControl.statusText ? "look-tab-matte-status" : undefined
+              }
+              data-capability={matteControl["data-capability"]}
+              data-capability-status={matteControl["data-capability-status"]}
               checked={backgroundRemoval.enabled}
-              onChange={(event) =>
+              onChange={(event) => {
+                if (matteControl.blocked) return;
                 setBackgroundRemoval((current) => ({
                   ...current,
                   enabled: event.target.checked,
-                }))
-              }
+                }));
+              }}
               className="neu-check cursor-pointer"
             />
           </label>
+          <CapabilityStatus
+            state={matteCapability}
+            id="look-tab-matte-status"
+          />
           {backgroundRemoval.enabled ? (
             <div className="mt-4 space-y-4">
               <p className="text-xs font-medium text-muted-foreground">

@@ -25,6 +25,7 @@ import sys
 import wave
 
 from app.services.music_catalog_import import AudioAnalysis
+from app.services.subprocess_env import media_tool_env
 
 _FFMPEG = "ffmpeg"
 
@@ -77,6 +78,7 @@ def normalize_loudness(*, input_path: str, output_path: str) -> str:
         capture_output=True,
         check=True,
         timeout=300,
+        env=media_tool_env(),
     )
     return output_path
 

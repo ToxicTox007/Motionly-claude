@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "vision-objects-endpoint",
+      "type": "generic_http",
+      "base_url": "https://vision.googleapis.com/v1",
+      "network": "public",
+      "auth": {
+        "type": "custom_header",
+        "header_name": "x-goog-api-key",
+        "secret_ref": "bundle:vision-objects-endpoint"
+      },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "Google Cloud Vision",
+        "purpose": "Receives still frames from your video to recognise the objects in them. Google states that these requests are processed in memory, are not stored, and are not used to train its models.",
+        "data_categories": ["image"],
+        "policy_url": "https://cloud.google.com/vision/docs/data-usage"
+      }
+    },
+    {
+      "id": "base-llm-endpoint",
+      "type": "openai_compatible",
+      "base_url": "https://api.openai.com/v1",
+      "network": "public",
+      "auth": { "type": "bearer", "secret_ref": "bundle:base-llm-endpoint" },
+      "timeout_s": 60,
+      "data_processor": {
+        "display_name": "OpenAI",
+        "purpose": "Planning chat and speech-to-text transcription so this example validates as a complete, required-capability-satisfying registry.",
+        "data_categories": ["text", "audio"],
+        "policy_url": "https://openai.com/policies/privacy-policy"
+      }
+    }
+  ],
+  "models": [
+    {
+      "id": "vision-objects-model",
+      "model_id": "google-vision-object-localization:builtin/stable",
+      "revision": "builtin-stable-2026-10-22",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["vision.object_detection"]
+    },
+    {
+      "id": "base-llm-model",
+      "model_id": "gpt-4o-mini",
+      "revision": "2026-10-01",
+      "licence": "proprietary",
+      "commercial_use": true,
+      "capabilities": ["planning.chat", "transcription.speech_to_text"]
+    }
+  ],
+  "routes": [
+    {
+      "id": "planning-chat-remote",
+      "capability": "planning.chat",
+      "adapter_id": "base-llm-endpoint",
+      "model_id": "gpt-4o-mini",
+      "model_ref": "base-llm-model",
+      "model_revision": "2026-10-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "tokens",
+        "input_per_million_usd": 0.15,
+        "output_per_million_usd": 0.6
+      },
+      "budget": { "feature": "planning", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "speech-to-text-remote",
+      "capability": "transcription.speech_to_text",
+      "adapter_id": "base-llm-endpoint",
+      "model_id": "gpt-4o-mini",
+      "model_ref": "base-llm-model",
+      "model_revision": "2026-10-01",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "seconds",
+        "per_unit_usd": 0.0001
+      },
+      "budget": { "feature": "transcription", "monthly_usd": 50 },
+      "compute_requirement": "remote",
+      "enabled": true,
+      "scope": "global"
+    },
+    {
+      "id": "vision-objects-remote",
+      "capability": "vision.object_detection",
+      "adapter_id": "vision-objects-endpoint",
+      "model_id": "google-vision-object-localization:builtin/stable",
+      "model_ref": "vision-objects-model",
+      "model_revision": "builtin-stable-2026-10-22",
+      "priority": 100,
+      "pricing": {
+        "status": "priced",
+        "unit": "images",
+        "per_request_usd": 0.0015
+      },
+      "budget": {
+        "feature": "vision_objects",
+        "monthly_usd": 50,
+        "hard_cap": { "max_requests_per_month": 10000 }
+      },
+      "compute_requirement": "remote",
+      "limits": { "max_batch": 16, "max_request_bytes": 9437184 },
+      "enabled": true,
+      "scope": "global",
+      "params": { "model": "builtin/stable" },
+      "label_aliases": {
+        "mobile phone": "cell phone",
+        "television": "tv",
+        "computer monitor": "monitor",
+        "computer keyboard": "keyboard",
+        "man": "person",
+        "woman": "person",
+        "boy": "person",
+        "girl": "person",
+        "human": "person",
+        "human face": "face",
+        "human head": "head"
+      },
+      "mapping": {
+        "request": {
+          "method": "POST",
+          "path": "/images:annotate",
+          "body": {
+            "requests": {
+              "$map": {
+                "over": "input.images",
+                "each": {
+                  "image": {
+                    "content": { "$fn": "base64", "args": [{ "$ref": "item" }] }
+                  },
+                  "features": [
+                    {
+                      "type": "OBJECT_LOCALIZATION",
+                      "maxResults": { "$ref": "input.max_results" },
+                      "model": { "$ref": "params.model" }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "items": "response.responses",
+        "aligned_to_input": true,
+        "fields": {
+          "detections": "localizedObjectAnnotations",
+          "label": "name",
+          "score": "score",
+          "box": "boundingPoly.normalizedVertices"
+        },
+        "box_format": "vertices_norm",
+        "item_error": "error.code",
+        "item_error_codes": {
+          "3": "rejected",
+          "9": "rejected",
+          "11": "rejected"
+        },
+        "usage": "count_ok_items"
+      }
+    }
+  ]
+}

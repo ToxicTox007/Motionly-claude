@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "adapters": [
+    {
+      "id": "local-cpu-matte",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-cpu-sound",
+      "type": "local",
+      "network": "private"
+    },
+    {
+      "id": "local-cpu-stems",
+      "type": "local",
+      "network": "private"
+    }
+  ],
+  "models": [
+    {
+      "id": "mediapipe-selfie-segmenter",
+      "model_id": "mediapipe-selfie-segmentation",
+      "revision": "sha256:490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "weights_file",
+      "source_url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite",
+      "capabilities": ["matte.segmentation"],
+      "weights_sha256": "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "yamnet-tflite-sound",
+      "model_id": "yamnet-tflite",
+      "revision": "sha256:4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+      "licence": "Apache-2.0",
+      "commercial_use": true,
+      "source_type": "weights_file",
+      "source_url": "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/latest/yamnet.tflite",
+      "capabilities": ["audio.sound_classification"],
+      "weights_sha256": "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+      "verified_at": "2026-10-24"
+    },
+    {
+      "id": "demucs-htdemucs",
+      "model_id": "htdemucs",
+      "revision": "demucs==4.1.0",
+      "licence": "MIT",
+      "commercial_use": true,
+      "source_type": "python_package",
+      "source_url": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
+      "capabilities": ["audio.stem_separation"],
+      "verified_at": "2026-10-24"
+    }
+  ],
+  "routes": [
+    {
+      "id": "local-matte-segmentation",
+      "capability": "matte.segmentation",
+      "adapter_id": "local-cpu-matte",
+      "model_id": "mediapipe-selfie-segmentation",
+      "model_ref": "mediapipe-selfie-segmenter",
+      "model_revision": "sha256:490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "cpu",
+      "requires_gpu": false,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "mediapipe_selfie_matte",
+        "model_path": "/opt/motionly/models/selfie_segmenter_landscape.tflite",
+        "weights_sha256": "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e"
+      }
+    },
+    {
+      "id": "local-sound-classification",
+      "capability": "audio.sound_classification",
+      "adapter_id": "local-cpu-sound",
+      "model_id": "yamnet-tflite",
+      "model_ref": "yamnet-tflite-sound",
+      "model_revision": "sha256:4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "cpu",
+      "requires_gpu": false,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "yamnet_sound",
+        "model_path": "/opt/motionly/models/yamnet.tflite",
+        "weights_sha256": "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf"
+      }
+    },
+    {
+      "id": "local-stem-separation",
+      "capability": "audio.stem_separation",
+      "adapter_id": "local-cpu-stems",
+      "model_id": "htdemucs",
+      "model_ref": "demucs-htdemucs",
+      "model_revision": "demucs==4.1.0",
+      "priority": 10,
+      "strategy": "local",
+      "compute_requirement": "cpu",
+      "requires_gpu": false,
+      "pricing": { "status": "free" },
+      "explicitly_free": true,
+      "enabled": true,
+      "scope": "global",
+      "params": {
+        "runner": "demucs_stems",
+        "model_name": "htdemucs"
+      }
+    }
+  ]
+}

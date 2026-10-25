@@ -75,10 +75,10 @@ SECRET_FILE_NAMES = (
     "supabase_jwt_secret",
     "admin_api_token",
     "worker_api_token",
-    "groq_api_key",
-    "openrouter_api_key",
-    "runway_api_key",
-    "azure_openai_api_key",
+    # Inference routes read their credentials from one generic secrets bundle
+    # (plan Task 26); no vendor-named key file is mounted. A fixture/local-audit
+    # deployment leaves it empty.
+    "ai_secrets_bundle",
     "metrics_bearer_token",
     "temporal_ca_cert",
     "temporal_server_cert",
@@ -99,9 +99,7 @@ SECRET_FILE_NAMES = (
     "temporal_diagnostics_key",
     LOCAL_AUDIT_AUTHORIZATION_SECRET_NAME,
 )
-OPTIONAL_EMPTY_SECRET_FILES = frozenset(
-    {"azure_openai_api_key", "groq_api_key", "openrouter_api_key", "runway_api_key"}
-)
+OPTIONAL_EMPTY_SECRET_FILES = frozenset({"ai_secrets_bundle"})
 LOCAL_AUDIT_VOLUMES = (
     "motionly-media",
     "motionly-model-cache",

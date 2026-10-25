@@ -1,0 +1,134 @@
+# GPU-free remote AI overlay. Apply on top of the production topology and do
+# NOT pass `--profile gpu`:
+#
+#   docker compose --project-name motionly --env-file <compose.env> \
+#     -f infra/docker-compose.gpu.yml -f infra/docker-compose.remote-ai.yml \
+#     up -d --wait
+#
+# Every feature that needs a GPU goes to a remote API; everything that runs on a
+# CPU stays local:
+#
+#   visual analysis   CPU signals (OpenCV, MediaPipe faces, colours) on
+#                     cpu-vision-worker; keyframes go to the configured object
+#                     detection route and the Tier-2 caption route (plan Task 11)
+#   B-roll embeddings a registry capability route (Tier 2, plan Task 12); until
+#                     one is configured, ranking uses its lexical fallback
+#   matte             MediaPipe selfie segmenter on CPU (cpu-vision-worker)
+#   transcription     the configured registry transcription route; it runs on
+#                     cpu-vision-worker with the configured diarization route,
+#                     the Tier-2 voice-emotion route (plan Task 12) and
+#                     YAMNet (TFLite, CPU) sound classification
+#   stems             a registry stem-separation route (cpu-vision-worker);
+#                     demucs-worker does not start
+#   rendering         libx264 on cpu-ffmpeg-worker (render_gpu is not served)
+#
+# Inputs (fail closed when missing):
+#   MOTIONLY_CPU_VISION_WORKER_IMAGE  digest-pinned image built from
+#       apps/worker/Dockerfile.python with API_EXTRAS=cpu-vision and
+#       CPU_VISION_ENABLED=true (CI component cpu-vision-worker). The image sets
+#       CPU_VISION_ENABLED itself, so a wrong image refuses the GPU queues.
+#   The declarative inference registry (AI_REGISTRY_FILE) and its one generic
+#       secrets bundle (AI_SECRETS_BUNDLE_FILE), both from the base topology.
+#       Remote object detection, diarization and stem separation are configured
+#       as registry routes; their endpoints, prices and keys live in the registry
+#       and its secrets bundle, not as env variables (plan Task 17).
+#
+# Each feature can go back to the GPU on its own: set its switch below (for
+# example VISUAL_PROVIDER=local_ml), GPU_WORKERS_ENABLED=true, move its queue
+# with CPU_VISION_WORKER_QUEUES / GPU_INFERENCE_WORKER_QUEUES, and start the
+# matching profile: gpu-inference (visual_analysis, transcription), gpu-matte,
+# gpu-render, or local-stems (Demucs). `--profile gpu` still starts every GPU
+# service. DEPLOYMENT-GUIDE.md has the per-feature checklist.
+#
+# The signed release path (scripts/deploy/apply_release.sh) deploys only
+# docker-compose.gpu.yml and refuses overlays outside rehearsal; this overlay is
+# for operator-run Compose deployments.
+
+x-remote-ai-environment: &remote-ai-environment
+  # No GPU worker runs: the GPU capacity observer, its maintenance job and GPU
+  # model prefetch are off, and production refuses any switch that still needs
+  # a GPU worker (app.core.production._validate_gpu_free_deployment).
+  GPU_WORKERS_ENABLED: ${GPU_WORKERS_ENABLED:-false}
+  VISUAL_PROVIDER: ${VISUAL_PROVIDER:-remote}
+  MATTE_PROVIDER: ${MATTE_PROVIDER:-local_cpu}
+  AUDIO_SOUND_PROVIDER: ${AUDIO_SOUND_PROVIDER:-yamnet_tflite}
+  # Speaker diarization is served by a registry ``audio.diarization`` route (plan
+  # Task 17); the local pyannote route needs a GPU worker, so a GPU-free
+  # deployment runs with the local switch disabled and relies on the registry
+  # route (or the transcript heuristic when none is configured).
+  AUDIO_DIARIZATION_PROVIDER: ${AUDIO_DIARIZATION_PROVIDER:-disabled}
+  # Voice emotion is rebuilt as a registry capability route in Tier 2 (plan Task
+  # 12); until then a GPU-free deployment runs with it disabled (the local
+  # wav2vec2 route needs a GPU worker).
+  AUDIO_EMOTION_PROVIDER: ${AUDIO_EMOTION_PROVIDER:-disabled}
+  # Keyframe/text embeddings are a registry capability route in Tier 2 (plan
+  # Task 12); the vendor embeddings switch is gone. B-roll ranking falls back to
+  # its lexical mode until that route is configured.
+  # Keyframe captions and voice emotion are rebuilt as registry capability routes
+  # in Tier 2 (plan Tasks 11/12); their former vendor switches and price env vars
+  # are gone. The route supplies the model id, revision, pricing and credentials.
+  # Remote object detection, diarization and stem separation are configured as
+  # registry routes (plan Task 17): their endpoints, prices and keys live in the
+  # registry and its secrets bundle, not as env variables.
+  # Optional deployment-wide monthly USD caps per feature (JSON); empty = none.
+  MODEL_GATEWAY_FEATURE_BUDGETS_USD: ${MODEL_GATEWAY_FEATURE_BUDGETS_USD:-}
+
+# Every process that reads the switches validates them at start-up. The remote
+# route credentials and the generic registry bundle come from the base topology.
+
+services:
+  # The API, and every worker that runs Python jobs, must agree on the switches:
+  # visual cache identities, embedding spaces and quotas depend on them. The
+  # orchestration roles (temporal-*, workflow-reconciler) read none of them.
+  api:
+    environment:
+      <<: *remote-ai-environment
+      # Renders stay on the CPU render queue (libx264).
+      FFMPEG_GPU_ENABLED: "false"
+
+  cpu-ffmpeg-worker:
+    environment: *remote-ai-environment
+
+  provider-worker:
+    environment: *remote-ai-environment
+
+  planning-worker:
+    environment: *remote-ai-environment
+
+  remotion-worker:
+    environment: *remote-ai-environment
+
+  # Serves every queue the GPU services and demucs-worker serve in the base
+  # topology, with the CPU and remote providers above.
+  cpu-vision-worker:
+    extends: { file: docker-compose.gpu.yml, service: cpu-ffmpeg-worker }
+    image: ${MOTIONLY_CPU_VISION_WORKER_IMAGE:?MOTIONLY_CPU_VISION_WORKER_IMAGE must be a digest-pinned GHCR cpu-vision worker image}
+    environment:
+      <<: *remote-ai-environment
+      WORKER_QUEUES: ${CPU_VISION_WORKER_QUEUES:-visual_analysis,transcription,matte_extraction,audio_demucs}
+      WORKER_CONCURRENCY: "1"
+      VISUAL_ANALYSIS_WORKER_CONCURRENCY: "1"
+      MATTE_WORKER_CONCURRENCY: "1"
+
+  # --- switch-back services: off unless their profile is started ------------
+  # They get the same switches, so a feature moved back agrees with the API.
+  gpu-inference-worker:
+    profiles: !override [gpu, gpu-inference]
+    environment:
+      <<: *remote-ai-environment
+      # Transcription stays on cpu-vision-worker unless moved back here.
+      WORKER_QUEUES: ${GPU_INFERENCE_WORKER_QUEUES:-visual_analysis}
+
+  matte-worker:
+    profiles: !override [gpu, gpu-matte]
+    environment: *remote-ai-environment
+
+  gpu-ffmpeg-worker:
+    profiles: !override [gpu, gpu-render]
+    environment: *remote-ai-environment
+
+  demucs-worker:
+    # Stems go to the configured registry route; Demucs (CPU) comes back with
+    # --profile local-stems.
+    profiles: [local-stems]
+    environment: *remote-ai-environment

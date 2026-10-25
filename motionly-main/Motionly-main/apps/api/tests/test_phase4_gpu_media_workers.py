@@ -25,7 +25,7 @@ from app.services.gpu_autoscaling import (
 )
 from app.services.local_storage import LocalObjectStorage
 from app.services.matte_jobs import (
-    MATTE_MODEL_VERSION,
+    _FALLBACK_MATTE_MODEL_VERSION,
     build_matte_cache_key,
     enqueue_matte_for_upload,
     matte_availability,
@@ -80,7 +80,7 @@ def _completed_matte(cache_key: str = "matte:v1:test") -> SegmentationMatte:
     return SegmentationMatte(
         bucket="raw-uploads",
         path="matte.mp4",
-        model=MATTE_MODEL_VERSION,
+        model=_FALLBACK_MATTE_MODEL_VERSION,
         fps=30.0,
         width=1920,
         height=1080,
@@ -147,7 +147,7 @@ def test_completed_matte_reuse_requires_matching_settings_and_model(matte_contex
         cache_key=cache_key,
         source_file_hash="hash-1",
         segmentation_settings=settings,
-        model_version=MATTE_MODEL_VERSION,
+        model_version=_FALLBACK_MATTE_MODEL_VERSION,
         matte=_completed_matte(cache_key),
     )
 
@@ -230,9 +230,9 @@ def test_cpu_fallback_produces_labelled_fixture_matte_not_black(matte_context):
     import subprocess
 
     from app.services.matte_jobs import (
+        _FALLBACK_MATTE_MODEL_VERSION,
         FIXTURE_MATTE_LABEL,
         FIXTURE_MATTE_MODEL,
-        MATTE_MODEL_VERSION,
     )
 
     record, _job = enqueue_matte_for_upload(
@@ -263,8 +263,8 @@ def test_cpu_fallback_produces_labelled_fixture_matte_not_black(matte_context):
     assert completed.matte.provenance == FIXTURE_MATTE_LABEL
     assert FIXTURE_MATTE_LABEL == "Test matte"
     # The real MediaPipe model name must never leak into a test matte.
-    assert MATTE_MODEL_VERSION not in (completed.matte.model or "")
-    assert MATTE_MODEL_VERSION not in (completed.matte.provenance or "")
+    assert _FALLBACK_MATTE_MODEL_VERSION not in (completed.matte.model or "")
+    assert _FALLBACK_MATTE_MODEL_VERSION not in (completed.matte.provenance or "")
     assert "mediapipe" not in (completed.matte.model or "").lower()
 
     # The rendered matte is visibly non-black (a centered ellipse). ffprobe the
@@ -449,7 +449,7 @@ def test_render_detects_matte_availability_states(matte_context):
         cache_key="matte:v1:available",
         source_file_hash="hash",
         segmentation_settings=matte_segmentation_settings(),
-        model_version=MATTE_MODEL_VERSION,
+        model_version=_FALLBACK_MATTE_MODEL_VERSION,
         matte=_completed_matte("matte:v1:available"),
     )
     pending = matte_context.repository.create_matte(
@@ -460,7 +460,7 @@ def test_render_detects_matte_availability_states(matte_context):
         cache_key="matte:v1:pending",
         source_file_hash=None,
         segmentation_settings=matte_segmentation_settings(),
-        model_version=MATTE_MODEL_VERSION,
+        model_version=_FALLBACK_MATTE_MODEL_VERSION,
     )
     failed = matte_context.repository.transition_matte(
         record=pending,

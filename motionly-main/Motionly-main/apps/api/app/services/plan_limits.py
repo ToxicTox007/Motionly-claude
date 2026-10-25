@@ -12,11 +12,12 @@ Consumed by:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from app.api.errors import ApiError
 from app.schemas.billing import BillingPlanKey, PlanEntitlements
-from app.services.billing import PLAN_DEFINITIONS, plan_for_subscription_status
+from app.services.billing import PLAN_DEFINITIONS, effective_plan_key
 
 if TYPE_CHECKING:
     from app.repositories.billing import SubscriptionRecord
@@ -54,9 +55,13 @@ def _effective_plan_key(plan_or_subscription: object) -> BillingPlanKey:
     (so a cancelled/none subscription cannot unlock paid features).
     """
     if hasattr(plan_or_subscription, "plan") and hasattr(plan_or_subscription, "status"):
-        return plan_for_subscription_status(
-            plan=_coerce_plan_key(plan_or_subscription.plan),
-            status=plan_or_subscription.status,
+        return effective_plan_key(
+            SimpleNamespace(
+                plan=_coerce_plan_key(plan_or_subscription.plan),
+                status=plan_or_subscription.status,
+                current_period_end=getattr(plan_or_subscription, "current_period_end", None),
+                updated_at=getattr(plan_or_subscription, "updated_at", None),
+            )
         )
     return _coerce_plan_key(plan_or_subscription)
 

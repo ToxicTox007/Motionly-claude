@@ -1,11 +1,15 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Badge } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { PageTitle } from "@/components/page-title";
 
 type LegalSection = {
   title: string;
-  body: string;
+  // A plain string (the common case) or rich, accessible markup (e.g. a list
+  // with a policy link), so a data-driven section can name a policy in link
+  // text without the page hard-coding processor names.
+  body: ReactNode;
 };
 
 export function LegalPage({
@@ -53,9 +57,15 @@ export function LegalPage({
                 <h2 className="mb-3 text-lg font-bold text-foreground">
                   {section.title}
                 </h2>
-                <p className="text-sm font-medium leading-[1.8] text-muted-foreground">
-                  {section.body}
-                </p>
+                {typeof section.body === "string" ? (
+                  <p className="text-sm font-medium leading-[1.8] text-muted-foreground">
+                    {section.body}
+                  </p>
+                ) : (
+                  <div className="text-sm font-medium leading-[1.8] text-muted-foreground">
+                    {section.body}
+                  </div>
+                )}
               </section>
             );
           })}

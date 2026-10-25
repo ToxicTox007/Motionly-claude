@@ -25,9 +25,14 @@ import {
   maintenanceRepeatJobs,
   assertNoFixturesInProduction,
   mlExecutionPlan,
-  mlJobsAllowed,
+  mlJobAllowed,
   workerHeartbeatPayload,
 } from "./ml-execution.mjs";
+import {
+  createRedactingLineWriter,
+  installLogRedaction,
+  redactLogText,
+} from "./log-redaction.mjs";
 import { markAlive } from "./liveness.mjs";
 
 function remotionEnabled() {
@@ -224,11 +229,14 @@ function attachSupervisorListeners(state) {
   child.stdout.on("data", (data) =>
     handleSupervisorStdout(state, String(data)),
   );
+  const stderrWriter = createRedactingLineWriter((line) =>
+    globalThis.process.stderr.write(line),
+  );
   child.stderr.on("data", (data) => {
     const text = String(data);
-    globalThis.process.stderr.write(text);
+    stderrWriter.write(text);
     emitSupervisorEvent(state, "subprocess_stderr", {
-      message: text.trim().slice(-1_000),
+      message: redactLogText(text.trim().slice(-1_000)),
       pending_requests: state.pending.size,
     });
   });
@@ -476,9 +484,9 @@ async function runRenderJob(job) {
 }
 
 async function runVisualJob(job) {
-  if (!mlJobsAllowed()) {
+  if (!mlJobAllowed("visual_analysis")) {
     throw new Error(
-      "visual_analysis requires the dedicated GPU/ML worker image",
+      "visual_analysis requires the dedicated GPU/ML worker image, or a cpu-vision worker with VISUAL_PROVIDER=remote",
     );
   }
   await ensureUploadRecordExists(job);
@@ -486,13 +494,16 @@ async function runVisualJob(job) {
     workspace_id: String(job.data.workspace_id),
     project_id: String(job.data.project_id),
     video_id: String(job.data.resource_id),
+    ...(job.data.registry_fingerprint
+      ? { registry_fingerprint: String(job.data.registry_fingerprint) }
+      : {}),
   });
 }
 
 async function runMatteJob(job) {
-  if (!mlJobsAllowed()) {
+  if (!mlJobAllowed("matte_extraction")) {
     throw new Error(
-      "matte_extraction requires the dedicated GPU/media worker image",
+      "matte_extraction requires the dedicated GPU/media worker image, or a cpu-vision worker with MATTE_PROVIDER=local_cpu",
     );
   }
   await ensureUploadRecordExists(job);
@@ -501,6 +512,9 @@ async function runMatteJob(job) {
     project_id: String(job.data.project_id),
     video_id: String(job.data.resource_id),
     matte_id: String(job.data.render_engine || ""),
+    ...(job.data.registry_fingerprint
+      ? { registry_fingerprint: String(job.data.registry_fingerprint) }
+      : {}),
   });
 }
 
@@ -1522,6 +1536,8 @@ function validateRemotionConfig() {
 }
 
 async function main() {
+  // Before anything logs: every write to stdout/stderr is credential-redacted.
+  installLogRedaction();
   const mode = process.argv[2] || (isProduction() ? "--loop" : "--check");
   if (!["--check", "--once", "--loop"].includes(mode)) {
     throw new Error("Usage: node src/worker.mjs [--check|--once|--loop]");

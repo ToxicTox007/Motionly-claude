@@ -1,0 +1,55 @@
+{
+  "registry": "smoke-objects.registry.json",
+  "route_id": "smoke-objects-remote",
+  "capability": "vision.object_detection",
+  "differential": false,
+  "differential_skip_reason": "smoke example; no archived adapter exists for a synthetic generic_http provider",
+  "request": {
+    "type": "generic_http",
+    "max_results": 5,
+    "images": [
+      { "b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC" },
+      { "b64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC" }
+    ]
+  },
+  "exchanges": [
+    {
+      "match": { "method": "POST", "path": "/v1/detect" },
+      "response": {
+        "status": 200,
+        "json": {
+          "results": [
+            {
+              "objects": [
+                { "name": "Automobile", "confidence": 0.91, "box": [0.1, 0.2, 0.3, 0.4] },
+                { "name": "Person", "confidence": 0.5, "box": { "x": 0.0, "y": 0.0, "w": 0.2, "h": 0.2 } }
+              ]
+            },
+            { "objects": [] }
+          ]
+        }
+      }
+    }
+  ],
+  "expect": {
+    "output": {
+      "detections": [
+        [
+          { "label": "car", "score": 0.91, "box": [0.1, 0.2, 0.3, 0.4] },
+          { "label": "person", "score": 0.5, "box": [0.0, 0.0, 0.2, 0.2] }
+        ],
+        []
+      ]
+    },
+    "usage": { "input_units": 2 },
+    "requests": [
+      {
+        "method": "POST",
+        "host": "objects.smoke.invalid",
+        "path": "/v1/detect",
+        "header_names": ["accept", "authorization"],
+        "body_keys": ["images"]
+      }
+    ]
+  }
+}

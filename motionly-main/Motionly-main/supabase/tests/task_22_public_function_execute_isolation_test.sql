@@ -24,7 +24,7 @@ select is(
 
 -- The existing callers keep EXECUTE on the functions they invoke. These four
 -- functions span the exposed set (an RLS helper, a legacy mapper, two cache
--- invalidators) and must remain reachable.
+-- invalidators) and must remain reachable by the roles that call them.
 select ok(
   has_function_privilege('service_role', 'public.is_workspace_member(uuid)', 'EXECUTE')
   and has_function_privilege('authenticated', 'public.is_workspace_member(uuid)', 'EXECUTE')
@@ -41,10 +41,13 @@ select ok(
     'service_role', 'public.motionly_invalidate_stale_derivatives(uuid,uuid)', 'EXECUTE'),
   'service_role keeps EXECUTE on motionly_invalidate_stale_derivatives'
 );
+-- motionly_worker no longer holds a direct grant (202610230101): the
+-- uploaded_videos trigger that calls it is SECURITY DEFINER, so it still runs
+-- (task_18_worker_least_privilege_test.sql exercises that path as the worker).
 select ok(
   has_function_privilege(
-    'motionly_worker', 'public.motionly_invalidate_on_media_replace(uuid)', 'EXECUTE'),
-  'motionly_worker keeps EXECUTE on motionly_invalidate_on_media_replace'
+    'service_role', 'public.motionly_invalidate_on_media_replace(uuid)', 'EXECUTE'),
+  'service_role keeps EXECUTE on motionly_invalidate_on_media_replace'
 );
 
 select * from finish();

@@ -35,31 +35,22 @@ x-media-environment: &media-environment
   MODEL_GATEWAY_REQUEST_BUDGET_USD: ${MODEL_GATEWAY_REQUEST_BUDGET_USD:-5}
   MODEL_GATEWAY_FAILURE_THRESHOLD: ${MODEL_GATEWAY_FAILURE_THRESHOLD:-3}
   MODEL_GATEWAY_CIRCUIT_COOLDOWN_SECONDS: ${MODEL_GATEWAY_CIRCUIT_COOLDOWN_SECONDS:-60}
-  TRANSCRIPTION_PROVIDER: groq
-  TRANSCRIPTION_MODEL: whisper-large-v3-turbo
-  TRANSCRIPTION_MODEL_REVISION: whisper-large-v3-turbo-2025-02-01
+  # Declarative inference registry (plan Task 4/Task 26): the only source of
+  # inference routes. Mounted read-only; a comma-separated list composes a remote
+  # registry with the local fragments. All route secrets come from one bundle.
+  AI_REGISTRY_FILE: /opt/motionly/ai-registry/registry.json
+  AI_SECRETS_DIR: /run/secrets
+  AI_SECRETS_BUNDLE_FILE: /run/secrets/ai_secrets_bundle
+  AI_BLOCK_NONCOMMERCIAL: ${AI_BLOCK_NONCOMMERCIAL:-false}
+  AI_WORKSPACE_SCOPED_ROUTES: ${AI_WORKSPACE_SCOPED_ROUTES:-false}
+  AI_QUOTA_SCOPE: ${AI_QUOTA_SCOPE:-feature}
+  # Transcription and planning model ids/revisions, credentials and provider
+  # labels come from the registry; only the budget hints stay as settings.
   TRANSCRIPTION_ESTIMATED_COST_PER_REQUEST_USD: ${TRANSCRIPTION_ESTIMATED_COST_PER_REQUEST_USD:-0.25}
-  GROQ_API_KEY_FILE: /run/secrets/groq_api_key
-  EDIT_PLANNER_PROVIDER: openrouter
-  EDIT_PLANNER_MODEL: openai/gpt-4.1-mini
-  EDIT_PLANNER_MODEL_REVISION: openai/gpt-4.1-mini-2025-04-14
   EDIT_PLANNER_INPUT_COST_PER_MILLION_USD: ${EDIT_PLANNER_INPUT_COST_PER_MILLION_USD:-2}
   EDIT_PLANNER_OUTPUT_COST_PER_MILLION_USD: ${EDIT_PLANNER_OUTPUT_COST_PER_MILLION_USD:-2}
-  OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
   AUDIO_ML_PROVIDER: local_ml
   ALLOW_FIXTURE_PROVIDERS: "false"
-  PYANNOTE_MODEL_REVISION: 84fd25912480287da0247647c3d2b4853cb3ee5d
-  WAV2VEC_EMOTION_MODEL_REVISION: 441a7599c3b22107314dcbd9166621c5c83f2cc5
-  VISUAL_CLIP_MODEL_REVISION: 3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268
-  VISUAL_BLIP_MODEL_REVISION: 59a1ef6c1e5117b3f65523d1c6066825bcf315e3
-  VISUAL_YOLO_MODEL_REVISION: ultralytics-assets-v8.3.0
-  RUNWAY_API_KEY_FILE: /run/secrets/runway_api_key
-  # Azure OpenAI remains an optional model provider; a blank host-managed file disables it.
-  AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
-  AZURE_OPENAI_API_KEY_FILE: /run/secrets/azure_openai_api_key
-  RUNWAY_MODEL: gen3a_turbo
-  RUNWAY_MODEL_REVISION: gen3a_turbo-2024-11-06
-  RUNWAY_ESTIMATED_COST_PER_REQUEST_USD: ${RUNWAY_ESTIMATED_COST_PER_REQUEST_USD:-0.5}
 
 x-temporal-environment: &temporal-environment
   TEMPORAL_DEPLOYMENT_MODE: self_hosted
@@ -99,6 +90,9 @@ x-orchestration-healthcheck: &orchestration-healthcheck
 x-media-volumes: &media-volumes
   - motionly-media:/var/data/motionly
   - motionly-model-cache:/var/cache/motionly
+  # Declarative inference registry, mounted read-only (plan Task 26). The route
+  # secrets come from the ai_secrets_bundle secret, never from this directory.
+  - ${AI_REGISTRY_DIR:-./ai-registry}:/opt/motionly/ai-registry:ro
 
 services:
   volume-permissions:
@@ -509,6 +503,7 @@ services:
       API_PUBLIC_BASE_URL: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}/api
       API_CORS_ORIGINS: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}
       BILLING_MODE: ${BILLING_MODE:?BILLING_MODE is required for production Compose (disabled or demo)}
+      BILLING_PAST_DUE_GRACE_DAYS: ${BILLING_PAST_DUE_GRACE_DAYS:-7}
       WORKER_API_BASE_URL: http://api:8000
     secrets:
       [
@@ -516,10 +511,7 @@ services:
         supabase_jwt_secret,
         worker_api_token,
         admin_api_token,
-        groq_api_key,
-        openrouter_api_key,
-        runway_api_key,
-        azure_openai_api_key,
+        ai_secrets_bundle,
         metrics_bearer_token,
         temporal_ca_cert,
         temporal_api_cert,
@@ -733,10 +725,7 @@ services:
         supabase_worker_key,
         supabase_jwt_secret,
         worker_api_token,
-        groq_api_key,
-        openrouter_api_key,
-        runway_api_key,
-        azure_openai_api_key,
+        ai_secrets_bundle,
       ]
 
     networks: [app]
@@ -901,14 +890,11 @@ secrets:
   worker_api_token:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/worker_api_token
 
-  groq_api_key:
-    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/groq_api_key
-  openrouter_api_key:
-    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/openrouter_api_key
-  runway_api_key:
-    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/runway_api_key
-  azure_openai_api_key:
-    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/azure_openai_api_key
+  # One generic secrets bundle for every registry route (plan Task 26). The
+  # registry's ``bundle:<key>`` refs read keys out of this JSON object; no
+  # vendor-named secret is mounted.
+  ai_secrets_bundle:
+    file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/ai_secrets_bundle
   metrics_bearer_token:
     file: ${SECRETS_DIR:?SECRETS_DIR must name the private (0700) host secret directory}/metrics_bearer_token
   # Origin guard (CloudFront custom header); previous is empty outside a rotation.
