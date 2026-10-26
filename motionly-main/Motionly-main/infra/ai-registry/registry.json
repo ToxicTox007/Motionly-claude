@@ -11,11 +11,17 @@
         "secret_ref": "file:aws_inference_secret_access_key"
       },
       "timeout_s": 60,
-      "config": { "region": "ap-south-1", "api": "converse" },
+      "config": {
+        "region": "ap-south-1",
+        "api": "converse"
+      },
       "data_processor": {
         "display_name": "Amazon Bedrock (Converse)",
         "purpose": "Serves planning chat, object detection and image captions through the Bedrock Converse API using cross-region (APAC) inference profiles from the source region ap-south-1 (Nova Pro for planning, Nova Lite for vision). Requests and results may be processed in any APAC region of the profile (ap-northeast-1, ap-northeast-2, ap-northeast-3, ap-south-1, ap-southeast-1, ap-southeast-2). Data sent between regions stays on the AWS network and is encrypted in transit; CloudTrail in ap-south-1 records the region that processed each request. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": ["text", "image"],
+        "data_categories": [
+          "text",
+          "image"
+        ],
         "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
       }
     },
@@ -37,7 +43,9 @@
       "data_processor": {
         "display_name": "Amazon Bedrock (Titan Text Embeddings, InvokeModel)",
         "purpose": "Produces text embeddings through the Bedrock InvokeModel API in ap-south-1 (Amazon Titan Text Embeddings V2). This is an in-region call: requests, results and your data are processed and stored only in ap-south-1 and do not leave that region. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": ["text"],
+        "data_categories": [
+          "text"
+        ],
         "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
       }
     },
@@ -54,11 +62,11 @@
       "config": {
         "region": "ap-south-1",
         "api": "data_automation",
-        "s3_bucket": "<STAGING_BUCKET>",
+        "s3_bucket": "motionly-staging-bda-576971911060",
         "s3_prefix": "bda",
         "s3_region": "ap-south-1",
-        "data_automation_profile_arn": "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:data-automation-profile/apac.data-automation-v1",
-        "data_automation_project_arn": "arn:aws:bedrock:ap-south-1:<ACCOUNT_ID>:data-automation-project/<BDA_PROJECT_ID>",
+        "data_automation_profile_arn": "arn:aws:bedrock:ap-south-1:576971911060:data-automation-profile/apac.data-automation-v1",
+        "data_automation_project_arn": "arn:aws:bedrock:ap-south-1:576971911060:data-automation-project/a4b157e9b58c",
         "data_automation_stage": "LIVE",
         "max_wait_s": 900,
         "poll_interval_s": 5,
@@ -67,7 +75,9 @@
       "data_processor": {
         "display_name": "Amazon Bedrock Data Automation",
         "purpose": "Transcribes and diarizes audio through Bedrock Data Automation using the cross-region (APAC) data-automation profile from the source region ap-south-1. Requests and results may be processed in any APAC region of the profile (ap-northeast-1, ap-northeast-2, ap-northeast-3, ap-south-1, ap-south-2, ap-southeast-1, ap-southeast-2, ap-southeast-4); per the AWS cross-region inference documentation your data is only stored in the source region ap-south-1 while requests and results may move within the geography. The audio is staged in an S3 bucket you own in ap-south-1 under the bda/ prefix, processed asynchronously, and the structured output is read back and deleted. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": ["audio"],
+        "data_categories": [
+          "audio"
+        ],
         "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
       }
     },
@@ -84,7 +94,7 @@
       "config": {
         "region": "us-west-2",
         "api": "async_invoke",
-        "s3_bucket": "<VIDEO_OUTPUT_BUCKET>",
+        "s3_bucket": "motionly-staging-video-576971911060",
         "s3_prefix": "video",
         "s3_region": "us-west-2",
         "video_family": "luma_ray",
@@ -94,7 +104,10 @@
       "data_processor": {
         "display_name": "Amazon Bedrock (Luma Ray 2, async-invoke)",
         "purpose": "Generates text-to-video clips with Luma Ray 2 through the Bedrock asynchronous invoke API in us-west-2. This is an in-region call: requests, results and your data are processed and stored only in us-west-2. The finished MP4 is written to an S3 bucket you own in us-west-2 under the video/ prefix and served through a short-lived presigned URL. Luma Ray 2 is billed through AWS Marketplace. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": ["text", "video"],
+        "data_categories": [
+          "text",
+          "video"
+        ],
         "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
       }
     },
@@ -121,7 +134,9 @@
       "revision": "nova-pro-v1-apac-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": ["planning.chat"]
+      "capabilities": [
+        "planning.chat"
+      ]
     },
     {
       "id": "bedrock-vision-model",
@@ -129,7 +144,10 @@
       "revision": "nova-lite-v1-apac-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": ["vision.object_detection", "vision.caption"]
+      "capabilities": [
+        "vision.object_detection",
+        "vision.caption"
+      ]
     },
     {
       "id": "bedrock-embeddings-model",
@@ -137,7 +155,9 @@
       "revision": "titan-embed-text-v2-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": ["embeddings.text"]
+      "capabilities": [
+        "embeddings.text"
+      ]
     },
     {
       "id": "bedrock-audio-model",
@@ -145,7 +165,10 @@
       "revision": "bda-audio-apac-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": ["transcription.speech_to_text", "audio.diarization"]
+      "capabilities": [
+        "transcription.speech_to_text",
+        "audio.diarization"
+      ]
     },
     {
       "id": "bedrock-video-model",
@@ -153,7 +176,10 @@
       "revision": "luma-ray-v2-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": ["video.generation.submit", "video.generation.status"]
+      "capabilities": [
+        "video.generation.submit",
+        "video.generation.status"
+      ]
     },
     {
       "id": "mediapipe-selfie-segmenter",
@@ -163,7 +189,9 @@
       "commercial_use": true,
       "source_type": "weights_file",
       "source_url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite",
-      "capabilities": ["matte.segmentation"],
+      "capabilities": [
+        "matte.segmentation"
+      ],
       "weights_sha256": "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
       "verified_at": "2026-10-24"
     },
@@ -175,7 +203,9 @@
       "commercial_use": true,
       "source_type": "weights_file",
       "source_url": "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/latest/yamnet.tflite",
-      "capabilities": ["audio.sound_classification"],
+      "capabilities": [
+        "audio.sound_classification"
+      ],
       "weights_sha256": "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
       "verified_at": "2026-10-24"
     },
@@ -187,7 +217,9 @@
       "commercial_use": true,
       "source_type": "python_package",
       "source_url": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
-      "capabilities": ["audio.stem_separation"],
+      "capabilities": [
+        "audio.stem_separation"
+      ],
       "verified_at": "2026-10-24"
     }
   ],
@@ -202,9 +234,7 @@
       "priority": 100,
       "compute_requirement": "remote",
       "pricing": {
-        "status": "priced",
-        "input_per_million_usd": "FILL FROM AWS PRICING PAGE",
-        "output_per_million_usd": "FILL FROM AWS PRICING PAGE"
+        "status": "unknown"
       },
       "budget": {
         "feature": "planning",
@@ -227,9 +257,7 @@
       "priority": 100,
       "compute_requirement": "remote",
       "pricing": {
-        "status": "priced",
-        "unit": "seconds",
-        "per_unit_usd": "FILL FROM AWS PRICING PAGE"
+        "status": "unknown"
       },
       "budget": {
         "feature": "transcription",
@@ -252,9 +280,7 @@
       "priority": 100,
       "compute_requirement": "remote",
       "pricing": {
-        "status": "priced",
-        "unit": "seconds",
-        "per_unit_usd": "FILL FROM AWS PRICING PAGE"
+        "status": "unknown"
       },
       "budget": {
         "feature": "audio_diarization",
@@ -277,9 +303,7 @@
       "priority": 100,
       "compute_requirement": "remote",
       "pricing": {
-        "status": "priced",
-        "input_per_million_usd": "FILL FROM AWS PRICING PAGE",
-        "output_per_million_usd": "FILL FROM AWS PRICING PAGE"
+        "status": "unknown"
       },
       "budget": {
         "feature": "vision_objects",
@@ -289,7 +313,10 @@
           "max_requests_per_month": 2000
         }
       },
-      "limits": { "max_batch": 8, "max_request_bytes": 9437184 },
+      "limits": {
+        "max_batch": 8,
+        "max_request_bytes": 9437184
+      },
       "enabled": true,
       "scope": "global"
     },
@@ -303,9 +330,7 @@
       "priority": 100,
       "compute_requirement": "remote",
       "pricing": {
-        "status": "priced",
-        "input_per_million_usd": "FILL FROM AWS PRICING PAGE",
-        "output_per_million_usd": "FILL FROM AWS PRICING PAGE"
+        "status": "unknown"
       },
       "budget": {
         "feature": "vision_captions",
@@ -328,8 +353,7 @@
       "priority": 100,
       "compute_requirement": "remote",
       "pricing": {
-        "status": "priced",
-        "input_per_million_usd": "FILL FROM AWS PRICING PAGE"
+        "status": "unknown"
       },
       "budget": {
         "feature": "embeddings",
@@ -354,9 +378,7 @@
       "compute_requirement": "remote",
       "timeout_s": 900,
       "pricing": {
-        "status": "priced",
-        "unit": "seconds",
-        "per_unit_usd": "FILL FROM AWS PRICING PAGE"
+        "status": "unknown"
       },
       "budget": {
         "feature": "video_generation",
@@ -380,7 +402,9 @@
       "strategy": "local",
       "compute_requirement": "cpu",
       "requires_gpu": false,
-      "pricing": { "status": "free" },
+      "pricing": {
+        "status": "free"
+      },
       "explicitly_free": true,
       "enabled": true,
       "scope": "global",
@@ -401,7 +425,9 @@
       "strategy": "local",
       "compute_requirement": "cpu",
       "requires_gpu": false,
-      "pricing": { "status": "free" },
+      "pricing": {
+        "status": "free"
+      },
       "explicitly_free": true,
       "enabled": true,
       "scope": "global",
@@ -422,7 +448,9 @@
       "strategy": "local",
       "compute_requirement": "cpu",
       "requires_gpu": false,
-      "pricing": { "status": "free" },
+      "pricing": {
+        "status": "free"
+      },
       "explicitly_free": true,
       "enabled": true,
       "scope": "global",
