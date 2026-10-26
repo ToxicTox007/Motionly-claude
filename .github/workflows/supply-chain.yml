@@ -1,0 +1,258 @@
+name: Supply chain
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+defaults:
+  run:
+    working-directory: motionly-main/Motionly-main
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  security-events: write
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: 9.15.4
+  NODE_VERSION: "24"
+  PYTHON_VERSION: "3.12"
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  locked-dependencies:
+    name: Verify locked dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install JavaScript dependencies from the frozen lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify Python lockfiles and hashes
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-ml.lock --dry-run
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-cpu-vision.lock --dry-run
+      - name: Verify Python package licenses
+        run: pip-licenses --fail-on='GPL;AGPL;LGPL'
+      - name: Verify npm lockfiles
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund --prefix apps/api/worker-bridge
+          npm ci --ignore-scripts --no-audit --no-fund --prefix apps/worker
+
+  sast:
+    name: CodeQL SAST
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  build-scan-sign:
+    name: Build, scan, attest, and sign ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    needs: [locked-dependencies]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: api
+            dockerfile: motionly-main/Motionly-main/apps/api/Dockerfile
+            build_args: ""
+          - component: web
+            dockerfile: motionly-main/Motionly-main/apps/web/Dockerfile
+            build_args: ""
+          - component: cpu-worker
+            dockerfile: motionly-main/Motionly-main/apps/worker/Dockerfile.python
+            build_args: ""
+          - component: gpu-worker
+            dockerfile: motionly-main/Motionly-main/apps/worker/Dockerfile.gpu
+            build_args: ""
+          - component: demucs-worker
+            dockerfile: motionly-main/Motionly-main/apps/worker/Dockerfile.python
+            build_args: API_EXTRAS=demucs
+          - component: cpu-vision-worker
+            dockerfile: motionly-main/Motionly-main/apps/worker/Dockerfile.python
+            build_args: |
+              API_EXTRAS=cpu-vision
+              CPU_VISION_ENABLED=true
+          - component: remotion-worker
+            dockerfile: motionly-main/Motionly-main/apps/worker/Dockerfile
+            build_args: ""
+          - component: temporal-server
+            dockerfile: motionly-main/Motionly-main/infra/temporal/server/Dockerfile
+            build_args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR before a release push
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the immutable linux/amd64 release candidate
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: motionly-main/Motionly-main
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build_args }}
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: Scan image vulnerabilities and embedded secrets
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0.17.3
+        with:
+          image: ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
+          artifact-name: sbom-${{ matrix.component }}
+          output-file: motionly-main/Motionly-main/sbom-${{ matrix.component }}.spdx.json
+      - name: Upload component SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.component }}
+          path: motionly-main/Motionly-main/sbom-${{ matrix.component }}.spdx.json
+          if-no-files-found: error
+      - name: Record the immutable pushed digest
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p release-digests
+          test -n '${{ steps.build.outputs.digest }}'
+          printf '%s\n' '${{ steps.build.outputs.digest }}' > release-digests/${{ matrix.component }}.digest
+      - name: Upload component digest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.component }}
+          path: motionly-main/Motionly-main/release-digests/${{ matrix.component }}.digest
+          if-no-files-found: error
+      - name: Install Cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v3.8.1
+      - name: Sign the pushed digest with GitHub OIDC
+        if: github.event_name == 'push'
+        run: >-
+          cosign sign --yes
+          "${{ env.IMAGE_PREFIX }}/${{ matrix.component }}@${{ steps.build.outputs.digest }}"
+
+  release-manifest:
+    name: Generate signed immutable release manifest
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: [build-scan-sign]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all component digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: motionly-main/Motionly-main/release-digests
+          merge-multiple: true
+      - name: Download all SBOM evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-*
+          path: motionly-main/Motionly-main/release-sboms
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install hash-locked release tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r scripts/release/requirements.lock
+      - name: Build canonical deployment bundle from Compose bind mounts
+        run: >-
+          python scripts/release/package_release_bundle.py
+          --output release-bundle.tar.gz
+          --layout-output release-bundle.layout.json
+      - name: Generate archive-bound Compose release manifest
+        env:
+          IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
+        run: |
+          set -euo pipefail
+          digest() { tr -d '\n' < "release-digests/$1.digest"; }
+          python scripts/release/generate_release_manifest.py \
+            --revision '${{ github.sha }}' \
+            --bundle release-bundle.tar.gz \
+            --bundle-layout release-bundle.layout.json \
+            --output release-manifest.json \
+            --image "MOTIONLY_API_IMAGE=${IMAGE_PREFIX}/api@$(digest api)" \
+            --image "MOTIONLY_WEB_IMAGE=${IMAGE_PREFIX}/web@$(digest web)" \
+            --image "MOTIONLY_CPU_FFMPEG_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_GPU_WORKER_IMAGE=${IMAGE_PREFIX}/gpu-worker@$(digest gpu-worker)" \
+            --image "MOTIONLY_GPU_FFMPEG_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_DEMUCS_WORKER_IMAGE=${IMAGE_PREFIX}/demucs-worker@$(digest demucs-worker)" \
+            --image "MOTIONLY_PROVIDER_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_PLANNING_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-worker@$(digest cpu-worker)" \
+            --image "MOTIONLY_REMOTION_WORKER_IMAGE=${IMAGE_PREFIX}/remotion-worker@$(digest remotion-worker)" \
+            --image "MOTIONLY_TEMPORAL_SERVER_IMAGE=${IMAGE_PREFIX}/temporal-server@$(digest temporal-server)" \
+            --image "MOTIONLY_CPU_VISION_WORKER_IMAGE=${IMAGE_PREFIX}/cpu-vision-worker@$(digest cpu-vision-worker)" \
+            --sbom api=sbom-api.spdx.json \
+            --sbom web=sbom-web.spdx.json \
+            --sbom cpu-worker=sbom-cpu-worker.spdx.json \
+            --sbom gpu-worker=sbom-gpu-worker.spdx.json \
+            --sbom demucs-worker=sbom-demucs-worker.spdx.json \
+            --sbom remotion-worker=sbom-remotion-worker.spdx.json \
+            --sbom temporal-server=sbom-temporal-server.spdx.json \
+            --sbom cpu-vision-worker=sbom-cpu-vision-worker.spdx.json
+      - name: Verify the archive against the unsigned manifest before signing
+        run: >-
+          python scripts/release/generate_release_manifest.py
+          --validate-bundle --manifest release-manifest.json --bundle release-bundle.tar.gz
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.1
+      - name: Sign release manifest with GitHub OIDC
+        run: >-
+          cosign sign-blob --yes
+          --output-signature release-manifest.sig
+          --output-certificate release-manifest.pem
+          release-manifest.json
+      - name: Upload signed release manifest and SBOM evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: |
+            motionly-main/Motionly-main/release-manifest.json
+            motionly-main/Motionly-main/release-manifest.sig
+            motionly-main/Motionly-main/release-manifest.pem
+            motionly-main/Motionly-main/release-bundle.tar.gz
+            motionly-main/Motionly-main/release-bundle.layout.json
+            motionly-main/Motionly-main/release-sboms/*.spdx.json
+          if-no-files-found: error
