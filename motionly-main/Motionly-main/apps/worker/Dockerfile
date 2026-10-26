@@ -6,10 +6,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM node:24-bookworm-slim@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae
+RUN npm install --global npm@12.2.1 --ignore-scripts --no-audit --no-fund
 
 # ── System dependencies ───────────────────────────────────────────────────────
 # Install Chromium and all shared libraries it needs for headless rendering.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
         chromium \
         ffmpeg \
         fonts-liberation \

@@ -1,4 +1,5 @@
 FROM node:24-bookworm-slim@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae AS build
+RUN npm install --global npm@12.2.1 --ignore-scripts --no-audit --no-fund
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
@@ -8,6 +9,7 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @motionly/shared build && pnpm --filter @motionly/web build
 
 FROM node:24-bookworm-slim@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae
+RUN npm install --global npm@12.2.1 --ignore-scripts --no-audit --no-fund
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
