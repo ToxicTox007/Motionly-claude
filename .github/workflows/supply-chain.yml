@@ -24,7 +24,7 @@ env:
   PNPM_VERSION: 9.15.4
   NODE_VERSION: "24"
   PYTHON_VERSION: "3.12"
-  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+  IMAGE_PREFIX: ghcr.io/toxictox007/motionly-claude
 
 jobs:
   locked-dependencies:
