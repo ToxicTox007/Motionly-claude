@@ -5,7 +5,7 @@
 # Chrome/Chromium is required by @remotion/renderer for headless frame capture.
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+FROM node:24-bookworm-slim@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae
 
 # ── System dependencies ───────────────────────────────────────────────────────
 # Install Chromium and all shared libraries it needs for headless rendering.
