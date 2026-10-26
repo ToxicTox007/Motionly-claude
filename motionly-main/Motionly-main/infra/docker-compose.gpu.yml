@@ -504,6 +504,9 @@ services:
       API_CORS_ORIGINS: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}
       BILLING_MODE: ${BILLING_MODE:?BILLING_MODE is required for production Compose (disabled or demo)}
       BILLING_PAST_DUE_GRACE_DAYS: ${BILLING_PAST_DUE_GRACE_DAYS:-7}
+      STOCK_VIDEO_PROVIDER: ${STOCK_VIDEO_PROVIDER:-pexels_pixabay}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
       WORKER_API_BASE_URL: http://api:8000
     secrets:
       [

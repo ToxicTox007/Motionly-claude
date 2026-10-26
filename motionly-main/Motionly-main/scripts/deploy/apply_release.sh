@@ -346,6 +346,11 @@ write_release_inputs() {
   fetch_secret_to_file admin-api-token "$secrets_dir/admin_api_token"
   fetch_secret_to_file worker-api-token "$secrets_dir/worker_api_token"
   fetch_secret_to_file metrics-bearer-token "$secrets_dir/metrics_bearer_token"
+  # Stock-video providers are application settings consumed by the API. Keep
+  # them in protected release inputs and inject them only into Compose's API
+  # environment; values never enter Git or command arguments.
+  fetch_secret_to_file pexels-api-key "$secrets_dir/pexels_api_key"
+  fetch_secret_to_file pixabay-api-key "$secrets_dir/pixabay_api_key"
   # Inference routes (plan Task 26): one declarative registry and one generic
   # secrets bundle replace the old per-vendor keys. The registry's
   # ``bundle:<key>`` refs read keys out of this JSON object; no vendor-named
@@ -410,6 +415,9 @@ environment = {
     "APP_DOMAIN": app_domain,
     "PUBLIC_ORIGIN": f"https://{app_domain}",
     "BILLING_MODE": billing_mode,
+    "STOCK_VIDEO_PROVIDER": "pexels_pixabay",
+    "PEXELS_API_KEY": secret("pexels_api_key"),
+    "PIXABAY_API_KEY": secret("pixabay_api_key"),
 }
 for name, value in environment.items():
     if "\n" in value or "\r" in value:
