@@ -82,36 +82,6 @@
       }
     },
     {
-      "id": "bedrock-video",
-      "type": "aws_bedrock",
-      "network": "public",
-      "auth": {
-        "type": "aws_access_key",
-        "access_key_id_ref": "file:aws_inference_access_key_id",
-        "secret_ref": "file:aws_inference_secret_access_key"
-      },
-      "timeout_s": 900,
-      "config": {
-        "region": "us-west-2",
-        "api": "async_invoke",
-        "s3_bucket": "motionly-staging-video-576971911060",
-        "s3_prefix": "video",
-        "s3_region": "us-west-2",
-        "video_family": "luma_ray",
-        "video_resolution": "720p",
-        "presign_expires_s": 900
-      },
-      "data_processor": {
-        "display_name": "Amazon Bedrock (Luma Ray 2, async-invoke)",
-        "purpose": "Generates text-to-video clips with Luma Ray 2 through the Bedrock asynchronous invoke API in us-west-2. This is an in-region call: requests, results and your data are processed and stored only in us-west-2. The finished MP4 is written to an S3 bucket you own in us-west-2 under the video/ prefix and served through a short-lived presigned URL. Luma Ray 2 is billed through AWS Marketplace. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": [
-          "text",
-          "video"
-        ],
-        "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
-      }
-    },
-    {
       "id": "local-cpu-matte",
       "type": "local",
       "network": "private"
@@ -168,17 +138,6 @@
       "capabilities": [
         "transcription.speech_to_text",
         "audio.diarization"
-      ]
-    },
-    {
-      "id": "bedrock-video-model",
-      "model_id": "luma.ray-v2:0",
-      "revision": "luma-ray-v2-2026-10-01",
-      "licence": "proprietary",
-      "commercial_use": true,
-      "capabilities": [
-        "video.generation.submit",
-        "video.generation.status"
       ]
     },
     {
@@ -364,30 +323,6 @@
         }
       },
       "embedding_space": "titan-embed-text-v2",
-      "enabled": true,
-      "scope": "global"
-    },
-    {
-      "id": "bedrock-video-generation",
-      "capability": "video.generation.submit",
-      "adapter_id": "bedrock-video",
-      "model_id": "luma.ray-v2:0",
-      "model_ref": "bedrock-video-model",
-      "model_revision": "luma-ray-v2-2026-10-01",
-      "priority": 100,
-      "compute_requirement": "remote",
-      "timeout_s": 900,
-      "pricing": {
-        "status": "unknown"
-      },
-      "budget": {
-        "feature": "video_generation",
-        "monthly_usd": 20,
-        "hard_cap": {
-          "max_requests_per_day": 3,
-          "max_requests_per_month": 20
-        }
-      },
       "enabled": true,
       "scope": "global"
     },
