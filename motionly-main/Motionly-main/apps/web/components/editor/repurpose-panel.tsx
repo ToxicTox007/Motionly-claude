@@ -304,7 +304,7 @@ export function RepurposePanel({
                         hookText: event.target.value,
                       }))
                     }
-                    className="flex min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm outline-none focus:border-focus focus:ring-4 focus:ring-primary/30"
+                    className="flex min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                   />
                   <p className="text-xs text-muted-foreground">
                     Rendered as an opening text layer for the first three

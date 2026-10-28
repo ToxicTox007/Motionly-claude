@@ -418,7 +418,7 @@ function AssetPicker({
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value)}
           placeholder={slot.keywords.join(" ") || slot.intent}
-          className="h-10 w-full rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+          className="h-10 w-full rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
         />
         <button
           onClick={onSearch}

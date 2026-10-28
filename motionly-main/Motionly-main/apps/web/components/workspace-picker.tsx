@@ -47,7 +47,7 @@ export function WorkspacePicker({
           id="workspace_id"
           name="workspace_id"
           required
-          className="min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+          className="min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           defaultValue=""
         >
           <option value="" disabled>

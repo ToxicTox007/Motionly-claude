@@ -1021,13 +1021,13 @@ export function ScalePanel(props: ScalePanelProps) {
       <Section title="Generated B-roll" icon={Film}>
         <div className="space-y-2">
           <input
-            className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
+            className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-2 focus:ring-focus transition-shadow focus:ring-offset-2 focus:ring-offset-background"
             placeholder="Describe the generated shot"
             value={generatedPrompt}
             onChange={(event) => setGeneratedPrompt(event.target.value)}
           />
           <input
-            className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
+            className="min-h-[40px] w-full px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-2 focus:ring-focus transition-shadow focus:ring-offset-2 focus:ring-offset-background"
             placeholder="Public prompt image URL"
             value={generatedImage}
             onChange={(event) => setGeneratedImage(event.target.value)}
@@ -1078,7 +1078,7 @@ export function ScalePanel(props: ScalePanelProps) {
       <Section title="Reference style analysis" icon={BrainCircuit}>
         <div className="flex gap-2">
           <input
-            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
+            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-2 focus:ring-focus transition-shadow focus:ring-offset-2 focus:ring-offset-background"
             placeholder="Style profile name"
             value={profileName}
             onChange={(event) => setProfileName(event.target.value)}
@@ -1185,7 +1185,7 @@ export function ScalePanel(props: ScalePanelProps) {
       <Section title="Template library & batch" icon={Layers3}>
         <div className="flex gap-2">
           <input
-            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
+            className="min-h-[40px] min-w-0 flex-1 px-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-2 focus:ring-focus transition-shadow focus:ring-offset-2 focus:ring-offset-background"
             placeholder="Template name"
             value={templateName}
             onChange={(event) => setTemplateName(event.target.value)}
@@ -1235,7 +1235,7 @@ export function ScalePanel(props: ScalePanelProps) {
               <div className="flex items-center justify-between gap-3">
                 {editingTemplateId === template.id ? (
                   <input
-                    className="min-h-8 min-w-0 flex-1 px-2 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30"
+                    className="min-h-8 min-w-0 flex-1 px-2 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                     aria-label={`New name for ${template.name}`}
                     value={editingTemplateName}
                     autoFocus
@@ -1348,7 +1348,7 @@ export function ScalePanel(props: ScalePanelProps) {
           ))}
         </div>
         <textarea
-          className="mt-3 min-h-[72px] w-full p-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-4 focus:ring-primary/30 transition-shadow"
+          className="mt-3 min-h-[72px] w-full p-3 text-xs font-medium text-foreground border border-control bg-surface rounded-neu shadow-neu-inset-sm focus:outline-none focus:border-focus focus:ring-2 focus:ring-focus transition-shadow focus:ring-offset-2 focus:ring-offset-background"
           aria-label="Batch project IDs"
           value={batchProjects}
           onChange={(event) => setBatchProjects(event.target.value)}

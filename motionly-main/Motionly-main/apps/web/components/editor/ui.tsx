@@ -25,7 +25,7 @@ export function PixelInput({ className, ...props }: PixelInputProps) {
   return (
     <input
       className={cn(
-        "flex min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-base font-medium shadow-neu-inset-sm transition disabled:cursor-not-allowed disabled:opacity-60 focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 sm:text-sm text-foreground",
+        "flex min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-base font-medium shadow-neu-inset-sm transition disabled:cursor-not-allowed disabled:opacity-60 focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus sm:text-sm text-foreground focus:ring-offset-2 focus:ring-offset-background",
         className,
       )}
       {...props}
@@ -41,7 +41,7 @@ export function PixelTextarea({ className, ...props }: PixelTextareaProps) {
   return (
     <textarea
       className={cn(
-        "flex min-h-[7rem] w-full rounded-neu border border-control bg-surface px-4 py-3 text-base font-medium shadow-neu-inset-sm transition disabled:cursor-not-allowed disabled:opacity-60 focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 sm:text-sm text-foreground",
+        "flex min-h-[7rem] w-full rounded-neu border border-control bg-surface px-4 py-3 text-base font-medium shadow-neu-inset-sm transition disabled:cursor-not-allowed disabled:opacity-60 focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus sm:text-sm text-foreground focus:ring-offset-2 focus:ring-offset-background",
         className,
       )}
       {...props}
@@ -81,7 +81,7 @@ export function PixelSelect({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
-          "flex min-h-11 w-full appearance-none rounded-neu border border-control bg-surface px-4 py-2 pr-10 text-base font-medium shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 sm:text-sm text-foreground",
+          "flex min-h-11 w-full appearance-none rounded-neu border border-control bg-surface px-4 py-2 pr-10 text-base font-medium shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus sm:text-sm text-foreground focus:ring-offset-2 focus:ring-offset-background",
           className,
         )}
         {...props}

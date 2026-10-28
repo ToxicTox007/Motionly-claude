@@ -68,7 +68,7 @@ export function AdminJobsList({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by job ID, queue, or kind..."
-            className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 pl-9 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 pl-9 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
         </div>
         <div className="relative">
@@ -78,7 +78,7 @@ export function AdminJobsList({
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="min-h-11 appearance-none rounded-neu border border-control bg-surface px-8 py-2 pr-10 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="min-h-11 appearance-none rounded-neu border border-control bg-surface px-8 py-2 pr-10 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           >
             <option value="all">All statuses</option>
             {statuses.map((status) => (

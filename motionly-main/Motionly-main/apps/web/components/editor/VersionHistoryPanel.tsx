@@ -122,13 +122,13 @@ export function VersionHistoryPanel({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="e.g. Client review"
-          className="min-h-[40px] min-w-0 flex-1 rounded-neu border border-control bg-surface px-3 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
+          className="min-h-[40px] min-w-0 flex-1 rounded-neu border border-control bg-surface px-3 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
         />
         <button
           type="button"
           disabled={busy || !activePlan}
           onClick={() => void saveSnapshot()}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus:outline-none active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm"
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus-visible:outline-none active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           {busy ? (
             <Loader2 className="size-4 animate-spin" strokeWidth={1.75} />

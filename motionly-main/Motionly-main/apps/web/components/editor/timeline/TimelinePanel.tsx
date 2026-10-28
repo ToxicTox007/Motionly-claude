@@ -1242,7 +1242,7 @@ export function TimelinePanel({
               name="start_ms"
               type="number"
               defaultValue={selectedClip.startMs}
-              className="ml-2 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              className="ml-2 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
           </label>
           <label className="text-sm font-semibold text-muted-foreground">
@@ -1251,7 +1251,7 @@ export function TimelinePanel({
               name="end_ms"
               type="number"
               defaultValue={selectedClip.endMs}
-              className="ml-2 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              className="ml-2 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
           </label>
           <span className="rounded-neu bg-muted px-2.5 py-2 font-mono text-xs font-semibold tabular-nums text-muted-foreground shadow-neu-inset-sm">
@@ -2002,7 +2002,7 @@ const ClipBlock = React.memo(
           "group absolute bottom-1 top-1 cursor-pointer overflow-hidden rounded-neu",
           "flex items-center gap-2 px-2 text-[10px] font-semibold leading-none text-white",
           "shadow-neu-raised-sm ring-inset transition-all duration-100",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-1 focus-visible:ring-offset-background",
           clip.colorClass,
           clip.disabled && "opacity-30",
           selected

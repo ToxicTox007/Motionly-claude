@@ -96,7 +96,7 @@ export default async function EditorialLearningOperationsPage({
             <label className="flex-1">
               <span className="sr-only">Project ID</span>
               <input
-                className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                 defaultValue={projectId}
                 name="projectId"
                 pattern="[0-9a-fA-F-]{36}"
@@ -171,7 +171,7 @@ export default async function EditorialLearningOperationsPage({
               <label className="block text-xs font-semibold text-muted-foreground">
                 Rollback reason
                 <input
-                  className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                  className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                   defaultValue="admin_rollback"
                   maxLength={160}
                   name="reason"
@@ -180,7 +180,7 @@ export default async function EditorialLearningOperationsPage({
               <label className="block text-xs font-medium text-muted-foreground">
                 Type <strong>ROLLBACK</strong> to confirm
                 <input
-                  className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                  className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                   name="confirmation"
                   required
                 />
@@ -248,7 +248,7 @@ export default async function EditorialLearningOperationsPage({
                       <label className="flex-1 text-xs font-medium text-muted-foreground">
                         Type <strong>PROMOTE</strong> to activate this dataset
                         <input
-                          className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                          className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                           name="confirmation"
                           required
                         />

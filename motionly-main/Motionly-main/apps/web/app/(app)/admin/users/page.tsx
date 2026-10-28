@@ -104,7 +104,7 @@ export default async function AdminUsersPage({
               type="search"
               defaultValue={query}
               placeholder="name@example.com"
-              className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
           </div>
           <button

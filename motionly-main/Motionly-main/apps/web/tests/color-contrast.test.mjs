@@ -138,3 +138,76 @@ test("muted, brand and status text are never faded with an opacity modifier", ()
   walk(new URL("../components", import.meta.url).pathname);
   assert.deepEqual(offenders, []);
 });
+
+// WCAG 1.4.3 for placeholder text: the rule must use the full token (an alpha
+// tint is invisible to the token checks above and measured 3.1–3.4:1).
+test("placeholder text uses the full muted-foreground token", () => {
+  const rule = css.slice(
+    css.indexOf("::placeholder {"),
+    css.indexOf("}", css.indexOf("::placeholder {")),
+  );
+  assert.match(rule, /color:\s*hsl\(var\(--muted-foreground\)\);/);
+  for (const [theme, tokens] of Object.entries(THEMES)) {
+    for (const surface of SURFACES) {
+      const ratio = contrast(tokens["muted-foreground"], tokens[surface]);
+      assert.ok(
+        ratio >= 4.5,
+        `${theme}: placeholder on --${surface} is ${ratio.toFixed(2)}`,
+      );
+    }
+  }
+});
+
+// WCAG 1.4.11 / 2.4.7: focus indicators are drawn in --focus, which must reach
+// 3:1 against every surface a control sits on.
+test("the focus colour reaches 3:1 on every surface", () => {
+  for (const [theme, tokens] of Object.entries(THEMES)) {
+    for (const surface of SURFACES) {
+      const ratio = contrast(tokens.focus, tokens[surface]);
+      assert.ok(
+        ratio >= 3,
+        `${theme}: --focus on --${surface} is ${ratio.toFixed(2)}`,
+      );
+    }
+  }
+});
+
+// FE-10: removing the outline is only allowed when a focus ring in the focus
+// colour replaces it, in the same class string; the low-contrast primary/30
+// ring (1.14:1) and a forced 6px radius on focus are gone.
+test("no control removes its outline without a visible focus ring", () => {
+  const offenders = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (/\.tsx?$/.test(name)) {
+        const source = readFileSync(path, "utf8");
+        for (const match of source.matchAll(/(["'`])([^"'`]*?)\1/g)) {
+          const classes = match[2];
+          if (!/(^|\s|:)outline-none(\s|$)/.test(classes)) continue;
+          if (!/\bring-focus\b/.test(classes)) {
+            offenders.push(`${path}: ${classes.slice(0, 80)}`);
+          }
+        }
+        for (const match of source.matchAll(
+          /(focus|focus-visible|focus-within):ring-primary\/30/g,
+        )) {
+          offenders.push(`${path}: ${match[0]}`);
+        }
+      }
+    }
+  };
+  walk(new URL("../app", import.meta.url).pathname);
+  walk(new URL("../components", import.meta.url).pathname);
+  assert.deepEqual(offenders, []);
+  const focusRule = css.slice(
+    css.indexOf(
+      ":where(a, button, input, textarea, select, [tabindex]):focus-visible",
+    ),
+  );
+  assert.doesNotMatch(
+    focusRule.slice(0, focusRule.indexOf("}")),
+    /border-radius/,
+  );
+});

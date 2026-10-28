@@ -6,7 +6,7 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "accent";
 type ButtonSize = "sm" | "md" | "lg" | "icon";
 
 const baseButtonClasses =
-  "inline-flex items-center justify-center gap-2 rounded-neu font-semibold transition-all duration-[140ms] ease-spring focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:shadow-neu-raised-sm";
+  "inline-flex items-center justify-center gap-2 rounded-neu font-semibold transition-all duration-[140ms] ease-spring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:shadow-neu-raised-sm focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:

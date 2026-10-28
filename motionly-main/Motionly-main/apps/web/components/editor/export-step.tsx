@@ -736,7 +736,7 @@ export function ExportStep({
     <div
       id="editor-export"
       tabIndex={-1}
-      className="space-y-4 rounded-neu-lg focus-visible:outline-none"
+      className="space-y-4 rounded-neu-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       aria-labelledby="export-heading"
     >
       <div className="space-y-2 border-b border-hairline pb-4">

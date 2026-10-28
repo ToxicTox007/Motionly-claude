@@ -65,7 +65,7 @@ export function PropertiesInspector({
                 onChange={(event) =>
                   updateProperty("content", event.target.value)
                 }
-                className="mt-1.5 min-h-[80px] w-full resize-y rounded-neu border border-control bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
+                className="mt-1.5 min-h-[80px] w-full resize-y rounded-neu border border-control bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
               />
             </label>
           </InspectorSection>
@@ -233,7 +233,7 @@ export function PropertiesInspector({
           <button
             type="submit"
             disabled={saving}
-            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-neu bg-primary text-xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus:outline-none active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm"
+            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-neu bg-primary text-xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus-visible:outline-none active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : null}
             Save Changes
@@ -292,7 +292,7 @@ function NumberField({
         min={min}
         max={max}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="mt-1.5 min-h-[40px] w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
+        className="mt-1.5 min-h-[40px] w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
       />
     </label>
   );

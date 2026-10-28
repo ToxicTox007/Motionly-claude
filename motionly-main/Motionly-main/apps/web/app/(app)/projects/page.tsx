@@ -104,7 +104,7 @@ export default async function ProjectsPage({
                         name="title"
                         defaultValue={project.title}
                         maxLength={120}
-                        className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                        className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                       />
                     </label>
                     <label>
@@ -114,7 +114,7 @@ export default async function ProjectsPage({
                       <select
                         name="status"
                         defaultValue={project.status}
-                        className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                        className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                       >
                         <option value="draft">Draft</option>
                         <option value="ready">Ready</option>

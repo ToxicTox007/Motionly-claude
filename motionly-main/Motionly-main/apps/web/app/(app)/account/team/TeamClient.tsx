@@ -404,7 +404,7 @@ export function TeamClient({
                 onChange={(event) =>
                   setRole(event.target.value as InvitableRole)
                 }
-                className="mt-1 min-h-11 rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                className="mt-1 min-h-11 rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
               >
                 <option value="member">Member</option>
                 <option value="admin">Admin</option>
@@ -426,7 +426,7 @@ export function TeamClient({
                 onChange={(event) =>
                   setExpiresInDays(Number(event.target.value))
                 }
-                className="mt-1 min-h-11 w-28 rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                className="mt-1 min-h-11 w-28 rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
               />
             </div>
             <Button type="submit" disabled={pending || !inviteEnabled}>
@@ -579,7 +579,7 @@ export function TeamClient({
                                 event.target.value as InvitableRole,
                               )
                             }
-                            className="min-h-9 rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                            className="min-h-9 rounded-neu border border-control bg-surface px-3 text-xs font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                           >
                             <option value="member">Member</option>
                             <option value="admin">Admin</option>

@@ -365,7 +365,7 @@ export function DashboardClient({
                 <h3 className="truncate text-xl font-bold tracking-tight text-foreground transition-colors group-hover:text-primary">
                   <Link
                     href={`/projects/${featuredProject.id}`}
-                    className="focus:underline focus:outline-none"
+                    className="focus:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                   >
                     {featuredProject.title}
                   </Link>
@@ -534,7 +534,7 @@ export function DashboardClient({
               placeholder="Search projects by title..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-11 w-full rounded-neu border border-control bg-surface pl-9 pr-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              className="h-11 w-full rounded-neu border border-control bg-surface pl-9 pr-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
           </div>
 
@@ -604,7 +604,7 @@ export function DashboardClient({
                     <h3 className="truncate text-sm font-semibold text-foreground transition-colors hover:text-primary">
                       <Link
                         href={`/projects/${project.id}`}
-                        className="focus:underline focus:outline-none"
+                        className="focus:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                       >
                         {project.title}
                       </Link>

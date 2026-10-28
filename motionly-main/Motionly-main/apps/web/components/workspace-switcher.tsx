@@ -39,7 +39,7 @@ export function WorkspaceSwitcher({
           name="workspace_id"
           defaultValue={currentWorkspaceId ?? ""}
           onChange={() => formRef.current?.requestSubmit()}
-          className="min-h-10 w-full rounded-neu border border-control bg-surface px-2 text-xs font-semibold text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+          className="min-h-10 w-full rounded-neu border border-control bg-surface px-2 text-xs font-semibold text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
         >
           {workspaces.map((workspace) => (
             <option key={workspace.id} value={workspace.id}>

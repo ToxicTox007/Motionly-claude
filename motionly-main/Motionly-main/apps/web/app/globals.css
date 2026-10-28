@@ -174,14 +174,17 @@ a {
 }
 
 /* ── Focus ───────────────────────────────────────────────────────────────── */
+/* No border-radius here: this rule is unlayered and would override every
+   rounded-* utility, snapping pills and cards to 6px corners on focus. */
 :where(a, button, input, textarea, select, [tabindex]):focus-visible {
   outline: 2px solid hsl(var(--focus));
   outline-offset: 2px;
-  border-radius: 6px;
 }
 
+/* Full muted-foreground (6.65:1 on the page): the old 70% tint measured
+   3.37:1 on surfaces and 3.14:1 on muted, below WCAG 1.4.3. */
 ::placeholder {
-  color: hsl(var(--muted-foreground) / 0.7);
+  color: hsl(var(--muted-foreground));
   opacity: 1;
 }
 

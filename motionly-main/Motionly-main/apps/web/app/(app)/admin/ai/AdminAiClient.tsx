@@ -169,7 +169,7 @@ function RecordForm({
         spellCheck={false}
         aria-describedby={`${fieldId}-hint`}
         placeholder={`{\n  "id": "...",\n  ...\n}`}
-        className="mt-2 w-full rounded-neu border border-control bg-surface p-3 font-mono text-xs text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30 read-only:opacity-70"
+        className="mt-2 w-full rounded-neu border border-control bg-surface p-3 font-mono text-xs text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus read-only:opacity-70 focus:ring-offset-2 focus:ring-offset-background"
       />
       <p id={`${fieldId}-hint`} className="mt-1 text-xs text-muted-foreground">
         {readOnly
@@ -419,7 +419,7 @@ function RouteTester({ routeIds }: { routeIds: string[] }) {
             id="route-test-id"
             value={routeId}
             onChange={(event) => setRouteId(event.target.value)}
-            className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           >
             {routeIds.map((id) => (
               <option key={id} value={id}>
@@ -443,7 +443,7 @@ function RouteTester({ routeIds }: { routeIds: string[] }) {
             step="0.01"
             value={maxCost}
             onChange={(event) => setMaxCost(event.target.value)}
-            className="mt-1.5 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="mt-1.5 min-h-11 w-28 rounded-neu border border-control bg-surface px-3 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
         </div>
         <label className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -560,7 +560,7 @@ function SecretForms({ secrets }: { secrets: SecretMetadata[] }) {
               type="text"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
           </div>
           <div>
@@ -575,7 +575,7 @@ function SecretForms({ secrets }: { secrets: SecretMetadata[] }) {
               type="text"
               value={scope}
               onChange={(event) => setScope(event.target.value)}
-              className="mt-1.5 min-h-11 w-32 rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              className="mt-1.5 min-h-11 w-32 rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
           </div>
           <div className="min-w-[12rem] flex-1">
@@ -592,7 +592,7 @@ function SecretForms({ secrets }: { secrets: SecretMetadata[] }) {
               value={value}
               onChange={(event) => setValue(event.target.value)}
               aria-describedby="secret-value-hint"
-              className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
             <span id="secret-value-hint" className="sr-only">
               The value is sent once and is never stored in the browser or shown
@@ -730,7 +730,7 @@ function SecretRow({ secret }: { secret: SecretMetadata }) {
                 autoComplete="off"
                 value={newValue}
                 onChange={(event) => setNewValue(event.target.value)}
-                className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
               />
               <div className="mt-5 flex justify-end gap-2">
                 <button

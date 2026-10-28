@@ -252,13 +252,13 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Your name (optional)"
-            className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
           <textarea
             value={comment}
             onChange={(event) => setComment(event.target.value)}
             placeholder="Describe a change or leave approval feedback…"
-            className="min-h-28 w-full rounded-neu border border-control bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="min-h-28 w-full rounded-neu border border-control bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
           {review.media_url ? (
             <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">

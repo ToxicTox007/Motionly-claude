@@ -57,7 +57,7 @@ export function ThemeMenu({
                 type="button"
                 aria-label="Close menu"
                 onClick={() => setOpen(false)}
-                className="flex size-9 items-center justify-center rounded-neu-sm bg-surface text-foreground shadow-neu-raised-sm transition-shadow hover:shadow-neu-raised active:shadow-neu-pressed focus-visible:outline-none"
+                className="flex size-9 items-center justify-center rounded-neu-sm bg-surface text-foreground shadow-neu-raised-sm transition-shadow hover:shadow-neu-raised active:shadow-neu-pressed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <X className="size-[18px]" strokeWidth={1.5} />
               </button>

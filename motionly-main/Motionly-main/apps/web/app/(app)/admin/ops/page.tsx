@@ -348,7 +348,7 @@ export default async function LaunchOpsPage({
                 min={1}
                 max={86400}
                 defaultValue={1800}
-                className="min-h-10 w-24 rounded-neu border border-control bg-surface px-3 text-xs font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                className="min-h-10 w-24 rounded-neu border border-control bg-surface px-3 text-xs font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
               />
               <button
                 type="submit"

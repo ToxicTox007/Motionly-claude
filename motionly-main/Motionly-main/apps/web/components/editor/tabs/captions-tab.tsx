@@ -456,7 +456,7 @@ export function CaptionsTab({
             id="full-transcript"
             value={transcriptText}
             onChange={(event) => setTranscriptText(event.target.value)}
-            className="min-h-24 px-3 py-2 text-sm focus:outline-none"
+            className="min-h-24 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             aria-describedby="full-transcript-help"
           />
           <p
@@ -528,7 +528,7 @@ export function CaptionsTab({
                     aria-label="Selected caption segment text"
                     value={selectedSegment.text}
                     onChange={(event) => updateSelectedText(event.target.value)}
-                    className="min-h-16 px-3 py-2 text-sm focus:outline-none"
+                    className="min-h-16 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                   />
                   <div className="grid grid-cols-2 gap-3 text-xs">
                     <label className="font-semibold text-foreground">
@@ -542,7 +542,7 @@ export function CaptionsTab({
                             start_ms: Number(event.target.value),
                           })
                         }
-                        className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-3 font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                        className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-3 font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                       />
                     </label>
                     <label className="font-semibold text-foreground">
@@ -556,7 +556,7 @@ export function CaptionsTab({
                             end_ms: Number(event.target.value),
                           })
                         }
-                        className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-3 font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+                        className="mt-1.5 min-h-10 w-full rounded-neu border border-control bg-surface px-3 font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
                       />
                     </label>
                   </div>

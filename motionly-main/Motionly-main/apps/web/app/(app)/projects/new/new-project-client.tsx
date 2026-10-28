@@ -100,7 +100,7 @@ export function NewProjectClient({
             placeholder="Founder story cutdown"
             onChange={handleTitleChange}
             aria-describedby={error ? "title-error" : undefined}
-            className="min-h-14 w-full rounded-neu border border-control bg-surface px-5 text-lg font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="min-h-14 w-full rounded-neu border border-control bg-surface px-5 text-lg font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
           {error ? (
             <p

@@ -70,7 +70,7 @@ export function EditorToolbar({
         onKeyDown={(event) => {
           if (event.key === "Enter") event.currentTarget.blur();
         }}
-        className="min-h-10 min-w-0 flex-1 truncate rounded-neu border border-control bg-surface px-3 py-1 text-sm font-semibold text-foreground transition-shadow duration-200 placeholder:text-muted-foreground focus:shadow-neu-inset-sm focus:outline-none focus:ring-2 focus:ring-focus sm:max-w-[280px] lg:max-w-[260px]"
+        className="min-h-10 min-w-0 flex-1 truncate rounded-neu border border-control bg-surface px-3 py-1 text-sm font-semibold text-foreground transition-shadow duration-200 placeholder:text-muted-foreground focus:shadow-neu-inset-sm focus:outline-none focus:ring-2 focus:ring-focus sm:max-w-[280px] lg:max-w-[260px] focus:ring-offset-2 focus:ring-offset-background"
         placeholder="Untitled project"
       />
 
@@ -164,7 +164,7 @@ export function EditorToolbar({
           type="button"
           onClick={onAiEdit}
           aria-label="Open AI Edit settings"
-          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 hover:shadow-neu-raised-lg focus:outline-none active:shadow-neu-pressed lg:inline-flex"
+          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 hover:shadow-neu-raised-lg focus-visible:outline-none active:shadow-neu-pressed lg:inline-flex focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           <Sparkles className="size-4" strokeWidth={1.75} />
           AI Edit
@@ -173,7 +173,7 @@ export function EditorToolbar({
           type="button"
           onClick={onExport}
           aria-label="Open export settings"
-          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus:outline-none active:shadow-neu-pressed lg:inline-flex"
+          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus-visible:outline-none active:shadow-neu-pressed lg:inline-flex focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         >
           <Download className="size-4" strokeWidth={1.75} />
           Export

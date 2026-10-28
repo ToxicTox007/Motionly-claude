@@ -106,7 +106,7 @@ export function RefundPanel({ demoMode }: { demoMode: boolean }) {
             value={workspaceId}
             onChange={(event) => setWorkspaceId(event.target.value)}
             placeholder="00000000-0000-0000-0000-000000000000"
-            className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
         </div>
         <div>
@@ -124,7 +124,7 @@ export function RefundPanel({ demoMode }: { demoMode: boolean }) {
             onChange={(event) => setAmount(event.target.value)}
             placeholder="Remaining"
             aria-describedby="refund-amount-hint"
-            className="mt-1.5 min-h-11 w-32 rounded-neu border border-control bg-surface px-4 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="mt-1.5 min-h-11 w-32 rounded-neu border border-control bg-surface px-4 text-sm font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
           <span id="refund-amount-hint" className="sr-only">
             Enter a positive amount in rupees, or leave blank to refund the
@@ -143,7 +143,7 @@ export function RefundPanel({ demoMode }: { demoMode: boolean }) {
             type="text"
             value={reason}
             onChange={(event) => setReason(event.target.value)}
-            className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+            className="mt-1.5 min-h-11 w-full rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
         </div>
         <button

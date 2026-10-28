@@ -206,7 +206,7 @@ export function ElementPalette({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search elements…"
-            className="min-h-10 w-full rounded-neu border border-control bg-surface pl-9 pr-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
+            className="min-h-10 w-full rounded-neu border border-control bg-surface pl-9 pr-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           />
         </label>
         <select
@@ -214,7 +214,7 @@ export function ElementPalette({
           onChange={(event) =>
             setFilter(event.target.value as PaletteCategory | "all")
           }
-          className="min-h-10 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus"
+          className="min-h-10 w-full rounded-neu border border-control bg-surface px-3 text-sm font-medium text-foreground shadow-neu-inset-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
           aria-label="Filter element category"
         >
           <option value="all">All categories</option>
