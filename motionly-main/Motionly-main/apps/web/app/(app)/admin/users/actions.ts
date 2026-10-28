@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { validateRefundRupees } from "@/lib/payment-history.mjs";
 import { env } from "@/lib/env";
-import { serverApiFetch } from "@/lib/server-api";
+import { failureCode, serverApiFetch } from "@/lib/server-api";
 
 const BASE = "/admin/users";
 
@@ -30,48 +30,47 @@ function usersUrl(params: Record<string, string>) {
   return `/admin/users${query ? `?${query}` : ""}`;
 }
 
-// Create a one-time recovery link. The link is returned to this action and
-// shown once to the admin via the page's ?link= param; it is never persisted
-// or logged. Any earlier link for the same user is invalidated by GoTrue.
-export async function createResetLink(formData: FormData) {
+export type ResetLinkState =
+  | { status: "idle" }
+  | { status: "ok"; link: string }
+  | { status: "error"; error: string };
+
+// Create a one-time recovery link (a live account-recovery credential, valid
+// for an hour). It is returned to the calling component as action state and
+// held only in that admin's browser tab: it never goes into a URL (browser
+// history, access logs, Referer), and it is never persisted or logged here.
+// Any earlier link for the same user is invalidated by GoTrue. The page is not
+// revalidated here, so a resolved request's row does not unmount and drop the
+// link before the admin copies it; the panel refreshes the list when closed.
+export async function createResetLink(
+  _previous: ResetLinkState,
+  formData: FormData,
+): Promise<ResetLinkState> {
   const email = String(formData.get("email") ?? "").trim();
   const requestId = String(formData.get("requestId") ?? "").trim();
-  if (!email) redirect(usersUrl({ error: "email_required" }));
+  if (!email) return { status: "error", error: "email_required" };
 
-  const context = await requireContext();
-  let link: string | null = null;
-  let errorCode = "reset_link_failed";
-  try {
-    const response = await fetch(`${env.apiBaseUrl}${BASE}/reset-links`, {
+  const context = await getAdminApiContext();
+  if (!context) return { status: "error", error: "admin_access_denied" };
+
+  const result = await serverApiFetch<{ link?: unknown }>(
+    `${BASE}/reset-links`,
+    {
       method: "POST",
-      cache: "no-store",
-      headers: {
-        ...adminHeaders(context.headers),
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        email,
-        ...(requestId ? { request_id: requestId } : {}),
-      }),
-    });
-    if (response.ok) {
-      const payload = (await response.json()) as { link: string };
-      link = payload.link;
-    } else {
-      const payload = (await response.json().catch(() => null)) as {
-        error?: { code?: string };
-      } | null;
-      errorCode = payload?.error?.code ?? errorCode;
-    }
-  } catch {
-    errorCode = "reset_link_failed";
+      headers: adminHeaders(context.headers),
+      body: { email, ...(requestId ? { request_id: requestId } : {}) },
+    },
+  );
+  if (!result.ok) {
+    return {
+      status: "error",
+      error: failureCode(result, "reset_link_failed"),
+    };
   }
-
-  revalidatePath("/admin/users");
-  if (link) {
-    redirect(usersUrl({ q: email, link }));
-  }
-  redirect(usersUrl({ q: email, error: errorCode }));
+  const link = result.data?.link;
+  return typeof link === "string" && link
+    ? { status: "ok", link }
+    : { status: "error", error: "reset_link_failed" };
 }
 
 export async function dismissResetRequest(formData: FormData) {

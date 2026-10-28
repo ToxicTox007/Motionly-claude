@@ -5,9 +5,9 @@ import { getAdminApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { messageFor, noticeFor, searchParam } from "@/lib/error-messages";
 import { serverApiFetch } from "@/lib/server-api";
-import { CopyLink } from "./CopyLink";
 import { RefundPanel } from "./RefundPanel";
-import { createResetLink, dismissResetRequest, setUserBan } from "./actions";
+import { ResetLinkPanel } from "./ResetLinkPanel";
+import { dismissResetRequest, setUserBan } from "./actions";
 
 type AdminUser = {
   id: string;
@@ -60,8 +60,9 @@ export default async function AdminUsersPage({
   if (!context) redirect("/dashboard?error=admin_access_denied");
 
   const params = await searchParams;
+  // ?q= stays a GET so a search is linkable (it carries the email searched
+  // for). The recovery link itself never travels in a URL (ResetLinkPanel).
   const query = typeof params.q === "string" ? params.q : "";
-  const link = typeof params.link === "string" ? params.link : null;
   const errorCode = typeof params.error === "string" ? params.error : null;
   const done = noticeFor("admin", searchParam(params, "done"));
 
@@ -82,18 +83,6 @@ export default async function AdminUsersPage({
           {done}
         </Alert>
       ) : null}
-      {link && (
-        <section className="mb-6 rounded-neu-lg bg-surface p-5 shadow-neu-raised">
-          <h2 className="mb-2 text-sm font-semibold text-foreground">
-            One-time reset link (valid 1 hour)
-          </h2>
-          <p className="mb-3 text-xs font-medium text-muted-foreground">
-            Send this to the user over a trusted channel. It works once and
-            expires in an hour; creating a new one invalidates it.
-          </p>
-          <CopyLink link={link} />
-        </section>
-      )}
 
       {/* Billing admin: issue a refund for a workspace. */}
       {/* The no-charge notice follows the billing mode, not billingEnabled. */}
@@ -152,15 +141,7 @@ export default async function AdminUsersPage({
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <form action={createResetLink}>
-                      <input type="hidden" name="email" value={user.email} />
-                      <button
-                        type="submit"
-                        className="min-h-10 rounded-neu bg-surface px-4 text-xs font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
-                      >
-                        Create reset link
-                      </button>
-                    </form>
+                    <ResetLinkPanel email={user.email} />
                     <form action={setUserBan}>
                       <input type="hidden" name="userId" value={user.id} />
                       <input type="hidden" name="email" value={user.email} />
@@ -211,16 +192,11 @@ export default async function AdminUsersPage({
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <form action={createResetLink}>
-                    <input type="hidden" name="email" value={request.email} />
-                    <input type="hidden" name="requestId" value={request.id} />
-                    <button
-                      type="submit"
-                      className="min-h-10 rounded-neu bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
-                    >
-                      Create reset link
-                    </button>
-                  </form>
+                  <ResetLinkPanel
+                    email={request.email}
+                    requestId={request.id}
+                    primary
+                  />
                   <form action={dismissResetRequest}>
                     <input type="hidden" name="requestId" value={request.id} />
                     <button

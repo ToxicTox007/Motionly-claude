@@ -75,6 +75,17 @@ export default function nextConfig(phase: string): NextConfig {
             },
           ],
         },
+        // Admin screens carry account-level data (emails, ban state, one-time
+        // recovery links in page state): never cache them, and never send
+        // their URLs to another page in a Referer. Listed after the global
+        // rule so its Referrer-Policy is the one that applies here.
+        {
+          source: "/admin/:path*",
+          headers: [
+            { key: "Cache-Control", value: "no-store" },
+            { key: "Referrer-Policy", value: "no-referrer" },
+          ],
+        },
       ];
     },
   };
