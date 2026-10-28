@@ -33,6 +33,11 @@ import { usePlaybackSync } from "./usePlaybackSync";
 import { useTimelineKeyboardShortcuts } from "./useTimelineKeyboardShortcuts";
 import { useEditorHistory, type HistoryEntry } from "../history-context";
 import { ClipBlock, MIN_CLIP_MS, type ReorderDirection } from "./ClipBlock";
+import {
+  isClipInRange,
+  snapToNearestEdge,
+  visibleTimeRange,
+} from "./timeline-geometry";
 import type {
   BrollSlotSummary,
   CaptionSegment,
@@ -140,37 +145,8 @@ export function TimelinePanel({
   const requestQueue = useRef<Promise<unknown>>(Promise.resolve());
 
   const getSnappedMs = useCallback(
-    (targetMs: number, ignoreClipId?: string) => {
-      const snapThresholdMs = 150;
-      let closestMs = targetMs;
-      let minDiff = snapThresholdMs;
-
-      const playheadDiff = Math.abs(targetMs - playheadMs);
-      if (playheadDiff < minDiff) {
-        minDiff = playheadDiff;
-        closestMs = playheadMs;
-      }
-
-      for (const track of tracks) {
-        for (const c of track.clips) {
-          if (c.id === ignoreClipId) continue;
-
-          const startDiff = Math.abs(targetMs - c.startMs);
-          if (startDiff < minDiff) {
-            minDiff = startDiff;
-            closestMs = c.startMs;
-          }
-
-          const endDiff = Math.abs(targetMs - c.endMs);
-          if (endDiff < minDiff) {
-            minDiff = endDiff;
-            closestMs = c.endMs;
-          }
-        }
-      }
-
-      return closestMs;
-    },
+    (targetMs: number, ignoreClipId?: string) =>
+      snapToNearestEdge(targetMs, { playheadMs, tracks, ignoreClipId }),
     [playheadMs, tracks],
   );
 
@@ -186,20 +162,14 @@ export function TimelinePanel({
     if (!scrollEl || !canvasEl) return;
 
     const updateRange = () => {
-      const scrollLeft = scrollEl.scrollLeft;
-      const clientWidth = scrollEl.clientWidth;
-      const totalWidth = canvasEl.clientWidth || 1;
-
-      const pxToMs = totalDurationMs / totalWidth;
-      const startMs = scrollLeft * pxToMs;
-      const endMs = (scrollLeft + clientWidth) * pxToMs;
-
-      const bufferMs = Math.max(2000, clientWidth * pxToMs * 0.25);
-
-      setVisibleRange({
-        startMs: Math.max(0, startMs - bufferMs),
-        endMs: Math.min(totalDurationMs, endMs + bufferMs),
-      });
+      setVisibleRange(
+        visibleTimeRange({
+          scrollLeft: scrollEl.scrollLeft,
+          clientWidth: scrollEl.clientWidth,
+          canvasWidth: canvasEl.clientWidth,
+          totalDurationMs,
+        }),
+      );
     };
 
     updateRange();
@@ -224,12 +194,7 @@ export function TimelinePanel({
   }, [totalDurationMs, zoomLevel]);
 
   const isClipVisible = useCallback(
-    (clip: TimelineClip) => {
-      if (clip.id === selectedClipId) return true;
-      return (
-        clip.endMs >= visibleRange.startMs && clip.startMs <= visibleRange.endMs
-      );
-    },
+    (clip: TimelineClip) => isClipInRange(clip, visibleRange, selectedClipId),
     [selectedClipId, visibleRange],
   );
 

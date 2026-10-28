@@ -1,17 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { useReducedMotion } from "motion/react";
 import { Pause, Play } from "lucide-react";
+import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 import { HeroConsole } from "./hero-console";
 
 /**
  * The landing hero mockup plus a pause control for its looping animation
  * (WCAG 2.2.2). The mockup stays decorative and aria-hidden; the control sits
- * outside it. Under reduced motion nothing loops, so there is no control.
+ * outside it. Under reduced motion nothing loops, so there is no control (it
+ * is removed right after hydration, which renders it like the server).
  */
 export function HeroShowcase() {
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = usePrefersReducedMotion();
   const [paused, setPaused] = useState(false);
 
   return (

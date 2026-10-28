@@ -47,13 +47,33 @@ before exiting.
 
 ## Browser performance
 
-Run the Playwright browser performance suite with a seeded app session:
+The Playwright browser performance suite measures a production build: the
+config runs `next build`, then `next start` on port 3001 behind a local edge
+proxy (`apps/web/tests/e2e/support/edge-proxy.mjs`) that serves `/api` and
+`/supabase` on the public origin `http://127.0.0.1:3000`, as the deployed edge
+does. It needs the API (started by the config) and Supabase.
+
+App surfaces are measured signed in, through the login form. Either give a
+user, or let the suite create a throwaway confirmed user with the service-role
+key (it is deleted afterwards):
 
 ```bash
+# Provided user (set PERF_PROJECT_ID, or a "Performance check" project is
+# created in its workspace for the editor surface):
 RUN_BROWSER_PERF=1 \
+PERF_USER_EMAIL=... PERF_USER_PASSWORD=... \
 PERF_PROJECT_ID=... \
 pnpm perf:browser
+
+# Throwaway user:
+RUN_BROWSER_PERF=1 \
+SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_ANON_KEY=... \
+SUPABASE_SERVICE_ROLE_KEY=... SUPABASE_JWT_SECRET=... \
+pnpm perf:browser
 ```
+
+`/admin/ops` needs a platform admin: it is measured only with a provided admin
+user and `PERF_USER_IS_ADMIN=1`.
 
 Covered surfaces:
 
@@ -66,9 +86,19 @@ Covered surfaces:
 - account
 - admin ops
 
-The suite records navigation timing, first contentful paint when available,
-transfer size, and encoded body size to `test-results/browser-performance.json`.
-Use those JSON samples as before/after evidence for browser responsiveness.
+The suite records navigation timing, first contentful paint, transfer size,
+encoded body size and the Core Web Vitals (LCP, CLS and INP, from
+PerformanceObserver; INP after one click on the page heading) to
+`test-results/browser-performance.json`. Use those JSON samples as before/after
+evidence for browser responsiveness.
+
+Budgets: DCL 2.5 s, load 5 s, FCP 2.5 s, LCP 2.5 s, CLS 0.1 and INP 200 ms
+(override with `BROWSER_PERF_DCL_MS`, `BROWSER_PERF_LOAD_MS`,
+`BROWSER_PERF_FCP_MS`, `BROWSER_PERF_LCP_MS`, `BROWSER_PERF_CLS` and
+`BROWSER_PERF_INP_MS`). By default the run observes: violations are written to
+each sample's `violations` and shown as test annotations. With
+`PERF_ENFORCE=1` any violation fails the run. A redirect away from a surface
+always fails it, unless `ALLOW_BROWSER_PERF_REDIRECTS=1`.
 
 ## Golden media benchmarks
 

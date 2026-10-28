@@ -123,11 +123,15 @@ test("a key creates a project, uploads, then revocation returns 401", async ({
   );
   expect([200, 201]).toContain(initRes.status());
 
-  // Revoke the key via the UI, then prove it stops working immediately.
+  // Revoke the key via the UI (confirmed first), then prove it stops working
+  // immediately.
   await page
     .getByRole("button", { name: /Revoke API key/i })
     .first()
     .click();
+  const confirm = page.getByRole("dialog", { name: "Revoke API key?" });
+  await confirm.getByRole("button", { name: "Revoke key" }).click();
+  await expect(confirm).toBeHidden();
   await expect(page.getByText(/Revoked/).first()).toBeVisible();
 
   const afterRes = await request.get("/api/projects", { headers: keyHeaders });

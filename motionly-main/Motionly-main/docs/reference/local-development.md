@@ -70,7 +70,7 @@ GPU-dependent capabilities and external providers run as labelled stand-ins in t
 
 ## Run the browser suite
 
-The browser suite (`apps/web/tests/browser`, config `apps/web/playwright.browser.config.mjs`) runs against the CPU-stage stack through the CloudFront simulator, in Chromium, Firefox, WebKit, a Pixel 7 and an iPhone 14. Every test fails on a console error, an uncaught page error, a failed request, any 5xx response, or a serious or critical WCAG 2.1 A/AA issue found by axe. It needs the Playwright browsers and `ffmpeg` (the upload journey generates a short test video):
+The browser suite (`apps/web/tests/browser`, config `apps/web/playwright.browser.config.mjs`) runs against the CPU-stage stack through the CloudFront simulator, in Chromium, Firefox, WebKit, a Pixel 7 and an iPhone 14. Every test fails on a console error, an uncaught page error, a failed request, any 5xx response, or a serious or critical WCAG 2.2 A/AA issue found by axe; moderate axe issues are attached to the test as `accessibility-advisories` without failing it. Tab-order focus checks run in the desktop Chromium and Firefox setups, and the responsive checks (320–1920px) in the three desktop setups. It needs the Playwright browsers and `ffmpeg` (the upload journey generates a short test video):
 
 ```bash
 pnpm --filter @motionly/web exec playwright install --with-deps chromium firefox webkit

@@ -141,7 +141,7 @@ test("a background-removal render uses the labelled test matte", async ({
   }).toPass({ timeout: 200_000, intervals: [10_000] });
 
   // Enable subject segmentation (background removal) in the Look tab.
-  await page.getByRole("button", { name: /Look/i }).first().click();
+  await page.getByRole("tab", { name: "Look", exact: true }).click();
   await page.getByLabel("Enable subject segmentation").check();
 
   // The preview shows the "Test" badge; its accessible name is the registry

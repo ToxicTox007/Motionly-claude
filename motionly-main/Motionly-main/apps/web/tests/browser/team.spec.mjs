@@ -251,7 +251,7 @@ test("the owner transfers ownership and the new owner can open billing", async (
       const response = await newOwner.goto("/billing");
       expect(response?.status()).toBeLessThan(400);
       await expect(
-        newOwner.getByRole("heading", { name: /Current plan/i }),
+        newOwner.getByText("Current plan", { exact: true }),
       ).toBeVisible();
       await expect(
         newOwner.getByText("Only the owner can manage billing"),

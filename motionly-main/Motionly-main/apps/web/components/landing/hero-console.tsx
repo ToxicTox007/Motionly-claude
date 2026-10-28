@@ -7,16 +7,17 @@
 // allowed and the viewer has not paused them (HeroShowcase owns the pause
 // control, outside this aria-hidden tree). Pointer tilt is disabled for
 // reduced motion or coarse pointers. Text only appears light on the dark
-// "ink" video area.
+// "ink" video area. The reduced-motion preference comes from
+// usePrefersReducedMotion, which matches the server during hydration.
 import {
   animate,
   m,
   useMotionTemplate,
   useMotionValue,
-  useReducedMotion,
   useSpring,
   useTransform,
 } from "motion/react";
+import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 import {
   useEffect,
   useRef,
@@ -73,7 +74,7 @@ function useInView(ref: React.RefObject<HTMLElement | null>) {
 }
 
 export function HeroConsole({ paused = false }: { paused?: boolean }) {
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = usePrefersReducedMotion();
   const rootRef = useRef<HTMLDivElement>(null);
   const inView = useInView(rootRef);
   const pageVisible = useSyncExternalStore(

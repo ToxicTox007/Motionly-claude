@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { useEffect, useState } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -156,5 +163,55 @@ describe("EditorWorkspaces", () => {
     expect(
       screen.queryByRole("dialog", { name: "Element palette" }),
     ).toBeNull();
+  });
+
+  it("on mobile, a tab bar opens each panel as a modal sheet", () => {
+    setViewport(false);
+    render(workspaces("professional"));
+    for (const name of ["Preview", "Elements", "Settings"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    // Panels in sheets are not rendered until their sheet opens.
+    expect(screen.queryByText(/left clicked/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Elements" }));
+    const palette = screen.getByRole("dialog", { name: "Element palette" });
+    expect(palette).toHaveAttribute("aria-modal", "true");
+    expect(within(palette).getByText(/left clicked/)).toBeInTheDocument();
+
+    // Preview closes the sheet again.
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a mobile sheet traps focus, closes on Escape and returns focus", async () => {
+    setViewport(false);
+    render(workspaces("professional"));
+    const opener = screen.getByRole("button", { name: "Settings" });
+    opener.focus();
+    fireEvent.click(opener);
+    const sheet = screen.getByRole("dialog", { name: "Editor settings" });
+    expect(sheet).toHaveAttribute("aria-modal", "true");
+
+    // Focus moves into the sheet.
+    await waitFor(() =>
+      expect(sheet).toContainElement(document.activeElement as HTMLElement),
+    );
+    // Tab from the last control wraps to the first; Shift+Tab goes back.
+    const close = within(sheet).getByRole("button", { name: "Close" });
+    const last = within(sheet).getByRole("button", {
+      name: "right clicked 0",
+    });
+    last.focus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
+    expect(last).toHaveFocus();
+
+    // Escape closes it and focus goes back to the tab that opened it.
+    fireEvent.keyDown(last, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "Editor settings" }),
+    ).toBeNull();
+    expect(opener).toHaveFocus();
   });
 });

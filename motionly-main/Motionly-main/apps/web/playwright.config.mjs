@@ -1,3 +1,7 @@
+// Browser performance harness (tests/e2e). It measures a production build
+// (`next build && next start`), never `next dev`, behind a local stand-in for
+// the edge (tests/e2e/support/edge-proxy.mjs) that serves /api and /supabase
+// on the one public origin, as deployed.
 import { defineConfig, devices } from "@playwright/test";
 
 const supabaseUrl = process.env.SUPABASE_URL || "http://127.0.0.1:54321";
@@ -5,6 +9,8 @@ const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || "";
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const jwtSecret = process.env.SUPABASE_JWT_SECRET || "";
 const publicOrigin = "http://127.0.0.1:3000";
+const apiOrigin = "http://127.0.0.1:8000";
+const webOrigin = "http://127.0.0.1:3001";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -34,7 +40,7 @@ export default defineConfig({
     {
       command: "python -m uvicorn app.main:app --host 127.0.0.1 --port 8000",
       cwd: "../api",
-      url: "http://127.0.0.1:8000/health/live",
+      url: `${apiOrigin}/health/live`,
       reuseExistingServer: true,
       timeout: 120_000,
       env: {
@@ -42,7 +48,7 @@ export default defineConfig({
         APP_ENV: "test",
         PROCESS_ROLE: "api",
         // One public origin: the browser reaches the API and Supabase through
-        // the web server, which proxies /api and /supabase in development.
+        // the edge proxy, which routes /api and /supabase.
         API_PUBLIC_BASE_URL: `${publicOrigin}/api`,
         API_CORS_ORIGINS: publicOrigin,
         SUPABASE_URL: supabaseUrl,
@@ -58,17 +64,33 @@ export default defineConfig({
       },
     },
     {
-      command: "pnpm dev",
-      url: "http://127.0.0.1:3000/login",
+      // A production build: dev-server timings say nothing about what
+      // viewers get.
+      command:
+        "pnpm exec next build && pnpm exec next start --hostname 127.0.0.1 --port 3001",
+      url: `${webOrigin}/login`,
       reuseExistingServer: true,
-      timeout: 120_000,
+      timeout: 600_000,
       env: {
         ...process.env,
         APP_ENV: "test",
         PUBLIC_ORIGIN: publicOrigin,
-        API_INTERNAL_URL: "http://127.0.0.1:8000",
+        API_INTERNAL_URL: apiOrigin,
         SUPABASE_URL: supabaseUrl,
         SUPABASE_ANON_KEY: supabaseAnonKey,
+      },
+    },
+    {
+      command: "node tests/e2e/support/edge-proxy.mjs",
+      url: `${publicOrigin}/login`,
+      reuseExistingServer: true,
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        EDGE_PORT: "3000",
+        EDGE_WEB_ORIGIN: webOrigin,
+        EDGE_API_ORIGIN: apiOrigin,
+        EDGE_SUPABASE_ORIGIN: supabaseUrl,
       },
     },
   ],

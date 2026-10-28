@@ -289,7 +289,8 @@ test("Other: an asset-library item can be previewed", async ({
     ],
   ]);
 
-  await page.getByRole("tab", { name: /Publish|Library/i }).click();
+  // The publishing library lives in the Localize tab.
+  await page.getByRole("tab", { name: "Localize", exact: true }).click();
   await page.getByRole("button", { name: /Preview City skyline/i }).click();
 
   await expect(
@@ -338,7 +339,7 @@ test("Other: an asset-library item can be downloaded", async ({
     ],
   ]);
 
-  await page.getByRole("tab", { name: /Publish|Library/i }).click();
+  await page.getByRole("tab", { name: "Localize", exact: true }).click();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: /Download skyline\.mp4/i }).click();
   const saved = await download;

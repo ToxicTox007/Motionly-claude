@@ -9,6 +9,12 @@ import { defineConfig, devices } from "@playwright/test";
 
 const results = "../../test-results/browser";
 const chromiumArgs = { launchOptions: { args: ["--no-sandbox"] } };
+// Specs that only make sense in some setups are not run elsewhere (rather
+// than skipped: the skip audit allows no undeclared skips). Tab order needs a
+// desktop keyboard; the responsive spec sets every width itself, so the
+// desktop engines cover phone widths and the phones keep their own.
+const KEYBOARD_ONLY = ["**/focus-visible.spec.mjs"];
+const EXPLICIT_WIDTHS = ["**/responsive.spec.mjs"];
 
 export default defineConfig({
   testDir: "./tests/browser",
@@ -38,8 +44,21 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], ...chromiumArgs },
     },
     { name: "firefox", use: { ...devices["Desktop Firefox"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-    { name: "pixel-7", use: { ...devices["Pixel 7"], ...chromiumArgs } },
-    { name: "iphone-14", use: { ...devices["iPhone 14"] } },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"] },
+      // WebKit's Tab skips links unless the viewer opts in.
+      testIgnore: KEYBOARD_ONLY,
+    },
+    {
+      name: "pixel-7",
+      use: { ...devices["Pixel 7"], ...chromiumArgs },
+      testIgnore: [...KEYBOARD_ONLY, ...EXPLICIT_WIDTHS],
+    },
+    {
+      name: "iphone-14",
+      use: { ...devices["iPhone 14"] },
+      testIgnore: [...KEYBOARD_ONLY, ...EXPLICIT_WIDTHS],
+    },
   ],
 });

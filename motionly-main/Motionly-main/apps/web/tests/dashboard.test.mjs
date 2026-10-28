@@ -10,10 +10,8 @@ test("DashboardClient.tsx onboarding, and search handed to /projects", async () 
     "utf8",
   );
 
-  // Search and sort run on /projects over every project (FE-27); behaviour
-  // is tested in tests/components/dashboard-client.test.tsx. No client-side
-  // filtering of the truncated first page remains.
-  assert.doesNotMatch(source, /setSearchQuery|filteredProjects/);
+  // Search and sort run on /projects over every project (FE-27), tested as
+  // behaviour in tests/components/dashboard-client.test.tsx.
 
   // Verify onboarding steps are defined
   assert.match(source, /Upload Video/);

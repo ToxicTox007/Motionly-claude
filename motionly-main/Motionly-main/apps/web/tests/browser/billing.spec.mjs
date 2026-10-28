@@ -29,9 +29,8 @@ const WORKSPACE_COOKIE_NAME = "motionly_workspace_id";
 async function gotoBilling(page) {
   const response = await page.goto("/billing");
   expect(response?.status()).toBeLessThan(400);
-  await expect(
-    page.getByRole("heading", { name: /Current plan/i }),
-  ).toBeVisible();
+  // The current-plan card renders only once the billing status is known.
+  await expect(page.getByText("Current plan", { exact: true })).toBeVisible();
 }
 
 test("the billing page shows the demo notice on every payment surface", async ({
@@ -43,7 +42,9 @@ test("the billing page shows the demo notice on every payment surface", async ({
   await gotoBilling(page);
 
   // The demo banner is present whenever billing is enabled in demo mode.
-  await expect(page.getByText(DEMO_NOTICE)).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({ hasText: DEMO_NOTICE }).first(),
+  ).toBeVisible();
   await gates.checkAccessibility(page);
 });
 
@@ -100,10 +101,18 @@ test("owner can cancel an active plan at period end", async ({
   await signIn(page, user, "/billing");
   await gotoBilling(page);
 
-  // The cancel control is present for an owner on an active paid plan.
+  // The cancel control is present for an owner on an active paid plan; it
+  // asks for confirmation before cancelling.
   const cancel = page.getByRole("button", { name: /Cancel at period end/i });
   await expect(cancel).toBeVisible();
   await cancel.click();
+  const confirm = page.getByRole("dialog", {
+    name: "Cancel your subscription?",
+  });
+  await confirm
+    .getByRole("button", { name: "Cancel subscription", exact: true })
+    .click();
+  await expect(confirm).toBeHidden();
 
   // The plan is now scheduled to cancel at the period end.
   await expect(async () => {

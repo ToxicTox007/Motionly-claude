@@ -12,7 +12,10 @@ const hero = read("components/landing/hero-console.tsx");
 
 test("the hero console is decorative and non-interactive", () => {
   assert.match(hero, /aria-hidden="true"/);
-  assert.match(hero, /useReducedMotion/);
+  // Reduced motion is read hydration-safely (behaviour:
+  // tests/components/hero-showcase-hydration.test.tsx).
+  assert.match(hero, /usePrefersReducedMotion\(\)/);
+  assert.doesNotMatch(hero, /useReducedMotion\(\)/);
   assert.doesNotMatch(hero, /<a /);
   assert.doesNotMatch(hero, /<button/);
   assert.doesNotMatch(hero, /href=/);

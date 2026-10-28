@@ -27,35 +27,6 @@ test("Login page implements form validation and pending submission locks", async
   );
 });
 
-test("Toast system defines provider, hook, and styled status alerts", async () => {
-  const providerSource = await readFile(
-    new URL("components/toast.tsx", root),
-    "utf8",
-  );
-
-  // Verify ToastProvider, useToast hook, and styled toast variants
-  assert.match(providerSource, /export function ToastProvider/);
-  assert.match(providerSource, /export function useToast/);
-  assert.match(providerSource, /success/);
-  assert.match(providerSource, /error/);
-  assert.match(providerSource, /warning/);
-  assert.match(providerSource, /info/);
-  assert.match(providerSource, /loading/);
-});
-
-test("Focus traps are implemented inside responsive drawers and modals", async () => {
-  const layoutSource = await readFile(
-    new URL("components/editor/layout/EditorWorkspaces.tsx", root),
-    "utf8",
-  );
-
-  // Verify focus trap hooks in editor layout drawers
-  assert.match(layoutSource, /useFocusTrap\(/);
-  assert.match(layoutSource, /panelRef=\{leftTrapRef\}/);
-  assert.match(layoutSource, /panelRef=\{rightTrapRef\}/);
-  assert.match(layoutSource, /ref=\{panelRef\}/);
-});
-
 test("Keyboard controls and visible focus indicators exist on UI elements", async () => {
   const uiSource = await readFile(
     new URL("components/editor/ui.tsx", root),
@@ -68,46 +39,10 @@ test("Keyboard controls and visible focus indicators exist on UI elements", asyn
   assert.match(uiSource, /aria-valuemin/);
 });
 
-test("Timeline virtualization, snapping alignments, and request queue compile correctly", async () => {
-  const timelineSource = await readFile(
-    new URL("components/editor/timeline/TimelinePanel.tsx", root),
-    "utf8",
-  );
-
-  // Verify memoized renders
-  assert.match(timelineSource, /const Playhead = React\.memo/);
-  assert.match(timelineSource, /const TimelineRuler = React\.memo/);
-  assert.match(timelineSource, /const MobileTimelineView = React\.memo/);
-
-  // Verify virtualization loops
-  assert.match(timelineSource, /const isClipVisible = useCallback/);
-
-  // Verify real-time alignment checks
-  assert.match(timelineSource, /const getSnappedMs = useCallback/);
-});
-
-test("Shared modal and focus trap preserve accessible dialog behavior", async () => {
-  // Behaviour (Tab wrap, topmost-only Escape, focus return, closeDisabled) is
-  // tested in tests/components/modal.test.tsx; this keeps the wiring.
-  const modalSource = await readFile(
-    new URL("components/modal.tsx", root),
-    "utf8",
-  );
-  const focusSource = await readFile(
-    new URL("lib/useFocusTrap.ts", root),
-    "utf8",
-  );
-
-  assert.match(modalSource, /aria-labelledby=\{titleId\}/);
-  assert.match(
-    modalSource,
-    /aria-describedby=\{description \? descriptionId : undefined\}/,
-  );
-  assert.match(modalSource, /id=\{titleId\}/);
-  assert.match(focusSource, /const onCloseRef = useRef\(onClose\)/);
-  assert.match(focusSource, /\}, \[active\]\);/);
-  assert.match(focusSource, /opener\?\.isConnected/);
-});
+// Toasts, the editor's mobile sheets and timeline (snapping, virtualisation)
+// and the shared Modal and focus trap are tested as behaviour in Vitest:
+// tests/components/{toast,editor-workspaces,modal}.test.tsx and
+// tests/unit/timeline-geometry.test.ts.
 
 test("Upload replacement and project bootstrap reject stale or failed state", async () => {
   const uploadSource = await readFile(

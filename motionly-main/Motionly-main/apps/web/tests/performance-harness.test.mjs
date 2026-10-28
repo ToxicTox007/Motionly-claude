@@ -107,6 +107,50 @@ test("browser performance harness covers required app surfaces", async () => {
   assert.match(docs, /Browser performance/);
 });
 
+test("browser performance runs signed in, on a production build, with Web Vitals", async () => {
+  const source = await readFile(
+    new URL("apps/web/tests/e2e/browser-performance.spec.mjs", root),
+    "utf8",
+  );
+  const docs = await readFile(
+    new URL("docs/ops/performance-load-tests.md", root),
+    "utf8",
+  );
+  const { default: config } = await import(
+    new URL("apps/web/playwright.config.mjs", root)
+  );
+  const servers = config.webServer;
+
+  // A production server, never the dev server: dev timings say nothing about
+  // what viewers get.
+  const web = servers.find((server) => /next start/.test(server.command));
+  assert.ok(web, "a `next start` web server");
+  assert.match(web.command, /next build/);
+  assert.ok(
+    !servers.some((server) => /\b(pnpm|next) dev\b/.test(server.command)),
+  );
+  // `next start` has no dev rewrites; a local edge serves /api and /supabase
+  // on the public origin the browser uses.
+  const edge = servers.find((server) => /edge-proxy\.mjs/.test(server.command));
+  assert.ok(edge, "the local edge proxy");
+  assert.equal(new URL(edge.url).origin, config.use.baseURL);
+
+  // App surfaces are measured signed in (through the login form).
+  assert.match(source, /async function signIn\(/);
+  assert.match(source, /storageState/);
+  assert.match(source, /PERF_USER_EMAIL/);
+  // Core Web Vitals from PerformanceObserver, with budgets.
+  assert.match(source, /observeWebVitals/);
+  for (const metric of ["lcpMs", "cls", "inpMs"]) {
+    assert.match(source, new RegExp(`\\b${metric}\\b`));
+  }
+  // Budgets only fail the run with PERF_ENFORCE=1; otherwise they are recorded.
+  assert.match(source, /if \(enforce\)/);
+  assert.match(source, /budgetViolations\(/);
+  assert.match(docs, /PERF_ENFORCE=1/);
+  assert.match(docs, /next start/);
+});
+
 test("golden media benchmark harness covers required media surfaces", async () => {
   const source = await readFile(
     new URL("scripts/perf/media-golden-benchmarks.mjs", root),

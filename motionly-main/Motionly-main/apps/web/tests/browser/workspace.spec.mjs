@@ -55,7 +55,12 @@ test("a creator can create a project, open it, and delete it", async ({
     .filter({ has: page.locator(`input[value="${title}"]`) });
   await expect(card).toBeVisible();
   await gates.checkAccessibility(page);
-  await card.getByRole("button", { name: "Delete project" }).click();
+  // Deleting is irreversible, so it is confirmed first.
+  await card.getByRole("button", { name: `Delete ${title}` }).click();
+  await page
+    .getByRole("dialog", { name: "Delete project?" })
+    .getByRole("button", { name: "Delete project", exact: true })
+    .click();
   await expect(card).toHaveCount(0);
 });
 

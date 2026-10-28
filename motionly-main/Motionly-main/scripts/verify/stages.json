@@ -264,7 +264,7 @@
     {
       "name": "browser",
       "status": "implemented",
-      "note": "Playwright in Chromium, Firefox, WebKit, Pixel 7 and iPhone 14 against the CPU stage through the CDN simulator (HTTPS), with console, page-error, 5xx, failed-request and axe WCAG 2.1 A/AA gates, then a service-log scan and the container verdict.",
+      "note": "Playwright in Chromium, Firefox, WebKit, Pixel 7 and iPhone 14 against the CPU stage through the CDN simulator (HTTPS), with console, page-error, 5xx, failed-request and axe WCAG 2.2 A/AA gates (moderate axe issues are attached as advisories), then a service-log scan and the container verdict.",
       "steps": [
         {
           "name": "build CPU-stage images from this checkout",

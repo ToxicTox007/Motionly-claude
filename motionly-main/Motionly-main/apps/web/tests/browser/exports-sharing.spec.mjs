@@ -93,9 +93,10 @@ test("a finished export is played, downloaded, shared, watched, and revoked", as
   expect(guestDownload.suggestedFilename()).toMatch(/\.mp4$/);
   await viewer.dispose();
 
-  // 8. Revoke the link from the owner's Exports panel.
+  // 8. Revoke the link from the owner's Exports panel (each Revoke button is
+  //    named by the link it revokes).
   await page
-    .getByRole("button", { name: /^Revoke$/ })
+    .getByRole("button", { name: /^Revoke share link created/ })
     .first()
     .click();
   await expect(page.getByText(/no longer works/i)).toBeVisible();

@@ -121,6 +121,26 @@ describe("Modal", () => {
       screen.queryByRole("button", { name: /overlay/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("is named by its title and described by its description", () => {
+    const { rerender } = render(
+      <Modal
+        open
+        title="Delete project?"
+        description="This cannot be undone."
+        onClose={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Delete project?" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAccessibleDescription("This cannot be undone.");
+
+    // No description: no dangling aria-describedby.
+    rerender(<Modal open title="Plain" onClose={() => {}} />);
+    expect(screen.getByRole("dialog", { name: "Plain" })).not.toHaveAttribute(
+      "aria-describedby",
+    );
+  });
 });
 
 describe("ConflictDialog", () => {

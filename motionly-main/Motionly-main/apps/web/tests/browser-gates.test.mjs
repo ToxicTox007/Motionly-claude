@@ -4,14 +4,57 @@ import test from "node:test";
 
 import {
   AXE_TAGS,
+  advisoryAxeViolations,
   blockingAxeViolations,
   blockingConsoleMessage,
   blockingRequestFailure,
   formatProblems,
 } from "./browser/support/gates.mjs";
 
-test("axe checks WCAG 2.1 A and AA and blocks only serious and critical issues", () => {
-  assert.deepEqual(AXE_TAGS, ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]);
+const SAMPLE_VIOLATIONS = [
+  {
+    id: "color-contrast",
+    impact: "serious",
+    help: "Contrast",
+    nodes: [{ target: ["#a"] }],
+  },
+  {
+    id: "region",
+    impact: "moderate",
+    help: "Landmarks",
+    nodes: [{ target: ["div"] }, { target: ["section", "p"] }],
+  },
+  { id: "minor", impact: "minor", help: "Minor", nodes: [{ target: ["p"] }] },
+];
+
+test("axe checks WCAG 2.0, 2.1 and 2.2 at levels A and AA", () => {
+  assert.deepEqual(AXE_TAGS, [
+    "wcag2a",
+    "wcag2aa",
+    "wcag21a",
+    "wcag21aa",
+    "wcag22a",
+    "wcag22aa",
+  ]);
+});
+
+test("moderate axe issues are kept for the artifact without blocking", () => {
+  assert.deepEqual(blockingAxeViolations(SAMPLE_VIOLATIONS), [
+    "color-contrast (serious): Contrast [#a]",
+  ]);
+  assert.deepEqual(advisoryAxeViolations(SAMPLE_VIOLATIONS, "/dashboard"), [
+    {
+      path: "/dashboard",
+      rule: "region",
+      impact: "moderate",
+      help: "Landmarks",
+      targets: ["div", "section p"],
+    },
+  ]);
+  assert.deepEqual(advisoryAxeViolations([], "/"), []);
+});
+
+test("axe blocks only serious and critical issues", () => {
   const violations = [
     {
       id: "color-contrast",

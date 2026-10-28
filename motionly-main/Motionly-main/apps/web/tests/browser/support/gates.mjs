@@ -1,9 +1,20 @@
 // Quality gates every browser test must pass (Task 6). Pure rules, unit
 // tested in tests/browser-gates.test.mjs; fixtures.mjs applies them to pages.
 
-/** WCAG 2.1 levels A and AA (axe rule tags). */
-export const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
+/**
+ * WCAG 2.0, 2.1 and 2.2 at levels A and AA (axe rule tags). axe-core 4.13
+ * tags no rule `wcag22a` yet; it is listed so a future rule is not missed.
+ */
+export const AXE_TAGS = [
+  "wcag2a",
+  "wcag2aa",
+  "wcag21a",
+  "wcag21aa",
+  "wcag22a",
+  "wcag22aa",
+];
 const BLOCKING_IMPACTS = new Set(["serious", "critical"]);
+const ADVISORY_IMPACTS = new Set(["moderate"]);
 
 // Requests a browser cancels itself when a page navigates away. Every engine
 // names this differently; none of them is a failure of the application.
@@ -19,6 +30,22 @@ export function blockingAxeViolations(violations) {
           .map((node) => node.target.join(" "))
           .join(", ")}]`,
     );
+}
+
+/**
+ * Moderate issues: reported in the run's artifacts so they can be fixed, but
+ * they do not fail a test.
+ */
+export function advisoryAxeViolations(violations, path) {
+  return violations
+    .filter((violation) => ADVISORY_IMPACTS.has(violation.impact))
+    .map((violation) => ({
+      path,
+      rule: violation.id,
+      impact: violation.impact,
+      help: violation.help,
+      targets: violation.nodes.map((node) => node.target.join(" ")),
+    }));
 }
 
 export function blockingConsoleMessage({ type, text }, allowed = []) {

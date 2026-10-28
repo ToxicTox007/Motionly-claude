@@ -1,8 +1,10 @@
 // Browser-suite fixtures (Task 6). Every test runs against the CPU stage
 // through the CloudFront simulator, as a viewer would, and must pass the
 // quality gates: no console errors, no uncaught page errors, no 5xx
-// responses, no failed requests, and no serious or critical WCAG 2.1 A/AA
-// accessibility violations on any page it visits.
+// responses, no failed requests, and no serious or critical WCAG 2.2 A/AA
+// accessibility violations on any page it visits. Moderate accessibility
+// issues are attached to the test as "accessibility-advisories" without
+// failing it.
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test as base } from "@playwright/test";
 import { randomBytes } from "node:crypto";
@@ -10,6 +12,7 @@ import { writeFileSync } from "node:fs";
 
 import {
   AXE_TAGS,
+  advisoryAxeViolations,
   blockingAxeViolations,
   blockingConsoleMessage,
   cancelledByNavigation,
@@ -176,6 +179,7 @@ export const test = base.extend({
         for (const issue of blockingAxeViolations(results.violations)) {
           problems.accessibility.push(`${issue} on ${path}`);
         }
+        advisories.push(...advisoryAxeViolations(results.violations, path));
         for (const violation of results.violations) {
           if (!["serious", "critical"].includes(violation.impact)) continue;
           for (const node of violation.nodes) {
@@ -193,6 +197,7 @@ export const test = base.extend({
         }
       };
       const details = [];
+      const advisories = [];
 
       await use({
         checkAccessibility,
@@ -214,6 +219,12 @@ export const test = base.extend({
         body: JSON.stringify(navigationTimings),
         contentType: "application/json",
       });
+      if (advisories.length > 0) {
+        await testInfo.attach("accessibility-advisories", {
+          body: JSON.stringify(advisories, null, 2),
+          contentType: "application/json",
+        });
+      }
       await Promise.all(pendingConsole);
       abortedRequests.push(
         ...cancelledByNavigation([...unfinished.values()], navigationTimes),
