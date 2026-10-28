@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RevisionConflictError } from "@/lib/client-api";
 
 /**
@@ -43,6 +43,13 @@ export interface ConflictHandlers {
  * Tracks the current plan/media revision for optimistic concurrency control.
  * Backward compatible — handles null revisions from older API responses.
  *
+ * The plan revision belongs to one plan of one project. It starts from
+ * `seedRevision` (the active plan's revision as loaded), so the very first
+ * edit already sends `expected_revision`; without it the API applies the
+ * write unconditionally and a concurrent edit would be silently overwritten.
+ * When the project or plan changes, tracking restarts from the new plan's
+ * seed rather than carrying the old plan's revision over.
+ *
  * @param fetchLatestRevision resolves the authoritative current plan revision
  *   from the server; used by force-save to retry against the latest revision.
  */
@@ -50,8 +57,11 @@ export function useRevisionTracking(
   projectId: string,
   planId: string | null,
   fetchLatestRevision?: () => Promise<number | null>,
+  seedRevision: number | null = null,
 ) {
-  const [planRevision, setPlanRevision] = useState<number | null>(null);
+  const scope = `${projectId}:${planId ?? ""}`;
+  const [trackedScope, setTrackedScope] = useState(scope);
+  const [planRevision, setPlanRevision] = useState<number | null>(seedRevision);
   const [mediaRevision, setMediaRevision] = useState<number | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [conflictState, setConflictState] = useState<ConflictState | null>(
@@ -59,10 +69,19 @@ export function useRevisionTracking(
   );
 
   // Keep a ref for the current revision so async callbacks always read latest
-  const planRevisionRef = useRef<number | null>(null);
+  const planRevisionRef = useRef<number | null>(seedRevision);
   // The handlers registered for the active conflict so Force Save / Discard can
   // re-apply or roll back the exact local change.
   const conflictHandlersRef = useRef<ConflictHandlers | null>(null);
+
+  // A different plan (or project) is now active: re-seed from its revision.
+  if (trackedScope !== scope) {
+    setTrackedScope(scope);
+    setPlanRevision(seedRevision);
+  }
+  useEffect(() => {
+    planRevisionRef.current = planRevision;
+  }, [planRevision]);
 
   const updateRevision = useCallback(
     (

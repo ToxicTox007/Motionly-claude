@@ -116,8 +116,15 @@ export function TimelinePanel({
   const canvasRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const { pushHistory, undo, redo, canUndo, canRedo, currentLabel } =
-    useEditorHistory();
+  const {
+    pushHistory,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    currentLabel,
+    isPending: historyPending,
+  } = useEditorHistory();
 
   const [snapMarkerMs, setSnapMarkerMs] = useState<number | null>(null);
   const [dragPreview, setDragPreview] = useState<{
@@ -1135,21 +1142,21 @@ export function TimelinePanel({
           ) : null}
           <TimelineButton
             onClick={() => {
-              if (canUndo && !saving) void undo();
+              if (canUndo && !saving && !historyPending) void undo();
             }}
             title="Undo"
             ariaLabel="Undo"
-            disabled={!canUndo || saving}
+            disabled={!canUndo || saving || historyPending}
           >
             <Undo2 className="size-3" />
           </TimelineButton>
           <TimelineButton
             onClick={() => {
-              if (canRedo && !saving) void redo();
+              if (canRedo && !saving && !historyPending) void redo();
             }}
             title="Redo"
             ariaLabel="Redo"
-            disabled={!canRedo || saving}
+            disabled={!canRedo || saving || historyPending}
           >
             <Redo2 className="size-3" />
           </TimelineButton>

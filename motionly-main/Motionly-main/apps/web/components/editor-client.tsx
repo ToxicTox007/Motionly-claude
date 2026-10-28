@@ -438,19 +438,6 @@ export function EditorClient(props: EditorClientProps) {
     };
   }, [localTranscript?.status, projectId, router, upload, workspaceId]);
 
-  // When AI generates a new plan, update locally and advance inspector
-  const handlePlanGenerated = useCallback(
-    (plan: EditPlanRecordSummary) => {
-      setLocalEditPlans((prev) => {
-        const without = prev.filter((p) => p.id !== plan.id);
-        return [...without, plan];
-      });
-      setLocalActivePlanId(plan.id);
-      setInspectorTab("captions");
-    },
-    [setInspectorTab],
-  );
-
   const fetchLatestRevision = useCallback(async (): Promise<number | null> => {
     if (!localActivePlanId) return null;
     const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
@@ -460,13 +447,14 @@ export function EditorClient(props: EditorClientProps) {
         friendlyError: "Could not read the latest plan revision.",
       },
     );
-    return (payload.plan as any)?.revision ?? null;
+    return payload.plan?.revision ?? null;
   }, [localActivePlanId, projectId, workspaceId]);
 
   const revisionTracking = useRevisionTracking(
     projectId,
     localActivePlanId,
     fetchLatestRevision,
+    activePlan?.revision ?? null,
   );
   const {
     updateRevision,
@@ -478,6 +466,20 @@ export function EditorClient(props: EditorClientProps) {
     getExpectedRevision,
   } = revisionTracking;
 
+  // When AI generates a new plan, update locally and advance inspector
+  const handlePlanGenerated = useCallback(
+    (plan: EditPlanRecordSummary) => {
+      setLocalEditPlans((prev) => {
+        const without = prev.filter((p) => p.id !== plan.id);
+        return [...without, plan];
+      });
+      setLocalActivePlanId(plan.id);
+      updateRevision(plan.revision, "plan");
+      setInspectorTab("captions");
+    },
+    [setInspectorTab, updateRevision],
+  );
+
   const handlePlanUpdated = useCallback(
     (plan: EditPlanRecordSummary) => {
       setLocalEditPlans((prev) => {
@@ -486,9 +488,7 @@ export function EditorClient(props: EditorClientProps) {
       });
       setLocalActivePlanId(plan.id);
       // Track revision from API response (backward compatible — ignores null)
-      if ((plan as any).revision != null) {
-        updateRevision((plan as any).revision, "plan");
-      }
+      updateRevision(plan.revision, "plan");
     },
     [updateRevision],
   );
@@ -752,7 +752,8 @@ export function EditorClient(props: EditorClientProps) {
   // ready-only editor entry is referenced.
   return (
     <EditorHistoryProvider
-      storageKey={`motionly:editor-history:${workspaceId}:${projectId}`}
+      storageKey={`motionly:editor-history:${workspaceId}:${projectId}:${userId}:${localActivePlanId ?? "no-plan"}`}
+      planId={localActivePlanId}
       executeAction={executeHistoryAction}
     >
       <EditorClientEditor
@@ -977,7 +978,14 @@ function EditorClientEditor(props: EditorClientEditorProps) {
   } = props;
   const router = useRouter();
   const { toast } = useToast();
-  const { undo, redo, canUndo, canRedo, pushHistory } = useEditorHistory();
+  const {
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    pushHistory,
+    isPending: historyPending,
+  } = useEditorHistory();
   const workflowStatus = useWorkflowStatus({
     projectId,
     workspaceId,
@@ -1231,13 +1239,15 @@ function EditorClientEditor(props: EditorClientEditorProps) {
   );
 
   // Editor-level undo/redo. Text fields keep their own native undo, and
-  // nothing fires behind an open dialog or mid-IME-composition. The effect
-  // event reads the latest history state, so the listener is attached once.
+  // nothing fires behind an open dialog, mid-IME-composition, or while an
+  // earlier undo/redo is still saving. The effect event reads the latest
+  // history state, so the listener is attached once.
   const onUndoRedoKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (shouldIgnoreShortcut(event)) return;
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
     if (event.key.toLowerCase() === "z") {
       event.preventDefault();
+      if (historyPending) return;
       if (event.shiftKey) {
         if (canRedo) void redo();
       } else {
@@ -1246,6 +1256,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     }
     if (event.key.toLowerCase() === "y") {
       event.preventDefault();
+      if (historyPending) return;
       if (canRedo) void redo();
     }
   });
@@ -1896,8 +1907,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             setInspectorTabWrapped(inspectorTabForCreatorTask(task.key)),
         }}
         commandBar={{
-          canUndo,
-          canRedo,
+          canUndo: canUndo && !historyPending,
+          canRedo: canRedo && !historyPending,
           onUndo: () => void undo(),
           onRedo: () => void redo(),
           onRetry: () => void workflowStatus.runCommand("retry"),

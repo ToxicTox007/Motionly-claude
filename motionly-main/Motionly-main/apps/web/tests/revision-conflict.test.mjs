@@ -30,94 +30,10 @@ test("RevisionConflictError instantiation from 409 response with properties acce
 });
 
 // ---------------------------------------------------------------------------
-// 2. useRevisionTracking initial state — null revision, no conflict
+// 2-6. useRevisionTracking (seeding, updateRevision, handleConflict,
+// clearConflict, getExpectedRevision) are behaviour-tested by rendering the
+// hook in tests/unit/use-revision-tracking.test.tsx.
 // ---------------------------------------------------------------------------
-test("useRevisionTracking initial state is null revision with no conflict", async () => {
-  const source = await readFile(
-    new URL("hooks/useRevisionTracking.ts", root),
-    "utf8",
-  );
-
-  // Initial plan revision is null
-  assert.match(source, /useState<number \| null>\(null\)/);
-  // Initial conflict state is null
-  assert.match(source, /useState<ConflictState \| null>\(\s*null,?\s*\)/);
-  // Ref starts as null
-  assert.match(source, /useRef<number \| null>\(null\)/);
-});
-
-// ---------------------------------------------------------------------------
-// 3. useRevisionTracking updateRevision — updates tracked revision
-// ---------------------------------------------------------------------------
-test("useRevisionTracking updateRevision updates tracked revision", async () => {
-  const source = await readFile(
-    new URL("hooks/useRevisionTracking.ts", root),
-    "utf8",
-  );
-
-  // updateRevision sets plan revision via state setter
-  assert.match(source, /setPlanRevision\(newRevision\)/);
-  // Also updates the ref for async reads
-  assert.match(source, /planRevisionRef\.current = newRevision/);
-  // Handles media kind
-  assert.match(source, /setMediaRevision\(newRevision\)/);
-  // Updates lastSyncedAt
-  assert.match(source, /setLastSyncedAt\(Date\.now\(\)\)/);
-  // Guards against null/undefined (old API compat)
-  assert.match(source, /if \(newRevision == null\) return/);
-});
-
-// ---------------------------------------------------------------------------
-// 4. useRevisionTracking handleConflict — sets conflict state
-// ---------------------------------------------------------------------------
-test("useRevisionTracking handleConflict sets conflict state from RevisionConflictError", async () => {
-  const source = await readFile(
-    new URL("hooks/useRevisionTracking.ts", root),
-    "utf8",
-  );
-
-  // Checks instanceof RevisionConflictError
-  assert.match(source, /error instanceof RevisionConflictError/);
-  // Sets conflict state with expected fields
-  assert.match(source, /setConflictState\(\{/);
-  assert.match(source, /expectedRevision: error\.expectedRevision/);
-  assert.match(source, /currentRevision: error\.currentRevision/);
-  assert.match(source, /conflictedAt: Date\.now\(\)/);
-  assert.match(source, /source/);
-  // Returns true when conflict handled
-  assert.match(source, /return true/);
-  // Returns false when not a conflict error
-  assert.match(source, /return false/);
-});
-
-// ---------------------------------------------------------------------------
-// 5. useRevisionTracking clearConflict — clears conflict state
-// ---------------------------------------------------------------------------
-test("useRevisionTracking clearConflict resets conflict state to null", async () => {
-  const source = await readFile(
-    new URL("hooks/useRevisionTracking.ts", root),
-    "utf8",
-  );
-
-  // clearConflict sets state to null
-  assert.match(source, /const clearConflict = useCallback\(\(\) => \{/);
-  assert.match(source, /setConflictState\(null\)/);
-});
-
-// ---------------------------------------------------------------------------
-// 6. useRevisionTracking getExpectedRevision — returns current revision or null
-// ---------------------------------------------------------------------------
-test("useRevisionTracking getExpectedRevision returns current revision or undefined", async () => {
-  const source = await readFile(
-    new URL("hooks/useRevisionTracking.ts", root),
-    "utf8",
-  );
-
-  // Reads from the ref (not state) for async safety
-  assert.match(source, /planRevisionRef\.current \?\? undefined/);
-  // Wrapped in useCallback
-  assert.match(source, /const getExpectedRevision = useCallback\(/);
-});
 
 // ---------------------------------------------------------------------------
 // 7. ConflictDialog renders correctly — shows message, two buttons
