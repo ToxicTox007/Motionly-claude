@@ -28,8 +28,10 @@ test("the raw key is shown exactly once with a copy button", async () => {
   const client = await source("app/(app)/account/api-keys/ApiKeysClient.tsx");
   // The secret lives only in component state (never re-fetched/persisted).
   assert.match(client, /useState<string \| null>\(null\)/);
-  assert.match(client, /data-testid="api-key-secret"/);
-  assert.match(client, /navigator\.clipboard\.writeText\(secret\)/);
+  // Copy, its fallback and the announcement are behaviour-tested in
+  // tests/components/copy-field.test.tsx.
+  assert.match(client, /testId="api-key-secret"/);
+  assert.match(client, /<CopyField/);
   assert.match(client, /only time the full key is shown/i);
   // The reveal is announced to assistive tech.
   assert.match(client, /aria-live="polite"/);

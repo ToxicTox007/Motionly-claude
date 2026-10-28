@@ -27,8 +27,10 @@ test("the Team page loads members + invites and gates management", async () => {
 
 test("the invite link is shown once with a copy button and announced", async () => {
   const client = await source("app/(app)/account/team/TeamClient.tsx");
-  assert.match(client, /data-testid="invite-link"/);
-  assert.match(client, /navigator\.clipboard\.writeText\(url\)/);
+  // Copy, its fallback and the announcement are behaviour-tested in
+  // tests/components/copy-field.test.tsx.
+  assert.match(client, /testId="invite-link"/);
+  assert.match(client, /<CopyField/);
   assert.match(client, /only time the link is shown/i);
   assert.match(client, /aria-live="polite"/);
   // The revealed link lives only in component state.

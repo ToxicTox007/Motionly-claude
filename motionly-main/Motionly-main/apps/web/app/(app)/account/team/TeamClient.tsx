@@ -3,17 +3,10 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  Check,
-  Copy,
-  Crown,
-  LogOut,
-  Trash2,
-  UserMinus,
-  UserPlus,
-} from "lucide-react";
+import { Crown, LogOut, Trash2, UserMinus, UserPlus } from "lucide-react";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { Button } from "@/components/button";
+import { CopyField } from "@/components/copy-field";
 import {
   canInvite,
   invitationIsPending,
@@ -47,23 +40,10 @@ function formatDate(value: string | null | undefined) {
 // A newly-minted invite link, shown exactly once with a copy button. The link
 // (which carries the raw token in its fragment) lives only in this component's
 // state; reloading the page loses it, matching the API's one-time contract.
+// The page-level status announces it; the link itself is not in a live region.
 function RevealedInvite({ url }: { url: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  };
   return (
-    <div
-      className="rounded-neu-lg bg-surface p-4 shadow-neu-raised"
-      role="status"
-      aria-live="polite"
-    >
+    <div className="rounded-neu-lg bg-surface p-4 shadow-neu-raised">
       <p className="text-sm font-semibold text-primary">
         Copy this invite link now
       </p>
@@ -72,23 +52,12 @@ function RevealedInvite({ url }: { url: string }) {
         want to add — anyone with the link can join this workspace until it is
         used or revoked.
       </p>
-      <div className="mt-3 flex items-center gap-2">
-        <code
-          className="flex-1 overflow-x-auto rounded-neu bg-surface px-3 py-2 font-mono text-xs text-foreground shadow-neu-inset"
-          data-testid="invite-link"
-        >
-          {url}
-        </code>
-        <Button
-          type="button"
-          size="sm"
-          onClick={copy}
-          aria-label="Copy invite link"
-        >
-          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-          {copied ? "Copied" : "Copy"}
-        </Button>
-      </div>
+      <CopyField
+        className="mt-3"
+        value={url}
+        label="Invite link"
+        testId="invite-link"
+      />
     </div>
   );
 }

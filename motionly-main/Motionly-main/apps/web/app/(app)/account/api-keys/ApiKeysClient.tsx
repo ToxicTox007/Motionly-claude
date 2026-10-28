@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Check, Copy, KeyRound, Trash2 } from "lucide-react";
+import { KeyRound, Trash2 } from "lucide-react";
 import { Button } from "@/components/button";
+import { CopyField } from "@/components/copy-field";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { messageFor } from "@/lib/error-messages";
 import { createApiKey, revokeApiKey, type ApiKeyView } from "./actions";
@@ -14,23 +15,13 @@ function formatDate(value: string | null) {
 
 // Shows a newly-created key's raw secret exactly once, with a copy button. The
 // secret lives only in this component's state; reloading the page loses it.
+// The reveal is announced, but the secret itself stays out of the live region.
 function RevealedSecret({ secret }: { secret: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(secret);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  };
   return (
-    <div
-      className="rounded-neu-lg bg-surface p-4 shadow-neu-raised"
-      role="status"
-      aria-live="polite"
-    >
+    <div className="rounded-neu-lg bg-surface p-4 shadow-neu-raised">
+      <p className="sr-only" role="status" aria-live="polite">
+        API key created. Copy it now; it is shown only once.
+      </p>
       <p className="text-sm font-semibold text-primary">
         Copy your new API key now
       </p>
@@ -38,23 +29,12 @@ function RevealedSecret({ secret }: { secret: string }) {
         This is the only time the full key is shown. Store it somewhere safe —
         you will not be able to see it again.
       </p>
-      <div className="mt-3 flex items-center gap-2">
-        <code
-          className="flex-1 overflow-x-auto rounded-neu bg-surface px-3 py-2 font-mono text-xs text-foreground shadow-neu-inset"
-          data-testid="api-key-secret"
-        >
-          {secret}
-        </code>
-        <Button
-          type="button"
-          size="sm"
-          onClick={copy}
-          aria-label="Copy API key"
-        >
-          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-          {copied ? "Copied" : "Copy"}
-        </Button>
-      </div>
+      <CopyField
+        className="mt-3"
+        value={secret}
+        label="API key"
+        testId="api-key-secret"
+      />
     </div>
   );
 }

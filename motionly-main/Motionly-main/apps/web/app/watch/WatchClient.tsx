@@ -4,6 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { env } from "@/lib/env";
 import { readTokenFromHash } from "@/components/editor/export-sharing.mjs";
+import {
+  PublicLinkError,
+  clearUrlFragment,
+  publicErrorMessage,
+  recallShareToken,
+  rememberShareToken,
+} from "@/lib/share-links";
+
+const INVALID_LINK = "This link is invalid, expired, or has been revoked.";
+const WATCH_TOKEN_KEY = "motionly:watch-token";
 
 type PublicExport = {
   title: string;
@@ -29,13 +39,19 @@ export function WatchClient() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      // The token lives in the fragment, read client-side only.
-      const token = readTokenFromHash(window.location.hash);
+      // The token lives in the fragment, read client-side only. It is kept
+      // for this tab (so a reload works) and removed from the address bar.
+      const hash = window.location.hash;
+      const fromHash = readTokenFromHash(hash);
+      clearUrlFragment();
+      const token =
+        fromHash ?? (hash ? null : recallShareToken(WATCH_TOKEN_KEY));
       if (!token) {
         setMessage("This link is missing its access token.");
         setLoading(false);
         return;
       }
+      if (fromHash) rememberShareToken(WATCH_TOKEN_KEY, fromHash);
       try {
         const response = await fetch(
           `${env.apiBaseUrl}/public/exports/resolve`,
@@ -48,14 +64,14 @@ export function WatchClient() {
         );
         if (!response.ok) {
           // All failures look identical, so show one neutral message.
-          throw new Error(
-            "This link is invalid, expired, or has been revoked.",
-          );
+          throw new PublicLinkError(INVALID_LINK);
         }
-        const payload = (await response.json()) as PublicExport;
+        const payload = (await response.json().catch(() => {
+          throw new PublicLinkError(INVALID_LINK);
+        })) as PublicExport;
         if (!cancelled) setData(payload);
       } catch (error) {
-        if (!cancelled) setMessage((error as Error).message);
+        if (!cancelled) setMessage(publicErrorMessage(error, INVALID_LINK));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -81,7 +97,7 @@ export function WatchClient() {
           role="alert"
           className="rounded-neu-md bg-surface p-4 text-sm font-semibold text-foreground shadow-neu-raised"
         >
-          {message ?? "This link is invalid, expired, or has been revoked."}
+          {message ?? INVALID_LINK}
         </p>
       </main>
     );

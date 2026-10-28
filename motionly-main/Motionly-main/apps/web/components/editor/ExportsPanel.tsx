@@ -4,7 +4,9 @@ import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Download, RotateCcw, Share2, Film } from "lucide-react";
 import type { ExportSummary } from "@motionly/shared";
 import { apiFetch, editorApiRequest } from "@/lib/client-api";
+import { copyText } from "@/lib/clipboard";
 import { env } from "@/lib/env";
+import { CopyField } from "../copy-field";
 import { useToast } from "../toast";
 import { Label, Select } from "./ui";
 import {
@@ -330,6 +332,7 @@ function ShareControls({
   const [allowDownload, setAllowDownload] = useState(true);
   const [links, setLinks] = useState<ExportShareLink[]>([]);
   const [busy, setBusy] = useState(false);
+  const [uncopiedUrl, setUncopiedUrl] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const response = await apiFetch(
@@ -352,6 +355,7 @@ function ShareControls({
 
   async function createLink() {
     setBusy(true);
+    setUncopiedUrl(null);
     onStatus("Creating share link…");
     try {
       const response = await apiFetch(
@@ -375,7 +379,9 @@ function ShareControls({
       // The token is returned exactly once; build the fragment URL and share it
       // now. We never store the token.
       const watchUrl = buildWatchUrl(env.appUrl, payload.token as string);
-      await shareWatchUrl(watchUrl, version, onStatus);
+      if (!(await shareWatchUrl(watchUrl, version, onStatus))) {
+        setUncopiedUrl(watchUrl);
+      }
       await refresh();
     } catch (error) {
       onStatus((error as Error).message);
@@ -454,6 +460,9 @@ function ShareControls({
           >
             Create & share link
           </button>
+          {uncopiedUrl ? (
+            <CopyField value={uncopiedUrl} label="Share link" />
+          ) : null}
           {links.length ? (
             <ul
               className="space-y-1"
@@ -496,11 +505,14 @@ function ShareControls({
   );
 }
 
+/** Shares or copies the watch link; false when neither worked, so the caller
+ * shows the link for copying by hand (never inside the status live region,
+ * since the link carries the share token). */
 async function shareWatchUrl(
   watchUrl: string,
   version: number,
   onStatus: (message: string | null) => void,
-) {
+): Promise<boolean> {
   const nav = typeof navigator !== "undefined" ? navigator : undefined;
   if (shareStrategy(nav) === "native" && nav) {
     try {
@@ -510,19 +522,15 @@ async function shareWatchUrl(
         url: watchUrl,
       });
       onStatus("Shared.");
-      return;
+      return true;
     } catch {
       // Fall through to copy if the user dismisses the native sheet.
     }
   }
-  try {
-    if (nav?.clipboard?.writeText) {
-      await nav.clipboard.writeText(watchUrl);
-      onStatus("Link copied to clipboard.");
-      return;
-    }
-  } catch {
-    // Ignore clipboard failures; surface the URL instead.
+  if ((await copyText(watchUrl)).ok) {
+    onStatus("Link copied to clipboard.");
+    return true;
   }
-  onStatus(`Share link: ${watchUrl}`);
+  onStatus("Share link created but not copied automatically. Copy it below.");
+  return false;
 }

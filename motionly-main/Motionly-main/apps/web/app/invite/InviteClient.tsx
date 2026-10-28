@@ -29,11 +29,33 @@ const INVITE_NEXT = "/invite";
 function resolveToken(): string | null {
   if (typeof window === "undefined") return null;
   const fromHash = inviteTokenFromHash(window.location.hash);
-  if (fromHash) {
-    window.sessionStorage.setItem(INVITE_TOKEN_STORAGE_KEY, fromHash);
+  try {
+    if (fromHash) {
+      window.sessionStorage.setItem(INVITE_TOKEN_STORAGE_KEY, fromHash);
+      return fromHash;
+    }
+    return window.sessionStorage.getItem(INVITE_TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage disabled: the fragment still works for this visit.
     return fromHash;
   }
-  return window.sessionStorage.getItem(INVITE_TOKEN_STORAGE_KEY);
+}
+
+// Failures that no retry can fix: the token is dead, so it is forgotten
+// (a later visit to /invite must not pick it up again) and Join is not
+// offered. A full workspace is not terminal: the owner can add seats.
+const TERMINAL_INVITE_ERRORS = new Set([
+  "invitation_not_found",
+  "invitation_already_used",
+  "invite_token_missing",
+]);
+
+function forgetInviteToken() {
+  try {
+    window.sessionStorage.removeItem(INVITE_TOKEN_STORAGE_KEY);
+  } catch {
+    // Nothing stored.
+  }
 }
 
 export function InviteClient() {
@@ -43,6 +65,10 @@ export function InviteClient() {
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const terminalError =
+    phase === "error" &&
+    errorCode !== null &&
+    TERMINAL_INVITE_ERRORS.has(errorCode);
 
   // Only async work here: check the viewer's sign-in state (and tidy the token
   // out of the address bar). setState happens in the async callback, not
@@ -74,12 +100,17 @@ export function InviteClient() {
     setErrorCode(null);
     setPhase("joining");
     startTransition(async () => {
-      const result = await acceptInvite(token);
+      const result = await acceptInvite(token).catch(() => ({
+        ok: false as const,
+        error: "invite_accept_failed",
+        signedIn: true,
+      }));
       if (!result.ok) {
         if (!result.signedIn) {
           setPhase("signed_out");
           return;
         }
+        if (TERMINAL_INVITE_ERRORS.has(result.error)) forgetInviteToken();
         setErrorCode(result.error);
         setPhase("error");
         return;
@@ -175,7 +206,9 @@ export function InviteClient() {
           </>
         ) : null}
 
-        {phase === "ready" || phase === "joining" || phase === "error" ? (
+        {phase === "ready" ||
+        phase === "joining" ||
+        (phase === "error" && !terminalError) ? (
           <button
             type="button"
             onClick={join}
@@ -186,7 +219,7 @@ export function InviteClient() {
           </button>
         ) : null}
 
-        {phase === "no_token" ? (
+        {phase === "no_token" || terminalError ? (
           <Link
             href="/dashboard"
             className="inline-flex min-h-11 items-center rounded-neu bg-surface px-4 text-sm font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"

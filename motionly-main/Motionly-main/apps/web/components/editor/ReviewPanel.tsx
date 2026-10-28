@@ -8,6 +8,8 @@ import {
 } from "lucide-react";
 import { env } from "@/lib/env";
 import { EditorApiError, editorApiRequest } from "@/lib/client-api";
+import { copyText } from "@/lib/clipboard";
+import { CopyField } from "../copy-field";
 import type { EditPlanRecordSummary } from "@motionly/shared";
 import { Button } from "../button";
 import { Input, Label, TextArea } from "./ui";
@@ -104,6 +106,9 @@ export function ReviewPanel({
     "review" | "comment" | "feedback" | "share" | ReviewStatus | null
   >(null);
   const [message, setMessage] = useState<string | null>(null);
+  // A share link the browser would not copy: shown so it can be copied by
+  // hand (it is created once; losing it would mean creating another).
+  const [uncopiedShareUrl, setUncopiedShareUrl] = useState<string | null>(null);
 
   const request = <T,>(
     path: string,
@@ -272,6 +277,7 @@ export function ReviewPanel({
     if (!review) return;
     setPending("share");
     setMessage(null);
+    setUncopiedShareUrl(null);
     try {
       const link = await request<{ url: string; expires_at: string }>(
         `/projects/${projectId}/reviews/${review.id}/share-links`,
@@ -281,10 +287,16 @@ export function ReviewPanel({
         },
       );
       const absoluteUrl = new URL(link.url, window.location.origin).toString();
-      await navigator.clipboard?.writeText(absoluteUrl);
-      setMessage(
-        `Review link copied. It expires ${new Date(link.expires_at).toLocaleString()}.`,
-      );
+      const expires = new Date(link.expires_at).toLocaleString();
+      const copied = await copyText(absoluteUrl);
+      if (copied.ok) {
+        setMessage(`Review link copied. It expires ${expires}.`);
+      } else {
+        setUncopiedShareUrl(absoluteUrl);
+        setMessage(
+          `Review link created but not copied automatically. Copy it below; it expires ${expires}.`,
+        );
+      }
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -479,8 +491,14 @@ export function ReviewPanel({
           </div>
         </>
       ) : null}
+      {uncopiedShareUrl ? (
+        <CopyField value={uncopiedShareUrl} label="Review link" />
+      ) : null}
       {message ? (
-        <p className="rounded-neu bg-surface p-2 text-xs font-semibold text-foreground shadow-neu-inset-sm">
+        <p
+          role="status"
+          className="rounded-neu bg-surface p-2 text-xs font-semibold text-foreground shadow-neu-inset-sm"
+        >
           {message}
         </p>
       ) : null}

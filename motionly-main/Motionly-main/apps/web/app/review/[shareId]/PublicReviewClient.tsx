@@ -3,6 +3,20 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Send, ThumbsDown } from "lucide-react";
 import { env } from "@/lib/env";
+import {
+  PublicLinkError,
+  clearUrlFragment,
+  publicErrorMessage,
+  readFragmentToken,
+  recallShareToken,
+  rememberShareToken,
+} from "@/lib/share-links";
+
+const INVALID_LINK =
+  "This review link is invalid, expired, or has been revoked.";
+const MISSING_TOKEN = "This review link is missing its access token.";
+const COMMENT_FAILED = "Your comment could not be added.";
+const DECISION_FAILED = "The review decision could not be recorded.";
 
 type Comment = {
   id: string;
@@ -31,6 +45,8 @@ function timecode(ms: number | null) {
 }
 
 export function PublicReviewClient({ shareId }: { shareId: string }) {
+  // The share id is a path segment of every API call: always encoded.
+  const reviewPath = `${env.apiBaseUrl}/public/reviews/${encodeURIComponent(shareId)}`;
   const [token, setToken] = useState<string | null>(null);
   const [review, setReview] = useState<PublicReview | null>(null);
   const [name, setName] = useState("");
@@ -48,37 +64,50 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
   }
 
   const resolve = async (secret: string) => {
-    const response = await fetch(
-      `${env.apiBaseUrl}/public/reviews/${shareId}/resolve`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: secret }),
-        cache: "no-store",
-      },
-    );
-    if (!response.ok)
-      throw new Error(
-        "This review link is invalid, expired, or has been revoked.",
-      );
-    const payload = (await response.json()) as PublicReview;
+    const response = await fetch(`${reviewPath}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: secret }),
+      cache: "no-store",
+    });
+    if (!response.ok) throw new PublicLinkError(INVALID_LINK);
+    const payload = (await response.json().catch(() => {
+      throw new PublicLinkError(INVALID_LINK);
+    })) as PublicReview;
     setReview(payload);
   };
 
   useEffect(() => {
+    let cancelled = false;
+    const storageKey = `motionly:review-token:${shareId}`;
     void Promise.resolve().then(async () => {
-      const secret = decodeURIComponent(window.location.hash.slice(1));
-      if (!secret) {
-        setMessage("This review link is missing its access token.");
+      // The token is read from the fragment once, kept for this tab so a
+      // reload still works, and removed from the address bar and history.
+      const fromHash = readFragmentToken(window.location.hash);
+      clearUrlFragment();
+      if (fromHash.status === "invalid") {
+        setMessage(INVALID_LINK);
         return;
       }
+      const secret =
+        fromHash.status === "ok"
+          ? fromHash.token
+          : recallShareToken(storageKey);
+      if (!secret) {
+        setMessage(MISSING_TOKEN);
+        return;
+      }
+      if (fromHash.status === "ok") rememberShareToken(storageKey, secret);
       setToken(secret);
       try {
         await resolve(secret);
       } catch (error) {
-        setMessage((error as Error).message);
+        if (!cancelled) setMessage(publicErrorMessage(error, INVALID_LINK));
       }
     });
+    return () => {
+      cancelled = true;
+    };
     // The fragment is intentionally client-only and never leaves the browser in a request URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareId]);
@@ -88,24 +117,21 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
     setPending(true);
     setMessage(null);
     try {
-      const response = await fetch(
-        `${env.apiBaseUrl}/public/reviews/${shareId}/comments`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            token,
-            body: comment.trim(),
-            author_name: name || undefined,
-            timecode_ms: attachTimestamp ? playheadMs : null,
-          }),
-        },
-      );
-      if (!response.ok) throw new Error("Your comment could not be added.");
+      const response = await fetch(`${reviewPath}/comments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token,
+          body: comment.trim(),
+          author_name: name || undefined,
+          timecode_ms: attachTimestamp ? playheadMs : null,
+        }),
+      });
+      if (!response.ok) throw new PublicLinkError(COMMENT_FAILED);
       setComment("");
       await resolve(token);
     } catch (error) {
-      setMessage((error as Error).message);
+      setMessage(publicErrorMessage(error, COMMENT_FAILED));
     } finally {
       setPending(false);
     }
@@ -116,25 +142,21 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
     setPending(true);
     setMessage(null);
     try {
-      const response = await fetch(
-        `${env.apiBaseUrl}/public/reviews/${shareId}/decision`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            token,
-            decision,
-            expected_status_revision: review.status_revision,
-            idempotency_key: `public-review-${review.id}-${review.status_revision}-${decision}`,
-            decider_name: name || undefined,
-          }),
-        },
-      );
-      if (!response.ok)
-        throw new Error("The review decision could not be recorded.");
+      const response = await fetch(`${reviewPath}/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token,
+          decision,
+          expected_status_revision: review.status_revision,
+          idempotency_key: `public-review-${review.id}-${review.status_revision}-${decision}`,
+          decider_name: name || undefined,
+        }),
+      });
+      if (!response.ok) throw new PublicLinkError(DECISION_FAILED);
       await resolve(token);
     } catch (error) {
-      setMessage((error as Error).message);
+      setMessage(publicErrorMessage(error, DECISION_FAILED));
     } finally {
       setPending(false);
     }
@@ -142,16 +164,22 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
 
   if (!review && !message) {
     return (
-      <Loader2
-        className="size-8 animate-spin text-primary"
-        aria-label="Loading review"
-      />
+      <p role="status" className="flex justify-center">
+        <Loader2
+          className="size-8 animate-spin text-primary"
+          aria-hidden="true"
+        />
+        <span className="sr-only">Loading review…</span>
+      </p>
     );
   }
 
   if (!review) {
     return (
-      <p className="rounded-neu-md bg-surface p-4 text-sm font-semibold text-foreground shadow-neu-raised">
+      <p
+        role="alert"
+        className="rounded-neu-md bg-surface p-4 text-sm font-semibold text-foreground shadow-neu-raised"
+      >
         {message}
       </p>
     );
@@ -295,7 +323,10 @@ export function PublicReviewClient({ shareId }: { shareId: string }) {
         </section>
       ) : null}
       {message ? (
-        <p className="rounded-neu-md bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset">
+        <p
+          role="alert"
+          className="rounded-neu-md bg-surface p-3 text-sm font-medium text-foreground shadow-neu-inset"
+        >
           {message}
         </p>
       ) : null}
