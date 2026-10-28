@@ -60,6 +60,7 @@ import {
   mergeCommands,
 } from "@/lib/command-registry.mjs";
 import { useFocusTrap } from "@/lib/useFocusTrap";
+import { shouldIgnoreShortcut } from "@/lib/keyboard-shortcuts";
 import { cn } from "@/lib/utils";
 
 export type PaletteGroup =
@@ -132,14 +133,23 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
 
   // Single global shortcut handler, in the capture phase so it runs before the
   // editor timeline's window keydown handler (which treats plain "k" as pause).
-  // Cmd/Ctrl+K is swallowed here and never reaches it.
+  // Cmd/Ctrl+K is swallowed here and never reaches it. It still works from a
+  // search box or over another dialog, but not inside a textarea or rich-text
+  // region, where Cmd/Ctrl+K has its own meaning (insert link).
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (isPaletteShortcut(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-        toggle();
+      if (!isPaletteShortcut(event)) return;
+      if (
+        shouldIgnoreShortcut(event, {
+          editable: "rich-text",
+          allowInDialog: true,
+        })
+      ) {
+        return;
       }
+      event.preventDefault();
+      event.stopPropagation();
+      toggle();
     };
     window.addEventListener("keydown", handler, { capture: true });
     return () =>

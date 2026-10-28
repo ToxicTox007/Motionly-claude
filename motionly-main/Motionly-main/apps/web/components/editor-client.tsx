@@ -3,6 +3,7 @@
 import React, {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useReducer,
   useRef,
@@ -24,22 +25,9 @@ import {
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  Sparkles,
-  Type,
-  Layers,
-  Music2,
-  Palette,
-  Download,
-  Film,
-  Loader2,
-  ChevronLeft,
-  History,
-  Network,
-  MessageSquare,
-  Languages,
-} from "lucide-react";
+import { Film, Loader2, ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { shouldIgnoreShortcut } from "@/lib/keyboard-shortcuts";
 import { useToast } from "./toast";
 import { LoadingPixelSkeleton } from "./editor/ui";
 import {
@@ -73,6 +61,17 @@ import {
 import { MobileNav } from "./mobile-nav";
 import { UploadPanel } from "./upload-panel";
 import { type PaletteElement } from "./editor/dnd/element-catalog";
+import {
+  editorDragAnnouncements,
+  editorDragInstructions,
+} from "./editor/dnd/announcements";
+import {
+  INSPECTOR_TABS,
+  InspectorTabList,
+  inspectorPanelId,
+  inspectorTabId,
+  type InspectorTab,
+} from "./editor/layout/InspectorTabs";
 import { PropertiesInspector } from "./editor/PropertiesInspector";
 import {
   EditorHistoryProvider,
@@ -137,18 +136,6 @@ interface EditorClientProps {
   visualStatus: VisualAnalysisStatusSummary;
   initialWorkflow: WorkflowDetail | null;
 }
-
-type InspectorTab =
-  | "ai"
-  | "captions"
-  | "broll"
-  | "audio"
-  | "look"
-  | "history"
-  | "scale"
-  | "review"
-  | "localize"
-  | "export";
 
 type PendingReviewProposal = {
   proposalId: string;
@@ -1243,29 +1230,31 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     [setInspectorTab],
   );
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      const isTyping = ["INPUT", "TEXTAREA", "SELECT"].includes(
-        target?.tagName ?? "",
-      );
-      if (isTyping) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        if (event.shiftKey) {
-          if (canRedo) void redo();
-        } else {
-          if (canUndo) void undo();
-        }
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") {
-        event.preventDefault();
+  // Editor-level undo/redo. Text fields keep their own native undo, and
+  // nothing fires behind an open dialog or mid-IME-composition. The effect
+  // event reads the latest history state, so the listener is attached once.
+  const onUndoRedoKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (shouldIgnoreShortcut(event)) return;
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+    if (event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
         if (canRedo) void redo();
+      } else {
+        if (canUndo) void undo();
       }
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canRedo, canUndo, redo, undo]);
+    if (event.key.toLowerCase() === "y") {
+      event.preventDefault();
+      if (canRedo) void redo();
+    }
+  });
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => onUndoRedoKeyDown(event);
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, []);
 
   const persistManualElements = useCallback(
     async (elements: ManualElement[]) => {
@@ -1874,6 +1863,10 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     <DndContext
       sensors={sensors}
       collisionDetection={editorCollisionDetection}
+      accessibility={{
+        announcements: editorDragAnnouncements,
+        screenReaderInstructions: editorDragInstructions,
+      }}
       onDragStart={handleDragStart}
       onDragCancel={() => setActivePaletteElement(null)}
       onDragEnd={handleDragEnd}
@@ -2129,24 +2122,6 @@ interface InspectorPanelProps {
   onReviewProposalCreated: (proposal: PendingReviewProposal) => void;
 }
 
-const INSPECTOR_TABS: Array<{
-  id: InspectorTab;
-  label: string;
-  icon: React.ElementType;
-  requiresPlan: boolean;
-}> = [
-  { id: "ai", label: "AI", icon: Sparkles, requiresPlan: false },
-  { id: "captions", label: "Text", icon: Type, requiresPlan: false },
-  { id: "broll", label: "B-roll", icon: Layers, requiresPlan: false },
-  { id: "audio", label: "Audio", icon: Music2, requiresPlan: false },
-  { id: "look", label: "Look", icon: Palette, requiresPlan: false },
-  { id: "history", label: "History", icon: History, requiresPlan: true },
-  { id: "review", label: "Review", icon: MessageSquare, requiresPlan: true },
-  { id: "scale", label: "Scale", icon: Network, requiresPlan: false },
-  { id: "localize", label: "Localize", icon: Languages, requiresPlan: false },
-  { id: "export", label: "Export", icon: Download, requiresPlan: false },
-];
-
 function InspectorPanel({
   tab,
   onTabChange,
@@ -2198,90 +2173,19 @@ function InspectorPanel({
   const activeTabMeta =
     INSPECTOR_TABS.find((item) => item.id === tab) ?? INSPECTOR_TABS[0];
 
-  function onTabKeyDown(
-    event: React.KeyboardEvent<HTMLButtonElement>,
-    currentIndex: number,
-  ) {
-    if (event.key === "Escape") {
-      event.currentTarget.blur();
-      return;
-    }
-    const direction =
-      event.key === "ArrowRight" || event.key === "ArrowDown"
-        ? 1
-        : event.key === "ArrowLeft" || event.key === "ArrowUp"
-          ? -1
-          : 0;
-    if (!direction && event.key !== "Home" && event.key !== "End") return;
-    event.preventDefault();
-    const enabledTabs = INSPECTOR_TABS.filter(
-      (item) => !(item.requiresPlan && !hasActivePlan),
-    );
-    const current = enabledTabs.findIndex(
-      (item) => item.id === INSPECTOR_TABS[currentIndex].id,
-    );
-    const next =
-      event.key === "Home"
-        ? enabledTabs[0]
-        : event.key === "End"
-          ? enabledTabs[enabledTabs.length - 1]
-          : enabledTabs[
-              (current + direction + enabledTabs.length) % enabledTabs.length
-            ];
-    onTabChange(next.id);
-    window.requestAnimationFrame(() => {
-      document.getElementById(`editor-tab-${next.id}`)?.focus();
-    });
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
-      {/* Tab strip */}
-      <div
-        className="flex shrink-0 snap-x gap-1.5 overflow-x-auto overscroll-x-contain rounded-full bg-surface px-1.5 py-2 shadow-neu-inset-sm sm:gap-2 sm:px-2"
-        role="tablist"
-        aria-label="Editor tools"
-      >
-        {INSPECTOR_TABS.map(
-          ({ id, label, icon: Icon, requiresPlan }, index) => {
-            const disabled = requiresPlan && !hasActivePlan;
-            const selected = tab === id;
-            return (
-              <button
-                id={`editor-tab-${id}`}
-                key={id}
-                role="tab"
-                type="button"
-                aria-selected={selected}
-                aria-controls={`editor-panel-${id}`}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => !disabled && onTabChange(id)}
-                onKeyDown={(event) => onTabKeyDown(event, index)}
-                disabled={disabled}
-                title={disabled ? "Generate an AI edit first" : label}
-                className={cn(
-                  "flex min-h-11 min-w-[4.6rem] shrink-0 snap-start items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 py-2 text-xs font-semibold transition-shadow duration-200 sm:min-w-20 sm:px-4 sm:text-sm",
-                  selected
-                    ? "bg-primary text-primary-foreground shadow-neu-glow"
-                    : disabled
-                      ? "cursor-not-allowed text-muted-foreground opacity-45"
-                      : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="size-4 shrink-0" />
-                <span className="sr-only">{selected ? "Selected: " : ""}</span>
-                {label}
-              </button>
-            );
-          },
-        )}
-      </div>
+      <InspectorTabList
+        tab={tab}
+        onTabChange={onTabChange}
+        hasActivePlan={hasActivePlan}
+      />
 
       {/* Tab content — scrollable */}
       <div
-        id={`editor-panel-${tab}`}
+        id={inspectorPanelId(tab)}
         role="tabpanel"
-        aria-labelledby={`editor-tab-${tab}`}
+        aria-labelledby={inspectorTabId(tab)}
         className="min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-2 sm:p-4"
       >
         <h2 className="sr-only">{activeTabMeta.label}</h2>

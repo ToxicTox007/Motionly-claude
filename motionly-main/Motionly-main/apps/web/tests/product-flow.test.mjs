@@ -21,6 +21,10 @@ test("Phase 6 uses a canonical product flow status model", async () => {
     new URL("components/editor/export-step.tsx", root),
     "utf8",
   );
+  const inspectorTabs = await readFile(
+    new URL("components/editor/layout/InspectorTabs.tsx", root),
+    "utf8",
+  );
 
   for (const stage of [
     "uploaded",
@@ -52,7 +56,8 @@ test("Phase 6 uses a canonical product flow status model", async () => {
   assert.doesNotMatch(exportStep, /publishStatusLabel|\/publish\b/);
   // Motionly does not post to social platforms: the tab that prepares
   // translated captions is not called "Publish".
-  assert.match(editor, /id: "localize", label: "Localize"/);
+  assert.match(inspectorTabs, /id: "localize", label: "Localize"/);
+  assert.doesNotMatch(inspectorTabs, /label: "Publish"/);
   assert.doesNotMatch(editor, /label: "Publish"/);
   assert.match(
     exportStep,
