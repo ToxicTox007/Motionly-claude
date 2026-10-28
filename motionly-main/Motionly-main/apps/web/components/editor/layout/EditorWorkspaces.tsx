@@ -23,13 +23,22 @@ function isDesktopWorkspace() {
   return window.matchMedia(DESKTOP_WORKSPACE_QUERY).matches;
 }
 
-function useDesktopWorkspace() {
+/** The viewport class, or null while it is unknown (on the server and
+ * during hydration). */
+function useDesktopWorkspace(): boolean | null {
   return useSyncExternalStore(
     subscribeToDesktopWorkspace,
     isDesktopWorkspace,
-    () => false,
+    () => null,
   );
 }
+
+/**
+ * Exactly one workspace tree mounts the editor panels. The server cannot know
+ * the viewport, so it (and hydration) renders a placeholder; guessing "mobile"
+ * there made desktop mount every panel twice. Mode changes keep the same tree,
+ * so panel state survives switching between Creator and Professional.
+ */
 export function EditorWorkspaces({
   mode,
   creatorFlow,
@@ -41,21 +50,25 @@ export function EditorWorkspaces({
 }) {
   const desktopWorkspace = useDesktopWorkspace();
 
+  if (desktopWorkspace === null) return <WorkspacePlaceholder />;
   if (!desktopWorkspace) {
     return (
-      <MobileWorkspace
-        key={mode}
-        mode={mode}
-        creatorFlow={creatorFlow}
-        panels={panels}
-      />
+      <MobileWorkspace mode={mode} creatorFlow={creatorFlow} panels={panels} />
     );
   }
+  return (
+    <DesktopWorkspace mode={mode} creatorFlow={creatorFlow} panels={panels} />
+  );
+}
 
-  return mode === "creator" ? (
-    <CreatorWorkspace creatorFlow={creatorFlow} panels={panels} />
-  ) : (
-    <ProfessionalWorkspace panels={panels} />
+function WorkspacePlaceholder() {
+  return (
+    <div className="flex min-h-0 flex-1 p-3" aria-busy="true">
+      <div className="min-h-[280px] flex-1 rounded-neu-xl bg-surface shadow-neu-raised motion-safe:animate-pulse" />
+      <p className="sr-only" role="status">
+        Loading editor…
+      </p>
+    </div>
   );
 }
 
@@ -69,6 +82,9 @@ function MobileWorkspace({
   panels: EditorPanels;
 }) {
   const [activeSheet, setActiveSheet] = useState<"left" | "right" | null>(null);
+  // Creator mode has no element palette, so its sheet closes on the switch
+  // (the workspace no longer remounts per mode, so this is explicit).
+  if (mode !== "professional" && activeSheet === "left") setActiveSheet(null);
   const leftTrapRef = useFocusTrap(activeSheet === "left", () =>
     setActiveSheet(null),
   );
@@ -157,23 +173,44 @@ function MobileWorkspace({
   );
 }
 
-function CreatorWorkspace({
+function DesktopWorkspace({
+  mode,
   creatorFlow,
   panels,
 }: {
+  mode: EditorMode;
   creatorFlow: CreatorFlow;
   panels: EditorPanels;
 }) {
+  const creator = mode === "creator";
   const activeTask =
     creatorFlow.tasks.find((task) => task.key === creatorFlow.activeTaskKey) ??
     creatorFlow.tasks[0];
 
+  // One tree for both modes: every panel keeps its position, so switching
+  // modes re-lays it out instead of remounting it. Creator adds the current
+  // task and drops the element palette; Professional shows the palette.
   return (
     <main
-      className="hidden min-h-0 max-w-full flex-1 gap-4 overflow-hidden p-3 lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[minmax(0,1fr)_210px]"
-      aria-label="Creator editor workspace"
-      data-editor-workspace="creator"
+      className={cn(
+        "hidden min-h-0 max-w-full flex-1 gap-4 overflow-hidden p-3 lg:grid",
+        creator
+          ? "lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[minmax(0,1fr)_210px]"
+          : "lg:grid-cols-[240px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_220px]",
+      )}
+      aria-label={
+        creator ? "Creator editor workspace" : "Professional editor workspace"
+      }
+      data-editor-workspace={mode}
     >
+      {creator ? null : (
+        <section
+          aria-labelledby="media-heading"
+          className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised"
+        >
+          {panels.leftPanel}
+        </section>
+      )}
       <section
         id="editor-preview"
         tabIndex={-1}
@@ -184,14 +221,16 @@ function CreatorWorkspace({
       </section>
       <aside
         className="flex min-h-0 flex-col gap-4"
-        aria-label="Guided editor settings"
+        aria-label={creator ? "Guided editor settings" : "Editor settings"}
       >
-        <section className="shrink-0 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised">
-          <CurrentTaskCard
-            task={activeTask}
-            onSelect={creatorFlow.onTaskSelect}
-          />
-        </section>
+        {creator ? (
+          <section className="shrink-0 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised">
+            <CurrentTaskCard
+              task={activeTask}
+              onSelect={creatorFlow.onTaskSelect}
+            />
+          </section>
+        ) : null}
         <section className="min-h-0 flex-1 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised">
           {panels.rightPanel}
         </section>
@@ -200,46 +239,10 @@ function CreatorWorkspace({
         id="editor-timeline"
         tabIndex={-1}
         aria-labelledby="timeline-heading"
-        className="col-span-2 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      >
-        {panels.bottomPanel}
-      </section>
-    </main>
-  );
-}
-
-function ProfessionalWorkspace({ panels }: { panels: EditorPanels }) {
-  return (
-    <main
-      className="hidden min-h-0 max-w-full flex-1 gap-4 overflow-hidden p-3 lg:grid lg:grid-cols-[240px_minmax(0,1fr)_360px] lg:grid-rows-[minmax(0,1fr)_220px]"
-      aria-label="Professional editor workspace"
-      data-editor-workspace="professional"
-    >
-      <section
-        aria-labelledby="media-heading"
-        className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised"
-      >
-        {panels.leftPanel}
-      </section>
-      <section
-        id="editor-preview"
-        tabIndex={-1}
-        aria-labelledby="preview-heading"
-        className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-      >
-        {panels.centerPanel}
-      </section>
-      <section
-        aria-label="Editor settings"
-        className="overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised"
-      >
-        {panels.rightPanel}
-      </section>
-      <section
-        id="editor-timeline"
-        tabIndex={-1}
-        aria-labelledby="timeline-heading"
-        className="col-span-3 overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+        className={cn(
+          "overflow-hidden rounded-neu-xl bg-surface shadow-neu-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
+          creator ? "col-span-2" : "col-span-3",
+        )}
       >
         {panels.bottomPanel}
       </section>

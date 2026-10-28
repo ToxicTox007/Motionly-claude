@@ -221,6 +221,8 @@ test("source contracts hydrate list then detail, poll with headers, and never pe
   assert.match(aiStep, /isProposalRevisionCompatible/);
   assert.match(aiStep, /onWorkflowRefresh/);
   assert.match(client, /useWorkflowStatus/);
-  assert.match(client, /workflowStatus\.runCommand\("cancel"\)/);
-  assert.match(client, /workflowStatus\.runCommand\("retry"\)/);
+  // The toolbar's commands are memoized around the hook's runCommand.
+  assert.match(client, /runWorkflowCommand = workflowStatus\.runCommand/);
+  assert.match(client, /runWorkflowCommand\("cancel"\)/);
+  assert.match(client, /runWorkflowCommand\("retry"\)/);
 });

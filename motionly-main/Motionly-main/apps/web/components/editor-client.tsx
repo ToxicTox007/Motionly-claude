@@ -43,6 +43,12 @@ import { createRebuildCoalescer } from "@/lib/coalesce-rebuild.mjs";
 import { useRevisionTracking } from "@/hooks/useRevisionTracking";
 import { useWorkflowStatus } from "@/hooks/useWorkflowStatus";
 import { useTranscriptPolling } from "@/hooks/useTranscriptPolling";
+import {
+  PlayheadStoreContext,
+  createPlayheadStore,
+  usePlayheadMs,
+  usePlayheadStore,
+} from "@/lib/playhead-store";
 import type {
   ConflictState,
   ConflictHandlers,
@@ -59,6 +65,7 @@ import {
   uploadStatusMessage,
 } from "@/lib/product-flow-status";
 import { EditorLayout } from "./editor-layout";
+import type { CreatorFlow, EditorCommandBar } from "./editor/layout/types";
 import {
   buildCreatorTasks,
   inspectorTabForCreatorTask,
@@ -153,7 +160,6 @@ type PendingReviewProposal = {
 type EditorUiState = {
   title: string;
   saveStatus: "saving" | "saved" | "error";
-  playheadMs: number;
   selectedClipId: string | null;
   inspectorTab: InspectorTab;
 };
@@ -257,7 +263,6 @@ export function EditorClient(props: EditorClientProps) {
   const [editorUi, dispatchEditorUi] = useReducer(editorUiReducer, {
     title,
     saveStatus: "saved",
-    playheadMs: 0,
     selectedClipId: null,
     inspectorTab: props.activePlanId ? "captions" : "ai",
   });
@@ -266,19 +271,18 @@ export function EditorClient(props: EditorClientProps) {
   const {
     title: localTitle,
     saveStatus,
-    playheadMs,
     selectedClipId,
     inspectorTab,
   } = editorUi;
+  // The playhead lives in its own store so playback re-renders only the
+  // timeline and preview, not the whole editor (FE-15).
+  const [playheadStore] = useState(() => createPlayheadStore(0));
   const setLocalTitle = useCallback<
     React.Dispatch<React.SetStateAction<string>>
   >((value) => dispatchEditorUi({ key: "title", value }), []);
   const setSaveStatus = useCallback<
     React.Dispatch<React.SetStateAction<"saving" | "saved" | "error">>
   >((value) => dispatchEditorUi({ key: "saveStatus", value }), []);
-  const setPlayheadMs = useCallback<
-    React.Dispatch<React.SetStateAction<number>>
-  >((value) => dispatchEditorUi({ key: "playheadMs", value }), []);
   const setSelectedClipId = useCallback<
     React.Dispatch<React.SetStateAction<string | null>>
   >((value) => dispatchEditorUi({ key: "selectedClipId", value }), []);
@@ -720,80 +724,79 @@ export function EditorClient(props: EditorClientProps) {
   // The server route renders lightweight upload/processing clients before this
   // ready-only editor entry is referenced.
   return (
-    <EditorHistoryProvider
-      storageKey={`motionly:editor-history:${workspaceId}:${projectId}:${userId}:${localActivePlanId ?? "no-plan"}`}
-      planId={localActivePlanId}
-      executeAction={executeHistoryAction}
-    >
-      <EditorClientEditor
-        {...props}
-        localEditPlans={localEditPlans}
-        localActivePlanId={localActivePlanId}
-        localCaptionTracks={localCaptionTracks}
-        localTranscript={localTranscript}
-        localBrollSlots={localBrollSlots}
-        localMusicSelection={localMusicSelection}
-        localEffectsConfig={localEffectsConfig}
-        draftCaptionTrack={draftCaptionTrack}
-        previewAudio={previewAudio}
-        previewBroll={previewBroll}
-        previewLook={previewLook}
-        previewExport={previewExport}
-        activePlan={activePlan}
-        timelineState={timelineState}
-        selectedTimelineClip={selectedTimelineClip}
-        activePreviewLook={activePreviewLook}
-        localTitle={localTitle}
-        saveStatus={saveStatus}
-        playheadMs={playheadMs}
-        selectedClipId={selectedClipId}
-        inspectorTab={inspectorTab}
-        setLocalEditPlans={setLocalEditPlans}
-        setLocalActivePlanId={setLocalActivePlanId}
-        setLocalCaptionTracks={setLocalCaptionTracks}
-        setLocalTranscript={setLocalTranscript}
-        setLocalBrollSlots={setLocalBrollSlots}
-        setLocalMusicSelection={setLocalMusicSelection}
-        setLocalEffectsConfig={setLocalEffectsConfig}
-        setDraftCaptionTrack={setDraftCaptionTrack}
-        setPreviewAudio={setPreviewAudio}
-        setPreviewBroll={setPreviewBroll}
-        setPreviewLook={setPreviewLook}
-        setPreviewExport={setPreviewExport}
-        setPlayheadMs={setPlayheadMs}
-        setSelectedClipId={setSelectedClipId}
-        setInspectorTab={setInspectorTab}
-        setLocalTitle={setLocalTitle}
-        handlePlanGenerated={handlePlanGenerated}
-        handlePlanUpdated={handlePlanUpdated}
-        handleCaptionTrackUpdated={handleCaptionTrackUpdated}
-        handleBrollSlotUpdated={handleBrollSlotUpdated}
-        handleBrollSlotsUpdated={handleBrollSlotsUpdated}
-        handleMusicSelectionUpdated={handleMusicSelectionUpdated}
-        handleEffectsConfigUpdated={handleEffectsConfigUpdated}
-        saveProjectTitle={saveProjectTitle}
-        conflictState={conflictState}
-        onConflictReload={refetchActivePlan}
-        onConflictForceSave={forceSave}
-        onConflictDismiss={dismissConflict}
-        getExpectedRevision={getExpectedRevision}
-        onConflictDetected={handleConflict}
-        planRevision={revisionTracking.planRevision}
-        pendingReviewProposal={pendingReviewProposal}
-        setPendingReviewProposal={setPendingReviewProposal}
-        onReviewProposalCreated={(proposal) => {
-          setPendingReviewProposal(proposal);
-          setInspectorTab("ai");
-        }}
-      />
-    </EditorHistoryProvider>
+    <PlayheadStoreContext.Provider value={playheadStore}>
+      <EditorHistoryProvider
+        storageKey={`motionly:editor-history:${workspaceId}:${projectId}:${userId}:${localActivePlanId ?? "no-plan"}`}
+        planId={localActivePlanId}
+        executeAction={executeHistoryAction}
+      >
+        <EditorClientEditor
+          {...props}
+          localEditPlans={localEditPlans}
+          localActivePlanId={localActivePlanId}
+          localCaptionTracks={localCaptionTracks}
+          localTranscript={localTranscript}
+          localBrollSlots={localBrollSlots}
+          localMusicSelection={localMusicSelection}
+          localEffectsConfig={localEffectsConfig}
+          draftCaptionTrack={draftCaptionTrack}
+          previewAudio={previewAudio}
+          previewBroll={previewBroll}
+          previewLook={previewLook}
+          previewExport={previewExport}
+          activePlan={activePlan}
+          timelineState={timelineState}
+          selectedTimelineClip={selectedTimelineClip}
+          activePreviewLook={activePreviewLook}
+          localTitle={localTitle}
+          saveStatus={saveStatus}
+          selectedClipId={selectedClipId}
+          inspectorTab={inspectorTab}
+          setLocalEditPlans={setLocalEditPlans}
+          setLocalActivePlanId={setLocalActivePlanId}
+          setLocalCaptionTracks={setLocalCaptionTracks}
+          setLocalTranscript={setLocalTranscript}
+          setLocalBrollSlots={setLocalBrollSlots}
+          setLocalMusicSelection={setLocalMusicSelection}
+          setLocalEffectsConfig={setLocalEffectsConfig}
+          setDraftCaptionTrack={setDraftCaptionTrack}
+          setPreviewAudio={setPreviewAudio}
+          setPreviewBroll={setPreviewBroll}
+          setPreviewLook={setPreviewLook}
+          setPreviewExport={setPreviewExport}
+          setSelectedClipId={setSelectedClipId}
+          setInspectorTab={setInspectorTab}
+          setLocalTitle={setLocalTitle}
+          handlePlanGenerated={handlePlanGenerated}
+          handlePlanUpdated={handlePlanUpdated}
+          handleCaptionTrackUpdated={handleCaptionTrackUpdated}
+          handleBrollSlotUpdated={handleBrollSlotUpdated}
+          handleBrollSlotsUpdated={handleBrollSlotsUpdated}
+          handleMusicSelectionUpdated={handleMusicSelectionUpdated}
+          handleEffectsConfigUpdated={handleEffectsConfigUpdated}
+          saveProjectTitle={saveProjectTitle}
+          conflictState={conflictState}
+          onConflictReload={refetchActivePlan}
+          onConflictForceSave={forceSave}
+          onConflictDismiss={dismissConflict}
+          getExpectedRevision={getExpectedRevision}
+          onConflictDetected={handleConflict}
+          planRevision={revisionTracking.planRevision}
+          pendingReviewProposal={pendingReviewProposal}
+          setPendingReviewProposal={setPendingReviewProposal}
+          onReviewProposalCreated={(proposal) => {
+            setPendingReviewProposal(proposal);
+            setInspectorTab("ai");
+          }}
+        />
+      </EditorHistoryProvider>
+    </PlayheadStoreContext.Provider>
   );
 }
 
 interface EditorClientEditorProps extends EditorClientProps {
   localTitle: string;
   saveStatus: "saving" | "saved" | "error";
-  playheadMs: number;
   selectedClipId: string | null;
   inspectorTab: InspectorTab;
   localEditPlans: EditPlanRecordSummary[];
@@ -842,7 +845,6 @@ interface EditorClientEditorProps extends EditorClientProps {
   setPreviewExport: React.Dispatch<
     React.SetStateAction<PreviewExportState | null>
   >;
-  setPlayheadMs: React.Dispatch<React.SetStateAction<number>>;
   setSelectedClipId: React.Dispatch<React.SetStateAction<string | null>>;
   setInspectorTab: React.Dispatch<React.SetStateAction<InspectorTab>>;
   setLocalTitle: React.Dispatch<React.SetStateAction<string>>;
@@ -908,7 +910,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     activePreviewLook,
     localTitle,
     saveStatus,
-    playheadMs,
     selectedClipId,
     inspectorTab,
     setLocalEditPlans,
@@ -923,7 +924,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     setPreviewBroll,
     setPreviewLook,
     setPreviewExport,
-    setPlayheadMs,
     setSelectedClipId,
     setInspectorTab,
     setLocalTitle,
@@ -1187,12 +1187,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     ? `${workflowStateLabel} · ${canonicalWorkflow.draft_render.progress_pct}%`
     : workflowStateLabel;
 
-  const setPlayheadMsWrapped = useCallback(
-    (ms: number | ((prev: number) => number)) => {
-      setPlayheadMs(ms);
-    },
-    [setPlayheadMs],
-  );
+  const playheadStore = usePlayheadStore();
+  const setPlayheadMsWrapped = playheadStore.set;
 
   const setSelectedClipIdWrapped = useCallback(
     (id: string | null) => {
@@ -1206,6 +1202,77 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       setInspectorTab(tab);
     },
     [setInspectorTab],
+  );
+
+  // Stable layout props, so the memoized toolbar skips editor re-renders
+  // that do not change what it shows.
+  const openExportTab = useCallback(
+    () => setInspectorTabWrapped("export"),
+    [setInspectorTabWrapped],
+  );
+  const openAiTab = useCallback(
+    () => setInspectorTabWrapped("ai"),
+    [setInspectorTabWrapped],
+  );
+  const workflowError = workflowStatus.error;
+  const runWorkflowCommand = workflowStatus.runCommand;
+  const workflowCommandPending = workflowStatus.pendingCommand !== null;
+  const creatorFlow = useMemo<CreatorFlow>(
+    () => ({
+      tasks: creatorTasks,
+      activeTaskKey: activeCreatorTask?.key ?? creatorTasks[0].key,
+      progressPct: creatorProgressPct,
+      workflowStatusLabel: canonicalWorkflow
+        ? canonicalWorkflow.delayed
+          ? `Workflow: ${workflowStateLabel} — Delayed — retrying`
+          : `Workflow: ${workflowStateLabel}`
+        : "Workflow: discovering latest run",
+      workflowStatusDetail:
+        workflowError ??
+        canonicalWorkflow?.status_detail ??
+        canonicalWorkflow?.draft_render?.error_message ??
+        jobLabel,
+      onTaskSelect: (task) =>
+        setInspectorTabWrapped(inspectorTabForCreatorTask(task.key)),
+    }),
+    [
+      activeCreatorTask?.key,
+      canonicalWorkflow,
+      creatorProgressPct,
+      creatorTasks,
+      jobLabel,
+      setInspectorTabWrapped,
+      workflowError,
+      workflowStateLabel,
+    ],
+  );
+  const commandBar = useMemo<EditorCommandBar>(
+    () => ({
+      canUndo: canUndo && !historyPending,
+      canRedo: canRedo && !historyPending,
+      onUndo: () => void undo(),
+      onRedo: () => void redo(),
+      onRetry: () => void runWorkflowCommand("retry"),
+      onCancel: () => void runWorkflowCommand("cancel"),
+      hasRetry: hasRetryableWorkflow,
+      hasCancel: hasCancelableWorkflow,
+      isPending: workflowCommandPending,
+      error: workflowError,
+      jobLabel,
+    }),
+    [
+      canRedo,
+      canUndo,
+      hasCancelableWorkflow,
+      hasRetryableWorkflow,
+      historyPending,
+      jobLabel,
+      redo,
+      runWorkflowCommand,
+      undo,
+      workflowCommandPending,
+      workflowError,
+    ],
   );
 
   // Editor-level undo/redo. Text fields keep their own native undo, and
@@ -1735,6 +1802,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         return;
       }
       const translated = event.active.rect.current.translated;
+      // Read the playhead now rather than subscribing the editor to it.
+      const playheadMs = playheadStore.get();
       let startMs = clip?.startMs ?? playheadMs;
       let endMs =
         clip?.endMs ??
@@ -1826,7 +1895,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       applyClipEffect,
       commitManualElements,
       manualElements,
-      playheadMs,
+      playheadStore,
       runAIElement,
       timelineState,
     ],
@@ -1857,38 +1926,10 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         onTitleChange={setLocalTitle}
         onTitleCommit={saveProjectTitle}
         saveStatus={elementSaving ? "saving" : saveStatus}
-        onExport={() => setInspectorTabWrapped("export")}
-        onAiEdit={() => setInspectorTabWrapped("ai")}
-        creatorFlow={{
-          tasks: creatorTasks,
-          activeTaskKey: activeCreatorTask?.key ?? creatorTasks[0].key,
-          progressPct: creatorProgressPct,
-          workflowStatusLabel: canonicalWorkflow
-            ? canonicalWorkflow.delayed
-              ? `Workflow: ${workflowStateLabel} — Delayed — retrying`
-              : `Workflow: ${workflowStateLabel}`
-            : "Workflow: discovering latest run",
-          workflowStatusDetail:
-            workflowStatus.error ??
-            canonicalWorkflow?.status_detail ??
-            canonicalWorkflow?.draft_render?.error_message ??
-            jobLabel,
-          onTaskSelect: (task) =>
-            setInspectorTabWrapped(inspectorTabForCreatorTask(task.key)),
-        }}
-        commandBar={{
-          canUndo: canUndo && !historyPending,
-          canRedo: canRedo && !historyPending,
-          onUndo: () => void undo(),
-          onRedo: () => void redo(),
-          onRetry: () => void workflowStatus.runCommand("retry"),
-          onCancel: () => void workflowStatus.runCommand("cancel"),
-          hasRetry: hasRetryableWorkflow,
-          hasCancel: hasCancelableWorkflow,
-          isPending: workflowStatus.pendingCommand !== null,
-          error: workflowStatus.error,
-          jobLabel,
-        }}
+        onExport={openExportTab}
+        onAiEdit={openAiTab}
+        creatorFlow={creatorFlow}
+        commandBar={commandBar}
       >
         {{
           leftPanel: (
@@ -1896,7 +1937,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           ),
 
           centerPanel: (
-            <VideoPreview
+            <LiveVideoPreview
               videoRef={videoRef}
               sourceUrl={mediaAssetUrls.source_video_url}
               sourceUnavailable={Boolean(panelErrors.assetUrls)}
@@ -1905,7 +1946,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               onPosterError={handlePreviewPosterError}
               sourceWidth={upload.width}
               sourceHeight={upload.height}
-              playheadMs={playheadMs}
               captionSegments={
                 activePlan?.plan.timeline?.captions?.length
                   ? activePlan.plan.timeline.captions
@@ -1990,7 +2030,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               onClipSelected={(startMs) => setPlayheadMsWrapped(startMs)}
               planRevision={planRevision}
               mediaRevision={upload.mediaRevision}
-              playheadMs={playheadMs}
               pendingReviewProposal={pendingReviewProposal}
               onReviewProposalHandled={() => setPendingReviewProposal(null)}
               onReviewProposalCreated={(proposal) => {
@@ -2001,11 +2040,9 @@ function EditorClientEditor(props: EditorClientEditorProps) {
           ),
 
           bottomPanel: (
-            <TimelinePanel
+            <LiveTimelinePanel
               state={timelineState}
               videoRef={videoRef}
-              playheadMs={playheadMs}
-              setPlayheadMs={setPlayheadMsWrapped}
               selectedClipId={selectedClipId}
               onClipSelect={(id) => {
                 setSelectedClipIdWrapped(id);
@@ -2100,7 +2137,6 @@ interface InspectorPanelProps {
   onClipSelected: (startMs: number) => void;
   planRevision?: number | null;
   mediaRevision?: number | null;
-  playheadMs: number;
   pendingReviewProposal: PendingReviewProposal | null;
   onReviewProposalHandled: () => void;
   onReviewProposalCreated: (proposal: PendingReviewProposal) => void;
@@ -2146,7 +2182,6 @@ function InspectorPanel({
   onClipSelected,
   planRevision,
   mediaRevision,
-  playheadMs,
   pendingReviewProposal,
   onReviewProposalHandled,
   onReviewProposalCreated,
@@ -2308,7 +2343,7 @@ function InspectorPanel({
               />
             )}
             {tab === "review" && (
-              <ReviewPanel
+              <LiveReviewPanel
                 projectId={projectId}
                 workspaceId={workspaceId}
                 activePlan={activePlan}
@@ -2316,7 +2351,6 @@ function InspectorPanel({
                 uploadedVideoId={upload.id}
                 sourceObjectReferenceId={upload.sourceObjectReferenceId}
                 sourceSha256={upload.verifiedSha256}
-                playheadMs={playheadMs}
                 onSeek={onClipSelected}
                 onProposalCreated={onReviewProposalCreated}
               />
@@ -2485,6 +2519,40 @@ function selectedElementInsight({
     detail: null,
     confidence: null,
   };
+}
+
+// ── Playhead subscribers ──────────────────────────────────────────────────────
+// Only these re-render as the playhead moves; the editor around them does not.
+
+function LiveVideoPreview(
+  props: Omit<React.ComponentProps<typeof VideoPreview>, "playheadMs">,
+) {
+  const playheadMs = usePlayheadMs();
+  return <VideoPreview {...props} playheadMs={playheadMs} />;
+}
+
+function LiveTimelinePanel(
+  props: Omit<
+    React.ComponentProps<typeof TimelinePanel>,
+    "playheadMs" | "setPlayheadMs"
+  >,
+) {
+  const playheadStore = usePlayheadStore();
+  const playheadMs = usePlayheadMs();
+  return (
+    <TimelinePanel
+      {...props}
+      playheadMs={playheadMs}
+      setPlayheadMs={playheadStore.set}
+    />
+  );
+}
+
+function LiveReviewPanel(
+  props: Omit<React.ComponentProps<typeof ReviewPanel>, "playheadMs">,
+) {
+  const playheadMs = usePlayheadMs();
+  return <ReviewPanel {...props} playheadMs={playheadMs} />;
 }
 
 function InspectorLoading() {

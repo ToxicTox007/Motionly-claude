@@ -34,34 +34,10 @@ test("creator mode is the default and editor mode preference persists", async ()
   assert.match(toolbar, /aria-label="Editor mode"/);
 });
 
-test("creator and professional modes expose intentionally different workspaces", async () => {
-  const workspaces = await read(
-    "components/editor/layout/EditorWorkspaces.tsx",
-  );
-  const creator = functionBody(
-    workspaces,
-    "CreatorWorkspace",
-    "ProfessionalWorkspace",
-  );
-  const professional = functionBody(
-    workspaces,
-    "ProfessionalWorkspace",
-    "MobileTab",
-  );
-
-  assert.match(creator, /data-editor-workspace="creator"/);
-  assert.match(creator, /CurrentTaskCard/);
-  assert.match(creator, /panels\.centerPanel/);
-  assert.match(creator, /panels\.rightPanel/);
-  assert.match(creator, /panels\.bottomPanel/);
-  assert.doesNotMatch(creator, /panels\.leftPanel/);
-
-  assert.match(professional, /data-editor-workspace="professional"/);
-  assert.match(professional, /panels\.leftPanel/);
-  assert.match(professional, /panels\.centerPanel/);
-  assert.match(professional, /panels\.rightPanel/);
-  assert.match(professional, /panels\.bottomPanel/);
-});
+// "creator and professional modes expose intentionally different workspaces"
+// and "only one viewport workspace mounts at a time" are behaviour-tested in
+// tests/components/editor-workspaces.test.tsx (one tree per viewport, mode
+// toggles keep panel state, creator hides the palette and shows the task).
 
 test("creator mode reduces tiny uppercase labels without weakening professional density", async () => {
   const [css, toolbar, progress, workspaces] = await Promise.all([
@@ -84,24 +60,6 @@ test("creator mode reduces tiny uppercase labels without weakening professional 
     assert.doesNotMatch(source, /text-\[(?:9|10)px\]/);
     assert.doesNotMatch(source, /\buppercase\b/);
   }
-});
-
-test("only one viewport workspace mounts at a time", async () => {
-  const workspaces = await read(
-    "components/editor/layout/EditorWorkspaces.tsx",
-  );
-  const selector = functionBody(
-    workspaces,
-    "EditorWorkspaces",
-    "MobileWorkspace",
-  );
-
-  assert.match(workspaces, /useSyncExternalStore/);
-  assert.match(workspaces, /\(min-width: 1024px\)/);
-  assert.match(selector, /if \(!desktopWorkspace\)/);
-  assert.match(selector, /return \(\s*<MobileWorkspace/);
-  assert.match(selector, /return mode === "creator"/);
-  assert.doesNotMatch(selector, /<>/);
 });
 
 test("precision keyboard workflows remain active and discoverable in both modes", async () => {
@@ -127,18 +85,15 @@ test("precision keyboard workflows remain active and discoverable in both modes"
   assert.match(toolbar, /J K L/);
   assert.match(toolbar, /Ctrl\/⌘ Z/);
 
-  const creator = functionBody(
+  // The timeline (and its shortcuts) is in both the desktop and mobile trees.
+  const desktop = functionBody(workspaces, "DesktopWorkspace", "MobileTab");
+  const mobile = functionBody(
     workspaces,
-    "CreatorWorkspace",
-    "ProfessionalWorkspace",
+    "MobileWorkspace",
+    "DesktopWorkspace",
   );
-  const professional = functionBody(
-    workspaces,
-    "ProfessionalWorkspace",
-    "MobileTab",
-  );
-  assert.match(creator, /panels\.bottomPanel/);
-  assert.match(professional, /panels\.bottomPanel/);
+  assert.match(desktop, /panels\.bottomPanel/);
+  assert.match(mobile, /panels\.bottomPanel/);
 });
 
 test("editor monoliths are decomposed behind focused module boundaries", async () => {

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type React from "react";
 import Image from "next/image";
 import Link from "next/link";
@@ -32,7 +33,9 @@ interface EditorToolbarProps {
   commandBar: EditorCommandBar;
 }
 
-export function EditorToolbar({
+/** Memoized: the editor passes stable props, so unrelated editor updates
+ * (clip selection, panel data) do not re-render the toolbar. */
+export const EditorToolbar = memo(function EditorToolbar({
   title,
   onTitleChange,
   onTitleCommit,
@@ -185,7 +188,7 @@ export function EditorToolbar({
       </div>
     </header>
   );
-}
+});
 
 function ModeButton({
   selected,
