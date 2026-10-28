@@ -3,8 +3,10 @@ import type { BillingStatusSummary } from "@motionly/shared";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
+import { ConfirmFormButton } from "@/components/confirm-form-button";
 import { LoadErrorAlert } from "@/components/load-error-alert";
 import { PixelIcon } from "@/components/pixel-icons";
+import { SubmitButton } from "@/components/submit-button";
 import { getBillingStatus, getPaymentHistory } from "@/lib/billing";
 import { getWorkspaceApiContext, canManageBilling } from "@/lib/api-auth";
 import { env } from "@/lib/env";
@@ -142,9 +144,12 @@ function BillingStatusView({
           {pastDueGraceMessage(status.subscription.past_due_grace_ends_at)}
           {isOwner && checkoutAvailable ? (
             <form action={retryRenewal} className="mt-3">
-              <Button type="submit" variant="secondary">
+              <SubmitButton
+                variant="secondary"
+                pendingLabel="Opening checkout…"
+              >
                 Retry payment
-              </Button>
+              </SubmitButton>
             </form>
           ) : null}
         </Alert>
@@ -171,12 +176,19 @@ function BillingStatusView({
               checkoutAvailable &&
               status.current_plan.key !== "free" &&
               !status.subscription.cancel_at_period_end ? (
-                <form action={cancelSubscription}>
-                  <Button type="submit" variant="secondary">
-                    <XCircle className="size-4" aria-hidden="true" />
-                    Cancel at period end
-                  </Button>
-                </form>
+                <ConfirmFormButton
+                  action={cancelSubscription}
+                  triggerLabel={
+                    <>
+                      <XCircle className="size-4" aria-hidden="true" />
+                      Cancel at period end
+                    </>
+                  }
+                  title="Cancel your subscription?"
+                  body={`${status.current_plan.name} stays active until the end of the current period; after that the workspace moves to the Free plan's limits. Exports stay available.`}
+                  confirmLabel="Cancel subscription"
+                  pendingLabel="Cancelling…"
+                />
               ) : status.subscription.cancel_at_period_end ? (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-semibold text-warning shadow-neu-inset-sm">
                   Cancels at period end
@@ -294,10 +306,13 @@ function BillingStatusView({
               checkoutAvailable ? (
                 <form action={startCheckout} className="mt-5">
                   <input type="hidden" name="plan" value={plan.key} />
-                  <Button type="submit" className="w-full">
+                  <SubmitButton
+                    className="w-full"
+                    pendingLabel="Opening checkout…"
+                  >
                     <ArrowUpRight className="size-4" aria-hidden="true" />
                     Upgrade
-                  </Button>
+                  </SubmitButton>
                 </form>
               ) : plan.key !== "free" && !isCurrent ? (
                 <Button

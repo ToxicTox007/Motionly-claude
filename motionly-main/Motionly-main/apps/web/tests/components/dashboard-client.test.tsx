@@ -81,3 +81,39 @@ describe("DashboardClient", () => {
     ).toBeGreaterThan(0);
   });
 });
+
+describe("DashboardClient delete", () => {
+  it("confirms first, deletes once and removes the card", async () => {
+    const { deleteProjectResult } =
+      await import("@/app/(app)/projects/actions");
+    const remove = vi.mocked(deleteProjectResult);
+    remove.mockClear();
+    const projects = ["p1", "p2"].map((id) => ({
+      id,
+      title: `Reel ${id}`,
+      updated_at: id === "p1" ? "2026-10-02T00:00:00Z" : "2026-10-01T00:00:00Z",
+      uploaded_videos: [],
+    }));
+    renderWithProviders(
+      <DashboardClient
+        initialProjects={projects}
+        workspaceName="Acme"
+        storage={storage}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Delete Reel p2" }),
+    );
+    expect(remove).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: "Delete project" });
+    await userEvent.dblClick(confirm);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith("p2");
+    expect(
+      await screen.findByText('"Reel p2" has been deleted.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Reel p2" }),
+    ).not.toBeInTheDocument();
+  });
+});

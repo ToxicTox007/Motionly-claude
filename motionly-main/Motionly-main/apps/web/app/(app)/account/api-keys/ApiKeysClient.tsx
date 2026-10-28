@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { Check, Copy, KeyRound, Trash2 } from "lucide-react";
 import { Button } from "@/components/button";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { messageFor } from "@/lib/error-messages";
 import { createApiKey, revokeApiKey, type ApiKeyView } from "./actions";
 
 function formatDate(value: string | null) {
@@ -71,7 +73,7 @@ export function ApiKeysClient({ initialKeys }: { initialKeys: ApiKeyView[] }) {
     startTransition(async () => {
       const result = await createApiKey(name);
       if (!result.ok) {
-        setError(result.error.replaceAll("_", " "));
+        setError(messageFor("account", result.error));
         return;
       }
       setSecret(result.secret);
@@ -80,22 +82,28 @@ export function ApiKeysClient({ initialKeys }: { initialKeys: ApiKeyView[] }) {
     });
   };
 
-  const onRevoke = (keyId: string) => {
-    setError(null);
-    startTransition(async () => {
-      const result = await revokeApiKey(keyId);
-      if (!result.ok) {
-        setError(result.error.replaceAll("_", " "));
-        return;
-      }
-      setKeys((current) =>
-        current.map((key) =>
-          key.id === keyId
-            ? { ...key, revoked_at: new Date().toISOString() }
-            : key,
-        ),
-      );
-    });
+  // Revoking is irreversible and breaks every integration using the key, so
+  // it is confirmed first; a failure is reported next to the list.
+  const [pendingRevoke, setPendingRevoke] = useState<ApiKeyView | null>(null);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const confirmRevoke = async () => {
+    if (!pendingRevoke) return;
+    const keyId = pendingRevoke.id;
+    setRevokeError(null);
+    const result = await revokeApiKey(keyId);
+    if (!result.ok) {
+      setRevokeError(messageFor("account", result.error));
+      setPendingRevoke(null);
+      return;
+    }
+    setKeys((current) =>
+      current.map((key) =>
+        key.id === keyId
+          ? { ...key, revoked_at: new Date().toISOString() }
+          : key,
+      ),
+    );
+    setPendingRevoke(null);
   };
 
   return (
@@ -204,8 +212,9 @@ export function ApiKeysClient({ initialKeys }: { initialKeys: ApiKeyView[] }) {
                             type="button"
                             variant="secondary"
                             size="sm"
-                            onClick={() => onRevoke(key.id)}
+                            onClick={() => setPendingRevoke(key)}
                             disabled={pending}
+                            aria-haspopup="dialog"
                             aria-label={`Revoke API key ${key.name}`}
                           >
                             <Trash2 className="size-4" aria-hidden="true" />
@@ -220,7 +229,25 @@ export function ApiKeysClient({ initialKeys }: { initialKeys: ApiKeyView[] }) {
             </table>
           </div>
         )}
+        {revokeError ? (
+          <p role="alert" className="mt-3 text-sm font-semibold text-danger">
+            {revokeError}
+          </p>
+        ) : null}
       </section>
+      <ConfirmDialog
+        open={pendingRevoke !== null}
+        title="Revoke API key?"
+        body={
+          pendingRevoke
+            ? `"${pendingRevoke.name}" (${pendingRevoke.prefix}…${pendingRevoke.last4}) stops working immediately for every integration that uses it. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Revoke key"
+        pendingLabel="Revoking…"
+        onCancel={() => setPendingRevoke(null)}
+        onConfirm={confirmRevoke}
+      />
     </div>
   );
 }

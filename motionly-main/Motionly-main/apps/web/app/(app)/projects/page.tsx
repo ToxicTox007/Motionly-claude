@@ -1,15 +1,17 @@
-import { Film, Pencil, PlusCircle, Trash2 } from "lucide-react";
+import { Film, Pencil, PlusCircle } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
-import { Button, ButtonLink } from "@/components/button";
+import { ButtonLink } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
 import { EmptyState } from "@/components/empty-state";
 import { LoadErrorAlert } from "@/components/load-error-alert";
+import { SubmitButton } from "@/components/submit-button";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { messageFor, searchParam } from "@/lib/error-messages";
 import { serverApiFetch } from "@/lib/server-api";
 import { cn } from "@/lib/utils";
-import { deleteProject, updateProject } from "./actions";
+import { updateProject } from "./actions";
+import { DeleteProjectButton } from "./delete-project-button";
 
 type ProjectRow = {
   id: string;
@@ -121,10 +123,14 @@ export default async function ProjectsPage({
                         <option value="failed">Failed</option>
                       </select>
                     </label>
-                    <Button type="submit" variant="secondary" className="gap-2">
+                    <SubmitButton
+                      variant="secondary"
+                      className="gap-2"
+                      pendingLabel="Saving…"
+                    >
                       <Pencil className="size-4" aria-hidden="true" />
                       Save
-                    </Button>
+                    </SubmitButton>
                   </form>
 
                   <div className="text-sm font-medium text-muted-foreground lg:text-right">
@@ -155,21 +161,10 @@ export default async function ProjectsPage({
                     >
                       Open
                     </Link>
-                    <form action={deleteProject}>
-                      <input
-                        type="hidden"
-                        name="projectId"
-                        value={project.id}
-                      />
-                      <Button
-                        type="submit"
-                        variant="secondary"
-                        className="text-danger"
-                        title="Delete project"
-                      >
-                        <Trash2 className="size-4" aria-hidden="true" />
-                      </Button>
-                    </form>
+                    <DeleteProjectButton
+                      projectId={project.id}
+                      title={project.title}
+                    />
                   </div>
                 </div>
               </article>

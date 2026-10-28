@@ -2,6 +2,8 @@
 
 import { useState, useMemo } from "react";
 import { Search, Filter, RotateCcw, Square } from "lucide-react";
+import { ConfirmFormButton } from "@/components/confirm-form-button";
+import { SubmitButton } from "@/components/submit-button";
 import { cn } from "@/lib/utils";
 
 type QueueJob = {
@@ -130,26 +132,33 @@ export function AdminJobsList({
               {["failed", "dead_letter", "canceled"].includes(job.status) ? (
                 <form action={onRetry}>
                   <input type="hidden" name="jobId" value={job.id} />
-                  <button
-                    type="submit"
-                    className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
+                  <SubmitButton
+                    variant="secondary"
+                    className="min-h-10 px-4 text-xs"
+                    pendingLabel="Retrying…"
                   >
                     <RotateCcw className="size-3.5" aria-hidden="true" />
                     Retry
-                  </button>
+                  </SubmitButton>
                 </form>
               ) : null}
               {["queued", "running"].includes(job.status) ? (
-                <form action={onCancel}>
+                <ConfirmFormButton
+                  action={onCancel}
+                  triggerClassName="min-h-10 px-4 text-xs text-danger"
+                  triggerLabel={
+                    <>
+                      <Square className="size-3.5" aria-hidden="true" />
+                      Cancel
+                    </>
+                  }
+                  title="Cancel this job?"
+                  body={`Job ${job.id} in ${job.queue_name} stops and will not run again unless it is retried.`}
+                  confirmLabel="Cancel job"
+                  pendingLabel="Cancelling…"
+                >
                   <input type="hidden" name="jobId" value={job.id} />
-                  <button
-                    type="submit"
-                    className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-danger shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
-                  >
-                    <Square className="size-3.5" aria-hidden="true" />
-                    Cancel
-                  </button>
-                </form>
+                </ConfirmFormButton>
               ) : null}
             </div>
           </div>

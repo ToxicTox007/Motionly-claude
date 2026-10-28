@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -8,17 +8,13 @@ import {
   Clock,
   AlertTriangle,
   PlusCircle,
-  Trash2,
-  ShieldAlert,
-  Loader2,
   Search,
   Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { messageFor } from "@/lib/error-messages";
 import { useToast } from "./toast";
-import { useFocusTrap } from "@/lib/useFocusTrap";
-import { Button } from "./button";
+import { ConfirmDialog } from "./confirm-dialog";
 import { LoadErrorAlert } from "./load-error-alert";
 import { deleteProjectResult } from "../app/(app)/projects/actions";
 
@@ -93,13 +89,6 @@ export function DashboardClient({
     id: string;
     title: string;
   } | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const isDeletingRef = useRef(false);
-
-  // Focus trap for delete modal
-  const focusTrapRef = useFocusTrap(Boolean(projectToDelete), () =>
-    setProjectToDelete(null),
-  );
 
   const sortedProjects = useMemo(() => {
     return [...localProjects].sort((a, b) => {
@@ -123,10 +112,10 @@ export function DashboardClient({
     setProjectToDelete(null);
   };
 
+  // Runs once per confirmation (ConfirmDialog ignores repeat clicks while it
+  // is pending); a failed delete keeps the card and says why.
   const confirmDelete = async () => {
-    if (!projectToDelete || isDeletingRef.current || deleteLoading) return;
-    isDeletingRef.current = true;
-    setDeleteLoading(true);
+    if (!projectToDelete) return;
 
     try {
       const result = await deleteProjectResult(projectToDelete.id);
@@ -162,9 +151,6 @@ export function DashboardClient({
           "Failed to delete project. Please check connection and try again.",
         variant: "error",
       });
-    } finally {
-      isDeletingRef.current = false;
-      setDeleteLoading(false);
     }
   };
 
@@ -680,78 +666,21 @@ export function DashboardClient({
         )}
       </div>
 
-      {/* Delete confirmation modal */}
-      {projectToDelete && (
-        <>
-          <button
-            type="button"
-            aria-label="Close delete confirmation overlay"
-            className="fixed inset-0 z-45 h-full w-full cursor-default bg-background/60 text-left backdrop-blur-sm"
-            onClick={handleCancelDelete}
-          />
-          <div
-            ref={focusTrapRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-dialog-title"
-            className="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg animate-scale-in"
-          >
-            {/* Warning icon */}
-            <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-neu text-warning shadow-neu-inset-sm">
-              <ShieldAlert
-                className="size-6"
-                strokeWidth={1.75}
-                aria-hidden="true"
-              />
-            </div>
-
-            <h3
-              id="delete-dialog-title"
-              className="mt-2 text-center text-xl font-bold tracking-tight text-foreground"
-            >
-              Confirm Delete
-            </h3>
-            <p className="mt-2 text-center text-sm font-medium leading-relaxed text-muted-foreground">
-              Are you sure you want to permanently delete project{" "}
-              <strong className="text-foreground">
-                &quot;{projectToDelete.title}&quot;
-              </strong>
-              ? This will remove all captions, visual analyses, and cached
-              exports. This action is irreversible.
-            </p>
-
-            <div className="mt-6 flex justify-end gap-3">
-              <button
-                type="button"
-                disabled={deleteLoading}
-                onClick={handleCancelDelete}
-                className="inline-flex items-center justify-center rounded-neu bg-surface px-4 py-2 text-xs font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={deleteLoading}
-                onClick={confirmDelete}
-                aria-busy={deleteLoading}
-                className="inline-flex items-center justify-center rounded-neu bg-danger px-4 py-2 text-xs font-semibold text-danger-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed disabled:opacity-50"
-              >
-                {deleteLoading ? (
-                  <>
-                    <Loader2
-                      className="mr-1.5 size-3.5 animate-spin"
-                      strokeWidth={1.75}
-                    />
-                    Deleting...
-                  </>
-                ) : (
-                  "Delete Project"
-                )}
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      {/* Delete confirmation (shared ConfirmDialog: focus trap, Escape, runs
+          once, cannot be dismissed mid-delete). */}
+      <ConfirmDialog
+        open={Boolean(projectToDelete)}
+        title="Delete project?"
+        body={
+          projectToDelete
+            ? `"${projectToDelete.title}" and its captions, visual analyses and cached exports will be permanently deleted. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete project"
+        pendingLabel="Deleting…"
+        onCancel={handleCancelDelete}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

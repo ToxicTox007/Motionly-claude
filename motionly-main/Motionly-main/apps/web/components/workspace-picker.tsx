@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import { Button } from "@/components/button";
+
 type WorkspaceOption = {
   id: string;
   name: string;
@@ -12,6 +15,9 @@ export function WorkspacePicker({
   workspaces: WorkspaceOption[];
   error?: string | null;
 }) {
+  // A plain POST to the route handler (it sets an httpOnly cookie), so
+  // useFormStatus does not apply: disable the button once it is submitted.
+  const [submitting, setSubmitting] = useState(false);
   return (
     <div className="mx-auto max-w-lg space-y-4 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg sm:p-8">
       <div>
@@ -36,6 +42,10 @@ export function WorkspacePicker({
         action="/app-api/workspaces/select"
         method="post"
         className="space-y-3"
+        onSubmit={(event) => {
+          if (submitting) event.preventDefault();
+          else setSubmitting(true);
+        }}
       >
         <label
           className="block text-xs font-semibold text-foreground"
@@ -59,12 +69,9 @@ export function WorkspacePicker({
             </option>
           ))}
         </select>
-        <button
-          type="submit"
-          className="min-h-11 rounded-neu bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-shadow duration-200 hover:brightness-105 active:shadow-neu-pressed"
-        >
-          Continue
-        </button>
+        <Button type="submit" disabled={submitting} aria-busy={submitting}>
+          {submitting ? "Switching…" : "Continue"}
+        </Button>
       </form>
     </div>
   );

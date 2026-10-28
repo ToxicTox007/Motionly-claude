@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
+import { SubmitButton } from "@/components/submit-button";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { messageFor, searchParam } from "@/lib/error-messages";
 import { serverApiFetch } from "@/lib/server-api";
@@ -185,9 +186,9 @@ export default async function EditorialLearningOperationsPage({
                   required
                 />
               </label>
-              <Button type="submit" variant="secondary">
+              <SubmitButton variant="secondary" pendingLabel="Rolling back…">
                 Rollback deployment
-              </Button>
+              </SubmitButton>
             </form>
           </section>
         ) : null}
@@ -253,7 +254,9 @@ export default async function EditorialLearningOperationsPage({
                           required
                         />
                       </label>
-                      <Button type="submit">Activate dataset</Button>
+                      <SubmitButton pendingLabel="Activating…">
+                        Activate dataset
+                      </SubmitButton>
                     </form>
                   ) : null}
                 </article>

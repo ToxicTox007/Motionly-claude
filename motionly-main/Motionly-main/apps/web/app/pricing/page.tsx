@@ -1,6 +1,7 @@
 import { Button, ButtonLink } from "@/components/button";
 import { Alert, Badge, Card } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
+import { SubmitButton } from "@/components/submit-button";
 import { startCheckout } from "@/app/(app)/billing/actions";
 import { getPublicPlans } from "@/lib/plans";
 import { env } from "@/lib/env";
@@ -115,9 +116,12 @@ export default async function PricingPage({
                 ) : env.billingEnabled ? (
                   <form action={startCheckout}>
                     <input type="hidden" name="plan" value={plan.key} />
-                    <Button type="submit" className="w-full">
+                    <SubmitButton
+                      className="w-full"
+                      pendingLabel="Opening checkout…"
+                    >
                       Upgrade
-                    </Button>
+                    </SubmitButton>
                   </form>
                 ) : (
                   <Button disabled className="w-full">

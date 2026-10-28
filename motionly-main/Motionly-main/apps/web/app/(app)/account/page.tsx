@@ -2,7 +2,7 @@ import { Briefcase, KeyRound, Mail, UserRound } from "lucide-react";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { EditorialLearningSettings } from "@/components/editorial-learning-settings";
-import { Button } from "@/components/button";
+import { SubmitButton } from "@/components/submit-button";
 import { Alert } from "@/components/brutal-ui";
 import { getActiveMemberships, getSessionSnapshot } from "@/lib/api-auth";
 import { env } from "@/lib/env";
@@ -142,7 +142,7 @@ export default async function AccountPage({
                 className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
               />
             </label>
-            <Button type="submit">Save profile</Button>
+            <SubmitButton pendingLabel="Saving…">Save profile</SubmitButton>
           </form>
 
           <aside className="space-y-5">
@@ -163,9 +163,13 @@ export default async function AccountPage({
               <p className="mt-2 text-sm font-medium text-muted-foreground">
                 Log out on this browser before switching accounts.
               </p>
-              <Button type="submit" variant="secondary" className="mt-4 w-full">
+              <SubmitButton
+                variant="secondary"
+                className="mt-4 w-full"
+                pendingLabel="Logging out…"
+              >
                 Log out
-              </Button>
+              </SubmitButton>
             </LogoutForm>
           </aside>
         </div>
@@ -228,9 +232,9 @@ export default async function AccountPage({
             not containing your email name. Changing it signs out every other
             session.
           </p>
-          <Button type="submit" variant="secondary">
+          <SubmitButton variant="secondary" pendingLabel="Updating…">
             Update password
-          </Button>
+          </SubmitButton>
         </form>
 
         <EditorialLearningSettings workspaceId={workspaceId} />

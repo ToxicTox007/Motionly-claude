@@ -81,15 +81,6 @@ export async function updateProject(formData: FormData) {
   redirect("/projects?updated=1");
 }
 
-export async function deleteProject(formData: FormData) {
-  const projectId = String(formData.get("projectId") ?? "").trim();
-  if (!projectId) redirect("/projects?error=missing_project");
-
-  const result = await deleteProjectResult(projectId);
-  if (!result.ok) redirect(`/projects?error=${result.error}`);
-  redirect("/projects?deleted=1");
-}
-
 export type DeleteProjectResult = { ok: true } | { ok: false; error: string };
 
 /**

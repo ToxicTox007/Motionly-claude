@@ -11,6 +11,8 @@ import type { ComponentType } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
 import { ButtonLink } from "@/components/button";
+import { ConfirmFormButton } from "@/components/confirm-form-button";
+import { SubmitButton } from "@/components/submit-button";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { messageFor, noticeFor, searchParam } from "@/lib/error-messages";
 import { serverApiFetch } from "@/lib/server-api";
@@ -331,9 +333,22 @@ export default async function LaunchOpsPage({
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-base font-bold">Queues</h2>
           <div className="flex items-center gap-3">
-            <form
+            <ConfirmFormButton
               action={deadLetterStuckJobs}
-              className="flex items-center gap-2"
+              formClassName="flex items-center gap-2"
+              triggerVariant="secondary"
+              triggerClassName="min-h-10 px-4 text-xs text-danger"
+              triggerLabel={
+                <>
+                  <AlertTriangle className="size-3.5" aria-hidden="true" />
+                  Dead-letter stuck jobs
+                </>
+              }
+              title="Dead-letter stuck jobs?"
+              body="Every job stuck longer than the chosen time, in every queue, is moved to the dead-letter state and stops retrying. Jobs can be retried from the list afterwards."
+              confirmLabel="Dead-letter jobs"
+              pendingLabel="Moving jobs…"
+              typedConfirmation="DEAD-LETTER"
             >
               <label
                 htmlFor="dead-letter-timeout"
@@ -350,14 +365,7 @@ export default async function LaunchOpsPage({
                 defaultValue={1800}
                 className="min-h-10 w-24 rounded-neu border border-control bg-surface px-3 text-xs font-medium tabular-nums text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
               />
-              <button
-                type="submit"
-                className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-danger shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
-              >
-                <AlertTriangle className="size-3.5" aria-hidden="true" />
-                Dead-letter stuck jobs
-              </button>
-            </form>
+            </ConfirmFormButton>
             <ButtonLink href="/feedback" variant="secondary">
               Send feedback
             </ButtonLink>
@@ -462,6 +470,11 @@ export default async function LaunchOpsPage({
                     jobId={render.id}
                     label="Cancel"
                     icon={Square}
+                    confirm={{
+                      title: "Cancel this render?",
+                      body: `Render ${render.id} stops and its partial output is discarded. The creator has to start the export again.`,
+                      confirmLabel: "Cancel render",
+                    }}
                   />
                 ) : null}
               </div>
@@ -590,22 +603,46 @@ function ActionForm({
   jobId,
   label,
   icon: Icon,
+  confirm,
 }: {
   action: (formData: FormData) => Promise<void>;
   jobId: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
+  /** Irreversible actions (cancel) ask first. */
+  confirm?: { title: string; body: string; confirmLabel: string };
 }) {
+  const content = (
+    <>
+      <Icon className="size-3.5" aria-hidden="true" />
+      {label}
+    </>
+  );
+  if (confirm) {
+    return (
+      <ConfirmFormButton
+        action={action}
+        triggerLabel={content}
+        triggerClassName="min-h-10 px-4 text-xs"
+        title={confirm.title}
+        body={confirm.body}
+        confirmLabel={confirm.confirmLabel}
+        pendingLabel="Working…"
+      >
+        <input type="hidden" name="jobId" value={jobId} />
+      </ConfirmFormButton>
+    );
+  }
   return (
     <form action={action}>
       <input type="hidden" name="jobId" value={jobId} />
-      <button
-        type="submit"
-        className="inline-flex min-h-10 items-center gap-2 rounded-neu bg-surface px-4 text-xs font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
+      <SubmitButton
+        variant="secondary"
+        className="min-h-10 px-4 text-xs"
+        pendingLabel="Working…"
       >
-        <Icon className="size-3.5" aria-hidden="true" />
-        {label}
-      </button>
+        {content}
+      </SubmitButton>
     </form>
   );
 }

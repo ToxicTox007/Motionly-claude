@@ -31,23 +31,19 @@ test("DashboardClient.tsx implements search, sort, and onboarding correctly", as
   assert.doesNotMatch(source, /publish directly|Export & Post/i);
 });
 
-test("DashboardClient.tsx implements secure pixel delete confirmation dialog", async () => {
+test("DashboardClient.tsx confirms deletes through the shared ConfirmDialog", async () => {
   const source = await readFile(
     new URL("components/DashboardClient.tsx", root),
     "utf8",
   );
 
-  // Verify focus trap hook import and usage
-  assert.match(source, /import.*useFocusTrap.*from.*@\/lib\/useFocusTrap/);
-  assert.match(source, /const focusTrapRef = useFocusTrap/);
-
-  // Verify delete action and double submit protection
+  // The hand-rolled dialog (its own backdrop button, trap and double-submit
+  // refs) is replaced by the shared ConfirmDialog, whose focus trap, Escape,
+  // run-once and no-dismiss-while-pending behaviour is tested in
+  // tests/components/confirm-dialog.test.tsx and dashboard-client.test.tsx.
+  assert.match(source, /import \{ ConfirmDialog \} from "\.\/confirm-dialog"/);
+  assert.match(source, /<ConfirmDialog/);
+  assert.match(source, /onConfirm=\{confirmDelete\}/);
   assert.match(source, /const confirmDelete = async \(\) =>/);
-  assert.match(source, /isDeletingRef\.current/);
-  assert.match(source, /deleteLoading/);
-
-  // Verify ARIA role dialog attributes
-  assert.match(source, /role="dialog"/);
-  assert.match(source, /aria-modal="true"/);
-  assert.match(source, /aria-labelledby="delete-dialog-title"/);
+  assert.doesNotMatch(source, /Close delete confirmation overlay/);
 });

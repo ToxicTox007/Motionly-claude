@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
+import { ConfirmFormButton } from "@/components/confirm-form-button";
+import { SubmitButton } from "@/components/submit-button";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { messageFor, noticeFor, searchParam } from "@/lib/error-messages";
@@ -142,7 +144,28 @@ export default async function AdminUsersPage({
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <ResetLinkPanel email={user.email} />
-                    <form action={setUserBan}>
+                    <ConfirmFormButton
+                      action={setUserBan}
+                      triggerClassName={
+                        user.banned
+                          ? "min-h-10 px-4 text-xs"
+                          : "min-h-10 px-4 text-xs text-danger"
+                      }
+                      triggerLabel={user.banned ? "Unban" : "Ban"}
+                      triggerAriaLabel={`${user.banned ? "Unban" : "Ban"} ${user.email}`}
+                      title={
+                        user.banned
+                          ? "Unban this account?"
+                          : "Ban this account?"
+                      }
+                      body={
+                        user.banned
+                          ? `${user.email} will be able to sign in again.`
+                          : `${user.email} is signed out everywhere and cannot sign in until unbanned. Their workspaces and projects are kept.`
+                      }
+                      confirmLabel={user.banned ? "Unban" : "Ban account"}
+                      pendingLabel={user.banned ? "Unbanning…" : "Banning…"}
+                    >
                       <input type="hidden" name="userId" value={user.id} />
                       <input type="hidden" name="email" value={user.email} />
                       <input
@@ -150,13 +173,7 @@ export default async function AdminUsersPage({
                         name="banned"
                         value={user.banned ? "false" : "true"}
                       />
-                      <button
-                        type="submit"
-                        className="min-h-10 rounded-neu bg-surface px-4 text-xs font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
-                      >
-                        {user.banned ? "Unban" : "Ban"}
-                      </button>
-                    </form>
+                    </ConfirmFormButton>
                   </div>
                 </div>
               ))
@@ -199,12 +216,13 @@ export default async function AdminUsersPage({
                   />
                   <form action={dismissResetRequest}>
                     <input type="hidden" name="requestId" value={request.id} />
-                    <button
-                      type="submit"
-                      className="min-h-10 rounded-neu bg-surface px-4 text-xs font-semibold text-foreground shadow-neu-raised transition-all duration-200 hover:shadow-neu-raised-lg active:shadow-neu-pressed"
+                    <SubmitButton
+                      variant="secondary"
+                      className="min-h-10 px-4 text-xs"
+                      pendingLabel="Dismissing…"
                     >
                       Dismiss
-                    </button>
+                    </SubmitButton>
                   </form>
                 </div>
               </div>

@@ -1,4 +1,4 @@
-import { Button } from "@/components/button";
+import { SubmitButton } from "@/components/submit-button";
 import { Alert, Select, Textarea } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { submitFeedback } from "./actions";
@@ -62,7 +62,7 @@ export default async function FeedbackPage({
             placeholder="Tell us what happened, what you expected, and the project URL if relevant."
           />
         </label>
-        <Button type="submit">Send feedback</Button>
+        <SubmitButton pendingLabel="Sending…">Send feedback</SubmitButton>
       </form>
     </main>
   );
