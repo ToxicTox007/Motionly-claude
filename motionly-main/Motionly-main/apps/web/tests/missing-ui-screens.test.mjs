@@ -22,9 +22,10 @@ test("lib/billing reads payment history from GET /billing/history", async () => 
 
 test("the billing page shows owner-only payment history", async () => {
   const page = await source("app/(app)/billing/page.tsx");
-  // History is fetched only for the owner and passed to the client table.
+  // History is fetched only for the owner (in parallel with the status) and
+  // passed to the client table.
   assert.match(page, /getPaymentHistory/);
-  assert.match(page, /isOwner \? await getPaymentHistory\(\)/);
+  assert.match(page, /isOwner \? getPaymentHistory\(\)/);
   assert.match(page, /<PaymentHistory/);
   assert.match(page, /isOwner \? \(\s*<PaymentHistory/);
 });

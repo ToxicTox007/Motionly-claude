@@ -64,4 +64,8 @@ export const env = {
   get skipAuthMiddleware(): boolean {
     return !inBrowser() && getServerConfig().skipAuthMiddleware;
   },
+  /** Server only: extra origins a checkout redirect may go to. */
+  get billingCheckoutOrigins(): string[] {
+    return getServerConfig().billingCheckoutOrigins;
+  },
 };

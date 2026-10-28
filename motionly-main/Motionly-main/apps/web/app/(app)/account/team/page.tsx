@@ -96,15 +96,19 @@ export default async function TeamPage() {
     : [];
 
   const status = await getBillingStatus();
-  const seatLimit = status.entitlements.seats;
+  // Unknown plan: the seat limit is unknown too (never a fabricated Free one).
+  const seatLimit = status ? status.entitlements.seats : null;
   const pending = invitations.filter(
     (invite) => !invite.revoked_at && !invite.accepted_at,
   ).length;
-  const usage = seatUsage({
-    activeMembers: members.length,
-    pendingInvites: pending,
-    limit: seatLimit,
-  });
+  const usage =
+    seatLimit === null
+      ? null
+      : seatUsage({
+          activeMembers: members.length,
+          pendingInvites: pending,
+          limit: seatLimit,
+        });
 
   return (
     <AppShell title="Team">
@@ -120,8 +124,8 @@ export default async function TeamPage() {
           viewerRole={role}
           members={members}
           invitations={invitations}
-          seatUsed={usage.used}
-          seatLimit={usage.limit}
+          seatUsed={usage?.used ?? members.length + pending}
+          seatLimit={usage?.limit ?? null}
         />
       </div>
     </AppShell>

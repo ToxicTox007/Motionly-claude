@@ -1,187 +1,34 @@
 import type { BillingStatusSummary } from "@motionly/shared";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
-import { env } from "@/lib/env";
+import { serverApiFetch } from "@/lib/server-api";
 
-// Offline degradation only. Real plan prices (INR paise) come from the API,
-// which reads apps/api/app/config/plans.json — the single source of truth. This
-// fallback deliberately carries price_paise: 0 so prices are never duplicated
-// here; the UI shows the live catalogue whenever the API is reachable.
-const unavailableWorkspaceId = "00000000-0000-0000-0000-000000000000";
+// Real plan prices (INR paise) and the workspace's subscription come from the
+// API, which reads apps/api/app/config/plans.json — the single source of truth.
+// When the API cannot answer, the status is *unknown*: callers show "billing
+// status unavailable" and hide every plan action. There is deliberately no
+// hand-written fallback plan list — a fabricated "Free" status would show a
+// paying owner an Upgrade button for the plan they already pay for.
 
-export const fallbackBillingStatus: BillingStatusSummary = {
-  subscription: {
-    workspace_id: unavailableWorkspaceId,
-    plan: "free",
-    status: "none",
-    cancel_at_period_end: false,
-    payment_issue: false,
-    updated_at: new Date(0).toISOString(),
-  },
-  current_plan: {
-    key: "free",
-    name: "Free",
-    price_paise: 0,
-    currency: "INR",
-    interval: "month",
-    entitlements: {
-      monthly_renders: 3,
-      watermark: true,
-      max_resolution: "720p",
-      broll: false,
-      priority_queue: false,
-      premium_effects: false,
-      seats: 1,
-      brand_kits: false,
-      bulk_uploads: false,
-      api_access: false,
-    },
-    features: [
-      "3 renders/month",
-      "Watermarked exports",
-      "720p exports",
-      "No B-roll",
-    ],
-  },
-  plans: [
-    {
-      key: "free",
-      name: "Free",
-      price_paise: 0,
-      currency: "INR",
-      interval: "month",
-      entitlements: {
-        monthly_renders: 3,
-        watermark: true,
-        max_resolution: "720p",
-        broll: false,
-        priority_queue: false,
-        premium_effects: false,
-        seats: 1,
-        brand_kits: false,
-        bulk_uploads: false,
-        api_access: false,
-      },
-      features: [
-        "3 renders/month",
-        "Watermarked exports",
-        "720p exports",
-        "No B-roll",
-      ],
-    },
-    {
-      key: "creator",
-      name: "Creator",
-      price_paise: 0,
-      currency: "INR",
-      interval: "month",
-      entitlements: {
-        monthly_renders: 30,
-        watermark: false,
-        max_resolution: "1080p",
-        broll: true,
-        priority_queue: false,
-        premium_effects: false,
-        seats: 1,
-        brand_kits: false,
-        bulk_uploads: false,
-        api_access: false,
-      },
-      features: ["30 renders/month", "No watermark", "1080p exports", "B-roll"],
-    },
-    {
-      key: "pro",
-      name: "Pro",
-      price_paise: 0,
-      currency: "INR",
-      interval: "month",
-      entitlements: {
-        monthly_renders: 100,
-        watermark: false,
-        max_resolution: "1080p",
-        broll: true,
-        priority_queue: true,
-        premium_effects: true,
-        seats: 1,
-        brand_kits: false,
-        bulk_uploads: false,
-        api_access: false,
-      },
-      features: [
-        "100 renders/month",
-        "Priority queue",
-        "Premium effects",
-        "B-roll",
-      ],
-    },
-    {
-      key: "agency",
-      name: "Agency",
-      price_paise: 0,
-      currency: "INR",
-      interval: "month",
-      entitlements: {
-        monthly_renders: 250,
-        watermark: false,
-        max_resolution: "4k",
-        broll: true,
-        priority_queue: true,
-        premium_effects: true,
-        seats: 5,
-        brand_kits: true,
-        bulk_uploads: true,
-        api_access: true,
-      },
-      features: [
-        "5 seats",
-        "4K exports",
-        "Brand kits",
-        "Bulk uploads",
-        "API access",
-      ],
-    },
-  ],
-  usage: {
-    workspace_id: unavailableWorkspaceId,
-    period_start: new Date(0).toISOString(),
-    period_end: new Date(0).toISOString(),
-    renders_used: 0,
-    renders_limit: 3,
-    remaining_renders: 3,
-    percent_used: 0,
-  },
-  can_render: true,
-  entitlements: {
-    monthly_renders: 3,
-    watermark: true,
-    max_resolution: "720p",
-    broll: false,
-    priority_queue: false,
-    premium_effects: false,
-    seats: 1,
-    brand_kits: false,
-    bulk_uploads: false,
-    api_access: false,
-  },
-};
+function isBillingStatus(value: unknown): value is BillingStatusSummary {
+  if (!value || typeof value !== "object") return false;
+  const status = value as Partial<BillingStatusSummary>;
+  return Boolean(
+    status.current_plan &&
+    status.subscription &&
+    status.entitlements &&
+    status.usage &&
+    Array.isArray(status.plans),
+  );
+}
 
-export async function getBillingStatus(): Promise<BillingStatusSummary> {
+/** The acting workspace's billing status, or null when it is unknown. */
+export async function getBillingStatus(): Promise<BillingStatusSummary | null> {
   const context = await getWorkspaceApiContext();
-  if (!context) {
-    return fallbackBillingStatus;
-  }
-
-  try {
-    const response = await fetch(`${env.apiBaseUrl}/billing/status`, {
-      headers: context.headers,
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      return fallbackBillingStatus;
-    }
-    return (await response.json()) as BillingStatusSummary;
-  } catch {
-    return fallbackBillingStatus;
-  }
+  if (!context) return null;
+  const result = await serverApiFetch<unknown>("/billing/status", {
+    headers: context.headers,
+  });
+  return result.ok && isBillingStatus(result.data) ? result.data : null;
 }
 
 // A single in-app receipt as the billing history table and receipt view render
@@ -201,29 +48,21 @@ export type PaymentReceiptSummary = {
   demo_notice?: string;
 };
 
-// Payment history for the acting workspace, read from the API's receipts store.
-// Returns an empty list on any failure so the billing page still renders (the
-// owner just sees "no payments yet"); the history surface is otherwise
-// owner-gated by the page.
-export async function getPaymentHistory(): Promise<PaymentReceiptSummary[]> {
+/**
+ * Payment history for the acting workspace, read from the API's receipts
+ * store, or null when it could not be loaded (the table then says so rather
+ * than claiming "no payments yet"). The page only asks for it as the owner.
+ */
+export async function getPaymentHistory(): Promise<
+  PaymentReceiptSummary[] | null
+> {
   const context = await getWorkspaceApiContext();
-  if (!context) {
-    return [];
-  }
-
-  try {
-    const response = await fetch(`${env.apiBaseUrl}/billing/history`, {
-      headers: context.headers,
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      return [];
-    }
-    const body = (await response.json()) as {
-      receipts?: PaymentReceiptSummary[];
-    };
-    return body.receipts ?? [];
-  } catch {
-    return [];
-  }
+  if (!context) return null;
+  const result = await serverApiFetch<{ receipts?: PaymentReceiptSummary[] }>(
+    "/billing/history",
+    { headers: context.headers },
+  );
+  if (!result.ok) return null;
+  const body = result.data ?? {};
+  return Array.isArray(body.receipts) ? (body.receipts ?? []) : null;
 }

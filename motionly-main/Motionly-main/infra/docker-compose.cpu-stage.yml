@@ -101,7 +101,9 @@ services:
       # Billing runs through the demo payment gateway (demo-billing profile).
       BILLING_ENABLED: "true"
       MOCK_GATEWAY_BASE_URL: http://payment-gateway:8010
-      MOCK_GATEWAY_PUBLIC_BASE_URL: https://localhost
+      # Checkout pages live at <public origin>/pay/checkout/ (the edge routes
+      # /pay/* to the gateway); the web app only follows checkout URLs there.
+      MOCK_GATEWAY_PUBLIC_BASE_URL: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for the CPU stage}
       MERCHANT_API_KEY_FILE: /run/secrets/merchant_api_key
       MOCK_GATEWAY_WEBHOOK_SECRET_FILE: /run/secrets/mock_gateway_webhook_secret
     secrets: [merchant_api_key, mock_gateway_webhook_secret]

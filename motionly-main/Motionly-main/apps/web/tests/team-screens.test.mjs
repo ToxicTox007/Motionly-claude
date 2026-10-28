@@ -65,7 +65,7 @@ test("the upgrade prompt links owners to billing; admins are told to ask", async
   const client = await source("app/(app)/account/team/TeamClient.tsx");
   assert.match(client, /upgradePrompt\(viewerRole\)/);
   assert.match(client, /prompt\.actionHref/);
-  assert.match(client, /usage\.atLimit/);
+  assert.match(client, /usage\?\.atLimit/);
 });
 
 test("server actions enforce owner/admin and only reveal the token once", async () => {

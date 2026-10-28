@@ -138,6 +138,10 @@ export function parseServerConfig(environment) {
     "SKIP_AUTH_MIDDLEWARE",
     value(environment, "SKIP_AUTH_MIDDLEWARE"),
   );
+  const billingCheckoutOrigins = parseOriginList(
+    "BILLING_CHECKOUT_ORIGINS",
+    value(environment, "BILLING_CHECKOUT_ORIGINS"),
+  );
 
   if (skipAuthMiddleware && !AUTH_BYPASS_DEPLOYMENTS.has(deployment)) {
     throw new Error(
@@ -167,7 +171,25 @@ export function parseServerConfig(environment) {
     billingEnabled,
     billingMode,
     skipAuthMiddleware,
+    billingCheckoutOrigins,
   };
+}
+
+/**
+ * Comma-separated http(s) origins, e.g. an external payment gateway's checkout
+ * host. Server only: never part of publicConfig(). Unset means none.
+ */
+export function parseOriginList(name, raw) {
+  if (raw === undefined || raw.trim() === "") return [];
+  return [
+    ...new Set(
+      raw
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => origin(name, item)),
+    ),
+  ];
 }
 
 /** The only configuration the browser receives. */

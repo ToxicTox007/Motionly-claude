@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
+import { LoadErrorAlert } from "@/components/load-error-alert";
 import { getBillingStatus } from "@/lib/billing";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { canManageWorkspace } from "@/lib/workspace-roles.mjs";
@@ -29,7 +30,8 @@ export default async function ApiKeysPage() {
   // Owners and admins only; members may not manage API keys (Task 19/24).
   const canManage = context ? canManageWorkspace(context.role) : true;
   const status = await getBillingStatus();
-  const hasApiAccess = status.entitlements.api_access;
+  const planKnown = status !== null;
+  const hasApiAccess = status?.entitlements.api_access ?? false;
 
   return (
     <AppShell title="API Keys">
@@ -38,6 +40,12 @@ export default async function ApiKeysPage() {
           <Alert tone="info" title="Owner or admin only">
             Only workspace owners and admins can manage API keys.
           </Alert>
+        ) : !planKnown ? (
+          // Unknown plan: neither claim the feature is locked nor unlock it.
+          <LoadErrorAlert
+            title="API key access is unavailable"
+            body="Motionly could not load this workspace's plan, so it cannot tell whether API keys are included. Existing keys keep working; try again in a moment."
+          />
         ) : !hasApiAccess ? (
           <Alert tone="warning" title="API access is an Agency-plan feature">
             Upgrade to the Agency plan to create API keys and automate Motionly.{" "}

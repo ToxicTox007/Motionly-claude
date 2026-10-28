@@ -171,7 +171,8 @@ export function TeamClient({
   members: TeamMember[];
   invitations: Invitation[];
   seatUsed: number;
-  seatLimit: number;
+  /** null when the plan (and so the seat limit) could not be loaded. */
+  seatLimit: number | null;
 }) {
   const [memberList, setMemberList] = useState(members);
   const router = useRouter();
@@ -193,11 +194,15 @@ export function TeamClient({
   } | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const usage = seatUsage({
-    activeMembers: memberList.length,
-    pendingInvites: inviteList.length,
-    limit: seatLimit,
-  });
+  // An unknown limit never enables invites (the API enforces seats either way).
+  const usage =
+    seatLimit === null
+      ? null
+      : seatUsage({
+          activeMembers: memberList.length,
+          pendingInvites: inviteList.length,
+          limit: seatLimit,
+        });
   const inviteEnabled = canInvite(viewerRole, usage);
   const prompt = upgradePrompt(viewerRole);
 
@@ -351,10 +356,11 @@ export function TeamClient({
           className="mt-1 text-sm font-medium text-muted-foreground"
           data-testid="seat-usage"
         >
-          {usage.used} of {usage.limit} seats in use (members plus pending
-          invites).
+          {usage
+            ? `${usage.used} of ${usage.limit} seats in use (members plus pending invites).`
+            : "Seat usage is unavailable right now because the workspace plan could not be loaded. Invites are paused until it can; refresh to try again."}
         </p>
-        {usage.atLimit && canManage ? (
+        {usage?.atLimit && canManage ? (
           <div className="mt-3 rounded-neu-md bg-surface p-3 shadow-neu-inset-sm">
             <p className="text-sm font-semibold text-foreground">
               {prompt.message}
@@ -428,7 +434,7 @@ export function TeamClient({
               {pending ? "Creating…" : "Create invite link"}
             </Button>
           </div>
-          {!inviteEnabled && usage.atLimit ? (
+          {!inviteEnabled && usage?.atLimit ? (
             <p className="mt-2 text-xs font-semibold text-muted-foreground">
               No seats left — free one up or upgrade to invite more teammates.
             </p>

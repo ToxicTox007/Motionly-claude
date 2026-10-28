@@ -15,9 +15,12 @@ const DEMO_NOTICE = "Demo payment — no money is charged";
 export function PaymentHistory({
   receipts,
   demoMode,
+  loadError = false,
 }: {
   receipts: PaymentReceiptSummary[];
   demoMode: boolean;
+  /** The history could not be loaded: say so instead of "No payments yet". */
+  loadError?: boolean;
 }) {
   const [active, setActive] = useState<PaymentReceiptSummary | null>(null);
   const rows = receipts.map((receipt) => receiptRow(receipt));
@@ -34,7 +37,15 @@ export function PaymentHistory({
           Payment history
         </h2>
       </div>
-      {rows.length === 0 ? (
+      {loadError ? (
+        <p
+          role="alert"
+          className="mt-3 text-sm font-medium text-muted-foreground"
+        >
+          Payment history could not be loaded right now. Your receipts are not
+          affected; refresh the page to try again.
+        </p>
+      ) : rows.length === 0 ? (
         <p className="mt-3 text-sm font-medium text-muted-foreground">
           No payments yet. Receipts appear here after you upgrade.
         </p>

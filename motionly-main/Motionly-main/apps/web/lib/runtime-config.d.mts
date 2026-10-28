@@ -14,6 +14,8 @@ export type ServerConfig = {
   billingEnabled: boolean;
   billingMode: "disabled" | "demo";
   skipAuthMiddleware: boolean;
+  /** Extra origins a checkout redirect may go to (server only). */
+  billingCheckoutOrigins: string[];
 };
 
 export type PublicConfig = {
@@ -39,6 +41,10 @@ export function parseBooleanFlag(
 export function parseServerConfig(
   environment: Record<string, string | undefined>,
 ): ServerConfig;
+export function parseOriginList(
+  name: string,
+  raw: string | undefined,
+): string[];
 export function publicConfig(config: ServerConfig): PublicConfig;
 export function serializePublicConfig(config: PublicConfig): string;
 export function parsePublicConfig(serialized: string): PublicConfig;

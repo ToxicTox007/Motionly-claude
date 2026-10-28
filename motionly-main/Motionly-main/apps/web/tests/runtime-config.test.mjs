@@ -69,6 +69,7 @@ test("the server reads its configuration from runtime variables", async () => {
     billingEnabled: false,
     billingMode: "disabled",
     skipAuthMiddleware: false,
+    billingCheckoutOrigins: [],
   });
   // Build-time NEXT_PUBLIC_* variables are not configuration any more.
   assert.throws(
@@ -630,4 +631,34 @@ test("a server refuses to start with invalid runtime configuration; a build need
   await withEnvironment(PRODUCTION_ENV, async () => {
     assert.doesNotThrow(() => nextConfig(PHASE_PRODUCTION_SERVER));
   });
+});
+
+test("extra checkout origins are validated, de-duplicated and never public", async () => {
+  const { parseServerConfig, publicConfig } = await runtimeConfig();
+  const config = parseServerConfig({
+    ...PRODUCTION_ENV,
+    BILLING_CHECKOUT_ORIGINS:
+      " https://pay.example.com, https://pay.example.com ,https://pay2.example.com/",
+  });
+  assert.deepEqual(config.billingCheckoutOrigins, [
+    "https://pay.example.com",
+    "https://pay2.example.com",
+  ]);
+  assert.equal("billingCheckoutOrigins" in publicConfig(config), false);
+  assert.throws(
+    () =>
+      parseServerConfig({
+        ...PRODUCTION_ENV,
+        BILLING_CHECKOUT_ORIGINS: "https://pay.example.com/checkout",
+      }),
+    /BILLING_CHECKOUT_ORIGINS must be an origin/,
+  );
+  assert.throws(
+    () =>
+      parseServerConfig({
+        ...PRODUCTION_ENV,
+        BILLING_CHECKOUT_ORIGINS: "javascript:alert(1)",
+      }),
+    /BILLING_CHECKOUT_ORIGINS must be an origin/,
+  );
 });
