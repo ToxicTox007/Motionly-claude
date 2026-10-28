@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -56,8 +57,14 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
 
 
+ProjectListSort = Literal["updated_desc", "updated_asc", "title_asc"]
+PROJECT_SEARCH_MAX_LENGTH = 120
+
+
 class ProjectListResponse(BaseModel):
     projects: list[ProjectResponse]
+    # Every project matching the search in the workspace, not just this page.
+    total: int = Field(ge=0)
 
 
 class ProjectDeleteResponse(BaseModel):

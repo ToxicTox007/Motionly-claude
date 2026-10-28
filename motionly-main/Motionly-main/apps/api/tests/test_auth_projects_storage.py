@@ -349,9 +349,9 @@ def test_project_api_prefers_async_repository_methods() -> None:
             self.async_calls.append("create")
             return self.create_project(**kwargs)
 
-        async def list_projects_async(self, **kwargs):
+        async def list_projects_page_async(self, **kwargs):
             self.async_calls.append("list")
-            return self.list_projects(**kwargs)
+            return self.list_projects_page(**kwargs)
 
         async def get_project_async(self, **kwargs):
             self.async_calls.append("get")

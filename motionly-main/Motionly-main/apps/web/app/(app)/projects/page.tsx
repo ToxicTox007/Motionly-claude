@@ -1,13 +1,23 @@
-import { Film, Pencil, PlusCircle } from "lucide-react";
+import { Film, Pencil, PlusCircle, Search } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { ButtonLink } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
 import { EmptyState } from "@/components/empty-state";
 import { LoadErrorAlert } from "@/components/load-error-alert";
+import { Pagination } from "@/components/pagination";
 import { SubmitButton } from "@/components/submit-button";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { messageFor, searchParam } from "@/lib/error-messages";
+import {
+  PROJECT_SEARCH_MAX_LENGTH,
+  PROJECT_SORTS,
+  PROJECT_SORT_LABELS,
+  pageCountFor,
+  parseProjectListQuery,
+  projectListApiPath,
+  projectListHref,
+} from "@/lib/project-list-query";
 import { serverApiFetch } from "@/lib/server-api";
 import { cn } from "@/lib/utils";
 import { updateProject } from "./actions";
@@ -51,12 +61,24 @@ export default async function ProjectsPage({
     );
   }
 
-  const result = await serverApiFetch<{ projects?: ProjectRow[] }>(
-    "/projects",
-    { headers: context.headers },
-  );
+  // Search, sort and page come from the URL and are applied by the API, so
+  // they cover every project and survive reloads and back/forward (FE-27).
+  const query = parseProjectListQuery(params);
+  const result = await serverApiFetch<{
+    projects?: ProjectRow[];
+    total?: number;
+  }>(projectListApiPath(query), { headers: context.headers });
   const loadError = !result.ok || !Array.isArray(result.data?.projects);
   const projects = result.ok ? (result.data?.projects ?? []) : [];
+  const total =
+    result.ok && typeof result.data?.total === "number"
+      ? result.data.total
+      : projects.length;
+  const pageCount = pageCountFor(total);
+  const pastTheEnd = !loadError && projects.length === 0 && total > 0;
+  const summary = query.q
+    ? `${total} ${total === 1 ? "project matches" : "projects match"} “${query.q}”`
+    : `${total} ${total === 1 ? "project" : "projects"}`;
 
   return (
     <AppShell title="Projects">
@@ -83,8 +105,86 @@ export default async function ProjectsPage({
         {notice ? <Alert tone="success">{notice}</Alert> : null}
         {error ? <Alert tone="danger">{error}</Alert> : null}
 
+        <form
+          role="search"
+          action="/projects"
+          method="get"
+          className="flex flex-col gap-3 rounded-neu-xl bg-surface p-3 shadow-neu-raised sm:flex-row sm:items-center"
+        >
+          <div className="relative min-w-0 flex-1">
+            <label htmlFor="projects-search" className="sr-only">
+              Search projects
+            </label>
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              strokeWidth={1.75}
+              aria-hidden="true"
+            />
+            <input
+              id="projects-search"
+              type="search"
+              name="q"
+              defaultValue={query.q}
+              maxLength={PROJECT_SEARCH_MAX_LENGTH}
+              placeholder="Search projects by title"
+              className="h-11 w-full rounded-neu border border-control bg-surface pl-9 pr-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
+            />
+          </div>
+          <label htmlFor="projects-sort" className="sr-only">
+            Sort
+          </label>
+          <select
+            id="projects-sort"
+            name="sort"
+            defaultValue={query.sort}
+            className="h-11 rounded-neu border border-control bg-surface px-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
+          >
+            {PROJECT_SORTS.map((sort) => (
+              <option key={sort} value={sort}>
+                {PROJECT_SORT_LABELS[sort]}
+              </option>
+            ))}
+          </select>
+          <SubmitButton variant="secondary" pendingLabel="Searching…">
+            Search
+          </SubmitButton>
+        </form>
+
+        {loadError ? null : (
+          <p
+            className="text-sm font-medium text-muted-foreground"
+            aria-live="polite"
+          >
+            {summary}
+          </p>
+        )}
+
         {loadError ? (
           <LoadErrorAlert title="Couldn't load your projects" />
+        ) : pastTheEnd ? (
+          <div className="rounded-neu-lg bg-surface p-8 text-center shadow-neu-raised">
+            <p className="text-sm font-medium text-muted-foreground">
+              This page is past the end of the list.
+            </p>
+            <Link
+              href={projectListHref({ ...query, page: pageCount })}
+              className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-primary underline-offset-4 hover:underline"
+            >
+              Go to the last page
+            </Link>
+          </div>
+        ) : projects.length === 0 && query.q ? (
+          <div className="rounded-neu-lg bg-surface p-8 text-center shadow-neu-raised">
+            <p className="text-sm font-semibold text-foreground">
+              No projects match “{query.q}”
+            </p>
+            <Link
+              href="/projects"
+              className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-primary underline-offset-4 hover:underline"
+            >
+              Clear search
+            </Link>
+          </div>
         ) : projects.length ? (
           <div className="grid gap-4">
             {projects.map((project) => (
@@ -177,6 +277,14 @@ export default async function ProjectsPage({
             body="Create your first reel project, upload footage, and start editing."
             actionHref="/projects/new"
             actionLabel="Create project"
+          />
+        )}
+
+        {loadError ? null : (
+          <Pagination
+            page={query.page}
+            pageCount={pageCount}
+            hrefFor={(page) => projectListHref({ ...query, page })}
           />
         )}
       </div>

@@ -117,3 +117,47 @@ describe("DashboardClient delete", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("DashboardClient search and totals", () => {
+  const projects = Array.from({ length: 12 }, (_, index) => ({
+    id: `p${index}`,
+    title: `Reel ${index}`,
+    updated_at: "2026-10-01T00:00:00Z",
+    uploaded_videos: [],
+  }));
+
+  it("searches every project on the projects page, not the 12 shown here", () => {
+    renderWithProviders(
+      <DashboardClient
+        initialProjects={projects}
+        total={30}
+        workspaceName="Acme"
+        storage={storage}
+      />,
+    );
+    const form = screen.getByRole("search");
+    expect(form).toHaveAttribute("action", "/projects");
+    expect(form).toHaveAttribute("method", "get");
+    expect(
+      screen.getByRole("searchbox", { name: "Search projects" }),
+    ).toHaveAttribute("name", "q");
+  });
+
+  it("links to the full list and counts the workspace total", () => {
+    renderWithProviders(
+      <DashboardClient
+        initialProjects={projects}
+        total={30}
+        workspaceName="Acme"
+        storage={storage}
+      />,
+    );
+    expect(
+      screen.getByRole("link", { name: "View all 30 projects" }),
+    ).toHaveAttribute("href", "/projects");
+    expect(screen.getByTestId("stat-total-projects")).toHaveTextContent("30");
+    expect(
+      screen.getByText(/cover your 12 most recent projects/),
+    ).toBeInTheDocument();
+  });
+});

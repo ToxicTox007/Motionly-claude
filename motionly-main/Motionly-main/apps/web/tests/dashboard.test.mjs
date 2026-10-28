@@ -4,23 +4,16 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 
-test("DashboardClient.tsx implements search, sort, and onboarding correctly", async () => {
+test("DashboardClient.tsx onboarding, and search handed to /projects", async () => {
   const source = await readFile(
     new URL("components/DashboardClient.tsx", root),
     "utf8",
   );
 
-  // Verify search and sort state variables
-  assert.match(source, /const \[searchQuery, setSearchQuery\] = useState/);
-  assert.match(source, /const \[sortBy, setSortBy\] = useState/);
-
-  // Verify filter logic
-  assert.match(source, /filteredProjects = useMemo/);
-  assert.match(source, /\.includes\(query\)/);
-
-  // Verify sorting options logic
-  assert.match(source, /sortBy === "updated"/);
-  assert.match(source, /a\.title\.localeCompare\(b\.title\)/);
+  // Search and sort run on /projects over every project (FE-27); behaviour
+  // is tested in tests/components/dashboard-client.test.tsx. No client-side
+  // filtering of the truncated first page remains.
+  assert.doesNotMatch(source, /setSearchQuery|filteredProjects/);
 
   // Verify onboarding steps are defined
   assert.match(source, /Upload Video/);

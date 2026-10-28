@@ -116,4 +116,43 @@ describe("loadDashboardData", () => {
     const data = await loadDashboardData({});
     expect(data.projects).toHaveLength(DASHBOARD_PROJECT_LIMIT);
   });
+
+  it("asks for the latest page only and reports the workspace total", async () => {
+    const fetchMock = stubApi({
+      "/projects": {
+        status: 200,
+        body: {
+          projects: [
+            { id: "p1", title: "P1", updated_at: "2026-10-01T00:00:00Z" },
+          ],
+          total: 30,
+        },
+      },
+      "/storage/quota": { status: 200, body: quota },
+    });
+    const data = await loadDashboardData({});
+    const projectsUrl = fetchMock.mock.calls
+      .map(([url]) => new URL(url as string))
+      .find((url) => url.pathname === "/projects");
+    expect(projectsUrl?.searchParams.get("limit")).toBe(
+      String(DASHBOARD_PROJECT_LIMIT),
+    );
+    expect(projectsUrl?.searchParams.get("sort")).toBe("updated_desc");
+    expect(data.total).toBe(30);
+  });
+
+  it("falls back to the page size when an older API omits the total", async () => {
+    stubApi({
+      "/projects": {
+        status: 200,
+        body: {
+          projects: [
+            { id: "p1", title: "P1", updated_at: "2026-10-01T00:00:00Z" },
+          ],
+        },
+      },
+      "/storage/quota": { status: 200, body: quota },
+    });
+    expect((await loadDashboardData({})).total).toBe(1);
+  });
 });

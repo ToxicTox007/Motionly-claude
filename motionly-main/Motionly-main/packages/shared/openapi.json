@@ -10397,10 +10397,16 @@
             },
             "title": "Projects",
             "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
           }
         },
         "required": [
-          "projects"
+          "projects",
+          "total"
         ],
         "title": "ProjectListResponse",
         "type": "object"
@@ -25856,6 +25862,51 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Case-insensitive title search; % and _ match literally.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive title search; % and _ match literally.",
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "updated_desc",
+              "enum": [
+                "updated_desc",
+                "updated_asc",
+                "title_asc"
+              ],
+              "title": "Sort",
+              "type": "string"
             }
           },
           {

@@ -5,7 +5,12 @@ from uuid import UUID, uuid4
 import httpx
 
 from app.api.errors import ApiError
-from app.schemas.projects import ProjectLatestUpload, ProjectResponse, ProjectStatus
+from app.schemas.projects import (
+    ProjectLatestUpload,
+    ProjectListSort,
+    ProjectResponse,
+    ProjectStatus,
+)
 from app.services.supabase import SupabaseRestClient
 
 PROJECT_RESPONSE_COLUMNS = (
@@ -49,6 +54,53 @@ class ProjectApiRecord:
         )
 
 
+@dataclass
+class ProjectPage:
+    projects: list["ProjectApiRecord"]
+    # Every project matching the search, across all pages.
+    total: int
+
+
+# PostgREST order for each list sort; the id tie-breaker keeps offset paging
+# stable when timestamps or titles are equal.
+_SUPABASE_ORDER: dict[str, str] = {
+    "updated_desc": "updated_at.desc,id.desc",
+    "updated_asc": "updated_at.asc,id.asc",
+    "title_asc": "title.asc,id.asc",
+}
+
+
+def escape_like(value: str) -> str:
+    """Escapes LIKE wildcards so a search for "100%" or "a_b" is literal."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _supabase_list_params(
+    *,
+    workspace_id: UUID,
+    limit: int,
+    offset: int,
+    query: str | None,
+    sort: ProjectListSort,
+) -> dict[str, str]:
+    params = {
+        "workspace_id": f"eq.{workspace_id}",
+        "select": PROJECT_LIST_COLUMNS,
+        "order": _SUPABASE_ORDER[sort],
+        "limit": str(limit),
+        "offset": str(offset),
+    }
+    if query:
+        params["title"] = f"ilike.%{escape_like(query)}%"
+    return params
+
+
+def _total_from_content_range(response: httpx.Response, fallback: int) -> int:
+    """PostgREST reports the exact count as the part after "/" ("0-19/57")."""
+    total = response.headers.get("content-range", "").rsplit("/", 1)[-1]
+    return int(total) if total.isdigit() else fallback
+
+
 class InMemoryProjectRepository:
     def __init__(self) -> None:
         self.projects: dict[UUID, ProjectApiRecord] = {}
@@ -70,11 +122,32 @@ class InMemoryProjectRepository:
         return project
 
     def list_projects(self, *, workspace_id: UUID, limit: int = 100) -> list[ProjectApiRecord]:
-        return sorted(
-            [project for project in self.projects.values() if project.workspace_id == workspace_id],
-            key=lambda project: project.updated_at,
-            reverse=True,
-        )[:limit]
+        return self.list_projects_page(workspace_id=workspace_id, limit=limit).projects
+
+    def list_projects_page(
+        self,
+        *,
+        workspace_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+        query: str | None = None,
+        sort: ProjectListSort = "updated_desc",
+    ) -> ProjectPage:
+        needle = query.casefold() if query else None
+        matches = [
+            project
+            for project in self.projects.values()
+            if project.workspace_id == workspace_id
+            and (needle is None or needle in project.title.casefold())
+        ]
+        if sort == "title_asc":
+            matches.sort(key=lambda project: (project.title.casefold(), str(project.id)))
+        else:
+            matches.sort(
+                key=lambda project: (project.updated_at, str(project.id)),
+                reverse=sort == "updated_desc",
+            )
+        return ProjectPage(projects=matches[offset : offset + limit], total=len(matches))
 
     def get_project(self, *, project_id: UUID, workspace_id: UUID) -> ProjectApiRecord:
         project = self.projects.get(project_id)
@@ -159,18 +232,7 @@ class SupabaseProjectRepository:
         return self._project_from_row(response.json()[0])
 
     def list_projects(self, *, workspace_id: UUID, limit: int = 100) -> list[ProjectApiRecord]:
-        response = self.client.request(
-            "GET",
-            "/projects",
-            params={
-                "workspace_id": f"eq.{workspace_id}",
-                "select": PROJECT_LIST_COLUMNS,
-                "order": "updated_at.desc",
-                "limit": str(limit),
-            },
-        )
-        self._raise_for_supabase(response)
-        return [self._project_from_row(row) for row in response.json()]
+        return self.list_projects_page(workspace_id=workspace_id, limit=limit).projects
 
     async def list_projects_async(
         self,
@@ -178,18 +240,57 @@ class SupabaseProjectRepository:
         workspace_id: UUID,
         limit: int = 100,
     ) -> list[ProjectApiRecord]:
+        page = await self.list_projects_page_async(workspace_id=workspace_id, limit=limit)
+        return page.projects
+
+    def list_projects_page(
+        self,
+        *,
+        workspace_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+        query: str | None = None,
+        sort: ProjectListSort = "updated_desc",
+    ) -> ProjectPage:
+        # One query returns the page and (count=exact) the total match count.
+        response = self.client.request(
+            "GET",
+            "/projects",
+            headers={"prefer": "count=exact"},
+            params=_supabase_list_params(
+                workspace_id=workspace_id, limit=limit, offset=offset, query=query, sort=sort
+            ),
+        )
+        self._raise_for_supabase(response)
+        projects = [self._project_from_row(row) for row in response.json()]
+        return ProjectPage(
+            projects=projects,
+            total=_total_from_content_range(response, offset + len(projects)),
+        )
+
+    async def list_projects_page_async(
+        self,
+        *,
+        workspace_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+        query: str | None = None,
+        sort: ProjectListSort = "updated_desc",
+    ) -> ProjectPage:
         response = await self.client.async_request(
             "GET",
             "/projects",
-            params={
-                "workspace_id": f"eq.{workspace_id}",
-                "select": PROJECT_LIST_COLUMNS,
-                "order": "updated_at.desc",
-                "limit": str(limit),
-            },
+            headers={"prefer": "count=exact"},
+            params=_supabase_list_params(
+                workspace_id=workspace_id, limit=limit, offset=offset, query=query, sort=sort
+            ),
         )
         self._raise_for_supabase(response)
-        return [self._project_from_row(row) for row in response.json()]
+        projects = [self._project_from_row(row) for row in response.json()]
+        return ProjectPage(
+            projects=projects,
+            total=_total_from_content_range(response, offset + len(projects)),
+        )
 
     def get_project(self, *, project_id: UUID, workspace_id: UUID) -> ProjectApiRecord:
         response = self.client.request(

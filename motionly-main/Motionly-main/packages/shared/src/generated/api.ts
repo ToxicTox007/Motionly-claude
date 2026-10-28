@@ -265,7 +265,7 @@ export interface components {
     "ProjectCreateRequest": { title: string; };
     "ProjectDeleteResponse": { id: string; deleted?: boolean; };
     "ProjectLatestUpload": { id: string; status: string; original_filename: string; duration_ms?: number | null; warnings?: Array<string>; };
-    "ProjectListResponse": { projects: Array<components["schemas"]["ProjectResponse"]>; };
+    "ProjectListResponse": { projects: Array<components["schemas"]["ProjectResponse"]>; total: number; };
     "ProjectModelSettingItem": { capability: string; option_id: string; };
     "ProjectModelSettingUpdate": { capability: string; option_id: string; };
     "ProjectModelSettingsResponse": { settings: Array<components["schemas"]["ProjectModelSettingItem"]>; };
@@ -541,7 +541,7 @@ export interface ApiOperationMap {
   "PATCH /phase5/templates/{template_id}": { method: "PATCH"; template: "/phase5/templates/{template_id}"; path: { template_id: string; }; query: {  }; body: components["schemas"]["SavedTemplateUpdateRequest"]; response: components["schemas"]["ScaleResourceResponse"]; };
   "DELETE /phase5/templates/{template_id}": { method: "DELETE"; template: "/phase5/templates/{template_id}"; path: { template_id: string; }; query: {  }; body: never; response: void; };
   "GET /plans": { method: "GET"; template: "/plans"; path: {  }; query: {  }; body: never; response: components["schemas"]["PublicPlansResponse"]; };
-  "GET /projects": { method: "GET"; template: "/projects"; path: {  }; query: { limit?: number; }; body: never; response: components["schemas"]["ProjectListResponse"]; };
+  "GET /projects": { method: "GET"; template: "/projects"; path: {  }; query: { limit?: number; offset?: number; q?: string | null; sort?: "updated_desc" | "updated_asc" | "title_asc"; }; body: never; response: components["schemas"]["ProjectListResponse"]; };
   "POST /projects": { method: "POST"; template: "/projects"; path: {  }; query: {  }; body: components["schemas"]["ProjectCreateRequest"]; response: components["schemas"]["ProjectResponse"]; };
   "GET /projects/{project_id}": { method: "GET"; template: "/projects/{project_id}"; path: { project_id: string; }; query: {  }; body: never; response: components["schemas"]["ProjectResponse"]; };
   "PATCH /projects/{project_id}": { method: "PATCH"; template: "/projects/{project_id}"; path: { project_id: string; }; query: {  }; body: components["schemas"]["ProjectUpdateRequest"]; response: components["schemas"]["ProjectResponse"]; };

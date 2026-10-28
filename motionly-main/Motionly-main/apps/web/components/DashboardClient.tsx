@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -10,6 +10,7 @@ import {
   PlusCircle,
   Search,
   Play,
+  ArrowRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { messageFor } from "@/lib/error-messages";
@@ -33,7 +34,10 @@ interface Project {
 }
 
 interface DashboardClientProps {
+  /** The latest projects, newest first (the API orders them). */
   initialProjects: Project[];
+  /** Every project in the workspace, not just the ones shown. */
+  total?: number;
   /** The projects request failed: the list is unknown, not empty. */
   loadError?: boolean;
   workspaceName: string;
@@ -67,46 +71,32 @@ function getStatusBadgeClass(status: string | undefined) {
 
 export function DashboardClient({
   initialProjects,
+  total,
   loadError = false,
   workspaceName,
   storage,
 }: DashboardClientProps) {
   const router = useRouter();
   const { toast } = useToast();
+  const serverTotal = total ?? initialProjects.length;
   const [localProjects, setLocalProjects] =
     useState<Project[]>(initialProjects);
+  const [localTotal, setLocalTotal] = useState(serverTotal);
   // A refresh (Retry, or after a delete) brings new server data: adopt it.
   const [serverProjects, setServerProjects] = useState(initialProjects);
-  if (serverProjects !== initialProjects) {
+  const [adoptedTotal, setAdoptedTotal] = useState(serverTotal);
+  if (serverProjects !== initialProjects || adoptedTotal !== serverTotal) {
     setServerProjects(initialProjects);
     setLocalProjects(initialProjects);
+    setAdoptedTotal(serverTotal);
+    setLocalTotal(serverTotal);
   }
-  const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState<"updated" | "title">("updated");
 
   // Delete project modal state
   const [projectToDelete, setProjectToDelete] = useState<{
     id: string;
     title: string;
   } | null>(null);
-
-  const sortedProjects = useMemo(() => {
-    return [...localProjects].sort((a, b) => {
-      if (sortBy === "updated") {
-        return (
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-        );
-      } else {
-        return a.title.localeCompare(b.title);
-      }
-    });
-  }, [localProjects, sortBy]);
-
-  const filteredProjects = useMemo(() => {
-    if (!searchQuery.trim()) return sortedProjects;
-    const query = searchQuery.toLowerCase();
-    return sortedProjects.filter((p) => p.title.toLowerCase().includes(query));
-  }, [sortedProjects, searchQuery]);
 
   const handleCancelDelete = () => {
     setProjectToDelete(null);
@@ -141,6 +131,7 @@ export function DashboardClient({
       setLocalProjects((current) =>
         current.filter((p) => p.id !== projectToDelete.id),
       );
+      setLocalTotal((current) => Math.max(0, current - 1));
       setProjectToDelete(null);
       router.refresh();
     } catch (error) {
@@ -281,11 +272,11 @@ export function DashboardClient({
     );
   }
 
-  // Bento layout splits
-  const featuredProject = searchQuery.trim() ? null : sortedProjects[0];
-  const bentoOtherProjects = searchQuery.trim()
-    ? filteredProjects
-    : sortedProjects.slice(1);
+  // Bento layout splits. The dashboard shows only the latest projects;
+  // search, sorting and the full list live on /projects (FE-27).
+  const featuredProject = localProjects[0];
+  const bentoOtherProjects = localProjects.slice(1);
+  const showsEveryProject = localTotal <= localProjects.length;
 
   return (
     <div className="flex flex-col gap-8">
@@ -319,7 +310,7 @@ export function DashboardClient({
       </div>
 
       {/* Bento Grid */}
-      {!searchQuery.trim() && featuredProject && (
+      {featuredProject && (
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Featured Recent Project */}
           <div className="group overflow-hidden rounded-neu-lg bg-surface shadow-neu-raised transition-shadow duration-200 hover:shadow-neu-raised-lg lg:col-span-2">
@@ -425,8 +416,11 @@ export function DashboardClient({
                   <span className="text-xs font-semibold text-muted-foreground">
                     Total Projects
                   </span>
-                  <span className="text-sm font-bold tabular-nums text-foreground">
-                    {localProjects.length}
+                  <span
+                    className="text-sm font-bold tabular-nums text-foreground"
+                    data-testid="stat-total-projects"
+                  >
+                    {localTotal}
                   </span>
                 </div>
                 <div className="flex items-center justify-between rounded-neu-md bg-surface p-3 shadow-neu-inset-sm">
@@ -455,6 +449,12 @@ export function DashboardClient({
                     }
                   </span>
                 </div>
+                {showsEveryProject ? null : (
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Ready and draft counts cover your {localProjects.length}{" "}
+                    most recent projects.
+                  </p>
+                )}
               </div>
 
               {/* Usage progress — real storage quota from the API (B23). */}
@@ -504,54 +504,39 @@ export function DashboardClient({
 
       {/* Grid of Other Projects */}
       <div className="space-y-4 border-t border-hairline pt-6">
-        {/* Search + Sort bar */}
+        {/* Search runs on /projects, across every project. */}
         <div className="flex flex-col gap-4 rounded-neu-xl bg-surface px-3 py-2 shadow-neu-raised sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative max-w-md flex-1">
+          <form
+            role="search"
+            action="/projects"
+            method="get"
+            className="relative max-w-md flex-1"
+          >
             <label htmlFor="project-search" className="sr-only">
               Search projects
             </label>
             <Search
               className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
               strokeWidth={1.75}
+              aria-hidden="true"
             />
             <input
               id="project-search"
-              type="text"
-              placeholder="Search projects by title..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              type="search"
+              name="q"
+              maxLength={120}
+              placeholder="Search all projects by title..."
               className="h-11 w-full rounded-neu border border-control bg-surface pl-9 pr-4 text-sm font-medium text-foreground shadow-neu-inset-sm transition focus:border-focus focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 focus:ring-offset-background"
             />
-          </div>
+          </form>
 
-          <div className="inline-flex gap-1 rounded-full bg-surface p-1 shadow-neu-inset-sm">
-            <button
-              type="button"
-              aria-pressed={sortBy === "updated"}
-              onClick={() => setSortBy("updated")}
-              className={cn(
-                "min-h-10 rounded-full px-4 text-sm font-semibold transition-shadow duration-200",
-                sortBy === "updated"
-                  ? "bg-surface text-foreground shadow-neu-raised-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              Recent
-            </button>
-            <button
-              type="button"
-              aria-pressed={sortBy === "title"}
-              onClick={() => setSortBy("title")}
-              className={cn(
-                "min-h-10 rounded-full px-4 text-sm font-semibold transition-shadow duration-200",
-                sortBy === "title"
-                  ? "bg-surface text-foreground shadow-neu-raised-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              A–Z
-            </button>
-          </div>
+          <Link
+            href="/projects"
+            className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-full bg-surface px-4 text-sm font-semibold text-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
+          >
+            View all {localTotal} {localTotal === 1 ? "project" : "projects"}
+            <ArrowRight className="size-4" aria-hidden="true" />
+          </Link>
         </div>
 
         {bentoOtherProjects.length > 0 ? (
@@ -659,11 +644,7 @@ export function DashboardClient({
               );
             })}
           </div>
-        ) : (
-          <p className="rounded-neu-lg bg-surface p-8 text-center text-sm font-medium text-muted-foreground shadow-neu-raised">
-            No projects found matching your search.
-          </p>
-        )}
+        ) : null}
       </div>
 
       {/* Delete confirmation (shared ConfirmDialog: focus trap, Escape, runs

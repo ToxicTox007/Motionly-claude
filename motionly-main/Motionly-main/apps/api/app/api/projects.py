@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, Query, Request
 from app.api.dependencies import Actor, get_actor, get_project_repository
 from app.repositories.projects import InMemoryProjectRepository
 from app.schemas.projects import (
+    PROJECT_SEARCH_MAX_LENGTH,
     ProjectCreateRequest,
     ProjectDeleteResponse,
     ProjectListResponse,
+    ProjectListSort,
     ProjectResponse,
     ProjectUpdateRequest,
 )
@@ -58,16 +60,30 @@ async def list_projects(
     actor: ActorDep,
     repository: ProjectRepositoryDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    q: Annotated[
+        str | None,
+        Query(
+            max_length=PROJECT_SEARCH_MAX_LENGTH,
+            description="Case-insensitive title search; % and _ match literally.",
+        ),
+    ] = None,
+    sort: Annotated[ProjectListSort, Query()] = "updated_desc",
 ) -> ProjectListResponse:
-    projects = await _repository_call(
+    query = (q or "").strip() or None
+    page = await _repository_call(
         repository,
-        "list_projects_async",
-        "list_projects",
+        "list_projects_page_async",
+        "list_projects_page",
         workspace_id=actor.workspace_id,
         limit=limit,
+        offset=offset,
+        query=query,
+        sort=sort,
     )
     return ProjectListResponse(
-        projects=[project.to_response() for project in projects],
+        projects=[project.to_response() for project in page.projects],
+        total=page.total,
     )
 
 

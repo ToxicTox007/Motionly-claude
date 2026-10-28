@@ -1,3 +1,4 @@
+import { projectListApiPath } from "@/lib/project-list-query";
 import { serverApiFetch } from "@/lib/server-api";
 import { storageGauge } from "@/lib/storage-gauge.mjs";
 
@@ -38,6 +39,8 @@ type QuotaResponse = {
 
 export type DashboardData = {
   projects: DashboardProject[];
+  /** Every project in the workspace; the dashboard shows only the latest. */
+  total: number;
   /** The projects request failed; the list is unknown, not empty. */
   loadError: boolean;
   storage: ReturnType<typeof storageGauge>;
@@ -48,6 +51,8 @@ export const DASHBOARD_PROJECT_LIMIT = 12;
 /**
  * The dashboard's data in two parallel API calls. B29: GET /projects embeds
  * each project's latest upload, so there is no per-project /uploads request.
+ * Only the latest page is fetched; `total` counts the whole workspace, and
+ * search and paging live on /projects (FE-27).
  * B23: the storage gauge shows the real quota; a failed quota degrades to
  * "not metered" rather than a fabricated bar.
  */
@@ -55,12 +60,18 @@ export async function loadDashboardData(
   headers: Record<string, string>,
 ): Promise<DashboardData> {
   const [projectsResult, quotaResult] = await Promise.all([
-    serverApiFetch<ProjectsResponse>("/projects", { headers }),
+    serverApiFetch<ProjectsResponse>(
+      projectListApiPath(
+        { q: "", sort: "updated_desc", page: 1 },
+        DASHBOARD_PROJECT_LIMIT,
+      ),
+      { headers },
+    ),
     serverApiFetch<QuotaResponse>("/storage/quota", { headers }),
   ]);
   const storage = storageGauge(quotaResult.ok ? quotaResult.data : null);
   if (!projectsResult.ok || !Array.isArray(projectsResult.data?.projects)) {
-    return { projects: [], loadError: true, storage };
+    return { projects: [], total: 0, loadError: true, storage };
   }
   const projects = projectsResult.data.projects
     .slice(0, DASHBOARD_PROJECT_LIMIT)
@@ -82,5 +93,9 @@ export async function loadDashboardData(
           : [],
       };
     });
-  return { projects, loadError: false, storage };
+  const total =
+    typeof projectsResult.data.total === "number"
+      ? projectsResult.data.total
+      : projects.length;
+  return { projects, total, loadError: false, storage };
 }

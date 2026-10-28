@@ -18,7 +18,10 @@ test("dashboard reads latest_upload through the one-call loader", async () => {
   assert.doesNotMatch(page, /\/uploads\/\$\{/);
   assert.match(loader, /latest_upload/);
   assert.doesNotMatch(loader, /\/uploads\//);
-  const projectsCalls = loader.match(/serverApiFetch<[^>]*>\("\/projects"/g);
+  // One projects request (the latest page, built by projectListApiPath).
+  const projectsCalls = loader.match(
+    /serverApiFetch<[^>]*>\(\s*(?:"\/projects|projectListApiPath\()/g,
+  );
   assert.equal(projectsCalls?.length, 1);
 });
 

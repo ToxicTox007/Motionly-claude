@@ -46,6 +46,7 @@ export default async function DashboardPage({
   let workspaceName = "Personal workspace";
   let data: DashboardData = {
     projects: [],
+    total: 0,
     loadError: false,
     storage: storageGauge(null),
   };
@@ -104,6 +105,7 @@ export default async function DashboardPage({
       ) : null}
       <DashboardClient
         initialProjects={data.projects}
+        total={data.total}
         loadError={data.loadError}
         workspaceName={workspaceName}
         storage={data.storage}
