@@ -257,7 +257,35 @@ def test_web_runtime_does_not_boot_through_a_package_manager() -> None:
 
     assert "corepack" not in runtime_stage
     assert 'CMD ["pnpm"' not in runtime_stage
-    # `next start` serves the .next build in its working directory.
-    assert runtime_stage.rstrip().endswith(
-        'WORKDIR /app/apps/web\nCMD ["node", "node_modules/next/dist/bin/next", "start"]'
-    )
+    # The standalone server: server.js from the traced build, run by node.
+    assert runtime_stage.rstrip().endswith('WORKDIR /app\nCMD ["node", "apps/web/server.js"]')
+
+
+def test_web_runtime_ships_only_the_standalone_server() -> None:
+    """FE-42: the runtime image holds the standalone output (server.js and the
+    traced node_modules), the static assets and public/, never the whole build
+    stage; and it still refuses to start without valid configuration."""
+    web = ROOT / "apps" / "web"
+    dockerfile = (web / "Dockerfile").read_text(encoding="utf-8")
+    runtime_stage = dockerfile.split("\nFROM ", 1)[1]
+
+    assert "COPY --from=build --chown=node:node /app ./" not in runtime_stage
+    for source, target in (
+        ("/app/apps/web/.next/standalone", "./"),
+        ("/app/apps/web/.next/static", "./apps/web/.next/static"),
+        ("/app/apps/web/public", "./apps/web/public"),
+    ):
+        assert f"COPY --from=build --chown=node:node {source} {target}" in runtime_stage
+    # server.js listens on HOSTNAME, which Docker sets to the container id.
+    assert "HOSTNAME=0.0.0.0" in runtime_stage
+
+    next_config = (web / "next.config.ts").read_text(encoding="utf-8")
+    assert 'output: "standalone"' in next_config
+    assert "outputFileTracingRoot: MONOREPO_ROOT" in next_config
+    # The standalone server does not run next.config.ts; instrumentation.ts
+    # validates the runtime configuration at startup and exits non-zero.
+    instrumentation = (web / "instrumentation.ts").read_text(encoding="utf-8")
+    assert 'import("./lib/startup-config")' in instrumentation
+    startup = (web / "lib" / "startup-config.ts").read_text(encoding="utf-8")
+    assert "parseServerConfig(environment)" in startup
+    assert "process.exit(1)" in startup

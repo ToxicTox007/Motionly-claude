@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { MONOREPO_ROOT } from "./lib/monorepo-root.mjs";
 import { parseServerConfig } from "./lib/runtime-config.mjs";
 
 // Phase names from next/constants (compared directly so this file also loads
@@ -22,7 +23,9 @@ export default function nextConfig(phase: string): NextConfig {
   const development = phase === DEVELOPMENT_SERVER;
   // A server validates its runtime configuration when it starts, so a
   // misconfigured container exits instead of failing requests. A build needs
-  // no configuration: the image is configured where it runs.
+  // no configuration: the image is configured where it runs. (The image's
+  // standalone server does not run this file; instrumentation.ts does the
+  // same check there.)
   const config =
     development || phase === PRODUCTION_SERVER
       ? parseServerConfig(process.env)
@@ -31,6 +34,10 @@ export default function nextConfig(phase: string): NextConfig {
   return {
     poweredByHeader: false,
     reactStrictMode: true,
+    // The image ships .next/standalone: server.js and only the node_modules
+    // files it uses, traced from the monorepo root (FE-42).
+    output: "standalone",
+    outputFileTracingRoot: MONOREPO_ROOT,
     ...(development
       ? {
           allowedDevOrigins: ["localhost", "127.0.0.1", "*.app.github.dev"],

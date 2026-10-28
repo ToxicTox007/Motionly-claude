@@ -231,9 +231,13 @@ def test_web_has_no_error_reporter_google_sign_in_or_direct_publishing() -> None
     dashboard = (WEB / "components" / "DashboardClient.tsx").read_text(encoding="utf-8")
 
     assert not [name for name in dependencies if name.startswith("@sentry/")]
-    # No-op stubs left behind when Sentry was dropped are dead code.
-    for stub in ("instrumentation.ts", "instrumentation-client.ts"):
-        assert not (WEB / stub).exists(), stub
+    # No-op stubs left behind when Sentry was dropped are dead code. The one
+    # instrumentation hook is the startup configuration check (FE-42), never
+    # an error reporter.
+    assert not (WEB / "instrumentation-client.ts").exists()
+    instrumentation = (WEB / "instrumentation.ts").read_text(encoding="utf-8")
+    assert "exitOnInvalidConfiguration()" in instrumentation
+    assert not re.search(r"sentry|glitchtip|onRequestError", instrumentation, re.IGNORECASE)
     assert not (WEB / "app" / "api" / "glitchtip-tunnel").exists()
     # Nothing reports the error, so the page must not say it was reported.
     assert "has been reported" not in global_error

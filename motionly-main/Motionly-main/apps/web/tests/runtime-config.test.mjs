@@ -566,6 +566,17 @@ async function withEnvironment(values, run) {
 const nextPhases = () => import("next/constants.js");
 const loadNextConfig = async () => (await import("../next.config.ts")).default;
 
+test("the build is a standalone server traced from the monorepo root", async () => {
+  const { PHASE_PRODUCTION_BUILD } = await nextPhases();
+  const nextConfig = await loadNextConfig();
+  const config = nextConfig(PHASE_PRODUCTION_BUILD);
+
+  // The image ships .next/standalone (server.js plus only the traced
+  // node_modules); tracing from the monorepo root includes packages/shared.
+  assert.equal(config.output, "standalone");
+  assert.equal(config.outputFileTracingRoot, repoRoot);
+});
+
 test("Next proxies /api and /supabase only in development; the edge does it when deployed", async () => {
   const {
     PHASE_DEVELOPMENT_SERVER,
