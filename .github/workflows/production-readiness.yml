@@ -101,10 +101,13 @@ jobs:
           cache-dependency-path: |
             motionly-main/Motionly-main/apps/api/requirements-dev.lock
             motionly-main/Motionly-main/apps/api/requirements-ml.lock
-      - name: Install locked dependencies
+      - name: Install locked dependencies and CPU media tools
         run: |
           pnpm install --frozen-lockfile
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+          # The API suite renders and mattes real media with ffmpeg.
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: Verify generated FastAPI contract
         run: pnpm contracts:check
       - name: Lint and typecheck
