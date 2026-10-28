@@ -87,8 +87,10 @@ test("Timeline virtualization, snapping alignments, and request queue compile co
 });
 
 test("Shared modal and focus trap preserve accessible dialog behavior", async () => {
+  // Behaviour (Tab wrap, topmost-only Escape, focus return, closeDisabled) is
+  // tested in tests/components/modal.test.tsx; this keeps the wiring.
   const modalSource = await readFile(
-    new URL("components/brutal-ui.tsx", root),
+    new URL("components/modal.tsx", root),
     "utf8",
   );
   const focusSource = await readFile(

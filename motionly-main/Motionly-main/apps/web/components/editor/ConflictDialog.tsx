@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useState } from "react";
 import { AlertTriangle, Loader2, RotateCcw, Upload } from "lucide-react";
 import { Button } from "@/components/button";
 import { Modal } from "@/components/brutal-ui";
@@ -26,19 +26,21 @@ export function ConflictDialog({
   onDismiss,
 }: ConflictDialogProps) {
   const [loading, setLoading] = useState<"reload" | "force" | null>(null);
-  const [forceError, setForceError] = useState<string | null>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  // Focus the dialog on mount
-  useEffect(() => {
-    contentRef.current?.focus();
-  }, []);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleReload = useCallback(async () => {
     setLoading("reload");
-    setForceError(null);
+    setActionError(null);
     try {
       await onReload();
+    } catch (error) {
+      // A failed reload keeps the dialog open and says so, instead of a
+      // spinner that stops with nothing explained.
+      setActionError(
+        error instanceof Error && error.message
+          ? `${error.message} Check your connection and try again.`
+          : "The latest version could not be loaded. Check your connection and try again.",
+      );
     } finally {
       setLoading(null);
     }
@@ -46,11 +48,11 @@ export function ConflictDialog({
 
   const handleForceSave = useCallback(async () => {
     setLoading("force");
-    setForceError(null);
+    setActionError(null);
     try {
       await onForceSave();
     } catch (error) {
-      setForceError(
+      setActionError(
         error instanceof Error
           ? error.message
           : "Force save failed. Please reload and try again.",
@@ -68,7 +70,9 @@ export function ConflictDialog({
       title="Version Conflict"
       description="Your changes conflict with a newer version of this plan."
       onClose={onDismiss}
-      contentRef={contentRef}
+      // While Reload or Force Save runs, the backdrop, Escape and Close do
+      // nothing: the result must land on an open dialog.
+      closeDisabled={loading !== null}
       footer={
         <>
           <Button
@@ -165,12 +169,12 @@ export function ConflictDialog({
           </div>
         )}
 
-        {forceError && (
+        {actionError && (
           <p
             className="rounded-neu-md bg-surface p-3 text-sm font-semibold text-danger shadow-neu-raised-sm ring-1 ring-danger/30"
             role="alert"
           >
-            {forceError}
+            {actionError}
           </p>
         )}
       </div>

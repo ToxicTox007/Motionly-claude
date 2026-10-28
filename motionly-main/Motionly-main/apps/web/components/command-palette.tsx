@@ -358,12 +358,12 @@ function CommandPalettePanel({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-[12vh]">
-      {/* Decorative backdrop. Opacity animation is fine here (aria-hidden). */}
-      <button
-        type="button"
-        aria-label="Close command palette"
+      {/* Pointer-only backdrop: hidden from assistive tech and the Tab order
+          (Escape closes the palette). Opacity animation is fine here. */}
+      <div
+        aria-hidden="true"
         onClick={onClose}
-        className="fixed inset-0 cursor-default bg-foreground/20 backdrop-blur-sm"
+        className="fixed inset-0 bg-foreground/20 backdrop-blur-sm"
       />
       <m.div
         ref={trapRef}

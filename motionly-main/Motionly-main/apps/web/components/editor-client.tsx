@@ -724,22 +724,19 @@ export function EditorClient(props: EditorClientProps) {
   );
 
   // ── Conflict resolution handlers ──────────────────────────────────────────
+  // Throws on failure so the conflict dialog can say why and stay open.
   const refetchActivePlan = useCallback(async () => {
     if (!localActivePlanId) return;
-    try {
-      const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
-        `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}`,
-        {
-          workspaceId,
-          friendlyError: "Could not reload the plan.",
-        },
-      );
-      handlePlanUpdated(payload.plan);
-      clearConflict();
-      router.refresh();
-    } catch (error) {
-      console.error("Failed to refetch plan after conflict:", error);
-    }
+    const payload = await editorApiRequest<{ plan: EditPlanRecordSummary }>(
+      `${env.apiBaseUrl}/projects/${projectId}/plans/${localActivePlanId}`,
+      {
+        workspaceId,
+        friendlyError: "Could not reload the plan.",
+      },
+    );
+    handlePlanUpdated(payload.plan);
+    clearConflict();
+    router.refresh();
   }, [
     clearConflict,
     handlePlanUpdated,
@@ -748,6 +745,21 @@ export function EditorClient(props: EditorClientProps) {
     router,
     workspaceId,
   ]);
+
+  // Dismissing keeps the server's version: roll the local change back, then
+  // re-read the plan so the tracked revision is current and the next save
+  // does not conflict again.
+  const dismissConflict = useCallback(() => {
+    discardConflict();
+    void refetchActivePlan().catch(() => {
+      toast({
+        title: "Could not load the latest version",
+        description:
+          "Reload the page before editing again so your next change is not rejected.",
+        variant: "error",
+      });
+    });
+  }, [discardConflict, refetchActivePlan, toast]);
 
   // The server route renders lightweight upload/processing clients before this
   // ready-only editor entry is referenced.
@@ -806,7 +818,7 @@ export function EditorClient(props: EditorClientProps) {
         conflictState={conflictState}
         onConflictReload={refetchActivePlan}
         onConflictForceSave={forceSave}
-        onConflictDismiss={discardConflict}
+        onConflictDismiss={dismissConflict}
         getExpectedRevision={getExpectedRevision}
         onConflictDetected={handleConflict}
         planRevision={revisionTracking.planRevision}

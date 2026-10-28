@@ -34,11 +34,10 @@ export function ThemeMenu({
 
       {open ? (
         <>
-          {/* Backdrop */}
-          <button
-            type="button"
-            aria-label="Close menu overlay"
-            className="fixed inset-0 z-40 cursor-default bg-background/60 backdrop-blur-sm"
+          {/* Pointer-only backdrop (hidden from assistive tech and Tab). */}
+          <div
+            aria-hidden="true"
+            className="fixed inset-0 z-40 bg-background/60 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           />
 

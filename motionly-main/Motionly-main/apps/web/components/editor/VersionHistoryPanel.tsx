@@ -6,7 +6,6 @@ import { Button } from "@/components/button";
 import { Modal } from "@/components/brutal-ui";
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
-import { useFocusTrap } from "@/lib/useFocusTrap";
 import type {
   EditPlanRecordSummary,
   PlanSnapshotSummary,
@@ -31,9 +30,6 @@ export function VersionHistoryPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [pendingRestore, setPendingRestore] =
     useState<PlanSnapshotSummary | null>(null);
-  const restoreModalRef = useFocusTrap(Boolean(pendingRestore), () =>
-    setPendingRestore(null),
-  );
 
   useEffect(() => {
     let canceled = false;
@@ -208,7 +204,7 @@ export function VersionHistoryPanel({
             : undefined
         }
         onClose={() => setPendingRestore(null)}
-        contentRef={restoreModalRef}
+        closeDisabled={busy}
         footer={
           <>
             <Button

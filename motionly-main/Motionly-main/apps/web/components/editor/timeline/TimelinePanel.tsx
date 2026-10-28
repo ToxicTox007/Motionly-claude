@@ -28,7 +28,6 @@ import { useToast } from "@/components/toast";
 import { formatMs, outputMsToSourceMs, rulerTicks } from "@/lib/timeline";
 import { editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
-import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useTimeline } from "./useTimeline";
 import { usePlaybackSync } from "./usePlaybackSync";
 import { useTimelineKeyboardShortcuts } from "./useTimelineKeyboardShortcuts";
@@ -127,9 +126,6 @@ export function TimelinePanel({
     endMs: number;
   } | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const deleteModalRef = useFocusTrap(deleteConfirmOpen, () =>
-    setDeleteConfirmOpen(false),
-  );
   const [visibleRange, setVisibleRange] = useState<{
     startMs: number;
     endMs: number;
@@ -1439,7 +1435,6 @@ export function TimelinePanel({
             : "Select a clip to delete."
         }
         onClose={() => setDeleteConfirmOpen(false)}
-        contentRef={deleteModalRef}
         footer={
           <>
             <Button

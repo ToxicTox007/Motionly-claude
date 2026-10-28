@@ -1,11 +1,9 @@
 import type {
   ComponentPropsWithoutRef,
   HTMLAttributes,
-  Ref,
   ReactNode,
   SelectHTMLAttributes,
 } from "react";
-import { useId } from "react";
 import { cn } from "@/lib/utils";
 import { IconButton } from "@/components/button";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
@@ -145,76 +143,9 @@ export function Alert({
   );
 }
 
-export function Modal({
-  open,
-  title,
-  description,
-  children,
-  footer,
-  onClose,
-  contentRef,
-}: {
-  open: boolean;
-  title: ReactNode;
-  description?: ReactNode;
-  children?: ReactNode;
-  footer?: ReactNode;
-  onClose: () => void;
-  contentRef?: Ref<HTMLDivElement>;
-}) {
-  const titleId = useId();
-  const descriptionId = useId();
-  if (!open) return null;
-  return (
-    <>
-      <button
-        type="button"
-        aria-label="Close modal overlay"
-        className="fixed inset-0 z-40 cursor-default bg-background/60 text-left backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <div
-        ref={contentRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={description ? descriptionId : undefined}
-        tabIndex={-1}
-        className="fixed left-1/2 top-1/2 z-50 w-[min(34rem,calc(100vw-1.5rem))] -translate-x-1/2 -translate-y-1/2 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg"
-      >
-        <div className="flex items-start justify-between gap-4 pb-3">
-          <div className="min-w-0">
-            <h2 id={titleId} className="text-lg font-bold text-foreground">
-              {title}
-            </h2>
-            {description ? (
-              <p
-                id={descriptionId}
-                className="mt-1 text-sm font-medium text-muted-foreground"
-              >
-                {description}
-              </p>
-            ) : null}
-          </div>
-          <IconButton
-            label="Close modal"
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-          >
-            <PixelIcon name="x" className="size-4" />
-          </IconButton>
-        </div>
-        {children ? <div className="py-4">{children}</div> : null}
-        {footer ? (
-          <div className="mt-2 flex flex-wrap justify-end gap-3 pt-4">
-            {footer}
-          </div>
-        ) : null}
-      </div>
-    </>
-  );
-}
+// The dialog lives in its own client module (it traps focus with effects);
+// re-exported here so existing imports keep working.
+export { Modal } from "@/components/modal";
 
 export function Tooltip({
   label,

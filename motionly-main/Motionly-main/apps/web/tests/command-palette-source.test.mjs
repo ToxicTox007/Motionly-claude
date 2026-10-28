@@ -37,8 +37,11 @@ test("trigger advertises its keyboard shortcut", () => {
   assert.match(source, /aria-label="Search commands"/);
 });
 
-test("close control and empty state use the agreed copy", () => {
-  assert.match(source, /aria-label="Close command palette"/);
+test("the backdrop is pointer-only and the empty state uses the agreed copy", () => {
+  // Escape (focus trap) closes the palette; the backdrop is not a second,
+  // unlabelled-in-context button in the Tab order.
+  assert.match(source, /aria-hidden="true"\s+onClick=\{onClose\}/);
+  assert.doesNotMatch(source, /aria-label="Close command palette"/);
   assert.match(source, /No matching commands/);
 });
 
