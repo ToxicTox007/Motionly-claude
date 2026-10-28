@@ -3,33 +3,30 @@ import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
 import { LoadErrorAlert } from "@/components/load-error-alert";
 import { getBillingStatus } from "@/lib/billing";
-import { getWorkspaceApiContext } from "@/lib/api-auth";
+import { requireWorkspaceApiContext } from "@/lib/require-context";
+import { serverApiFetch } from "@/lib/server-api";
 import { canManageWorkspace } from "@/lib/workspace-roles.mjs";
-import { env } from "@/lib/env";
 import { ApiKeysClient } from "./ApiKeysClient";
 import type { ApiKeyView } from "./actions";
 
-async function loadKeys(): Promise<ApiKeyView[]> {
-  const context = await getWorkspaceApiContext();
-  if (!context) return [];
-  try {
-    const response = await fetch(`${env.apiBaseUrl}/api-keys`, {
-      headers: context.headers,
-      cache: "no-store",
-    });
-    if (!response.ok) return [];
-    const body = (await response.json()) as { keys: ApiKeyView[] };
-    return body.keys ?? [];
-  } catch {
-    return [];
-  }
+async function loadKeys(
+  headers: Record<string, string>,
+): Promise<ApiKeyView[]> {
+  const result = await serverApiFetch<{ keys?: ApiKeyView[] }>("/api-keys", {
+    headers,
+  });
+  return result.ok && Array.isArray(result.data?.keys) ? result.data.keys : [];
 }
 
 export default async function ApiKeysPage() {
-  const context = await getWorkspaceApiContext();
+  const context = await requireWorkspaceApiContext("/account/api-keys");
   // Owners and admins only; members may not manage API keys (Task 19/24).
-  const canManage = context ? canManageWorkspace(context.role) : true;
-  const status = await getBillingStatus();
+  const canManage = canManageWorkspace(context.role);
+  // The plan and the keys are independent: load them together.
+  const [status, keys] = await Promise.all([
+    getBillingStatus(),
+    canManage ? loadKeys(context.headers) : Promise.resolve([]),
+  ]);
   const planKnown = status !== null;
   const hasApiAccess = status?.entitlements.api_access ?? false;
 
@@ -66,7 +63,7 @@ export default async function ApiKeysPage() {
               </Link>{" "}
               for the endpoints a key can call.
             </Alert>
-            <ApiKeysClient initialKeys={await loadKeys()} />
+            <ApiKeysClient initialKeys={keys} />
           </>
         )}
       </div>

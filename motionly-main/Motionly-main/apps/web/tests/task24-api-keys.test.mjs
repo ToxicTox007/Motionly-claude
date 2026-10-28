@@ -18,8 +18,10 @@ test("API keys page gates on owner/admin and the api_access plan", async () => {
   assert.match(page, /Agency-plan feature/);
   // Members see the owner/admin gate.
   assert.match(page, /Owner or admin only/);
-  // The list is loaded server-side and passed to the client component.
-  assert.match(page, /<ApiKeysClient initialKeys=\{await loadKeys\(\)\}/);
+  // The list is loaded server-side (in parallel with the plan) and passed to
+  // the client component.
+  assert.match(page, /loadKeys\(context\.headers\)/);
+  assert.match(page, /<ApiKeysClient initialKeys=\{keys\}/);
 });
 
 test("the raw key is shown exactly once with a copy button", async () => {

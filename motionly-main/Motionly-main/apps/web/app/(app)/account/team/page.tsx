@@ -1,7 +1,8 @@
 import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
-import { getWorkspaceApiContext } from "@/lib/api-auth";
 import { getBillingStatus } from "@/lib/billing";
+import { requireWorkspaceApiContext } from "@/lib/require-context";
+import { serverApiFetch } from "@/lib/server-api";
 import { canManageWorkspace } from "@/lib/workspace-roles.mjs";
 import { seatUsage } from "@/lib/team.mjs";
 import { createClient } from "@/lib/supabase/server";
@@ -68,34 +69,29 @@ async function loadMembers(workspaceId: string, selfId: string | null) {
     .sort((a, b) => order[a.role] - order[b.role]);
 }
 
-async function loadInvitations(headers: HeadersInit): Promise<Invitation[]> {
-  try {
-    const response = await fetch(`${env.apiBaseUrl}/team/invitations`, {
-      headers,
-      cache: "no-store",
-    });
-    if (!response.ok) return [];
-    const body = (await response.json()) as { invitations?: Invitation[] };
-    return body.invitations ?? [];
-  } catch {
-    return [];
-  }
+async function loadInvitations(
+  headers: Record<string, string>,
+): Promise<Invitation[]> {
+  const result = await serverApiFetch<{ invitations?: Invitation[] }>(
+    "/team/invitations",
+    { headers },
+  );
+  return result.ok && Array.isArray(result.data?.invitations)
+    ? result.data.invitations
+    : [];
 }
 
 export default async function TeamPage() {
-  const context = await getWorkspaceApiContext();
-  const role = context?.role ?? "owner";
+  const context = await requireWorkspaceApiContext("/account/team");
+  const role = context.role;
   const canManage = canManageWorkspace(role);
 
-  const members = await loadMembers(
-    context?.workspaceId ?? "",
-    context?.userId ?? null,
-  );
-  const invitations = canManage
-    ? await loadInvitations(context?.headers ?? {})
-    : [];
-
-  const status = await getBillingStatus();
+  // Members, invitations and the plan are independent: load them together.
+  const [members, invitations, status] = await Promise.all([
+    loadMembers(context.workspaceId, context.userId),
+    canManage ? loadInvitations(context.headers) : Promise.resolve([]),
+    getBillingStatus(),
+  ]);
   // Unknown plan: the seat limit is unknown too (never a fabricated Free one).
   const seatLimit = status ? status.entitlements.seats : null;
   const pending = invitations.filter(

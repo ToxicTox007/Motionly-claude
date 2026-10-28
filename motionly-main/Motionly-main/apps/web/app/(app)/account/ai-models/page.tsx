@@ -1,6 +1,6 @@
 import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
-import { getWorkspaceApiContext } from "@/lib/api-auth";
+import { requireWorkspaceApiContext } from "@/lib/require-context";
 import { canManageWorkspace } from "@/lib/workspace-roles.mjs";
 import { AiModelsClient } from "./AiModelsClient";
 
@@ -11,11 +11,9 @@ import { AiModelsClient } from "./AiModelsClient";
 // client (as the editor panels do), so the server page only resolves the
 // workspace id and the viewer's role.
 export default async function AiModelsPage() {
-  const context = await getWorkspaceApiContext();
-  const role = context?.role ?? "owner";
-  const canManage = canManageWorkspace(role);
-  const workspaceId =
-    context?.workspaceId ?? "00000000-0000-4000-8000-000000000002";
+  const context = await requireWorkspaceApiContext("/account/ai-models");
+  const canManage = canManageWorkspace(context.role);
+  const workspaceId = context.workspaceId;
 
   return (
     <AppShell title="AI models">

@@ -1,10 +1,13 @@
 import { Briefcase, KeyRound, Mail, UserRound } from "lucide-react";
+import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { EditorialLearningSettings } from "@/components/editorial-learning-settings";
 import { Button } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
-import { createClient } from "@/lib/supabase/server";
+import { getActiveMemberships, getSessionSnapshot } from "@/lib/api-auth";
 import { env } from "@/lib/env";
+import { messageFor, searchParam } from "@/lib/error-messages";
+import { requireWorkspaceApiContext } from "@/lib/require-context";
 import { logout } from "../../(auth)/actions";
 import { updatePassword, updateProfile } from "./actions";
 
@@ -18,10 +21,11 @@ export default async function AccountPage({
     typeof params.updated === "string"
       ? "Profile updated."
       : typeof params.password === "string"
-        ? "Password updated."
+        ? "Password updated. Every other session was signed out."
         : null;
-  const error =
-    typeof params.error === "string" ? params.error.replaceAll("_", " ") : null;
+  const errorCode = searchParam(params, "error");
+  // Mapped copy only: a crafted ?error= never puts its text on the page.
+  const error = errorCode ? messageFor("account", errorCode) : null;
   let email = "local@motionly.dev";
   let fullName = "Local creator";
   let company = "";
@@ -31,39 +35,28 @@ export default async function AccountPage({
   let workspaceId = "00000000-0000-4000-8000-000000000002";
 
   if (!env.skipAuthMiddleware) {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (user) {
-      email = user.email ?? email;
-      const { data: profile } = await supabase
+    const { supabase, user } = await getSessionSnapshot();
+    if (!user) redirect("/login?next=%2Faccount");
+    email = user.email ?? email;
+    // The workspace shown and configured here is the one selected for this
+    // session (cookie-aware), not whichever membership a query returns first.
+    const [{ data: profile }, context, memberships] = await Promise.all([
+      supabase
         .from("profiles")
         .select("full_name,company,role")
         .eq("id", user.id)
-        .maybeSingle();
-      fullName = String(
-        profile?.full_name ?? user.user_metadata.full_name ?? "",
-      );
-      company = String(profile?.company ?? "");
-      role = String(profile?.role ?? "");
-
-      const { data: membership } = await supabase
-        .from("workspace_members")
-        .select("workspace_id,role,workspaces(name)")
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .limit(1)
-        .maybeSingle();
-
-      const workspace = Array.isArray(membership?.workspaces)
-        ? membership?.workspaces[0]
-        : membership?.workspaces;
-      workspaceName = workspace?.name ?? workspaceName;
-      workspaceRole = membership?.role ?? workspaceRole;
-      workspaceId = membership?.workspace_id ?? workspaceId;
-    }
+        .maybeSingle(),
+      requireWorkspaceApiContext("/account"),
+      getActiveMemberships(user.id),
+    ]);
+    fullName = String(profile?.full_name ?? user.user_metadata.full_name ?? "");
+    company = String(profile?.company ?? "");
+    role = String(profile?.role ?? "");
+    workspaceId = context.workspaceId;
+    workspaceRole = context.role;
+    workspaceName =
+      memberships.find((item) => item.workspaceId === context.workspaceId)
+        ?.name ?? workspaceName;
   }
 
   return (
@@ -189,7 +182,19 @@ export default async function AccountPage({
             <KeyRound className="size-5 text-primary" aria-hidden="true" />
             <h3 className="text-lg font-bold text-foreground">Password</h3>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <label>
+              <span className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+                Current password
+              </span>
+              <input
+                name="currentPassword"
+                type="password"
+                required
+                autoComplete="current-password"
+                className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
+              />
+            </label>
             <label>
               <span className="mb-1.5 block text-xs font-semibold text-muted-foreground">
                 New password
@@ -197,7 +202,10 @@ export default async function AccountPage({
               <input
                 name="password"
                 type="password"
+                required
                 minLength={8}
+                autoComplete="new-password"
+                aria-describedby="password-policy"
                 className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
               />
             </label>
@@ -208,11 +216,21 @@ export default async function AccountPage({
               <input
                 name="confirmPassword"
                 type="password"
+                required
                 minLength={8}
+                autoComplete="new-password"
                 className="min-h-11 w-full rounded-neu border border-control bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-neu-inset-sm focus:border-focus focus:outline-none focus:ring-4 focus:ring-primary/30"
               />
             </label>
           </div>
+          <p
+            id="password-policy"
+            className="text-xs font-medium text-muted-foreground"
+          >
+            At least 8 characters with some variety, not a common password, and
+            not containing your email name. Changing it signs out every other
+            session.
+          </p>
           <Button type="submit" variant="secondary">
             Update password
           </Button>
