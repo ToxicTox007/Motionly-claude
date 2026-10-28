@@ -27,6 +27,15 @@ env:
   IMAGE_PREFIX: ghcr.io/toxictox007/motionly-claude
 
 jobs:
+  # The full production-readiness gate (lint, typecheck, unit, browser, perf,
+  # database, media, containers, scans). Image builds wait for it, so nothing
+  # is built, signed or deployed unless it passes.
+  readiness:
+    name: Production readiness
+    uses: ./.github/workflows/production-readiness.yml
+    permissions:
+      contents: read
+
   locked-dependencies:
     name: Verify locked dependencies
     runs-on: ubuntu-latest
@@ -80,7 +89,7 @@ jobs:
   build-scan-sign:
     name: Build, scan, attest, and sign ${{ matrix.component }}
     runs-on: ubuntu-latest
-    needs: [locked-dependencies]
+    needs: [locked-dependencies, readiness]
     strategy:
       fail-fast: false
       matrix:

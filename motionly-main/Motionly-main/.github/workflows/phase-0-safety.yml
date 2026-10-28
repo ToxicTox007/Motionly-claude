@@ -394,7 +394,10 @@ jobs:
           sh -lc "cd /app/apps/renderer && pnpm render:smoke"
       - name: Verify web startup health
         run: |
-          docker run -d --name motionly-web-health -p 13000:3000 motionly-web:test
+          # The web server validates its runtime configuration at startup and
+          # refuses to boot without it; these CI-only values satisfy that check
+          # and never reach a real service (/login needs neither the API nor Auth).
+          docker run -d --name motionly-web-health -p 13000:3000 -e APP_ENV=test -e PUBLIC_ORIGIN=http://127.0.0.1:13000 -e API_INTERNAL_URL=http://api.invalid -e SUPABASE_URL=http://supabase.invalid -e SUPABASE_ANON_KEY=ci-only-anon-key motionly-web:test
           for attempt in {1..30}; do
             curl --fail --silent http://127.0.0.1:13000/login && break
             if [ "$attempt" = 30 ]; then docker logs motionly-web-health; exit 1; fi

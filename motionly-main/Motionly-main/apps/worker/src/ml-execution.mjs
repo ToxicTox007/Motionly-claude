@@ -68,7 +68,8 @@ export function cpuVisionQueues(queueNames, environment = process.env) {
   return queueNames.filter((queue) => {
     const rule = CPU_VISION_QUEUE_SWITCHES[queue];
     return Boolean(
-      rule && rule.values.includes(value(environment, rule.setting).toLowerCase()),
+      rule &&
+      rule.values.includes(value(environment, rule.setting).toLowerCase()),
     );
   });
 }

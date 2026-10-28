@@ -11,7 +11,10 @@ import { getJobsPaged, recordCanceledJob, snapshots } from "./queue-bridge.mjs";
 test("bullDelayMs converts positive seconds to bounded milliseconds", () => {
   assert.equal(bullDelayMs(5), 5000);
   assert.equal(bullDelayMs("2.5"), 2500);
-  assert.equal(bullDelayMs(MAX_ENQUEUE_DELAY_SECONDS + 100), MAX_ENQUEUE_DELAY_SECONDS * 1000);
+  assert.equal(
+    bullDelayMs(MAX_ENQUEUE_DELAY_SECONDS + 100),
+    MAX_ENQUEUE_DELAY_SECONDS * 1000,
+  );
 });
 
 test("bullDelayMs treats missing/zero/invalid as immediate (undefined)", () => {

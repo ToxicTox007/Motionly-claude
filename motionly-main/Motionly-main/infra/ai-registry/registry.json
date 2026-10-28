@@ -18,10 +18,7 @@
       "data_processor": {
         "display_name": "Amazon Bedrock (Converse)",
         "purpose": "Serves planning chat, object detection and image captions through the Bedrock Converse API using cross-region (APAC) inference profiles from the source region ap-south-1 (Nova Pro for planning, Nova Lite for vision). Requests and results may be processed in any APAC region of the profile (ap-northeast-1, ap-northeast-2, ap-northeast-3, ap-south-1, ap-southeast-1, ap-southeast-2). Data sent between regions stays on the AWS network and is encrypted in transit; CloudTrail in ap-south-1 records the region that processed each request. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": [
-          "text",
-          "image"
-        ],
+        "data_categories": ["text", "image"],
         "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
       }
     },
@@ -43,9 +40,7 @@
       "data_processor": {
         "display_name": "Amazon Bedrock (Titan Text Embeddings, InvokeModel)",
         "purpose": "Produces text embeddings through the Bedrock InvokeModel API in ap-south-1 (Amazon Titan Text Embeddings V2). This is an in-region call: requests, results and your data are processed and stored only in ap-south-1 and do not leave that region. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": [
-          "text"
-        ],
+        "data_categories": ["text"],
         "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
       }
     },
@@ -75,9 +70,7 @@
       "data_processor": {
         "display_name": "Amazon Bedrock Data Automation",
         "purpose": "Transcribes and diarizes audio through Bedrock Data Automation using the cross-region (APAC) data-automation profile from the source region ap-south-1. Requests and results may be processed in any APAC region of the profile (ap-northeast-1, ap-northeast-2, ap-northeast-3, ap-south-1, ap-south-2, ap-southeast-1, ap-southeast-2, ap-southeast-4); per the AWS cross-region inference documentation your data is only stored in the source region ap-south-1 while requests and results may move within the geography. The audio is staged in an S3 bucket you own in ap-south-1 under the bda/ prefix, processed asynchronously, and the structured output is read back and deleted. Credentials come from a narrowly scoped IAM user's static access key mounted as secret files. Amazon states Bedrock does not retain inputs or outputs and does not use them to train models.",
-        "data_categories": [
-          "audio"
-        ],
+        "data_categories": ["audio"],
         "policy_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html"
       }
     },
@@ -104,9 +97,7 @@
       "revision": "nova-pro-v1-apac-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": [
-        "planning.chat"
-      ]
+      "capabilities": ["planning.chat"]
     },
     {
       "id": "bedrock-vision-model",
@@ -114,10 +105,7 @@
       "revision": "nova-lite-v1-apac-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": [
-        "vision.object_detection",
-        "vision.caption"
-      ]
+      "capabilities": ["vision.object_detection", "vision.caption"]
     },
     {
       "id": "bedrock-embeddings-model",
@@ -125,9 +113,7 @@
       "revision": "titan-embed-text-v2-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": [
-        "embeddings.text"
-      ]
+      "capabilities": ["embeddings.text"]
     },
     {
       "id": "bedrock-audio-model",
@@ -135,10 +121,7 @@
       "revision": "bda-audio-apac-2026-10-01",
       "licence": "proprietary",
       "commercial_use": true,
-      "capabilities": [
-        "transcription.speech_to_text",
-        "audio.diarization"
-      ]
+      "capabilities": ["transcription.speech_to_text", "audio.diarization"]
     },
     {
       "id": "mediapipe-selfie-segmenter",
@@ -148,9 +131,7 @@
       "commercial_use": true,
       "source_type": "weights_file",
       "source_url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite",
-      "capabilities": [
-        "matte.segmentation"
-      ],
+      "capabilities": ["matte.segmentation"],
       "weights_sha256": "490e9ea734313e0de10fa0cd9e3c6133e36ea4db2b7a49bde9ef019f72796b8e",
       "verified_at": "2026-10-24"
     },
@@ -162,9 +143,7 @@
       "commercial_use": true,
       "source_type": "weights_file",
       "source_url": "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/latest/yamnet.tflite",
-      "capabilities": [
-        "audio.sound_classification"
-      ],
+      "capabilities": ["audio.sound_classification"],
       "weights_sha256": "4d8b4a53282dc83ef04e3e7dbc4fbc98082e34e44ed798e16c3a0cdd4c584faf",
       "verified_at": "2026-10-24"
     },
@@ -176,9 +155,7 @@
       "commercial_use": true,
       "source_type": "python_package",
       "source_url": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
-      "capabilities": [
-        "audio.stem_separation"
-      ],
+      "capabilities": ["audio.stem_separation"],
       "verified_at": "2026-10-24"
     }
   ],

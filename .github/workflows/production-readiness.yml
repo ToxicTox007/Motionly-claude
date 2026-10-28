@@ -1,0 +1,581 @@
+name: Production readiness
+
+# Root copy of motionly-main/Motionly-main/.github/workflows/phase-0-safety.yml.
+# GitHub only runs workflows from the repository root, so this file is what
+# CI executes; the nested file stays as the contract the API tests pin.
+# scripts/verify/workflow_parity.py fails when the two drift apart.
+# Supply chain calls this workflow (workflow_call) and its image builds wait
+# for it, so no release image is built, signed or deployed unless every job
+# here passes. The staging canary runs only on a manual dispatch.
+
+on:
+  workflow_call:
+    inputs:
+      run_staging_canary:
+        description: Run the protected staging-sandbox deployment and canary verification
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      run_staging_canary:
+        description: Run the protected staging-sandbox deployment and canary verification
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: motionly-main/Motionly-main
+
+env:
+  PNPM_VERSION: 9.15.4
+  NODE_VERSION: "24"
+  PYTHON_VERSION: "3.12"
+  SUPABASE_CLI_VERSION: 2.104.0
+
+jobs:
+  cpu-stage-verify:
+    name: CPU-stage verify (fresh checkout)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: motionly-main/Motionly-main/infra/temporal/server/go.mod
+          cache-dependency-path: motionly-main/Motionly-main/infra/temporal/server/go.sum
+      - name: Install locked dependencies and CPU media tools
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Run CPU-stage verification stages
+        env:
+          MOTIONLY_PYTHON: python
+        run: pnpm verify --stage static,unit,leakage,contracts,media,deadcode
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-stage-verify-${{ github.sha }}
+          path: motionly-main/Motionly-main/test-results/
+          if-no-files-found: warn
+
+  quality-and-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Verify generated FastAPI contract
+        run: pnpm contracts:check
+      - name: Lint and typecheck
+        run: |
+          pnpm lint
+          pnpm typecheck
+          cd apps/api
+          python -m ruff check app tests scripts
+      - name: Run unit and recorded-provider contracts
+        run: |
+          pnpm test
+          cd apps/api
+          APP_ENV=test python -m pytest -q
+      - name: Enforce forward-only migrations
+        run: bash scripts/check_forward_migrations.sh origin/main
+
+  performance-harness-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Verify production-candidate contracts without live infrastructure
+        run: |
+          node scripts/verify_handoff_acceptance.mjs
+          node --test scripts/perf/*.test.mjs scripts/canary-gate.test.mjs scripts/external-verification-gate.test.mjs scripts/production-candidate-evidence.test.mjs
+          pnpm --filter @motionly/web exec node --test tests/performance-harness.test.mjs
+
+  empty-database-and-repositories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - name: Install locked dependencies (includes the pinned Supabase CLI)
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Build the database from empty, then pgTAP, repository contracts and schema-matches-code
+        env:
+          MOTIONLY_PYTHON: python
+        run: pnpm verify --stage db
+      - name: Upload database verification results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: empty-database-${{ github.sha }}
+          path: motionly-main/Motionly-main/test-results/
+          if-no-files-found: warn
+
+  # AWS: static template validation and the local release rehearsal (the real
+  # release agent against moto and a local registry). Never calls AWS.
+  aws-release-rehearsal:
+    name: AWS template checks and release rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/infra/aws/tools/requirements.lock
+      - name: Free runner disk for the CPU-stage images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Template checks, image build, release rehearsal
+        env:
+          MOTIONLY_PYTHON: python
+        run: pnpm verify --stage aws
+      - name: Upload AWS results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-release-rehearsal-${{ github.sha }}
+          path: motionly-main/Motionly-main/test-results/
+          if-no-files-found: warn
+
+  # The production Compose topology without GPU hardware (slim size). The runner
+  # size for the full size is pending Decision D4.
+  cpu-stage-stack:
+    name: CPU-stage stack from empty volumes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - name: Free runner disk for the CPU-stage images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install locked dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Build, start from empty volumes, check, and tear down
+        env:
+          MOTIONLY_PYTHON: python
+          CPU_STAGE_SIZE: slim
+        run: pnpm verify --stage stack
+      - name: Upload stack results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-stage-stack-${{ github.sha }}
+          path: motionly-main/Motionly-main/test-results/
+          if-no-files-found: warn
+
+  media-goldens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Chromium and FFmpeg renderer
+        run: docker build --file apps/worker/Dockerfile --tag motionly-renderer-test .
+      - name: Verify Remotion upload-to-export timeline cuts
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-renderer-test
+          sh -lc "cd /app/apps/renderer && pnpm test:encoded"
+      - name: Verify effect, caption, transition, and framing goldens
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-renderer-test
+          sh -lc "cd /app/apps/renderer && pnpm test:golden"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - name: Verify FFmpeg golden and 512 MiB streaming ceiling
+        working-directory: motionly-main/Motionly-main/apps/api
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements-dev.lock
+          APP_ENV=test python -m pytest -q tests/test_golden_media_pipeline.py tests/test_phase8_integrity.py::test_512_mib_upload_is_streamed_with_bounded_python_memory
+
+  redis-contracts:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Verify Redis retry, failure, and idempotency
+        env:
+          RUN_REDIS_CONTRACTS: "true"
+          REDIS_URL: redis://127.0.0.1:6379/15
+        run: pnpm --filter @motionly/worker test
+      - name: Verify gateway budgets, leases, and circuits across processes
+        working-directory: motionly-main/Motionly-main/apps/api
+        env:
+          RUN_REDIS_CONTRACTS: "true"
+          REDIS_URL: redis://127.0.0.1:6379/14
+        run: python -m pytest -q tests/test_model_gateway_redis.py
+
+  # The browser suite against the CPU stage behind the CDN simulator, in
+  # Chromium, Firefox, WebKit and two phone layouts (scripts/verify/stages.json).
+  cpu-stage-browser:
+    name: Browser suite against the CPU stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - name: Free runner disk for the CPU-stage images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Install locked dependencies, browsers and ffmpeg
+        run: |
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+          pnpm --filter @motionly/web exec playwright install --with-deps chromium firefox webkit
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg gnupg
+          # k6 for the perf-stage API-workflow smoke.
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install -y k6
+      - name: Stack from empty volumes, browser suite, perf smoke and budgets, verdict, tear down
+        env:
+          MOTIONLY_PYTHON: python
+          CPU_STAGE_SIZE: slim
+        run: pnpm verify --stage browser,perf
+      - name: Upload browser results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-stage-browser-${{ github.sha }}
+          path: motionly-main/Motionly-main/test-results/
+          if-no-files-found: warn
+
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production containers
+        run: |
+          docker build --file apps/api/Dockerfile --tag motionly-api:test .
+          docker build --file apps/worker/Dockerfile --tag motionly-worker:test .
+          docker build --file apps/web/Dockerfile --tag motionly-web:test .
+      - name: Verify API startup health
+        run: |
+          # Non-local environments refuse to start without JWT and Supabase
+          # settings; these CI-only values satisfy startup validation and are
+          # never used to reach a real service.
+          docker run -d --name motionly-api-health -p 18000:8000 -e APP_ENV=test -e SUPABASE_JWT_SECRET=ci-only-jwt-secret -e SUPABASE_URL=http://supabase.invalid -e SUPABASE_SERVICE_ROLE_KEY=ci-only-service-role motionly-api:test
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:18000/health/live && break
+            if [ "$attempt" = 30 ]; then docker logs motionly-api-health; exit 1; fi
+            sleep 2
+          done
+      - name: Verify worker startup contract
+        run: docker run --rm motionly-worker:test node src/worker.mjs --check
+      - name: Verify Chromium smoke render
+        run: >-
+          docker run --rm
+          --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+          motionly-worker:test
+          sh -lc "cd /app/apps/renderer && pnpm render:smoke"
+      - name: Verify web startup health
+        run: |
+          # The web server validates its runtime configuration at startup and
+          # refuses to boot without it; these CI-only values satisfy that check
+          # and never reach a real service (/login needs neither the API nor Auth).
+          docker run -d --name motionly-web-health -p 13000:3000 -e APP_ENV=test -e PUBLIC_ORIGIN=http://127.0.0.1:13000 -e API_INTERNAL_URL=http://api.invalid -e SUPABASE_URL=http://supabase.invalid -e SUPABASE_ANON_KEY=ci-only-anon-key motionly-web:test
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:13000/login && break
+            if [ "$attempt" = 30 ]; then docker logs motionly-web-health; exit 1; fi
+            sleep 2
+          done
+
+  secret-and-dependency-scans:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan repository secrets without exposing findings
+        run: >-
+          docker run --rm
+          --volume "${{ github.workspace }}:/repo"
+          zricethezav/gitleaks:v8.24.2
+          detect --source=/repo --no-git --redact --exit-code=1
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - run: pnpm audit --prod --audit-level low
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Scan hash-locked Python dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: -r motionly-main/Motionly-main/apps/api/requirements.lock
+
+  phase-10-prelaunch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: motionly-main/Motionly-main/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            motionly-main/Motionly-main/apps/api/requirements-dev.lock
+            motionly-main/Motionly-main/apps/api/requirements-ml.lock
+      - uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Install pre-launch gate dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          pnpm install --frozen-lockfile
+          python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
+      - name: Verify documentation structure
+        run: pnpm docs:check
+      - name: Verify documented launch evidence
+        run: node scripts/verify_prelaunch_evidence.mjs
+      - name: Run Phase 10 pre-launch contracts
+        working-directory: motionly-main/Motionly-main/apps/api
+        run: APP_ENV=test python -m pytest -q tests/test_phase10_prelaunch.py tests/test_billing.py
+      - name: Verify backup and restore drill
+        run: |
+          supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
+          supabase db reset --local
+          eval "$(supabase status -o env)"
+          psql "$DB_URL" --command "drop database if exists motionly_restore;"
+          psql "$DB_URL" --command "create database motionly_restore;"
+          psql "$DB_URL" --set ON_ERROR_STOP=1 --file scripts/backup_restore_seed.sql
+          MOTIONLY_BACKUP_RESTORE_ACK=restore-target bash scripts/verify_backup_restore.sh "$DB_URL" "postgresql://postgres:postgres@127.0.0.1:54322/motionly_restore"
+
+  staging-canary:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_staging_canary == true
+    needs:
+      - quality-and-contracts
+      - performance-harness-contracts
+      - empty-database-and-repositories
+      - media-goldens
+      - redis-contracts
+      - cpu-stage-browser
+      - containers
+      - secret-and-dependency-scans
+      - phase-10-prelaunch
+    runs-on: ubuntu-latest
+    environment: external-provider-verification
+    env:
+      DEPLOY_TOKEN: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+      STAGING_DEPLOY_HOOK: ${{ secrets.STAGING_DEPLOY_HOOK }}
+      STAGING_HEALTH_URL: ${{ secrets.STAGING_HEALTH_URL }}
+      STAGING_PROVIDER_CONTRACT_URL: ${{ secrets.STAGING_PROVIDER_CONTRACT_URL }}
+      CANARY_PROMOTE_HOOK: ${{ secrets.CANARY_PROMOTE_HOOK }}
+      CANARY_ROLLBACK_HOOK: ${{ secrets.CANARY_ROLLBACK_HOOK }}
+      CANARY_METRICS_URL: ${{ secrets.CANARY_METRICS_URL }}
+      EXTERNAL_VERIFICATION_AUTHORIZATION: ${{ secrets.EXTERNAL_VERIFICATION_AUTHORIZATION }}
+      EXTERNAL_VERIFICATION_TARGET: staging-sandbox
+      EXTERNAL_VERIFICATION_RUN_ID: ${{ github.run_id }}
+      EXTERNAL_VERIFICATION_ALLOWED_HOSTS: ${{ secrets.EXTERNAL_VERIFICATION_ALLOWED_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Authorize staging-sandbox verification endpoints
+        run: >-
+          node scripts/external-verification-gate.mjs
+          --evidence-dir test-results/external-verification
+          --endpoint "$STAGING_DEPLOY_HOOK"
+          --endpoint "$STAGING_HEALTH_URL"
+          --endpoint "$STAGING_PROVIDER_CONTRACT_URL"
+          --endpoint "$CANARY_PROMOTE_HOOK"
+          --endpoint "$CANARY_ROLLBACK_HOOK"
+          --endpoint "$CANARY_METRICS_URL"
+      - name: Deploy immutable revision with forward-only migrations
+        run: |
+          : "${DEPLOY_TOKEN:?missing staging deploy token}"
+          : "${STAGING_DEPLOY_HOOK:?missing staging deploy hook}"
+          curl --fail --silent --show-error --request POST \
+            --header "authorization: Bearer $DEPLOY_TOKEN" \
+            --header "content-type: application/json" \
+            --data "{\"revision\":\"$GITHUB_SHA\",\"migration_strategy\":\"forward-only\"}" \
+            "$STAGING_DEPLOY_HOOK"
+      - name: Verify staging and provider sandboxes
+        run: |
+          : "${STAGING_HEALTH_URL:?missing staging health URL}"
+          : "${STAGING_PROVIDER_CONTRACT_URL:?missing provider contract URL}"
+          curl --fail --silent --show-error --retry 20 --retry-delay 6 "$STAGING_HEALTH_URL"
+          curl --fail --silent --show-error --request POST \
+            --header "authorization: Bearer $DEPLOY_TOKEN" \
+            --header "content-type: application/json" \
+            --data "{\"revision\":\"$GITHUB_SHA\",\"mode\":\"sandbox\"}" \
+            "$STAGING_PROVIDER_CONTRACT_URL"
+      - name: Progressively promote, enforce SLOs, and roll back failures
+        run: >-
+          node scripts/canary-gate.mjs
+          --contract scripts/perf/slo-contract.json
+          --evidence-dir test-results/canary
+          --revision "$GITHUB_SHA"
+      - name: Seal protected production-candidate evidence
+        run: >-
+          node scripts/production-candidate-evidence.mjs
+          --revision "$GITHUB_SHA"
+          --external-evidence-dir test-results/external-verification
+          --canary-evidence-dir test-results/canary
+          --output test-results/production-candidate/acceptance.json
+      - name: Upload canary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-canary-${{ github.sha }}
+          path: |
+            motionly-main/Motionly-main/test-results/external-verification/
+            motionly-main/Motionly-main/test-results/canary/
+            motionly-main/Motionly-main/test-results/production-candidate/
+          if-no-files-found: warn

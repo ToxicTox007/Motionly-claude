@@ -38,6 +38,10 @@
         {
           "name": "actionlint",
           "run": "scripts/verify/actionlint.sh"
+        },
+        {
+          "name": "root CI workflow mirrors the nested workflow",
+          "run": "{python} scripts/verify/workflow_parity.py"
         }
       ]
     },

@@ -20,3 +20,8 @@ if [[ ! -x "$binary" ]]; then
 fi
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 "$binary" -config-file .github/actionlint.yaml -shellcheck= .github/workflows/*.yml
+# The git repository root sits above this monorepo; GitHub runs its workflows
+# (the root copies of these, see scripts/verify/workflow_parity.py).
+if compgen -G "../../.github/workflows/*.yml" >/dev/null; then
+  "$binary" -config-file .github/actionlint.yaml -shellcheck= ../../.github/workflows/*.yml
+fi

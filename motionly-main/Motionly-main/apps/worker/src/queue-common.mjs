@@ -321,7 +321,11 @@ export function bullPriority(priority) {
 export const MAX_ENQUEUE_DELAY_SECONDS = 86_400;
 
 export function bullDelayMs(delaySeconds) {
-  if (delaySeconds === undefined || delaySeconds === null || delaySeconds === "") {
+  if (
+    delaySeconds === undefined ||
+    delaySeconds === null ||
+    delaySeconds === ""
+  ) {
     return undefined;
   }
   const parsed = Number(delaySeconds);
