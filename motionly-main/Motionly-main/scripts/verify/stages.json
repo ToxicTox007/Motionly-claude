@@ -59,6 +59,11 @@
           "run": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination={results}/junit/web.xml tests/*.test.mjs"
         },
         {
+          "name": "web component tests (vitest, jsdom)",
+          "cwd": "apps/web",
+          "run": "VITEST_JUNIT={results}/junit/web-components.xml node node_modules/vitest/vitest.mjs run"
+        },
+        {
           "name": "web browser specs load (playwright --list)",
           "cwd": "apps/web",
           "run": "timeout 180 node node_modules/@playwright/test/cli.js test --list && MOTIONLY_CPU_STAGE_STATE=/dev/null timeout 180 node node_modules/@playwright/test/cli.js test --config playwright.browser.config.mjs --list"
@@ -101,7 +106,7 @@
         },
         {
           "name": "skip audit",
-          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --pytest {results}/junit/api.xml --node {results}/junit/web.xml --node {results}/junit/worker.xml --node {results}/junit/renderer-ts.xml --node {results}/junit/renderer-mjs.xml --node {results}/junit/scripts.xml --node {results}/junit/cdn-sim.xml --summary {results}/skip-audit.json"
+          "run": "{python} scripts/verify/skip_audit.py --manifest tests/gpu-stage.json --pytest {results}/junit/api.xml --node {results}/junit/web.xml --node {results}/junit/web-components.xml --node {results}/junit/worker.xml --node {results}/junit/renderer-ts.xml --node {results}/junit/renderer-mjs.xml --node {results}/junit/scripts.xml --node {results}/junit/cdn-sim.xml --summary {results}/skip-audit.json"
         }
       ]
     },
