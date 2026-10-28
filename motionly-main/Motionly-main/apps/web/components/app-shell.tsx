@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { type PixelIconName } from "@/components/pixel-icons";
 import { ThemeMenu } from "@/components/theme-menu";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
@@ -12,13 +13,16 @@ import {
 } from "@/components/command-palette";
 import { env } from "@/lib/env";
 import { usageMeter, type UsageMeter } from "@/lib/usage-meter.mjs";
-import { WORKSPACE_COOKIE_NAME } from "@/lib/api-auth";
+import {
+  WORKSPACE_COOKIE_NAME,
+  getActiveMemberships,
+  getSessionSnapshot,
+} from "@/lib/api-auth";
 import {
   canManageBilling,
   canManageWorkspace,
-  normalizeWorkspaceRole,
 } from "@/lib/workspace-roles.mjs";
-import { createClient } from "@/lib/supabase/server";
+import { serverApiFetch } from "@/lib/server-api";
 import type { BillingStatusSummary } from "@motionly/shared";
 import { PageTitle } from "@/components/page-title";
 
@@ -195,7 +199,9 @@ export async function AppShell({
   );
 }
 
-async function loadShellState() {
+// Memoized per request: the shell, the page and the auth context share the
+// session, membership and billing-status lookups.
+const loadShellState = cache(async () => {
   const fallback: {
     creatorName: string;
     planName: string;
@@ -213,57 +219,40 @@ async function loadShellState() {
       remaining_renders: 10,
       percent_used: 0,
     }),
-    // Default to showing billing (owner) until we resolve the member's role;
-    // skipAuthMiddleware local dev acts as the owner.
-    showBilling: true,
-    showApiKeys: true,
+    // Management entries stay hidden until the viewer's role is known (fail
+    // closed). Only the skipAuthMiddleware local bypass acts as the owner.
+    showBilling: env.skipAuthMiddleware,
+    showApiKeys: env.skipAuthMiddleware,
     // A single (local/dev) workspace: the switcher hides itself below two.
     workspaces: [],
     workspaceId: null,
   };
   if (env.skipAuthMiddleware) return fallback;
-  const supabase = await createClient();
-  const [
-    {
-      data: { user },
-    },
-    {
-      data: { session },
-    },
-  ] = await Promise.all([supabase.auth.getUser(), supabase.auth.getSession()]);
+  const { supabase, user, session } = await getSessionSnapshot();
   if (!user || !session?.access_token) return fallback;
-  const [{ data: profile }, { data: memberships }] = await Promise.all([
+  const [{ data: profile }, memberships] = await Promise.all([
     supabase
       .from("profiles")
       .select("full_name")
       .eq("id", user.id)
       .maybeSingle(),
-    supabase
-      .from("workspace_members")
-      .select("workspace_id, role, workspaces(name)")
-      .eq("user_id", user.id)
-      .eq("status", "active"),
+    getActiveMemberships(user.id),
   ]);
   const selectedWorkspaceId = (await cookies()).get(
     WORKSPACE_COOKIE_NAME,
   )?.value;
   const workspaceId =
     selectedWorkspaceId ??
-    (memberships?.length === 1 ? String(memberships[0].workspace_id) : null);
+    (memberships.length === 1 ? memberships[0].workspaceId : null);
   // Every workspace the viewer belongs to, for the app-shell switcher.
-  const workspaces = (memberships ?? []).map((item) => {
-    const workspace = Array.isArray(item.workspaces)
-      ? item.workspaces[0]
-      : item.workspaces;
-    return {
-      id: String(item.workspace_id),
-      name: workspace?.name ?? "Workspace",
-    };
-  });
-  const membership = memberships?.find(
-    (item) => String(item.workspace_id) === workspaceId,
+  const workspaces = memberships.map((item) => ({
+    id: item.workspaceId,
+    name: item.name,
+  }));
+  const membership = memberships.find(
+    (item) => item.workspaceId === workspaceId,
   );
-  if (!membership?.workspace_id) {
+  if (!membership) {
     return {
       ...fallback,
       creatorName: profile?.full_name || fallback.creatorName,
@@ -271,17 +260,19 @@ async function loadShellState() {
       workspaceId,
     };
   }
-  const role = normalizeWorkspaceRole((membership as { role?: unknown }).role);
+  const role = membership.role;
   const showBilling = canManageBilling(role);
   const showApiKeys = canManageWorkspace(role);
-  const response = await fetch(`${env.apiBaseUrl}/billing/status`, {
-    headers: {
-      authorization: `Bearer ${session.access_token}`,
-      "x-motionly-workspace-id": String(membership.workspace_id),
+  const billing = await serverApiFetch<BillingStatusSummary>(
+    "/billing/status",
+    {
+      headers: {
+        authorization: `Bearer ${session.access_token}`,
+        "x-motionly-workspace-id": membership.workspaceId,
+      },
     },
-    cache: "no-store",
-  });
-  if (!response.ok)
+  );
+  if (!billing.ok || !billing.data?.current_plan)
     return {
       ...fallback,
       creatorName: profile?.full_name || fallback.creatorName,
@@ -290,7 +281,7 @@ async function loadShellState() {
       workspaces,
       workspaceId,
     };
-  const status = (await response.json()) as BillingStatusSummary;
+  const status = billing.data;
   return {
     creatorName: profile?.full_name || fallback.creatorName,
     planName: `${status.current_plan.name} Plan`,
@@ -300,7 +291,7 @@ async function loadShellState() {
     workspaces,
     workspaceId,
   };
-}
+});
 
 function shellCommands(shell: {
   showBilling: boolean;

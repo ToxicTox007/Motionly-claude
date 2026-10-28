@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { isAdminIdentityAllowed } from "@/lib/admin-auth.mjs";
 import {
   canManageBilling,
@@ -15,7 +16,58 @@ export type WorkspaceRole = "owner" | "admin" | "member";
 
 export { canManageBilling };
 
-export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
+// Memoized per request (React cache): a page, its AppShell and the helpers it
+// calls share one Supabase getUser/getSession/membership lookup instead of
+// repeating them.
+export const getWorkspaceApiContext = cache((requestedWorkspaceId?: string) =>
+  resolveWorkspaceApiContext(requestedWorkspaceId),
+);
+
+export type ActiveMembership = {
+  workspaceId: string;
+  role: WorkspaceRole;
+  name: string;
+};
+
+/** The signed-in viewer's Supabase user and session, once per request. */
+export const getSessionSnapshot = cache(async () => {
+  const supabase = await createClient();
+  const [
+    {
+      data: { user },
+    },
+    {
+      data: { session },
+    },
+  ] = await Promise.all([supabase.auth.getUser(), supabase.auth.getSession()]);
+  return { supabase, user, session };
+});
+
+/** The viewer's active workspace memberships, once per request. */
+export const getActiveMemberships = cache(
+  async (userId: string): Promise<ActiveMembership[]> => {
+    const { supabase } = await getSessionSnapshot();
+    const { data } = await supabase
+      .from("workspace_members")
+      .select("workspace_id, role, workspaces(name)")
+      .eq("user_id", userId)
+      .eq("status", "active");
+    return (data ?? []).map((item) => {
+      const workspace = Array.isArray(item.workspaces)
+        ? item.workspaces[0]
+        : item.workspaces;
+      return {
+        workspaceId: String(item.workspace_id),
+        role: normalizeWorkspaceRole((item as { role?: unknown }).role),
+        name:
+          (workspace as { name?: string } | null | undefined)?.name ??
+          "Workspace",
+      };
+    });
+  },
+);
+
+async function resolveWorkspaceApiContext(requestedWorkspaceId?: string) {
   if (env.skipAuthMiddleware) {
     const mockUserId = "00000000-0000-4000-8000-000000000001";
     const mockWorkspaceId = "00000000-0000-4000-8000-000000000002";
@@ -30,25 +82,15 @@ export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
       },
     };
   }
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const { user, session } = await getSessionSnapshot();
 
   if (!user || !session?.access_token) {
     return null;
   }
 
-  const { data: memberships } = await supabase
-    .from("workspace_members")
-    .select("workspace_id, role")
-    .eq("user_id", user.id)
-    .eq("status", "active");
+  const memberships = await getActiveMemberships(user.id);
 
-  if (!memberships?.length) {
+  if (!memberships.length) {
     redirect("/dashboard?error=workspace_missing");
   }
 
@@ -56,19 +98,17 @@ export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
   const selectedWorkspaceId =
     requestedWorkspaceId?.trim() ||
     cookieStore.get(WORKSPACE_COOKIE_NAME)?.value?.trim() ||
-    (memberships.length === 1 ? String(memberships[0].workspace_id) : "");
+    (memberships.length === 1 ? memberships[0].workspaceId : "");
   const membership = memberships.find(
-    (item) => String(item.workspace_id) === selectedWorkspaceId,
+    (item) => item.workspaceId === selectedWorkspaceId,
   );
 
-  if (!membership?.workspace_id) {
+  if (!membership) {
     redirect("/dashboard?error=workspace_selection_required");
   }
 
-  const workspaceId = String(membership.workspace_id);
-  const role: WorkspaceRole = normalizeWorkspaceRole(
-    (membership as { role?: unknown }).role,
-  );
+  const workspaceId = membership.workspaceId;
+  const role: WorkspaceRole = membership.role;
   return {
     userId: user.id,
     workspaceId,
@@ -81,7 +121,7 @@ export async function getWorkspaceApiContext(requestedWorkspaceId?: string) {
   };
 }
 
-export async function getAdminApiContext() {
+export const getAdminApiContext = cache(async () => {
   const context = await getWorkspaceApiContext();
   if (!context) return null;
   const allowed = isAdminIdentityAllowed(context, {
@@ -89,4 +129,8 @@ export async function getAdminApiContext() {
     adminWorkspaceIds: process.env.ADMIN_WORKSPACE_IDS,
   });
   return allowed ? context : null;
-}
+});
+
+export type WorkspaceApiContext = NonNullable<
+  Awaited<ReturnType<typeof getWorkspaceApiContext>>
+>;

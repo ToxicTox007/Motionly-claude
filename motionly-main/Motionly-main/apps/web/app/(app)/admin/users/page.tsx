@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
+import { messageFor } from "@/lib/error-messages";
 import { CopyLink } from "./CopyLink";
 import { RefundPanel } from "./RefundPanel";
 import { createResetLink, dismissResetRequest, setUserBan } from "./actions";
@@ -49,14 +50,6 @@ async function fetchResetRequests(
   return payload.requests ?? [];
 }
 
-const ERROR_MESSAGES: Record<string, string> = {
-  user_not_found: "No account uses that email.",
-  reset_link_failed: "Could not create a reset link. Try again.",
-  email_required: "Enter an email to search.",
-  request_required: "Select a request to act on.",
-  user_required: "Select a user to act on.",
-};
-
 export default async function AdminUsersPage({
   searchParams,
 }: {
@@ -79,7 +72,7 @@ export default async function AdminUsersPage({
     <AppShell title="Users">
       {errorCode && (
         <Alert tone="danger" className="mb-5">
-          {ERROR_MESSAGES[errorCode] ?? "That action could not be completed."}
+          {messageFor("admin", errorCode)}
         </Alert>
       )}
       {link && (
