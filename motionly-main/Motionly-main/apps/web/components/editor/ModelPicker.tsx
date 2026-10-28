@@ -233,13 +233,13 @@ function OptionRow({
           {labels.map((label) => (
             <span
               key={label}
-              className="inline-flex items-center rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-muted-foreground shadow-neu-raised-sm"
+              className="inline-flex items-center rounded-full bg-surface px-2 py-0.5 text-xxs font-semibold text-muted-foreground shadow-neu-raised-sm"
             >
               {labelText(label)}
             </span>
           ))}
           {quotaText ? (
-            <span className="inline-flex items-center rounded-full bg-surface px-2 py-0.5 text-[11px] font-semibold text-muted-foreground shadow-neu-raised-sm">
+            <span className="inline-flex items-center rounded-full bg-surface px-2 py-0.5 text-xxs font-semibold text-muted-foreground shadow-neu-raised-sm">
               {quotaText}
             </span>
           ) : null}

@@ -149,7 +149,7 @@ export function ProcessingProjectScreen({
                     active ? "bg-surface shadow-neu-inset-sm" : "opacity-60",
                   )}
                 >
-                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-surface text-[10px] font-bold text-foreground shadow-neu-raised-sm">
+                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-surface text-2xs font-bold text-foreground shadow-neu-raised-sm">
                     {completed ? "✓" : active ? "▶" : index + 1}
                   </div>
                   <div className="min-w-0">
@@ -162,7 +162,7 @@ export function ProcessingProjectScreen({
                       {stage.label}
                     </p>
                     {active ? (
-                      <p className="mt-0.5 text-[10px] font-medium leading-normal text-muted-foreground">
+                      <p className="mt-0.5 text-2xs font-medium leading-normal text-muted-foreground">
                         {stage.description}
                       </p>
                     ) : null}

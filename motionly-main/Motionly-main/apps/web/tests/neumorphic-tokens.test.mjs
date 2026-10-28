@@ -18,9 +18,14 @@ const layout = readFileSync(
   "utf8",
 );
 
-function themeTokens(selector) {
-  const start = css.indexOf(`${selector} {`);
-  assert.notEqual(start, -1, `theme block ${selector} exists`);
+// One token block (FE-39). Its selector list keeps matching the root
+// element, an explicit data-theme="light" and the system light preference.
+const TOKEN_SELECTOR =
+  ':root,\n:root[data-theme="light"],\n:root:not([data-theme="dark"]) {';
+
+function themeTokens() {
+  const start = css.indexOf(TOKEN_SELECTOR);
+  assert.notEqual(start, -1, "the token block exists");
   const block = css.slice(start, css.indexOf("}", start));
   return Object.fromEntries(
     [
@@ -55,15 +60,12 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-const BLOCKS = {
-  root: themeTokens(":root"),
-  light: themeTokens(':root[data-theme="light"]'),
-  system: themeTokens(':root:not([data-theme="dark"])'),
-};
+const BLOCKS = { root: themeTokens() };
 
-test("the three theme blocks hold identical light values", () => {
-  assert.deepEqual(BLOCKS.root, BLOCKS.light);
-  assert.deepEqual(BLOCKS.root, BLOCKS.system);
+test("one token block covers the root, explicit light and system light", () => {
+  assert.equal(css.split(TOKEN_SELECTOR).length - 1, 1);
+  // No other block redefines the tokens.
+  assert.equal((css.match(/--background:/g) ?? []).length, 1);
 });
 
 test("no dark theme block exists (light only)", () => {
@@ -127,8 +129,12 @@ test("darkMode is configured as a selector", () => {
   assert.match(tailwind, /darkMode:\s*\["selector",/);
 });
 
+const fonts = readFileSync(new URL("../app/fonts.ts", import.meta.url), "utf8");
+
 test("layout uses next/font and static light theme, with no theme script", () => {
-  assert.match(layout, /from "next\/font\/google"/);
+  // The font is shared with global-error through app/fonts.ts.
+  assert.match(fonts, /from "next\/font\/google"/);
+  assert.match(layout, /from "\.\/fonts"/);
   assert.match(layout, /data-theme="light"/);
   assert.equal(layout.includes("themeScript"), false);
   assert.equal(layout.includes("motionly-theme"), false);

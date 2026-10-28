@@ -84,6 +84,23 @@ describe("login validation", () => {
   });
 });
 
+describe("login submit", () => {
+  it("locks the button with a pending label while signing in", async () => {
+    const { login } = await import("@/app/(auth)/actions");
+    vi.mocked(login).mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    render(<LoginPage />);
+    await user.type(screen.getByLabelText("Email"), "a@example.com");
+    await user.type(screen.getByLabelText("Password"), "correct horse");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+    const pending = await screen.findByRole("button", {
+      name: /Logging in/,
+    });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+  });
+});
+
 describe("signup strength meter", () => {
   it("follows the server policy instead of length alone", async () => {
     render(<SignupPage />);

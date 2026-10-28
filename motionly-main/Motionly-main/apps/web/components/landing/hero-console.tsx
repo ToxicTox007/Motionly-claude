@@ -259,7 +259,7 @@ export function HeroConsole({ paused = false }: { paused?: boolean }) {
                   className="size-11 rounded-full"
                   style={{ background: ringBackground }}
                 />
-                <m.div className="absolute flex size-8 items-center justify-center rounded-full bg-surface text-[11px] font-bold tabular-nums text-primary shadow-neu-inset-sm">
+                <m.div className="absolute flex size-8 items-center justify-center rounded-full bg-surface text-xxs font-bold tabular-nums text-primary shadow-neu-inset-sm">
                   {ringLabel}
                 </m.div>
               </div>

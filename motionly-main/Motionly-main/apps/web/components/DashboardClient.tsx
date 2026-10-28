@@ -599,7 +599,7 @@ export function DashboardClient({
                     <div className="mt-3 flex items-center justify-between border-t border-hairline pt-3">
                       {/* Metadata chips */}
                       <div className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-2xs font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
                           <Play
                             className="size-2.5"
                             strokeWidth={1.75}
@@ -607,7 +607,7 @@ export function DashboardClient({
                           />
                           {formatDuration(upload?.duration_ms ?? null)}
                         </span>
-                        <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-2xs font-semibold tabular-nums text-foreground shadow-neu-raised-sm">
                           <Clock
                             className="size-2.5"
                             strokeWidth={1.75}
@@ -621,7 +621,7 @@ export function DashboardClient({
                       <div className="flex items-center gap-1.5">
                         <Link
                           href={`/projects/${project.id}`}
-                          className="inline-flex items-center justify-center rounded-neu bg-primary px-2.5 py-1 text-[10px] font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
+                          className="inline-flex items-center justify-center rounded-neu bg-primary px-2.5 py-1 text-2xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed"
                         >
                           Open
                         </Link>
@@ -632,7 +632,7 @@ export function DashboardClient({
                               title: project.title,
                             })
                           }
-                          className="inline-flex items-center justify-center rounded-neu bg-surface px-2 py-1 text-[10px] font-semibold text-danger shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
+                          className="inline-flex items-center justify-center rounded-neu bg-surface px-2 py-1 text-2xs font-semibold text-danger shadow-neu-raised-sm transition-shadow duration-200 hover:shadow-neu-raised active:shadow-neu-pressed"
                           aria-label={`Delete ${project.title}`}
                         >
                           Delete

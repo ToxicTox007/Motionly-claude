@@ -691,7 +691,7 @@ export function LookTab({
                       />
                     ) : null}
                     <span>{effect.label}</span>
-                    <span className="text-[10px] opacity-75 font-normal">
+                    <span className="text-2xs opacity-75 font-normal">
                       ({disabled ? "Disabled" : selected ? "Selected" : "Off"})
                     </span>
                   </button>
@@ -1062,7 +1062,7 @@ export function LookTab({
                       </Button>
                     </div>
                     <div>
-                      <p className="mb-2 text-[11px] font-semibold text-muted-foreground">
+                      <p className="mb-2 text-xxs font-semibold text-muted-foreground">
                         Apply effects to this clip only
                       </p>
                       <div className="flex flex-wrap gap-2">
@@ -1082,7 +1082,7 @@ export function LookTab({
                               disabled={disabled}
                               aria-pressed={selected}
                               className={cn(
-                                "inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold transition-shadow duration-200 disabled:cursor-not-allowed",
+                                "inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 py-1 text-2xs font-semibold transition-shadow duration-200 disabled:cursor-not-allowed",
                                 selected
                                   ? "bg-primary text-primary-foreground shadow-neu-glow"
                                   : disabled
@@ -1102,7 +1102,7 @@ export function LookTab({
                         <button
                           type="button"
                           onClick={clearClipMotionEffects}
-                          className="mt-2 text-[11px] font-semibold text-danger hover:underline"
+                          className="mt-2 text-xxs font-semibold text-danger hover:underline"
                         >
                           Clear clip effects
                         </button>
@@ -1308,7 +1308,7 @@ export function LookTab({
                 Uses lightweight MediaPipe subject segmentation after visual
                 analysis completes.
               </p>
-              <p className="rounded-neu-md bg-surface p-2 text-[10px] font-semibold text-foreground leading-normal shadow-neu-inset-sm">
+              <p className="rounded-neu-md bg-surface p-2 text-2xs font-semibold text-foreground leading-normal shadow-neu-inset-sm">
                 ⚠️ Preview runs a lightweight browser model. The final
                 server-rendered export utilizes a high-precision neural
                 segmentation model.

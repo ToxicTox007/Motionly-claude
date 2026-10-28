@@ -325,7 +325,7 @@ function SlotRow({
             <p className="truncate text-xs font-semibold text-foreground">
               {slot.keywords?.[0] ?? slot.intent ?? "B-roll"}
             </p>
-            <p className="mt-1 line-clamp-1 text-[10px] font-medium text-muted-foreground leading-relaxed">
+            <p className="mt-1 line-clamp-1 text-2xs font-medium text-muted-foreground leading-relaxed">
               {slot.intent}
             </p>
           </div>
@@ -454,7 +454,7 @@ function AssetPicker({
                   </span>
                 ) : null}
               </div>
-              <p className="truncate px-2 py-1.5 text-[10px] font-semibold text-foreground bg-surface">
+              <p className="truncate px-2 py-1.5 text-2xs font-semibold text-foreground bg-surface">
                 {asset.title}
               </p>
             </button>

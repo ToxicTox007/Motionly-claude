@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/button";
 import React, { useState } from "react";
 import { Loader2, Trash2, X } from "lucide-react";
 import type { ManualElement } from "@motionly/shared";
@@ -230,14 +231,14 @@ export function PropertiesInspector({
 
         {/* Action Buttons */}
         <div className="flex gap-2.5 pt-3">
-          <button
+          <Button
             type="submit"
             disabled={saving}
-            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-neu bg-primary text-xs font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus-visible:outline-none active:shadow-neu-pressed disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="h-11 flex-1 px-0 text-xs"
           >
             {saving ? <Loader2 className="size-4 animate-spin" /> : null}
             Save Changes
-          </button>
+          </Button>
           <button
             type="button"
             onClick={() => void onDelete(draft.id)}

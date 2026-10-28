@@ -115,7 +115,7 @@ export function AdminJobsList({
                 | {job.kind} |{" "}
                 <span
                   className={cn(
-                    "rounded-full px-2 py-0.5 text-[10px] font-semibold shadow-neu-inset-sm",
+                    "rounded-full px-2 py-0.5 text-2xs font-semibold shadow-neu-inset-sm",
                     ["failed", "dead_letter"].includes(job.status) &&
                       "bg-danger text-danger-foreground",
                     ["queued"].includes(job.status) && "bg-info text-ink",

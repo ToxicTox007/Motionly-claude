@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/button";
 import { usePathname } from "next/navigation";
 import { useId } from "react";
 
@@ -45,12 +46,9 @@ export function WorkspaceSwitcher({
             </option>
           ))}
         </select>
-        <button
-          type="submit"
-          className="min-h-10 shrink-0 rounded-neu bg-primary px-3 text-xs font-semibold text-primary-foreground shadow-neu-glow transition-shadow duration-200 hover:brightness-105 active:shadow-neu-pressed"
-        >
+        <Button type="submit" size="sm" className="shrink-0 px-3">
           Switch
-        </button>
+        </Button>
       </div>
     </form>
   );

@@ -304,7 +304,7 @@ export function CommandPaletteTrigger({
       <span>Search</span>
       <span
         aria-hidden
-        className="ml-auto rounded-neu-sm bg-muted px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground shadow-neu-inset-sm"
+        className="ml-auto rounded-neu-sm bg-muted px-1.5 py-0.5 text-xxs font-semibold tabular-nums text-muted-foreground shadow-neu-inset-sm"
       >
         {hint}
       </span>

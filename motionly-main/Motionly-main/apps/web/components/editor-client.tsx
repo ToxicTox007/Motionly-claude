@@ -2069,7 +2069,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
         {activePaletteElement ? (
           <div className="w-32 rounded-neu-md bg-surface p-2 text-xs font-semibold text-foreground shadow-neu-raised-lg">
             {activePaletteElement.preview || activePaletteElement.name}
-            <span className="mt-1 block truncate text-[10px]">
+            <span className="mt-1 block truncate text-2xs">
               {activePaletteElement.name}
             </span>
           </div>
@@ -2077,7 +2077,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
       </DragOverlay>
       {dropMessage ? (
         <div
-          className="pointer-events-none fixed bottom-4 left-1/2 z-[100] -translate-x-1/2 border border-border bg-background px-3 py-2 text-xs font-bold shadow-xl"
+          className="pointer-events-none fixed bottom-4 left-1/2 z-[100] -translate-x-1/2 border border-border bg-background px-3 py-2 text-xs font-bold shadow-neu-raised-lg"
           aria-live="polite"
         >
           {dropMessage}
@@ -2433,7 +2433,7 @@ function SelectedElementInsight({
           Selected {clip.trackKind}
         </p>
         {insight.confidence !== null ? (
-          <span className="rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-semibold text-foreground shadow-neu-inset-sm">
+          <span className="rounded-full bg-muted px-2.5 py-0.5 text-2xs font-semibold text-foreground shadow-neu-inset-sm">
             {Math.round(insight.confidence * 100)}% confidence
           </span>
         ) : null}
@@ -2442,7 +2442,7 @@ function SelectedElementInsight({
         AI reason: {insight.reason}
       </p>
       {insight.detail ? (
-        <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
+        <p className="mt-1 text-xxs font-semibold text-muted-foreground">
           {insight.detail}
         </p>
       ) : null}
@@ -2814,7 +2814,7 @@ function ProcessingScreen({
                       : "opacity-60",
                   )}
                 >
-                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-foreground shadow-neu-inset-sm">
+                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-2xs font-semibold text-foreground shadow-neu-inset-sm">
                     {isCompleted ? "✓" : isActive ? "▶" : idx + 1}
                   </div>
                   <div className="min-w-0">
@@ -2827,7 +2827,7 @@ function ProcessingScreen({
                       {stage.label}
                     </p>
                     {isActive && (
-                      <p className="text-[10px] text-muted-foreground font-medium mt-0.5 leading-normal">
+                      <p className="text-2xs text-muted-foreground font-medium mt-0.5 leading-normal">
                         {stage.description}
                       </p>
                     )}
@@ -2853,7 +2853,7 @@ function ProcessingScreen({
             }}
           />
         </div>
-        <p className="text-2xs font-semibold text-muted-foreground">
+        <p className="text-2xs font-semibold leading-4 text-muted-foreground">
           This page will refresh automatically
         </p>
       </div>

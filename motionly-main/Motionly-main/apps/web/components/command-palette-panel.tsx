@@ -115,7 +115,7 @@ export function CommandPalettePanel({
                     {command.shortcut ? (
                       <span
                         aria-hidden
-                        className="rounded-neu-sm bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-neu-inset-sm"
+                        className="rounded-neu-sm bg-muted px-1.5 py-0.5 text-2xs font-semibold text-muted-foreground shadow-neu-inset-sm"
                       >
                         {command.shortcut}
                       </span>
@@ -125,7 +125,7 @@ export function CommandPalettePanel({
               </Command.Group>
             ))}
           </Command.List>
-          <div className="flex items-center gap-4 border-hairline border-t px-4 py-2 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-4 border-hairline border-t px-4 py-2 text-xxs text-muted-foreground">
             <span className="flex items-center gap-1">
               <kbd className="rounded-neu-sm bg-muted px-1.5 py-0.5 shadow-neu-inset-sm">
                 ↑↓

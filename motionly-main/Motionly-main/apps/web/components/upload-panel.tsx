@@ -1142,7 +1142,7 @@ function StatusBadge({
 function MetadataRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-neu-md bg-surface p-2 shadow-neu-inset-sm">
-      <p className="text-[10px] font-semibold text-muted-foreground">{label}</p>
+      <p className="text-2xs font-semibold text-muted-foreground">{label}</p>
       <p className="mt-0.5 break-all text-xs font-semibold text-foreground">
         {value}
       </p>

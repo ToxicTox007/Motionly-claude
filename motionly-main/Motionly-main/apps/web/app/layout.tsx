@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { Plus_Jakarta_Sans } from "next/font/google";
 import { headers } from "next/headers";
 import { AuthSessionListener } from "@/components/auth-session-listener";
 import { CommandPaletteProvider } from "@/components/command-palette";
 import { MotionProvider } from "@/components/motion-provider";
 import { ToastProvider } from "@/components/toast";
+import { jakarta } from "./fonts";
 import { getPublicConfig } from "@/lib/env";
 import {
   PUBLIC_CONFIG_ELEMENT_ID,
@@ -19,14 +19,6 @@ export const metadata: Metadata = {
     icon: "/icon.svg",
   },
 };
-
-// Plus Jakarta Sans is a variable font: one file covers every weight we use
-// (400–800) instead of five static ones (FE-40).
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-sans",
-});
 
 export default async function RootLayout({
   children,

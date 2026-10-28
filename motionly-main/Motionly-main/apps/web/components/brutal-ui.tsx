@@ -80,7 +80,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold shadow-neu-raised-sm",
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xxs font-semibold shadow-neu-raised-sm",
         variant === "neutral" && "bg-surface text-foreground",
         variant === "primary" && "bg-primary text-primary-foreground",
         variant === "accent" && "bg-accent text-accent-foreground",
@@ -159,7 +159,7 @@ export function Tooltip({
   return (
     <span className={cn("group relative inline-flex", className)}>
       {children}
-      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-neu-sm bg-surface px-2.5 py-1 text-[11px] font-semibold text-foreground shadow-neu-raised-sm group-hover:block group-focus-within:block">
+      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-neu-sm bg-surface px-2.5 py-1 text-xxs font-semibold text-foreground shadow-neu-raised-sm group-hover:block group-focus-within:block">
         {label}
       </span>
     </span>

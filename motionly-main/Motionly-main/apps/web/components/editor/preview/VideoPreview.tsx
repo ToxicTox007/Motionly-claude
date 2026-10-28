@@ -1246,9 +1246,9 @@ function SafeZoneOverlay() {
   return (
     <div className="pointer-events-none absolute inset-0">
       {/* Action safe — 90% */}
-      <div className="absolute inset-[5%] rounded-sm border border-dashed border-white/10" />
+      <div className="absolute inset-[5%] rounded-neu-sm border border-dashed border-white/10" />
       {/* Title safe — 80% */}
-      <div className="absolute inset-[10%] rounded-sm border border-dashed border-white/5" />
+      <div className="absolute inset-[10%] rounded-neu-sm border border-dashed border-white/5" />
     </div>
   );
 }

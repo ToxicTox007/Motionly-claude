@@ -385,7 +385,7 @@ export function PublishingLibraryPanel({
             Prepare
           </Button>
         </div>
-        <p className="mt-2 text-[11px] font-medium text-muted-foreground">
+        <p className="mt-2 text-xxs font-medium text-muted-foreground">
           Each language gets independent captions, translated text overlays,
           metadata suggestions, and a required review step. Voice dubbing is
           intentionally not included.
@@ -414,7 +414,7 @@ export function PublishingLibraryPanel({
                   {item.description_suggestions[0] ??
                     "No description suggestion"}
                 </p>
-                <p className="mt-1 text-[10px] text-muted-foreground">
+                <p className="mt-1 text-2xs text-muted-foreground">
                   {item.overlay_translations.length} localized overlay
                   {item.overlay_translations.length === 1 ? "" : "s"}
                 </p>
@@ -462,7 +462,7 @@ export function PublishingLibraryPanel({
             <h3 className="text-sm font-bold text-foreground">
               Workspace asset library
             </h3>
-            <p className="text-[11px] font-medium text-muted-foreground">
+            <p className="text-xxs font-medium text-muted-foreground">
               Search past exports and clips; favorite, collect, and reuse assets
               across projects.
             </p>
@@ -503,7 +503,7 @@ export function PublishingLibraryPanel({
           </Button>
         </div>
         {collections.length ? (
-          <p className="mt-2 text-[10px] font-medium text-muted-foreground">
+          <p className="mt-2 text-2xs font-medium text-muted-foreground">
             Newest collection: {collections[0].name} (
             {collections[0].asset_ids.length} assets). Add library cards to it.
           </p>
@@ -518,7 +518,7 @@ export function PublishingLibraryPanel({
                 <strong className="truncate text-foreground">
                   {item.name}
                 </strong>
-                <p className="truncate text-[10px] text-muted-foreground">
+                <p className="truncate text-2xs text-muted-foreground">
                   {item.kind} · {item.description}
                 </p>
               </div>

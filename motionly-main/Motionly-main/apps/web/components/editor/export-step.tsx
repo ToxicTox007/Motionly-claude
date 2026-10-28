@@ -774,7 +774,7 @@ export function ExportStep({
               ...brandKits.map((kit) => ({ value: kit.id, label: kit.name })),
             ]}
           />
-          <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+          <p className="mt-1 text-2xs font-medium text-muted-foreground">
             Applies the selected kit’s creator template, platform, frame,
             captions, and permitted quality.
           </p>
@@ -852,7 +852,7 @@ export function ExportStep({
                   );
                 })}
               </div>
-              <p className="text-[10px] font-medium text-muted-foreground mt-1">
+              <p className="text-2xs font-medium text-muted-foreground mt-1">
                 Source: {sourceAspectLabel}
               </p>
             </div>
@@ -955,7 +955,7 @@ export function ExportStep({
             })),
           ]}
         />
-        <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+        <p className="mt-1 text-2xs font-medium text-muted-foreground">
           Approved packages use their reviewed captions and localized text
           overlays.
         </p>
@@ -1072,12 +1072,12 @@ export function ExportStep({
               <span className="text-right text-sm font-bold text-primary tabular-nums">
                 {progress}%
                 {etaLabel ? (
-                  <span className="block text-[10px] font-semibold text-muted-foreground tabular-nums">
+                  <span className="block text-2xs font-semibold text-muted-foreground tabular-nums">
                     ETA {etaLabel}
                   </span>
                 ) : null}
                 {waitBandLabel ? (
-                  <span className="block text-[10px] font-semibold text-muted-foreground">
+                  <span className="block text-2xs font-semibold text-muted-foreground">
                     {waitBandLabel}
                   </span>
                 ) : null}
@@ -1277,17 +1277,17 @@ function ExportStepSection({
           {title}
         </h3>
         {status === "completed" && (
-          <span className="rounded-full px-2 py-0.5 font-semibold text-[10px] bg-success text-ink shadow-neu-raised-sm">
+          <span className="rounded-full px-2 py-0.5 font-semibold text-2xs bg-success text-ink shadow-neu-raised-sm">
             Completed
           </span>
         )}
         {status === "active" && (
-          <span className="rounded-full px-2 py-0.5 font-semibold text-[10px] bg-primary text-primary-foreground shadow-neu-glow">
+          <span className="rounded-full px-2 py-0.5 font-semibold text-2xs bg-primary text-primary-foreground shadow-neu-glow">
             Active
           </span>
         )}
         {status === "idle" && (
-          <span className="rounded-full px-2 py-0.5 font-semibold text-[10px] bg-muted text-muted-foreground shadow-neu-inset-sm">
+          <span className="rounded-full px-2 py-0.5 font-semibold text-2xs bg-muted text-muted-foreground shadow-neu-inset-sm">
             Idle
           </span>
         )}

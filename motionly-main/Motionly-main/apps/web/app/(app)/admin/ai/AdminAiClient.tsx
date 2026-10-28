@@ -56,7 +56,7 @@ function BadgeRow({ badges }: { badges: WarningBadge[] }) {
       {badges.map((badge) => (
         <li key={badge.code}>
           <span
-            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold shadow-neu-inset-sm ${badgeToneClass[badge.tone]}`}
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xxs font-semibold shadow-neu-inset-sm ${badgeToneClass[badge.tone]}`}
           >
             {badge.tone === "info" ? (
               <Info className="size-3" aria-hidden="true" />
@@ -153,7 +153,7 @@ function RecordForm({
           {entry ? entry.id : `New ${KIND_LABEL[kind]}`}
         </label>
         {entry ? (
-          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground shadow-neu-inset-sm">
+          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xxs font-semibold text-muted-foreground shadow-neu-inset-sm">
             {readOnly ? "File · read-only" : "Database"}
           </span>
         ) : null}
@@ -451,7 +451,7 @@ function RouteTester({ routeIds }: { routeIds: string[] }) {
             type="checkbox"
             checked={allowPaid}
             onChange={(event) => setAllowPaid(event.target.checked)}
-            className="size-4 rounded border-control shadow-neu-inset-sm"
+            className="size-4 rounded-neu border-control shadow-neu-inset-sm"
           />
           Allow paid async test
         </label>
@@ -829,7 +829,7 @@ function HealthPanel({ health }: { health: RouteHealthEntry[] }) {
             <p className="text-sm font-semibold text-foreground">
               {entry.route_id}
             </p>
-            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground shadow-neu-inset-sm">
+            <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xxs font-semibold text-muted-foreground shadow-neu-inset-sm">
               Circuit: {entry.circuit_state}
             </span>
           </div>

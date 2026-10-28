@@ -471,7 +471,7 @@ function ShareControls({
               {links.map((link) => (
                 <li
                   key={link.id}
-                  className="flex items-center justify-between gap-2 rounded-neu bg-surface px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-neu-inset-sm"
+                  className="flex items-center justify-between gap-2 rounded-neu bg-surface px-2 py-1 text-xxs font-medium text-muted-foreground shadow-neu-inset-sm"
                 >
                   <span>
                     {link.revoked_at

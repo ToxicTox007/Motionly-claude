@@ -28,6 +28,26 @@ const sizeClasses: Record<ButtonSize, string> = {
   icon: "size-11 p-0 text-sm",
 };
 
+/** The Button classes for an element that cannot be a Button or ButtonLink
+ * (e.g. a plain <a> on the global error page, which must not depend on the
+ * router). */
+export function buttonClassName({
+  variant = "primary",
+  size = "md",
+  className,
+}: {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  className?: string;
+} = {}) {
+  return cn(
+    baseButtonClasses,
+    sizeClasses[size],
+    variantClasses[variant],
+    className,
+  );
+}
+
 type ButtonProps = ComponentPropsWithoutRef<"button"> & {
   variant?: ButtonVariant;
   size?: ButtonSize;

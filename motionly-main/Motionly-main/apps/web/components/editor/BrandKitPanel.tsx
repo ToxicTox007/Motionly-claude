@@ -387,7 +387,7 @@ export function BrandKitPanel({
         <h3 className="text-sm font-bold tracking-tight text-foreground">
           Brand Kit
         </h3>
-        <p className="mt-1 text-[11px] font-medium text-muted-foreground">
+        <p className="mt-1 text-xxs font-medium text-muted-foreground">
           Apply your house look, assets, tone, and export defaults in one
           action.
         </p>
@@ -513,7 +513,7 @@ export function BrandKitPanel({
           />
         </Field>
       </div>
-      <p className="-mt-1 text-[10px] font-medium text-muted-foreground">
+      <p className="-mt-1 text-2xs font-medium text-muted-foreground">
         Use public HTTPS or workspace media URLs. Logos and watermarks become
         editable canvas graphics; intros/outros become video overlays.
       </p>
@@ -638,20 +638,20 @@ export function BrandKitPanel({
                     <p className="truncate text-xs font-semibold text-foreground">
                       {kit.name}
                     </p>
-                    <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+                    <p className="mt-1 text-2xs font-medium text-muted-foreground">
                       {(settings.colors ?? []).join(" · ") || "No colors"} ·{" "}
                       {settings.font_family ?? "System"} ·{" "}
                       {String(settings.caption_settings?.preset ?? "captions")}
                     </p>
                     {exportPreset ? (
-                      <p className="text-[10px] font-medium text-muted-foreground">
+                      <p className="text-2xs font-medium text-muted-foreground">
                         {exportPreset.platform ?? "instagram"} ·{" "}
                         {exportPreset.output_aspect ?? "9:16"} ·{" "}
                         {exportPreset.resolution ?? "1080p"}
                       </p>
                     ) : null}
                   </div>
-                  <span className="shrink-0 text-[10px] font-medium text-muted-foreground tabular-nums">
+                  <span className="shrink-0 text-2xs font-medium text-muted-foreground tabular-nums">
                     v{kit.revision}
                   </span>
                 </div>
@@ -659,7 +659,7 @@ export function BrandKitPanel({
                   <Button
                     disabled={busy}
                     onClick={() => void apply(kit)}
-                    className="h-8 px-2 text-[10px]"
+                    className="h-8 px-2 text-2xs"
                   >
                     Apply
                   </Button>
@@ -671,7 +671,7 @@ export function BrandKitPanel({
                       setForm(formForKit(kit, captionTrack));
                       setMessage(null);
                     }}
-                    className="h-8 px-2 text-[10px]"
+                    className="h-8 px-2 text-2xs"
                   >
                     Edit
                   </Button>
@@ -679,7 +679,7 @@ export function BrandKitPanel({
                     disabled={busy}
                     variant="secondary"
                     onClick={() => void remove(kit)}
-                    className="h-8 px-2 text-[10px]"
+                    className="h-8 px-2 text-2xs"
                   >
                     Delete
                   </Button>
@@ -689,14 +689,14 @@ export function BrandKitPanel({
           })}
         </div>
       ) : (
-        <p className="text-[11px] font-medium text-muted-foreground">
+        <p className="text-xxs font-medium text-muted-foreground">
           Save your first kit to reuse it across projects.
         </p>
       )}
       {message ? (
         <p
           role="status"
-          className="rounded-neu bg-surface p-2 text-[11px] font-semibold text-foreground shadow-neu-inset-sm"
+          className="rounded-neu bg-surface p-2 text-xxs font-semibold text-foreground shadow-neu-inset-sm"
         >
           {message}
         </p>
@@ -713,7 +713,7 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="block text-[10px] font-semibold tracking-wide text-muted-foreground">
+    <label className="block text-2xs font-semibold tracking-wide text-muted-foreground">
       <span className="mb-1 block">{label}</span>
       <span className="block [&_input]:min-h-9 [&_input]:w-full [&_input]:rounded-neu [&_input]:border [&_input]:border-control [&_input]:bg-surface [&_input]:px-2 [&_input]:text-xs [&_input]:font-medium [&_input]:text-foreground [&_input]:shadow-neu-inset-sm [&_select]:min-h-9 [&_select]:w-full [&_select]:rounded-neu [&_select]:border [&_select]:border-control [&_select]:bg-surface [&_select]:px-2 [&_select]:text-xs [&_select]:font-medium [&_select]:text-foreground [&_select]:shadow-neu-inset-sm [&_textarea]:min-h-16 [&_textarea]:w-full [&_textarea]:rounded-neu [&_textarea]:border [&_textarea]:border-control [&_textarea]:bg-surface [&_textarea]:p-2 [&_textarea]:text-xs [&_textarea]:font-medium [&_textarea]:text-foreground [&_textarea]:shadow-neu-inset-sm">
         {children}

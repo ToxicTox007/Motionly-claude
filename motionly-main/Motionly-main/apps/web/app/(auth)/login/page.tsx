@@ -1,35 +1,15 @@
 "use client";
 
+import { SubmitButton } from "@/components/submit-button";
 import Link from "next/link";
 import Image from "next/image";
 import React, { useState, Suspense } from "react";
-import { useFormStatus } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { Alert, Input } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { Loader2 } from "lucide-react";
 import { login } from "../actions";
 import { PageTitle } from "@/components/page-title";
-
-function SubmitButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="mt-6 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-neu bg-primary text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed active:brightness-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-    >
-      {pending ? (
-        <>
-          <Loader2 className="size-4 animate-spin" />
-          Logging in...
-        </>
-      ) : (
-        "Log in"
-      )}
-    </button>
-  );
-}
 
 function LoginFormContent() {
   const searchParams = useSearchParams();
@@ -179,7 +159,9 @@ function LoginFormContent() {
         )}
       </div>
 
-      <SubmitButton />
+      <SubmitButton className="mt-6 w-full" pendingLabel="Logging in...">
+        Log in
+      </SubmitButton>
 
       <p className="mt-4 text-center text-sm text-muted-foreground">
         <Link
@@ -234,7 +216,7 @@ export default function LoginPage() {
               {["bg-danger", "bg-warning", "bg-success"].map((c, i) => (
                 <div key={i} className={`size-2 rounded-full ${c}`} />
               ))}
-              <span className="ml-auto text-[10px] font-semibold text-muted-foreground">
+              <span className="ml-auto text-2xs font-semibold text-muted-foreground">
                 Motionly
               </span>
             </div>
@@ -245,7 +227,7 @@ export default function LoginPage() {
                     key={item}
                     className={`flex h-8 items-center rounded-neu px-2.5 ${i === 0 ? "bg-primary text-primary-foreground shadow-neu-glow" : "bg-surface text-muted-foreground shadow-neu-raised-sm"}`}
                   >
-                    <span className="text-[10px] font-semibold">{item}</span>
+                    <span className="text-2xs font-semibold">{item}</span>
                     {i === 0 && (
                       <PixelIcon name="play" className="ml-auto size-3" />
                     )}

@@ -10,10 +10,10 @@ test("Login page implements form validation and pending submission locks", async
     "utf8",
   );
 
-  // Verify form pending locks
-  assert.match(source, /const \{ pending \} = useFormStatus\(\)/);
-  assert.match(source, /disabled=\{pending\}/);
-  assert.match(source, /Logging in\.\.\./);
+  // The shared SubmitButton locks the form while it runs (behaviour:
+  // tests/components/auth-forms.test.tsx "login submit").
+  assert.match(source, /<SubmitButton/);
+  assert.match(source, /pendingLabel="Logging in\.\.\."/);
 
   // Verify inline validation logic
   assert.match(source, /const validateEmail =/);

@@ -1,9 +1,9 @@
 "use client";
 
+import { SubmitButton } from "@/components/submit-button";
 import Link from "next/link";
 import Image from "next/image";
 import React, { useState, Suspense } from "react";
-import { useFormStatus } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { Alert, Input } from "@/components/brutal-ui";
 import { Loader2 } from "lucide-react";
@@ -11,26 +11,6 @@ import { resetPassword } from "../actions";
 import { PageTitle } from "@/components/page-title";
 import { RESET_PASSWORD_ERROR_MESSAGES } from "@/lib/password-reset.mjs";
 import { PASSWORD_MIN_LENGTH } from "@/lib/password-policy.mjs";
-
-function SubmitButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="mt-6 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-neu bg-primary text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 active:shadow-neu-pressed active:brightness-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-neu-raised-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-    >
-      {pending ? (
-        <>
-          <Loader2 className="size-4 animate-spin" />
-          Saving...
-        </>
-      ) : (
-        "Set new password"
-      )}
-    </button>
-  );
-}
 
 function ResetPasswordFormContent() {
   const searchParams = useSearchParams();
@@ -134,7 +114,9 @@ function ResetPasswordFormContent() {
         )}
       </div>
 
-      <SubmitButton />
+      <SubmitButton className="mt-6 w-full" pendingLabel="Saving...">
+        Set new password
+      </SubmitButton>
     </form>
   );
 }

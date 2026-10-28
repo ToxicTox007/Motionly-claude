@@ -294,7 +294,7 @@ export const ClipBlock = React.memo(
         aria-label={`${clip.trackKind} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}, duration ${formatMs(widthMs)}.`}
         className={cn(
           "group absolute bottom-1 top-1 cursor-pointer overflow-hidden rounded-neu",
-          "flex items-center gap-2 px-2 text-[10px] font-semibold leading-none text-white",
+          "flex items-center gap-2 px-2 text-2xs font-semibold leading-none text-white",
           "shadow-neu-raised-sm ring-inset transition-all duration-100",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-1 focus-visible:ring-offset-background",
           clip.colorClass,
@@ -335,7 +335,7 @@ export const ClipBlock = React.memo(
           onPointerDown={(event) => startTrim("left", event)}
         />
         <span className="min-w-0 flex-1 truncate">{clip.label}</span>
-        <span className="hidden shrink-0 rounded-full bg-ink/40 px-1.5 font-mono text-[9px] tabular-nums sm:inline">
+        <span className="hidden shrink-0 rounded-full bg-ink/40 px-1.5 font-mono text-2xs tabular-nums sm:inline">
           {formatMs(widthMs)}
         </span>
         <TrimHandle

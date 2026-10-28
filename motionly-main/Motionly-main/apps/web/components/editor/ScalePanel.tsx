@@ -918,7 +918,7 @@ export function ScalePanel(props: ScalePanelProps) {
       </div>
 
       <Section title="Regenerate layers" icon={RefreshCw}>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-xxs text-muted-foreground">
           Rebuild only the layers you pick. Other layers and your current export
           are preserved; this creates a new version.
         </p>
@@ -1136,7 +1136,7 @@ export function ScalePanel(props: ScalePanelProps) {
                   {references.length}/5 references
                 </span>{" "}
                 ·{" "}
-                <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-primary shadow-neu-inset-sm">
+                <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold text-primary shadow-neu-inset-sm">
                   {profile.status}
                 </span>
               </p>
@@ -1267,7 +1267,7 @@ export function ScalePanel(props: ScalePanelProps) {
                     <>
                       <Button
                         disabled={busy || !editingTemplateName.trim()}
-                        className="min-h-8 h-8 px-3 text-[10px]"
+                        className="min-h-8 h-8 px-3 text-2xs"
                         onClick={() => void renameTemplate(template)}
                       >
                         Save name
@@ -1275,7 +1275,7 @@ export function ScalePanel(props: ScalePanelProps) {
                       <Button
                         variant="secondary"
                         disabled={busy}
-                        className="min-h-8 h-8 px-3 text-[10px]"
+                        className="min-h-8 h-8 px-3 text-2xs"
                         onClick={() => {
                           setEditingTemplateId(null);
                           setEditingTemplateName("");
@@ -1289,7 +1289,7 @@ export function ScalePanel(props: ScalePanelProps) {
                       <Button
                         variant="secondary"
                         disabled={busy}
-                        className="min-h-8 h-8 px-3 text-[10px]"
+                        className="min-h-8 h-8 px-3 text-2xs"
                         onClick={() =>
                           action(
                             () => applySavedTemplate(template),
@@ -1303,7 +1303,7 @@ export function ScalePanel(props: ScalePanelProps) {
                         variant="secondary"
                         disabled={busy}
                         aria-label={`Rename ${template.name}`}
-                        className="min-h-8 h-8 px-3 text-[10px]"
+                        className="min-h-8 h-8 px-3 text-2xs"
                         onClick={() => {
                           setEditingTemplateId(template.id);
                           setEditingTemplateName(template.name);
@@ -1315,7 +1315,7 @@ export function ScalePanel(props: ScalePanelProps) {
                         variant="secondary"
                         disabled={busy}
                         aria-label={`Delete ${template.name}`}
-                        className="min-h-8 h-8 px-3 text-[10px] text-danger gap-1"
+                        className="min-h-8 h-8 px-3 text-2xs text-danger gap-1"
                         onClick={() => setPendingDeleteTemplateId(template.id)}
                       >
                         <Trash2
@@ -1335,14 +1335,14 @@ export function ScalePanel(props: ScalePanelProps) {
                   aria-label={`Confirm deleting template ${template.name}`}
                   className="flex items-center justify-between gap-2 rounded-neu-md bg-surface p-2 shadow-neu-raised-sm ring-1 ring-danger/30"
                 >
-                  <span className="text-[11px] font-semibold text-danger">
+                  <span className="text-xxs font-semibold text-danger">
                     Delete “{template.name}” permanently?
                   </span>
                   <div className="flex gap-2">
                     <Button
                       variant="danger"
                       disabled={busy}
-                      className="min-h-8 h-8 px-3 text-[10px]"
+                      className="min-h-8 h-8 px-3 text-2xs"
                       onClick={() => void deleteTemplate(template)}
                     >
                       Confirm delete
@@ -1350,7 +1350,7 @@ export function ScalePanel(props: ScalePanelProps) {
                     <Button
                       variant="secondary"
                       disabled={busy}
-                      className="min-h-8 h-8 px-3 text-[10px]"
+                      className="min-h-8 h-8 px-3 text-2xs"
                       onClick={() => setPendingDeleteTemplateId(null)}
                     >
                       Keep
@@ -1395,7 +1395,7 @@ export function ScalePanel(props: ScalePanelProps) {
         </Button>
         {batches.length ? (
           <div className="mt-3 space-y-2">
-            <p className="text-[10px] font-semibold tracking-wide text-muted-foreground">
+            <p className="text-2xs font-semibold tracking-wide text-muted-foreground">
               Batches
             </p>
             {batches.slice(0, 6).map((batch) => {
@@ -1419,7 +1419,7 @@ export function ScalePanel(props: ScalePanelProps) {
                     variant="secondary"
                     disabled={busy || !cancelable}
                     aria-label={`Cancel batch ${batch.name}`}
-                    className="min-h-8 h-8 px-3 text-[10px]"
+                    className="min-h-8 h-8 px-3 text-2xs"
                     onClick={() => void cancelBatch(batch)}
                   >
                     Cancel
@@ -1439,7 +1439,7 @@ export function ScalePanel(props: ScalePanelProps) {
         >
           Sync shared manifest
         </Button>
-        <p className="mt-2 text-[10px] font-medium text-muted-foreground leading-relaxed">
+        <p className="mt-2 text-2xs font-medium text-muted-foreground leading-relaxed">
           V1 collaboration uses whole-timeline optimistic revisions. Concurrent
           conflicts reload latest state.
         </p>
@@ -1451,7 +1451,7 @@ export function ScalePanel(props: ScalePanelProps) {
           {analyticsLayers.map((layer) => (
             <div
               key={String(layer.layer)}
-              className="rounded-neu-md bg-surface p-2.5 text-[10px] shadow-neu-raised-sm"
+              className="rounded-neu-md bg-surface p-2.5 text-2xs shadow-neu-raised-sm"
             >
               <span className="font-semibold text-foreground">
                 {String(layer.layer)}
@@ -1466,7 +1466,7 @@ export function ScalePanel(props: ScalePanelProps) {
         </div>
         {trainingConsentReady ? (
           <>
-            <p className="mt-3 text-[10px] font-medium text-muted-foreground">
+            <p className="mt-3 text-2xs font-medium text-muted-foreground">
               Training consent is active. A frozen dataset needs at least{" "}
               {trainingMinimumExamples} consented edit signals; promotion
               remains an explicit admin operation.
@@ -1494,7 +1494,7 @@ export function ScalePanel(props: ScalePanelProps) {
             </Button>
           </>
         ) : (
-          <p className="mt-3 rounded-neu bg-surface p-3 text-[10px] font-medium text-muted-foreground shadow-neu-inset-sm">
+          <p className="mt-3 rounded-neu bg-surface p-3 text-2xs font-medium text-muted-foreground shadow-neu-inset-sm">
             Preference learning is blocked until you enable training consent in{" "}
             <a className="font-semibold text-primary underline" href="/account">
               Account settings
@@ -1508,14 +1508,14 @@ export function ScalePanel(props: ScalePanelProps) {
         {resources.slice(0, 8).map((resource) => (
           <div
             key={resource.id}
-            className="flex justify-between items-center gap-2 rounded-neu bg-surface px-3 py-2 text-[10px] shadow-neu-raised-sm"
+            className="flex justify-between items-center gap-2 rounded-neu bg-surface px-3 py-2 text-2xs shadow-neu-raised-sm"
           >
             <span className="truncate font-semibold text-foreground">
               {resource.name}
             </span>
             <span
               className={cn(
-                "capitalize font-semibold text-[10px]",
+                "capitalize font-semibold text-2xs",
                 resource.status === "failed"
                   ? "text-danger"
                   : "text-muted-foreground",
@@ -1570,7 +1570,7 @@ function Section({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-neu-md bg-surface p-3 shadow-neu-raised-sm">
-      <p className="text-[10px] font-semibold tracking-wide text-muted-foreground">
+      <p className="text-2xs font-semibold tracking-wide text-muted-foreground">
         {label}
       </p>
       <p className="truncate text-sm font-bold text-foreground mt-1">{value}</p>

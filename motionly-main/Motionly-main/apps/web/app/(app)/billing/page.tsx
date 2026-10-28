@@ -271,7 +271,7 @@ function BillingStatusView({
                   <h3 className="flex flex-wrap items-center gap-1.5 text-lg font-bold text-foreground">
                     {plan.name}
                     {isDemo ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-[9px] font-semibold text-warning shadow-neu-inset-sm">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold text-warning shadow-neu-inset-sm">
                         Demo
                       </span>
                     ) : null}

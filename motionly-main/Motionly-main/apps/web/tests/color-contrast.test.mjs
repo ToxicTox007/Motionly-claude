@@ -16,9 +16,14 @@ const tailwind = readFileSync(
   "utf8",
 );
 
-function themeTokens(selector) {
-  const start = css.indexOf(`${selector} {`);
-  assert.notEqual(start, -1, `theme block ${selector} exists`);
+// One token block (FE-39). Its selector list keeps matching the root
+// element, an explicit data-theme="light" and the system light preference.
+const TOKEN_SELECTOR =
+  ':root,\n:root[data-theme="light"],\n:root:not([data-theme="dark"]) {';
+
+function themeTokens() {
+  const start = css.indexOf(TOKEN_SELECTOR);
+  assert.notEqual(start, -1, "the token block exists");
   const block = css.slice(start, css.indexOf("}", start));
   return Object.fromEntries(
     [
@@ -53,11 +58,7 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-const THEMES = {
-  dark: themeTokens(":root"),
-  light: themeTokens(':root[data-theme="light"]'),
-  "system light": themeTokens(':root:not([data-theme="dark"])'),
-};
+const THEMES = { light: themeTokens() };
 const TEXT_TOKENS = [
   "foreground",
   "muted-foreground",

@@ -1,3 +1,4 @@
+import { Button } from "@/components/button";
 import { memo } from "react";
 import type React from "react";
 import Image from "next/image";
@@ -163,24 +164,25 @@ export const EditorToolbar = memo(function EditorToolbar({
           ]}
           className="lg:hidden"
         />
-        <button
+        <Button
           type="button"
+          variant="accent"
           onClick={onAiEdit}
           aria-label="Open AI Edit settings"
-          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-accent px-3 text-sm font-semibold text-accent-foreground shadow-neu-raised transition-all duration-200 hover:brightness-105 hover:shadow-neu-raised-lg focus-visible:outline-none active:shadow-neu-pressed lg:inline-flex focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="hidden min-h-10 gap-1.5 px-3 hover:shadow-neu-raised-lg lg:inline-flex"
         >
           <Sparkles className="size-4" strokeWidth={1.75} />
           AI Edit
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           onClick={onExport}
           aria-label="Open export settings"
-          className="hidden min-h-10 items-center gap-1.5 rounded-neu bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-neu-glow transition-all duration-200 hover:brightness-105 focus-visible:outline-none active:shadow-neu-pressed lg:inline-flex focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="hidden min-h-10 gap-1.5 px-4 lg:inline-flex"
         >
           <Download className="size-4" strokeWidth={1.75} />
           Export
-        </button>
+        </Button>
       </div>
 
       <div className="sm:hidden">

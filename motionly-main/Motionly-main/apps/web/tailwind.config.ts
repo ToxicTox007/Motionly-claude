@@ -73,14 +73,11 @@ const config: Config = {
           "sans-serif",
         ],
       },
+      // One radius scale. Tailwind's own names that duplicated a neu-* value
+      // pixel for pixel were removed; tests/design-system.test.mjs keeps them
+      // out of the app so radii stay on this scale.
       borderRadius: {
-        sm: "10px",
-        DEFAULT: "14px",
-        md: "18px",
-        lg: "22px",
-        xl: "28px",
         "2xl": "32px",
-        "3xl": "36px",
         "neu-sm": "10px",
         neu: "14px",
         "neu-md": "18px",
@@ -97,12 +94,8 @@ const config: Config = {
         "neu-inset": inset(4),
         "neu-pressed": inset(4),
         "neu-glow": `${raised(6)}, 0 0 16px hsl(var(--primary) / 0.35)`,
-        // Tailwind's own scale, remapped to soft shadows (still used: shadow-xl).
-        sm: raised(3),
-        DEFAULT: raised(6),
-        md: raised(6),
-        lg: raised(12),
-        xl: raised(12),
+        // Tailwind's sm/DEFAULT/md/lg/xl duplicated neu-raised-* exactly and
+        // were removed (see the radius note above).
         none: "none",
       },
       transitionTimingFunction: {
@@ -115,8 +108,12 @@ const config: Config = {
         base: "220ms",
         slow: "380ms",
       },
+      // The small end of the type scale. 2xs and xxs set only the size (no
+      // line height), so they replace the old text-[10px] / text-[11px]
+      // arbitrary values without moving any text.
       fontSize: {
-        "2xs": ["0.625rem", { lineHeight: "1rem" }],
+        "2xs": "0.625rem",
+        xxs: "0.6875rem",
         xs: ["0.75rem", { lineHeight: "1.125rem" }],
       },
       animation: {

@@ -168,13 +168,14 @@ export default function HomePage() {
             >
               Log in
             </Link>
-            <a
+            <ButtonLink
               href="/signup"
-              className="inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-neu-glow transition-shadow hover:shadow-neu-raised-lg active:shadow-neu-pressed"
+              size="sm"
+              className="rounded-full hover:shadow-neu-raised-lg"
             >
               Start free
               <PixelIcon name="play" className="size-3.5" />
-            </a>
+            </ButtonLink>
           </div>
         </nav>
       </header>

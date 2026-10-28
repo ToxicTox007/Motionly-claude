@@ -1,7 +1,13 @@
 "use client";
 
-import { AlertTriangle, ArrowLeft, RefreshCw } from "lucide-react";
+// Replaces the root layout when it fails, so it loads the global styles and
+// the app font itself and uses the same design tokens as every other page.
+// It links with plain <a> elements: the router may be what broke.
+import "./globals.css";
+import { AlertTriangle, ArrowLeft, Home, RefreshCw } from "lucide-react";
+import { buttonClassName } from "@/components/button";
 import { PageTitle } from "@/components/page-title";
+import { jakarta } from "./fonts";
 
 export default function GlobalError({
   error,
@@ -10,190 +16,62 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset?: () => void;
 }) {
-  const base = "hsl(215 24% 90%)";
-  const ink = "hsl(222 30% 17%)";
-  const muted = "hsl(220 16% 32%)";
-  const teal = "hsl(174 98% 44%)";
-  const tealText = "hsl(196 60% 8%)";
-  const danger = "hsl(352 74% 48%)";
-  const raised = "6px 6px 12px hsl(216 24% 72%), -6px -6px 12px #ffffff";
-  const raisedLg = "12px 12px 24px hsl(216 24% 72%), -12px -12px 24px #ffffff";
-  const inset =
-    "inset 4px 4px 8px hsl(216 24% 72%), inset -4px -4px 8px #ffffff";
-  const glow =
-    "6px 6px 12px hsl(216 24% 72%), -6px -6px 12px #ffffff, 0 0 0 1px hsl(174 98% 44% / 0.35)";
-
   return (
-    <html lang="en" data-theme="light">
+    <html lang="en" data-theme="light" className={jakarta.variable}>
       <head>
         <PageTitle title="Something went wrong" />
       </head>
-      <body
-        style={{
-          minHeight: "100vh",
-          display: "grid",
-          placeItems: "center",
-          background: base,
-          color: ink,
-          fontFamily:
-            "'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif",
-          WebkitFontSmoothing: "antialiased",
-          padding: "1rem",
-          margin: 0,
-        }}
-      >
+      <body className="m-0 grid min-h-screen place-items-center bg-background p-4 font-sans text-foreground antialiased">
         <main
-          style={{
-            width: "100%",
-            maxWidth: "460px",
-            textAlign: "center",
-            background: base,
-            padding: "2.5rem 2rem",
-            boxShadow: raisedLg,
-            borderRadius: "28px",
-          }}
+          id="main"
+          className="w-full max-w-md rounded-neu-xl bg-surface px-8 py-10 text-center shadow-neu-raised-lg"
         >
-          {/* Error icon */}
-          <div
-            style={{
-              width: "72px",
-              height: "72px",
-              borderRadius: "18px",
-              background: danger,
-              color: "#ffffff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              margin: "0 auto 1.5rem",
-              boxShadow: raised,
-            }}
-          >
+          <div className="mx-auto mb-6 flex size-[72px] items-center justify-center rounded-neu-md bg-danger text-danger-foreground shadow-neu-raised">
             <AlertTriangle
-              style={{
-                width: "32px",
-                height: "32px",
-                color: "#ffffff",
-                strokeWidth: 1.75,
-              }}
+              className="size-8"
+              strokeWidth={1.75}
+              aria-hidden="true"
             />
           </div>
 
-          {/* Status code */}
-          <p
-            style={{
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              letterSpacing: 0,
-              color: tealText,
-              background: teal,
-              padding: "0.25rem 0.75rem",
-              borderRadius: "9999px",
-              display: "inline-block",
-              marginBottom: "1rem",
-              boxShadow: glow,
-            }}
-          >
+          <p className="mb-4 inline-block rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground shadow-neu-glow">
             System error
           </p>
 
-          <h1
-            style={{
-              fontSize: "1.75rem",
-              fontWeight: 700,
-              lineHeight: 1.15,
-              letterSpacing: "-0.01em",
-              margin: "0 0 1rem",
-              color: ink,
-            }}
-          >
+          <h1 className="mb-4 text-3xl font-bold leading-tight tracking-tight text-foreground">
             Something went off track.
           </h1>
 
-          <p
-            style={{
-              fontSize: "0.9375rem",
-              lineHeight: 1.6,
-              fontWeight: 500,
-              color: muted,
-              margin: "0 0 2rem",
-            }}
-          >
+          <p className="mb-8 text-sm font-medium leading-relaxed text-muted-foreground">
             You can try refreshing the page or head back to your dashboard.
           </p>
 
-          {/* Actions */}
-          <div
-            style={{
-              display: "flex",
-              gap: "0.75rem",
-              justifyContent: "center",
-              flexWrap: "wrap",
-            }}
-          >
-            <a
-              href="/dashboard"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                minHeight: "44px",
-                padding: "0 1.25rem",
-                borderRadius: "14px",
-                background: teal,
-                color: tealText,
-                fontSize: "0.875rem",
-                fontWeight: 600,
-                textDecoration: "none",
-                boxShadow: glow,
-              }}
-            >
-              <ArrowLeft
-                style={{ width: "16px", height: "16px", strokeWidth: 1.75 }}
-              />
+          <div className="flex flex-wrap justify-center gap-3">
+            <a href="/dashboard" className={buttonClassName()}>
+              <ArrowLeft className="size-4" aria-hidden="true" />
               Go to dashboard
             </a>
-            {reset && (
+            {reset ? (
               <button
+                type="button"
                 onClick={reset}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  minHeight: "44px",
-                  padding: "0 1.125rem",
-                  borderRadius: "14px",
-                  background: base,
-                  color: ink,
-                  fontSize: "0.875rem",
-                  fontWeight: 600,
-                  border: "none",
-                  cursor: "pointer",
-                  boxShadow: raised,
-                }}
+                className={buttonClassName({ variant: "secondary" })}
               >
-                <RefreshCw
-                  style={{ width: "15px", height: "15px", strokeWidth: 1.75 }}
-                />
+                <RefreshCw className="size-4" aria-hidden="true" />
                 Try again
               </button>
-            )}
+            ) : null}
+            <a href="/" className={buttonClassName({ variant: "ghost" })}>
+              <Home className="size-4" aria-hidden="true" />
+              Home
+            </a>
           </div>
 
-          {error.digest && (
-            <p
-              style={{
-                marginTop: "2rem",
-                padding: "0.5rem 0.75rem",
-                borderRadius: "10px",
-                boxShadow: inset,
-                fontSize: "0.75rem",
-                color: muted,
-                fontFamily: "ui-monospace, monospace",
-              }}
-            >
+          {error.digest ? (
+            <p className="mt-8 rounded-neu-sm px-3 py-2 font-mono text-xs text-muted-foreground shadow-neu-inset">
               Error ID: {error.digest}
             </p>
-          )}
+          ) : null}
         </main>
       </body>
     </html>

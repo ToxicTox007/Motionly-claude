@@ -5,10 +5,14 @@
 /* ── Design Tokens -- Classic light-only neumorphism ─────────────────────────
    Base plane #E0E5EC = hsl(215 24% 90%). Raised surfaces share the base colour
    and are shaped by a light shadow (top-left, white: --neu-light) plus a dark
-   shadow (bottom-right: --neu-dark). All three theme blocks are identical:
-   light only. Text tokens tuned for >=4.5:1 on background, surface,
-   surface-elevated and muted (see tests/color-contrast.test.mjs). */
-:root {
+   shadow (bottom-right: --neu-dark). Light only: one token block, whose
+   selector list matches the root element, an explicit data-theme="light" and
+   the system light preference alike. Text tokens tuned for >=4.5:1 on
+   background, surface, surface-elevated and muted (see
+   tests/color-contrast.test.mjs). */
+:root,
+:root[data-theme="light"],
+:root:not([data-theme="dark"]) {
   --ink: 222 30% 17%;
   --background: 215 24% 90%;
   --foreground: 222 30% 17%;
@@ -50,88 +54,6 @@
   --warning-text: 33 90% 26%;
   --success-text: 151 70% 23%;
   --info-text: 200 90% 26%;
-}
-
-/* ── Light Theme (explicit) ──────────────────────────────────────────────── */
-:root[data-theme="light"] {
-  --ink: 222 30% 17%;
-  --background: 215 24% 90%;
-  --foreground: 222 30% 17%;
-  --surface: 215 24% 90%;
-  --surface-elevated: 215 28% 94%;
-  --surface-soft: 215 28% 94%;
-  --muted: 215 20% 85%;
-  --muted-foreground: 220 16% 32%;
-
-  --neu-light: 0 0% 100%;
-  --neu-dark: 216 24% 72%;
-  --hairline: 216 18% 80%;
-  --control-border: 216 16% 48%;
-  --focus: 180 72% 30%;
-  --shadow-color: 216 24% 72%;
-
-  --border: 216 18% 80%;
-  --border-strong: 216 24% 72%;
-
-  --primary: 174 98% 44%;
-  --primary-foreground: 196 60% 8%;
-  --primary-text: 174 100% 19%;
-  --accent: 160 88% 65%;
-  --accent-foreground: 196 60% 8%;
-  --accent-text: 162 90% 21%;
-
-  --danger: 352 76% 49%;
-  --danger-foreground: 0 0% 100%;
-  --warning: 38 92% 50%;
-  --success: 151 70% 40%;
-  --info: 200 90% 42%;
-
-  --danger-text: 352 76% 37%;
-  --warning-text: 33 90% 26%;
-  --success-text: 151 70% 23%;
-  --info-text: 200 90% 26%;
-}
-
-/* ── System preference (light) -- identical light values ─────────────────── */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --ink: 222 30% 17%;
-    --background: 215 24% 90%;
-    --foreground: 222 30% 17%;
-    --surface: 215 24% 90%;
-    --surface-elevated: 215 28% 94%;
-    --surface-soft: 215 28% 94%;
-    --muted: 215 20% 85%;
-    --muted-foreground: 220 16% 32%;
-
-    --neu-light: 0 0% 100%;
-    --neu-dark: 216 24% 72%;
-    --hairline: 216 18% 80%;
-    --control-border: 216 16% 48%;
-    --focus: 180 72% 30%;
-    --shadow-color: 216 24% 72%;
-
-    --border: 216 18% 80%;
-    --border-strong: 216 24% 72%;
-
-    --primary: 174 98% 44%;
-    --primary-foreground: 196 60% 8%;
-    --primary-text: 174 100% 19%;
-    --accent: 160 88% 65%;
-    --accent-foreground: 196 60% 8%;
-    --accent-text: 162 90% 21%;
-
-    --danger: 352 76% 49%;
-    --danger-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
-    --success: 151 70% 40%;
-    --info: 200 90% 42%;
-
-    --danger-text: 352 76% 37%;
-    --warning-text: 33 90% 26%;
-    --success-text: 151 70% 23%;
-    --info-text: 200 90% 26%;
-  }
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */

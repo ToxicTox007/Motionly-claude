@@ -1215,7 +1215,7 @@ export function TimelinePanel({
             <ZoomIn className="size-3" />
           </TimelineButton>
           {zoomLevel !== 1 && (
-            <span className="ml-1 rounded-full bg-primary px-2 py-0.5 font-mono text-[10px] font-semibold tabular-nums text-primary-foreground shadow-neu-glow">
+            <span className="ml-1 rounded-full bg-primary px-2 py-0.5 font-mono text-2xs font-semibold tabular-nums text-primary-foreground shadow-neu-glow">
               {zoomLevel.toFixed(1)}x
             </span>
           )}
@@ -1403,7 +1403,7 @@ export function TimelinePanel({
                 className="pointer-events-none absolute bottom-0 top-0 z-30 border-l-4 border-dashed border-primary"
                 style={{ left: pct(snapMarkerMs) }}
               >
-                <span className="absolute left-2 top-1 rounded-full bg-primary px-2 py-0.5 font-mono text-[10px] font-semibold text-primary-foreground shadow-neu-glow">
+                <span className="absolute left-2 top-1 rounded-full bg-primary px-2 py-0.5 font-mono text-2xs font-semibold text-primary-foreground shadow-neu-glow">
                   Snap {formatMs(snapMarkerMs)}
                 </span>
               </div>
@@ -1543,7 +1543,7 @@ const TimelineMinimap = React.memo(function TimelineMinimap({
         onSeek(Math.max(0, Math.min(totalDurationMs, nextMs)));
       }}
     >
-      <span className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-surface px-2 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground shadow-neu-raised-sm">
+      <span className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-surface px-2 py-0.5 font-mono text-2xs font-semibold text-muted-foreground shadow-neu-raised-sm">
         Map
       </span>
       <div className="absolute inset-y-2 left-[4.5rem] right-3 rounded-neu-sm bg-muted shadow-neu-inset-sm">
@@ -1680,7 +1680,7 @@ const MobileTimelineView = React.memo(
               >
                 <div
                   className={cn(
-                    "sticky left-2 top-1/2 z-20 inline-flex -translate-y-1/2 select-none items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold shadow-neu-raised-sm",
+                    "sticky left-2 top-1/2 z-20 inline-flex -translate-y-1/2 select-none items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-semibold shadow-neu-raised-sm",
                     trackToneClass(track.kind),
                   )}
                 >
@@ -1706,7 +1706,7 @@ const MobileTimelineView = React.memo(
                           title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}`}
                           onClick={() => onClipSelect(clip.id)}
                           className={cn(
-                            "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden rounded-neu px-2 text-left text-[11px] font-semibold leading-tight text-white shadow-neu-raised-sm",
+                            "absolute top-2 flex min-h-11 min-w-16 items-center overflow-hidden rounded-neu px-2 text-left text-xxs font-semibold leading-tight text-white shadow-neu-raised-sm",
                             clip.colorClass,
                             clip.disabled && "opacity-35",
                             clip.id === selectedClipId
@@ -1836,7 +1836,7 @@ const Playhead = React.memo(function Playhead({
       className="pointer-events-none absolute top-0 z-20 flex flex-col items-center"
       style={{ left: pct, transform: "translateX(-50%)" }}
     >
-      <div className="h-3 w-3 rotate-45 rounded-sm bg-primary shadow-neu-glow" />
+      <div className="h-3 w-3 rotate-45 rounded-neu-sm bg-primary shadow-neu-glow" />
       <div className="w-0.5 bg-primary" style={{ height: totalHeight - 8 }} />
     </div>
   );
@@ -1877,7 +1877,7 @@ const TimelineRuler = React.memo(function TimelineRuler({
           className="absolute top-0 flex flex-col items-center"
           style={{ left: pct(tick.ms), transform: "translateX(-50%)" }}
         >
-          <span className="bg-muted px-1 pt-1 font-mono text-[9px] font-semibold leading-none tabular-nums text-primary">
+          <span className="bg-muted px-1 pt-1 font-mono text-2xs font-semibold leading-none tabular-nums text-primary">
             {tick.label}
           </span>
           <div className="mt-0.5 h-4 w-px bg-hairline" />

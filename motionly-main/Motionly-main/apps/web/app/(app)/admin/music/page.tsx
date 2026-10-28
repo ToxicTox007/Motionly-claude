@@ -133,7 +133,7 @@ export default async function AdminMusicPage() {
                   >
                     {track.title}
                     {track.is_test_track && (
-                      <span className="ml-2 inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground shadow-neu-inset-sm">
+                      <span className="ml-2 inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold text-muted-foreground shadow-neu-inset-sm">
                         Test track
                       </span>
                     )}
