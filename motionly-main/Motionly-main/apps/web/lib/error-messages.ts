@@ -78,6 +78,8 @@ const ERRORS: Record<MessageDomain, Record<string, string>> = {
     feedback_failed: "Feedback could not be sent. Try again.",
   },
   projects: {
+    missing_project: "Choose a project first.",
+    not_authenticated: "Your session ended. Sign in again to continue.",
     title_required: "Give the project a title.",
     status_invalid: "Choose Draft, Ready or Failed.",
     project_not_found: "That project no longer exists.",

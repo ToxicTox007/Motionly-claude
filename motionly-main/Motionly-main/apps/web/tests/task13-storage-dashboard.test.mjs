@@ -20,11 +20,13 @@ test("DashboardClient renders the real storage gauge, not a fake bar", async () 
 });
 
 test("dashboard page sources storage from GET /storage/quota", async () => {
-  const source = await readFile(
-    new URL("app/(app)/dashboard/page.tsx", root),
-    "utf8",
-  );
-  assert.match(source, /storageGauge/);
-  assert.match(source, /\/storage\/quota/);
-  assert.match(source, /storage=\{storage\}/);
+  const [page, loader] = await Promise.all([
+    readFile(new URL("app/(app)/dashboard/page.tsx", root), "utf8"),
+    readFile(new URL("lib/dashboard-data.ts", root), "utf8"),
+  ]);
+  // The loader (behaviour-tested in tests/unit/dashboard-data.test.ts) reads
+  // the quota; the page passes the gauge down.
+  assert.match(loader, /storageGauge/);
+  assert.match(loader, /\/storage\/quota/);
+  assert.match(page, /storage=\{data\.storage\}/);
 });

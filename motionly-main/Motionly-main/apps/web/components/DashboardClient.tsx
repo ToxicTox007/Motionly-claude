@@ -15,9 +15,11 @@ import {
   Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { messageFor } from "@/lib/error-messages";
 import { useToast } from "./toast";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { Button } from "./button";
+import { LoadErrorAlert } from "./load-error-alert";
 import { deleteProjectResult } from "../app/(app)/projects/actions";
 
 interface UploadedVideo {
@@ -36,6 +38,8 @@ interface Project {
 
 interface DashboardClientProps {
   initialProjects: Project[];
+  /** The projects request failed: the list is unknown, not empty. */
+  loadError?: boolean;
   workspaceName: string;
   storage?: {
     metered: boolean;
@@ -67,6 +71,7 @@ function getStatusBadgeClass(status: string | undefined) {
 
 export function DashboardClient({
   initialProjects,
+  loadError = false,
   workspaceName,
   storage,
 }: DashboardClientProps) {
@@ -74,6 +79,12 @@ export function DashboardClient({
   const { toast } = useToast();
   const [localProjects, setLocalProjects] =
     useState<Project[]>(initialProjects);
+  // A refresh (Retry, or after a delete) brings new server data: adopt it.
+  const [serverProjects, setServerProjects] = useState(initialProjects);
+  if (serverProjects !== initialProjects) {
+    setServerProjects(initialProjects);
+    setLocalProjects(initialProjects);
+  }
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"updated" | "title">("updated");
 
@@ -123,10 +134,10 @@ export function DashboardClient({
       if (!result.ok) {
         toast({
           title: "Delete Failed",
-          description: `Could not delete "${projectToDelete.title}" (${result.error.replaceAll(
-            "_",
-            " ",
-          )}). The project was kept.`,
+          description: `Could not delete "${projectToDelete.title}". ${messageFor(
+            "projects",
+            result.error,
+          )} The project was kept.`,
           variant: "error",
         });
         return;
@@ -156,6 +167,30 @@ export function DashboardClient({
       setDeleteLoading(false);
     }
   };
+
+  // The projects could not be loaded: say so and offer Retry. Showing the
+  // first-run onboarding here would tell an existing user their work is gone.
+  if (loadError) {
+    return (
+      <div className="flex flex-col gap-8">
+        <div className="min-w-0">
+          <span
+            className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-foreground shadow-neu-raised-sm"
+            data-testid="workspace-name"
+          >
+            {workspaceName}
+          </span>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+            Your Projects
+          </h1>
+        </div>
+        <LoadErrorAlert
+          title="Couldn't load your projects"
+          body="Motionly could not reach its servers. Your projects are safe; try again in a moment."
+        />
+      </div>
+    );
+  }
 
   // Onboarding card deck when empty
   if (localProjects.length === 0) {

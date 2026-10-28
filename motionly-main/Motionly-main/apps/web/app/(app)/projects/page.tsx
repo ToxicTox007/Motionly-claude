@@ -4,8 +4,10 @@ import { AppShell } from "@/components/app-shell";
 import { Button, ButtonLink } from "@/components/button";
 import { Alert } from "@/components/brutal-ui";
 import { EmptyState } from "@/components/empty-state";
+import { LoadErrorAlert } from "@/components/load-error-alert";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
-import { env } from "@/lib/env";
+import { messageFor, searchParam } from "@/lib/error-messages";
+import { serverApiFetch } from "@/lib/server-api";
 import { cn } from "@/lib/utils";
 import { deleteProject, updateProject } from "./actions";
 
@@ -29,8 +31,9 @@ export default async function ProjectsPage({
       : typeof params.deleted === "string"
         ? "Project deleted."
         : null;
-  const error =
-    typeof params.error === "string" ? params.error.replaceAll("_", " ") : null;
+  const errorCode = searchParam(params, "error");
+  // Mapped copy only: a crafted ?error= never puts its text on the page.
+  const error = errorCode ? messageFor("projects", errorCode) : null;
   const context = await getWorkspaceApiContext();
   if (!context) {
     return (
@@ -46,12 +49,12 @@ export default async function ProjectsPage({
     );
   }
 
-  const response = await fetch(`${env.apiBaseUrl}/projects`, {
-    headers: context.headers,
-    cache: "no-store",
-  });
-  const payload = response.ok ? await response.json() : { projects: [] };
-  const projects = (payload.projects ?? []) as ProjectRow[];
+  const result = await serverApiFetch<{ projects?: ProjectRow[] }>(
+    "/projects",
+    { headers: context.headers },
+  );
+  const loadError = !result.ok || !Array.isArray(result.data?.projects);
+  const projects = result.ok ? (result.data?.projects ?? []) : [];
 
   return (
     <AppShell title="Projects">
@@ -78,7 +81,9 @@ export default async function ProjectsPage({
         {notice ? <Alert tone="success">{notice}</Alert> : null}
         {error ? <Alert tone="danger">{error}</Alert> : null}
 
-        {projects.length ? (
+        {loadError ? (
+          <LoadErrorAlert title="Couldn't load your projects" />
+        ) : projects.length ? (
           <div className="grid gap-4">
             {projects.map((project) => (
               <article
