@@ -47,7 +47,13 @@ test("TimelinePanel.tsx implements snapping logic and markers correctly", async 
   assert.match(source, /const getSnappedMs = useCallback/);
   assert.match(source, /snapMarkerMs !== null/);
   assert.match(source, /border-dashed border-primary/);
-  assert.match(source, /getSnappedMs\(nextMs/);
+  // Drags snap through getSnappedMs; ClipBlock owns the drag (behaviour in
+  // tests/components/clip-block.test.tsx).
+  const clipBlock = await readFile(
+    new URL("components/editor/timeline/ClipBlock.tsx", root),
+    "utf8",
+  );
+  assert.match(clipBlock, /getSnappedMs\(nextMs, clip\.id\)/);
 });
 
 test("TimelinePanel.tsx implements sequential queue and optimistic updates correctly", async () => {

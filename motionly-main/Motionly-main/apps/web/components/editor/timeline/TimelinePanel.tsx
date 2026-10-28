@@ -32,6 +32,7 @@ import { useTimeline } from "./useTimeline";
 import { usePlaybackSync } from "./usePlaybackSync";
 import { useTimelineKeyboardShortcuts } from "./useTimelineKeyboardShortcuts";
 import { useEditorHistory, type HistoryEntry } from "../history-context";
+import { ClipBlock, MIN_CLIP_MS, type ReorderDirection } from "./ClipBlock";
 import type {
   BrollSlotSummary,
   CaptionSegment,
@@ -73,14 +74,10 @@ interface TimelinePanelProps {
   ) => boolean;
 }
 
-type ReorderDirection = -1 | 1;
-
 const TRACK_HEIGHT = 56;
 const RULER_HEIGHT = 36;
 const LABEL_WIDTH = 112;
-const MIN_CLIP_MS = 300;
 const NUDGE_MS = 500;
-const REORDER_THRESHOLD_MS = 120;
 
 type BrollRegionSnapshot = {
   startMs: number;
@@ -1746,25 +1743,6 @@ const MobileTimelineView = React.memo(
   },
 );
 
-interface ClipBlockProps {
-  clip: TimelineClip;
-  pct: (ms: number) => string;
-  selected: boolean;
-  onSelect: (id: string) => void;
-  onTrim: (clip: TimelineClip, side: "left" | "right", nextMs: number) => void;
-  onMove: (clip: TimelineClip, nextStartMs: number) => void;
-  onReorder: (clip: TimelineClip, direction: ReorderDirection) => void;
-  msFromPointer: (clientX: number) => number;
-  trimDisabled: boolean;
-  moveDisabled: boolean;
-  reorderDisabled: boolean;
-  getSnappedMs: (targetMs: number, ignoreClipId?: string) => number;
-  setSnapMarkerMs: (ms: number | null) => void;
-  setDragPreview: (
-    preview: { clipId: string; startMs: number; endMs: number } | null,
-  ) => void;
-}
-
 function DroppableTrack({
   id,
   data,
@@ -1842,255 +1820,6 @@ function TransitionDropZone({ index, left }: { index: number; left: string }) {
       <div
         className={cn("w-1 h-3/4 bg-primary/20", isOver && "bg-primary/80")}
       />
-    </div>
-  );
-}
-
-const ClipBlock = React.memo(
-  function ClipBlock({
-    clip,
-    pct,
-    selected,
-    onSelect,
-    onTrim,
-    onMove,
-    onReorder,
-    msFromPointer,
-    trimDisabled,
-    moveDisabled,
-    reorderDisabled,
-    getSnappedMs,
-    setSnapMarkerMs,
-    setDragPreview,
-  }: ClipBlockProps) {
-    const widthMs = Math.max(clip.endMs - clip.startMs, 0);
-    const { setNodeRef: setDropRef, isOver } = useDroppable({
-      id: `clip:${clip.id}`,
-      data: { zone: "clip", clip },
-    });
-
-    function startTrim(
-      side: "left" | "right",
-      event: React.PointerEvent<HTMLDivElement>,
-    ) {
-      event.stopPropagation();
-      if (trimDisabled) return;
-
-      const handlePointerMove = (moveEvent: PointerEvent) => {
-        const nextMs = msFromPointer(moveEvent.clientX);
-        const snapped = getSnappedMs(nextMs, clip.id);
-        const previewMs = Math.abs(snapped - nextMs) <= 150 ? snapped : nextMs;
-        setDragPreview({
-          clipId: clip.id,
-          startMs:
-            side === "left"
-              ? Math.min(previewMs, clip.endMs - MIN_CLIP_MS)
-              : clip.startMs,
-          endMs:
-            side === "right"
-              ? Math.max(previewMs, clip.startMs + MIN_CLIP_MS)
-              : clip.endMs,
-        });
-        if (Math.abs(snapped - nextMs) <= 150) {
-          setSnapMarkerMs(snapped);
-        } else {
-          setSnapMarkerMs(null);
-        }
-      };
-
-      const handlePointerUp = (nextEvent: PointerEvent) => {
-        window.removeEventListener("pointermove", handlePointerMove);
-        window.removeEventListener("pointerup", handlePointerUp);
-        setSnapMarkerMs(null);
-        setDragPreview(null);
-
-        const nextMs = msFromPointer(nextEvent.clientX);
-        const finalMs = getSnappedMs(nextMs, clip.id);
-        onTrim(clip, side, finalMs);
-      };
-
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp);
-    }
-
-    function startMove(event: React.PointerEvent<HTMLDivElement>) {
-      event.stopPropagation();
-      onSelect(clip.id);
-      const startPointerMs = msFromPointer(event.clientX);
-      const startClipMs = clip.startMs;
-
-      const handlePointerMove = (moveEvent: PointerEvent) => {
-        const deltaMs = msFromPointer(moveEvent.clientX) - startPointerMs;
-        const nextMs = startClipMs + deltaMs;
-        const snapped = getSnappedMs(nextMs, clip.id);
-        const previewStart =
-          Math.abs(snapped - nextMs) <= 150 ? snapped : nextMs;
-        setDragPreview({
-          clipId: clip.id,
-          startMs: previewStart,
-          endMs: previewStart + (clip.endMs - clip.startMs),
-        });
-        if (Math.abs(snapped - nextMs) <= 150) {
-          setSnapMarkerMs(snapped);
-        } else {
-          setSnapMarkerMs(null);
-        }
-      };
-
-      const handlePointerUp = (nextEvent: PointerEvent) => {
-        window.removeEventListener("pointermove", handlePointerMove);
-        window.removeEventListener("pointerup", handlePointerUp);
-        setSnapMarkerMs(null);
-        setDragPreview(null);
-
-        const deltaMs = msFromPointer(nextEvent.clientX) - startPointerMs;
-        if (Math.abs(deltaMs) < 80) return;
-
-        const nextMs = startClipMs + deltaMs;
-        const finalMs = getSnappedMs(nextMs, clip.id);
-
-        if (!moveDisabled) {
-          onMove(clip, finalMs);
-          return;
-        }
-        if (!reorderDisabled) {
-          if (deltaMs > REORDER_THRESHOLD_MS) {
-            onReorder(clip, 1);
-          } else if (deltaMs < -REORDER_THRESHOLD_MS) {
-            onReorder(clip, -1);
-          }
-        }
-      };
-
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp);
-    }
-
-    function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        onSelect(clip.id);
-      } else if (event.key === "ArrowLeft" && !moveDisabled) {
-        event.preventDefault();
-        onMove(clip, clip.startMs - 500);
-      } else if (event.key === "ArrowRight" && !moveDisabled) {
-        event.preventDefault();
-        onMove(clip, clip.startMs + 500);
-      } else if (
-        event.key === "ArrowLeft" &&
-        !reorderDisabled &&
-        moveDisabled
-      ) {
-        event.preventDefault();
-        onReorder(clip, -1);
-      } else if (
-        event.key === "ArrowRight" &&
-        !reorderDisabled &&
-        moveDisabled
-      ) {
-        event.preventDefault();
-        onReorder(clip, 1);
-      }
-    }
-
-    return (
-      <div
-        ref={setDropRef}
-        role="button"
-        tabIndex={0}
-        aria-pressed={selected}
-        aria-label={`${clip.trackKind} clip ${clip.label}. Starts ${formatMs(clip.startMs)}, ends ${formatMs(clip.endMs)}, duration ${formatMs(widthMs)}.`}
-        className={cn(
-          "group absolute bottom-1 top-1 cursor-pointer overflow-hidden rounded-neu",
-          "flex items-center gap-2 px-2 text-[10px] font-semibold leading-none text-white",
-          "shadow-neu-raised-sm ring-inset transition-all duration-100",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-          clip.colorClass,
-          clip.disabled && "opacity-30",
-          selected
-            ? "z-30 shadow-neu-glow ring-2 ring-primary"
-            : "ring-0 hover:brightness-110",
-          isOver && "z-20 ring-2 ring-primary brightness-125",
-        )}
-        style={{
-          left: pct(clip.startMs),
-          width: `max(3.75rem, ${pct(widthMs)})`,
-        }}
-        onPointerDown={startMove}
-        onKeyDown={onKeyDown}
-        onClick={(event) => {
-          event.stopPropagation();
-          onSelect(clip.id);
-        }}
-        title={`${clip.label} | ${formatMs(clip.startMs)} - ${formatMs(clip.endMs)}${
-          moveDisabled
-            ? reorderDisabled
-              ? " | Use toolbar actions"
-              : " | Drag left/right to reorder"
-            : " | Drag to move"
-        }`}
-      >
-        <TrimHandle
-          side="left"
-          selected={selected}
-          disabled={trimDisabled}
-          onPointerDown={(event) => startTrim("left", event)}
-        />
-        <span className="min-w-0 flex-1 truncate">{clip.label}</span>
-        <span className="hidden shrink-0 rounded-full bg-ink/40 px-1.5 font-mono text-[9px] tabular-nums sm:inline">
-          {formatMs(widthMs)}
-        </span>
-        <TrimHandle
-          side="right"
-          selected={selected}
-          disabled={trimDisabled}
-          onPointerDown={(event) => startTrim("right", event)}
-        />
-      </div>
-    );
-  },
-  (prev, next) => {
-    return (
-      prev.selected === next.selected &&
-      prev.clip.id === next.clip.id &&
-      prev.clip.startMs === next.clip.startMs &&
-      prev.clip.endMs === next.clip.endMs &&
-      prev.clip.label === next.clip.label &&
-      prev.trimDisabled === next.trimDisabled &&
-      prev.moveDisabled === next.moveDisabled &&
-      prev.reorderDisabled === next.reorderDisabled
-    );
-  },
-);
-
-function TrimHandle({
-  side,
-  selected,
-  disabled,
-  onPointerDown,
-}: {
-  side: "left" | "right";
-  selected: boolean;
-  disabled: boolean;
-  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
-}) {
-  return (
-    <div
-      className={cn(
-        "absolute bottom-0 top-0 z-20 flex w-5 items-center justify-center transition",
-        disabled
-          ? "cursor-not-allowed opacity-0 pointer-events-none"
-          : cn(
-              "cursor-ew-resize opacity-70 hover:opacity-100 group-hover:opacity-100 active:opacity-100",
-              selected ? "opacity-100" : "sm:opacity-0",
-            ),
-        side === "left" ? "left-0 -translate-x-2" : "right-0 translate-x-2",
-      )}
-      title={disabled ? "Edit in Audio" : "Trim clip"}
-      onPointerDown={onPointerDown}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div className="h-7 w-2 rounded-full bg-white shadow-neu-raised-sm" />
     </div>
   );
 }
