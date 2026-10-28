@@ -6,6 +6,7 @@ import { assertNeumorphic } from "./neumorphic-guard-helper.mjs";
 test("command palette files are free of neo-brutalist legacy tokens", () => {
   assertNeumorphic([
     "components/command-palette.tsx",
+    "components/command-palette-panel.tsx",
     "components/motion-provider.tsx",
   ]);
 });

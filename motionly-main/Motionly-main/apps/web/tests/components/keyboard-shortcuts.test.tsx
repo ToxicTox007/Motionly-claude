@@ -151,7 +151,10 @@ describe("command palette shortcut", () => {
     const input = screen.getByRole("textbox", { name: "Title" });
     act(() => input.focus());
     fireEvent.keyDown(input, { key: "k", ctrlKey: true });
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    // The palette panel loads on first open.
+    expect(
+      await screen.findByRole("dialog", {}, { timeout: 10_000 }),
+    ).toBeInTheDocument();
   });
 
   it("Ctrl+K in a textarea or contenteditable keeps its native meaning", () => {

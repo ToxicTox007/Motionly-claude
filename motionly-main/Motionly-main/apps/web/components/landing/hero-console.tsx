@@ -2,18 +2,28 @@
 
 // Decorative neumorphic product mockup for the landing hero. Entirely
 // non-interactive: the root is aria-hidden and contains no focusable elements
-// (no links, buttons, anchors, focus targets or form fields). Because nothing
-// inside is interactive, decorative loops may run continuously — but they stop
-// under prefers-reduced-motion, and pointer tilt is disabled for reduced motion
-// or coarse pointers. Text only appears light on the dark "ink" video area.
+// (no links, buttons, anchors, focus targets or form fields). The decorative
+// loops run only while the mockup is on screen, the tab is visible, motion is
+// allowed and the viewer has not paused them (HeroShowcase owns the pause
+// control, outside this aria-hidden tree). Pointer tilt is disabled for
+// reduced motion or coarse pointers. Text only appears light on the dark
+// "ink" video area.
 import {
+  animate,
   m,
+  useMotionTemplate,
   useMotionValue,
   useReducedMotion,
   useSpring,
   useTransform,
 } from "motion/react";
-import { useEffect, useState, type PointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type PointerEvent,
+} from "react";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 
 const CAPTION_WORDS = ["Your", "story", "cut", "to", "the", "beat"];
@@ -37,11 +47,48 @@ const LANES: Array<{
   { icon: "broll", tone: "bg-info", left: 14, width: 28 },
 ];
 
-export function HeroConsole() {
+function subscribeToVisibility(onChange: () => void) {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+
+function isPageVisible() {
+  return document.visibilityState !== "hidden";
+}
+
+/** Whether the element is on screen; true when IntersectionObserver is not
+ * available, so the mockup still animates there. */
+function useInView(ref: React.RefObject<HTMLElement | null>) {
+  const [inView, setInView] = useState(true);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) =>
+      setInView(Boolean(entry?.isIntersecting)),
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return inView;
+}
+
+export function HeroConsole({ paused = false }: { paused?: boolean }) {
   const reduceMotion = useReducedMotion();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inView = useInView(rootRef);
+  const pageVisible = useSyncExternalStore(
+    subscribeToVisibility,
+    isPageVisible,
+    () => true,
+  );
+  const animating = !reduceMotion && !paused && inView && pageVisible;
   const [coarse, setCoarse] = useState(false);
   const [activeWord, setActiveWord] = useState(0);
-  const [ringPct, setRingPct] = useState(0);
+  // The progress ring counts up on a motion value: no React re-render per step.
+  const ringPct = useMotionValue(0);
+  const ringLabel = useTransform(ringPct, (value) => Math.round(value));
+  const ringDegrees = useTransform(ringPct, (value) => value * 3.6);
+  const ringBackground = useMotionTemplate`conic-gradient(hsl(var(--primary)) ${ringDegrees}deg, hsl(var(--muted)) 0deg)`;
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -52,22 +99,23 @@ export function HeroConsole() {
     return () => query.removeEventListener("change", update);
   }, []);
 
-  // Caption word sweep + progress ring count-up. Only runs with motion on.
+  // Caption word sweep + progress ring count-up, only while animating.
   useEffect(() => {
-    if (reduceMotion) return;
+    if (!animating) return;
     const words = window.setInterval(
       () => setActiveWord((index) => (index + 1) % CAPTION_WORDS.length),
       700,
     );
-    const ring = window.setInterval(
-      () => setRingPct((pct) => (pct >= 100 ? 0 : pct + 4)),
-      120,
-    );
+    const ring = animate(ringPct, [0, 100], {
+      duration: 3,
+      ease: "linear",
+      repeat: Infinity,
+    });
     return () => {
       window.clearInterval(words);
-      window.clearInterval(ring);
+      ring.stop();
     };
-  }, [reduceMotion]);
+  }, [animating, ringPct]);
 
   const tiltEnabled = !reduceMotion && !coarse;
 
@@ -97,6 +145,7 @@ export function HeroConsole() {
 
   return (
     <div
+      ref={rootRef}
       aria-hidden="true"
       className="relative select-none [perspective:1600px]"
       onPointerMove={handlePointerMove}
@@ -137,7 +186,7 @@ export function HeroConsole() {
                 <div className="absolute inset-0 flex items-center justify-center">
                   <m.span
                     className="flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-neu-glow"
-                    animate={reduceMotion ? undefined : { scale: [1, 1.08, 1] }}
+                    animate={animating ? { scale: [1, 1.08, 1] } : undefined}
                     transition={{
                       duration: 2.4,
                       repeat: Infinity,
@@ -171,7 +220,7 @@ export function HeroConsole() {
               <div className="flex size-14 items-center justify-center rounded-full bg-surface shadow-neu-raised">
                 <m.span
                   className="relative flex size-9 items-center justify-center rounded-full bg-muted shadow-neu-inset-sm"
-                  animate={reduceMotion ? undefined : { rotate: [0, 40, 0] }}
+                  animate={animating ? { rotate: [0, 40, 0] } : undefined}
                   transition={{
                     duration: 3,
                     repeat: Infinity,
@@ -196,7 +245,7 @@ export function HeroConsole() {
                           : "size-5 rounded-full bg-surface shadow-neu-raised-sm"
                       }
                       animate={
-                        reduceMotion ? undefined : { x: on ? [16, 16] : [0, 0] }
+                        animating ? { x: on ? [16, 16] : [0, 0] } : undefined
                       }
                       style={{ marginLeft: on ? 16 : 0 }}
                     />
@@ -206,15 +255,13 @@ export function HeroConsole() {
 
               {/* Progress ring counting up */}
               <div className="relative flex size-14 items-center justify-center rounded-full bg-surface shadow-neu-raised">
-                <div
+                <m.div
                   className="size-11 rounded-full"
-                  style={{
-                    background: `conic-gradient(hsl(var(--primary)) ${ringPct * 3.6}deg, hsl(var(--muted)) 0deg)`,
-                  }}
+                  style={{ background: ringBackground }}
                 />
-                <div className="absolute flex size-8 items-center justify-center rounded-full bg-surface text-[11px] font-bold tabular-nums text-primary shadow-neu-inset-sm">
-                  {ringPct}
-                </div>
+                <m.div className="absolute flex size-8 items-center justify-center rounded-full bg-surface text-[11px] font-bold tabular-nums text-primary shadow-neu-inset-sm">
+                  {ringLabel}
+                </m.div>
               </div>
             </div>
 
@@ -222,9 +269,7 @@ export function HeroConsole() {
             <div className="relative rounded-neu-lg bg-surface p-3 shadow-neu-inset">
               <m.span
                 className="absolute inset-y-2 z-10 w-0.5 rounded-full bg-primary shadow-neu-glow"
-                animate={
-                  reduceMotion ? { left: "40%" } : { left: ["10%", "88%"] }
-                }
+                animate={animating ? { left: ["10%", "88%"] } : { left: "40%" }}
                 transition={{
                   duration: 4,
                   repeat: Infinity,
@@ -241,15 +286,15 @@ export function HeroConsole() {
                       className={`absolute top-1 bottom-1 flex items-center justify-center rounded-full ${lane.tone} shadow-neu-raised-sm`}
                       style={{ width: `${lane.width}%` }}
                       animate={
-                        reduceMotion
-                          ? { left: `${lane.left}%` }
-                          : {
+                        animating
+                          ? {
                               left: [
                                 `${lane.left}%`,
                                 `${lane.left + 8}%`,
                                 `${lane.left}%`,
                               ],
                             }
+                          : { left: `${lane.left}%` }
                       }
                       transition={{
                         duration: 3.6 + index,

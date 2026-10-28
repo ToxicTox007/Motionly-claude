@@ -20,9 +20,10 @@ export const metadata: Metadata = {
   },
 };
 
+// Plus Jakarta Sans is a variable font: one file covers every weight we use
+// (400–800) instead of five static ones (FE-40).
 const jakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
   display: "swap",
   variable: "--font-sans",
 });

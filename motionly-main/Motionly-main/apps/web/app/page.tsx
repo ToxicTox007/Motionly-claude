@@ -6,7 +6,7 @@ import {
   RegisterCommands,
   type PaletteCommand,
 } from "@/components/command-palette";
-import { HeroConsole } from "@/components/landing/hero-console";
+import { HeroShowcase } from "@/components/landing/hero-showcase";
 import { Reveal } from "@/components/landing/reveal";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 import { MobileNav } from "@/components/mobile-nav";
@@ -216,7 +216,7 @@ export default function HomePage() {
             </Reveal>
 
             <Reveal delay={0.08}>
-              <HeroConsole />
+              <HeroShowcase />
             </Reveal>
           </div>
         </section>

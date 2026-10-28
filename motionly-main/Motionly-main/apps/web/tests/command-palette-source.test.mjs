@@ -2,10 +2,25 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const source = await readFile(
+const provider = await readFile(
   new URL("../components/command-palette.tsx", import.meta.url),
   "utf8",
 );
+// The dialog lives in its own lazily loaded module (FE-40).
+const panel = await readFile(
+  new URL("../components/command-palette-panel.tsx", import.meta.url),
+  "utf8",
+);
+const source = `${provider}\n${panel}`;
+
+test("the panel (and cmdk) load only when the palette first opens", () => {
+  assert.match(
+    provider,
+    /dynamic\(\s*\(\) =>\s*import\("\.\/command-palette-panel"\)/,
+  );
+  assert.doesNotMatch(provider, /from "cmdk"/);
+  assert.match(panel, /from "cmdk"/);
+});
 
 test("does not use Command.Dialog (Radix Dialog logs console errors)", () => {
   assert.doesNotMatch(source, /Command\.Dialog/);

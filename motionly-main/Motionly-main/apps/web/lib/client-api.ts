@@ -169,13 +169,17 @@ export async function editorApiRequest<T>(
       requestId: error?.request_id,
       technicalMessage,
     });
-    console.error("Editor API request failed", {
-      path,
-      method,
-      status: response.status,
-      body,
-      payload,
-    });
+    // Request metadata only, and only outside production: bodies and API
+    // payloads can carry user content (captions, titles, prompts).
+    if (process.env.NODE_ENV !== "production") {
+      console.error("Editor API request failed", {
+        path: path.split(/[?#]/)[0],
+        method,
+        status: response.status,
+        code: error?.code,
+        requestId: error?.request_id,
+      });
+    }
     throw apiError;
   }
 
