@@ -69,13 +69,20 @@ const ERRORS: Record<MessageDomain, Record<string, string>> = {
     admin_required: "You do not have access to the admin area.",
   },
   editorial: {
-    promote_confirmation_required: "Type PROMOTE to confirm the promotion.",
+    promotion_confirmation_required: "Type PROMOTE to confirm the promotion.",
+    rollback_confirmation_required: "Type ROLLBACK to confirm the rollback.",
+    deployment_revision_required:
+      "The deployment changed. Reload the project and try again.",
+    editorial_operation_failed:
+      "That operation could not be completed. Try again.",
+    editorial_learning_revision_conflict:
+      "The deployment changed. Reload the project and try again.",
     action_failed: "That action could not be completed. Try again.",
   },
   feedback: {
     message_required: "Write at least 10 characters of feedback.",
-    message_too_long: "Keep feedback under 2,000 characters.",
-    feedback_failed: "Feedback could not be sent. Try again.",
+    message_too_long: "Keep feedback under 5,000 characters.",
+    feedback_failed: "Feedback could not be saved. Please try again.",
   },
   projects: {
     missing_project: "Choose a project first.",

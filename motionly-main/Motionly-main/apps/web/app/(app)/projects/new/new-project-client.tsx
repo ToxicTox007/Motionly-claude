@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/button";
-import { Badge } from "@/components/brutal-ui";
+import { Alert, Badge } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { createProject } from "../actions";
 
@@ -27,7 +27,12 @@ function SubmitButton() {
   );
 }
 
-export function NewProjectClient() {
+export function NewProjectClient({
+  serverError = null,
+}: {
+  /** Mapped copy for a failed create (?error= on /projects/new). */
+  serverError?: string | null;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   // The field is uncontrolled and validated from its submitted value:
   // autofill and typing before hydration set values without input events.
@@ -73,6 +78,7 @@ export function NewProjectClient() {
         onSubmit={handleSubmit}
         className="space-y-8 rounded-neu-xl bg-surface p-6 shadow-neu-raised-lg sm:p-8"
       >
+        {serverError ? <Alert tone="danger">{serverError}</Alert> : null}
         <div className="grid gap-2 rounded-neu-md bg-surface p-3 text-xs font-semibold shadow-neu-inset-sm sm:grid-cols-3">
           <span className="text-primary">01 Name</span>
           <span className="text-muted-foreground">02 Upload</span>

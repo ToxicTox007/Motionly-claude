@@ -9,9 +9,11 @@ import {
 import { redirect } from "next/navigation";
 import type { ComponentType } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Alert } from "@/components/brutal-ui";
 import { ButtonLink } from "@/components/button";
 import { getAdminApiContext } from "@/lib/api-auth";
-import { env } from "@/lib/env";
+import { messageFor, noticeFor, searchParam } from "@/lib/error-messages";
+import { serverApiFetch } from "@/lib/server-api";
 import { AdminJobsList } from "./AdminJobsList";
 import {
   cancelQueueJob,
@@ -109,9 +111,16 @@ type OpsOverview = {
   health?: Record<string, unknown>;
 };
 
-export default async function LaunchOpsPage() {
+export default async function LaunchOpsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const context = await getAdminApiContext();
   if (!context) redirect("/dashboard?error=admin_access_denied");
+  const params = (await searchParams) ?? {};
+  const errorCode = searchParam(params, "error");
+  const done = noticeFor("admin", searchParam(params, "done"));
   const [overview, queues, dependencyHealth] = await Promise.all([
     fetchOpsOverview(context.headers),
     fetchQueues(context.headers),
@@ -123,6 +132,16 @@ export default async function LaunchOpsPage() {
 
   return (
     <AppShell title="Launch Ops">
+      {errorCode ? (
+        <Alert tone="danger" className="mb-6">
+          {messageFor("admin", errorCode)}
+        </Alert>
+      ) : null}
+      {done ? (
+        <Alert tone="success" className="mb-6">
+          {done}
+        </Alert>
+      ) : null}
       <div className="mb-6 grid gap-3 md:grid-cols-3">
         <MetricCard
           icon={Gauge}
@@ -511,60 +530,37 @@ export default async function LaunchOpsPage() {
   );
 }
 
+function withAdminToken(headers: Record<string, string>) {
+  return {
+    ...headers,
+    ...(process.env.ADMIN_API_TOKEN
+      ? { "x-motionly-admin-token": process.env.ADMIN_API_TOKEN }
+      : {}),
+  };
+}
+
 async function fetchOpsOverview(headers: Record<string, string>) {
-  try {
-    const response = await fetch(`${env.apiBaseUrl}/admin/ops/overview`, {
-      cache: "no-store",
-      headers: {
-        ...headers,
-        ...(process.env.ADMIN_API_TOKEN
-          ? { "x-motionly-admin-token": process.env.ADMIN_API_TOKEN }
-          : {}),
-      },
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as OpsOverview;
-  } catch {
-    return null;
-  }
+  const result = await serverApiFetch<OpsOverview>("/admin/ops/overview", {
+    headers: withAdminToken(headers),
+  });
+  return result.ok ? result.data : null;
 }
 
 async function fetchQueues(headers: Record<string, string>) {
-  try {
-    const response = await fetch(`${env.apiBaseUrl}/admin/queues?limit=50`, {
-      cache: "no-store",
-      headers: {
-        ...headers,
-        ...(process.env.ADMIN_API_TOKEN
-          ? { "x-motionly-admin-token": process.env.ADMIN_API_TOKEN }
-          : {}),
-      },
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as {
-      queues: QueueSnapshot[];
-      jobs: QueueJob[];
-      total_jobs?: number;
-      limit?: number;
-    };
-  } catch {
-    return null;
-  }
+  const result = await serverApiFetch<{
+    queues: QueueSnapshot[];
+    jobs: QueueJob[];
+    total_jobs?: number;
+    limit?: number;
+  }>("/admin/queues?limit=50", { headers: withAdminToken(headers) });
+  return result.ok ? result.data : null;
 }
 
 async function fetchDependencyHealth(headers: Record<string, string>) {
-  try {
-    const response = await fetch(`${env.apiBaseUrl}/health/dependencies`, {
-      cache: "no-store",
-      headers,
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as {
-      dependencies: Record<string, { status: string; message: string }>;
-    };
-  } catch {
-    return null;
-  }
+  const result = await serverApiFetch<{
+    dependencies: Record<string, { status: string; message: string }>;
+  }>("/health/dependencies", { headers });
+  return result.ok ? result.data : null;
 }
 
 function MetricCard({

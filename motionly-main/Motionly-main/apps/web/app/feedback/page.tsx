@@ -3,6 +3,7 @@ import { Alert, Select, Textarea } from "@/components/brutal-ui";
 import { PixelIcon } from "@/components/pixel-icons";
 import { submitFeedback } from "./actions";
 import { PageTitle } from "@/components/page-title";
+import { messageFor } from "@/lib/error-messages";
 
 export default async function FeedbackPage({
   searchParams,
@@ -31,7 +32,7 @@ export default async function FeedbackPage({
       ) : null}
       {params?.error ? (
         <Alert tone="danger" className="mb-4 max-w-2xl">
-          Feedback could not be saved. Please try again.
+          {messageFor("feedback", params.error)}
         </Alert>
       ) : null}
       <form
@@ -55,6 +56,7 @@ export default async function FeedbackPage({
             name="message"
             required
             minLength={10}
+            maxLength={5000}
             rows={7}
             className="mt-2"
             placeholder="Tell us what happened, what you expected, and the project URL if relevant."

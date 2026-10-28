@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
+import { LoadErrorAlert } from "@/components/load-error-alert";
 import { getAdminApiContext } from "@/lib/api-auth";
-import { env } from "@/lib/env";
+import { serverApiFetch } from "@/lib/server-api";
 
 type CatalogTrack = {
   provider_track_id: string;
@@ -31,13 +32,15 @@ type CatalogResponse = {
 
 async function fetchCatalog(
   headers: Record<string, string>,
-): Promise<CatalogResponse> {
-  const response = await fetch(`${env.apiBaseUrl}/admin/music/tracks`, {
-    cache: "no-store",
+): Promise<CatalogResponse | null> {
+  const result = await serverApiFetch<CatalogResponse>("/admin/music/tracks", {
     headers,
   });
-  if (!response.ok) return { tracks: [], allow_list_approved: false };
-  return (await response.json()) as CatalogResponse;
+  if (!result.ok || !Array.isArray(result.data?.tracks)) return null;
+  return {
+    tracks: result.data.tracks,
+    allow_list_approved: result.data.allow_list_approved === true,
+  };
 }
 
 function formatDuration(ms: number | null): string {
@@ -59,7 +62,20 @@ export default async function AdminMusicPage() {
   const context = await getAdminApiContext();
   if (!context) redirect("/dashboard?error=admin_access_denied");
 
-  const { tracks, allow_list_approved } = await fetchCatalog(context.headers);
+  const catalog = await fetchCatalog(context.headers);
+
+  if (!catalog) {
+    // Unavailable is not "no tracks" and says nothing about the allow-list.
+    return (
+      <AppShell title="Music catalog">
+        <LoadErrorAlert
+          title="The music catalog is unavailable"
+          body="Motionly could not load the catalog from the API. No tracks or rights records were changed; try again in a moment."
+        />
+      </AppShell>
+    );
+  }
+  const { tracks, allow_list_approved } = catalog;
 
   return (
     <AppShell title="Music catalog">

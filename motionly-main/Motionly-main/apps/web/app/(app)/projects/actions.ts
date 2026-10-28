@@ -3,92 +3,90 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getWorkspaceApiContext } from "@/lib/api-auth";
-import { env } from "@/lib/env";
+import { failureCode, serverApiFetch } from "@/lib/server-api";
+
+// Every API outcome becomes an allowlisted ?error= code (lib/error-messages.ts)
+// rather than a crash: a 502 HTML page or an empty body never reaches
+// response.json() unchecked.
+
+const STATUSES = new Set(["draft", "ready", "failed"]);
+const MAX_TITLE_LENGTH = 120;
+
+function projectPath(projectId: string) {
+  return `/projects/${encodeURIComponent(projectId)}`;
+}
 
 export async function createProject(formData: FormData) {
   const title =
-    String(formData.get("title") ?? "Untitled reel").trim() || "Untitled reel";
+    String(formData.get("title") ?? "Untitled reel")
+      .trim()
+      .slice(0, MAX_TITLE_LENGTH) || "Untitled reel";
 
   const context = await getWorkspaceApiContext();
   if (!context) {
     redirect(`/login?next=${encodeURIComponent("/projects/new")}`);
   }
 
-  const response = await fetch(`${env.apiBaseUrl}/projects`, {
+  const result = await serverApiFetch<{ id?: unknown }>("/projects", {
     method: "POST",
     headers: context.headers,
-    body: JSON.stringify({ title }),
-    cache: "no-store",
+    body: { title },
   });
-  const project = await response.json();
-
-  if (!response.ok || !project.id) {
+  const projectId =
+    result.ok && typeof result.data?.id === "string" ? result.data.id : null;
+  if (!projectId) {
     redirect(
-      `/projects/new?error=${encodeURIComponent(project?.error?.code ?? "create_failed")}`,
+      `/projects/new?error=${result.ok ? "create_failed" : failureCode(result, "create_failed")}`,
     );
   }
 
-  redirect(`/projects/${project.id}`);
+  redirect(projectPath(projectId));
 }
 
 export async function updateProject(formData: FormData) {
-  const projectId = String(formData.get("projectId") ?? "");
+  const projectId = String(formData.get("projectId") ?? "").trim();
   const titleValue = formData.get("title");
   const statusValue = formData.get("status");
-  const title = typeof titleValue === "string" ? titleValue.trim() : "";
-  const status = typeof statusValue === "string" ? statusValue : "";
 
   if (!projectId) redirect("/projects?error=missing_project");
 
   const payload: { title?: string; status?: string } = {};
-  if (title) payload.title = title;
-  if (["draft", "ready", "failed"].includes(status)) payload.status = status;
+  if (typeof titleValue === "string") {
+    const title = titleValue.trim();
+    // Clearing the title used to "succeed" while silently keeping the old one.
+    if (!title) redirect("/projects?error=title_required");
+    payload.title = title.slice(0, MAX_TITLE_LENGTH);
+  }
+  if (typeof statusValue === "string" && statusValue !== "") {
+    if (!STATUSES.has(statusValue)) redirect("/projects?error=status_invalid");
+    payload.status = statusValue;
+  }
 
   const context = await getWorkspaceApiContext();
   if (!context) redirect(`/login?next=${encodeURIComponent("/projects")}`);
 
-  const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}`, {
-    method: "PATCH",
-    headers: context.headers,
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
-  const project = await response.json();
-
-  if (!response.ok || !project.id) {
+  const result = await serverApiFetch<{ id?: unknown }>(
+    projectPath(projectId),
+    { method: "PATCH", headers: context.headers, body: payload },
+  );
+  if (!result.ok || typeof result.data?.id !== "string") {
     redirect(
-      `/projects?error=${encodeURIComponent(project?.error?.code ?? "update_failed")}`,
+      `/projects?error=${result.ok ? "update_failed" : failureCode(result, "update_failed")}`,
     );
   }
 
   revalidatePath("/projects");
   revalidatePath("/dashboard");
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(projectPath(projectId));
   redirect("/projects?updated=1");
 }
 
 export async function deleteProject(formData: FormData) {
-  const projectId = String(formData.get("projectId") ?? "");
+  const projectId = String(formData.get("projectId") ?? "").trim();
   if (!projectId) redirect("/projects?error=missing_project");
 
-  const context = await getWorkspaceApiContext();
-  if (!context) redirect(`/login?next=${encodeURIComponent("/projects")}`);
-
-  const response = await fetch(`${env.apiBaseUrl}/projects/${projectId}`, {
-    method: "DELETE",
-    headers: context.headers,
-    cache: "no-store",
-  });
-  const payload = await response.json();
-
-  if (!response.ok || !payload.deleted) {
-    redirect(
-      `/projects?error=${encodeURIComponent(payload?.error?.code ?? "delete_failed")}`,
-    );
-  }
-
-  revalidatePath("/projects");
-  revalidatePath("/dashboard");
+  const result = await deleteProjectResult(projectId);
+  if (!result.ok) redirect(`/projects?error=${result.error}`);
   redirect("/projects?deleted=1");
 }
 
@@ -111,26 +109,15 @@ export async function deleteProjectResult(
     return { ok: false, error: "not_authenticated" };
   }
 
-  let response: Response;
-  try {
-    response = await fetch(`${env.apiBaseUrl}/projects/${projectId}`, {
-      method: "DELETE",
-      headers: context.headers,
-      cache: "no-store",
-    });
-  } catch {
-    return { ok: false, error: "network_error" };
+  const result = await serverApiFetch<{ deleted?: unknown }>(
+    projectPath(projectId),
+    { method: "DELETE", headers: context.headers },
+  );
+  if (!result.ok) {
+    return { ok: false, error: failureCode(result, "delete_failed") };
   }
-
-  let payload: { deleted?: boolean; error?: { code?: string } } = {};
-  try {
-    payload = (await response.json()) as typeof payload;
-  } catch {
-    // leave payload empty; handled below
-  }
-
-  if (!response.ok || !payload.deleted) {
-    return { ok: false, error: payload?.error?.code ?? "delete_failed" };
+  if (result.data?.deleted !== true) {
+    return { ok: false, error: "delete_failed" };
   }
 
   revalidatePath("/projects");

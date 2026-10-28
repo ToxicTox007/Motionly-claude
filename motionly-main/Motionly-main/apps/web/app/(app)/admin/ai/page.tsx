@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { LoadErrorAlert } from "@/components/load-error-alert";
 import { getAdminApiContext } from "@/lib/api-auth";
-import { env } from "@/lib/env";
+import { serverApiFetch } from "@/lib/server-api";
 import type {
   RegistrySnapshot,
   RouteHealth,
@@ -29,16 +30,10 @@ async function fetchJson<T>(
   path: string,
   headers: Record<string, string>,
 ): Promise<T | null> {
-  try {
-    const response = await fetch(`${env.apiBaseUrl}${path}`, {
-      cache: "no-store",
-      headers: adminHeaders(headers),
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  }
+  const result = await serverApiFetch<T>(path, {
+    headers: adminHeaders(headers),
+  });
+  return result.ok ? result.data : null;
 }
 
 export default async function AdminAiPage() {
@@ -54,7 +49,19 @@ export default async function AdminAiPage() {
     ),
   ]);
 
-  if (!snapshot || !snapshot.database_enabled) {
+  if (!snapshot) {
+    // The API did not answer: that says nothing about the feature flag.
+    return (
+      <AppShell title="AI Configuration">
+        <LoadErrorAlert
+          title="The AI configuration is unavailable"
+          body="Motionly could not load the inference registry from the API. Nothing was changed; try again in a moment."
+        />
+      </AppShell>
+    );
+  }
+
+  if (!snapshot.database_enabled) {
     return (
       <AppShell title="AI Configuration">
         <div className="rounded-neu-lg bg-surface p-8 text-center shadow-neu-inset">

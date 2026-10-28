@@ -49,7 +49,7 @@ test("editorial deployment operations require typed confirmations through server
 
   assert.match(actions, /formData\.get\("confirmation"\) !== "PROMOTE"/);
   assert.match(actions, /formData\.get\("confirmation"\) !== "ROLLBACK"/);
-  assert.match(actions, /if \(!response\.ok\)/);
+  assert.match(actions, /if \(!result\.ok\)/);
   assert.match(
     page,
     /Only IDs, item counts, state, and immutable manifest hashes are\s+shown/,

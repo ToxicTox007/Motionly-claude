@@ -18,8 +18,10 @@ test("deleteProjectResult action returns a result object instead of only redirec
   // Success and failure are explicit result shapes.
   assert.match(source, /return \{ ok: true \}/);
   assert.match(source, /ok: false, error:/);
-  // Failure is reported for a non-ok response or a non-deleted payload.
-  assert.match(source, /!response\.ok \|\| !payload\.deleted/);
+  // Failure is reported for a non-ok response or a non-deleted payload; the
+  // branches are exercised in tests/unit/project-actions.test.ts.
+  assert.match(source, /if \(!result\.ok\)/);
+  assert.match(source, /result\.data\?\.deleted !== true/);
 });
 
 test("DashboardClient confirmDelete no longer treats NEXT_REDIRECT as success", async () => {

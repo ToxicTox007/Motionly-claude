@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { validateRefundRupees } from "@/lib/payment-history.mjs";
 import { env } from "@/lib/env";
+import { serverApiFetch } from "@/lib/server-api";
 
 const BASE = "/admin/users";
 
@@ -19,7 +20,8 @@ function adminHeaders(contextHeaders: Record<string, string>) {
 
 async function requireContext() {
   const context = await getAdminApiContext();
-  if (!context) throw new Error("Admin access is required.");
+  // A lost admin session lands on an explained page, not the error screen.
+  if (!context) redirect("/dashboard?error=admin_access_denied");
   return context;
 }
 
@@ -77,17 +79,15 @@ export async function dismissResetRequest(formData: FormData) {
   if (!requestId) redirect(usersUrl({ error: "request_required" }));
 
   const context = await requireContext();
-  await fetch(`${env.apiBaseUrl}${BASE}/reset-requests/dismiss`, {
+  const result = await serverApiFetch(`${BASE}/reset-requests/dismiss`, {
     method: "POST",
-    cache: "no-store",
-    headers: {
-      ...adminHeaders(context.headers),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ request_id: requestId }),
+    headers: adminHeaders(context.headers),
+    body: { request_id: requestId },
   });
   revalidatePath("/admin/users");
-  redirect(usersUrl({ dismissed: "1" }));
+  redirect(
+    usersUrl(result.ok ? { done: "dismissed" } : { error: "dismiss_failed" }),
+  );
 }
 
 export async function setUserBan(formData: FormData) {
@@ -97,17 +97,20 @@ export async function setUserBan(formData: FormData) {
   if (!userId) redirect(usersUrl({ error: "user_required" }));
 
   const context = await requireContext();
-  await fetch(`${env.apiBaseUrl}${BASE}/${banned ? "ban" : "unban"}`, {
+  const result = await serverApiFetch(`${BASE}/${banned ? "ban" : "unban"}`, {
     method: "POST",
-    cache: "no-store",
-    headers: {
-      ...adminHeaders(context.headers),
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ user_id: userId }),
+    headers: adminHeaders(context.headers),
+    body: { user_id: userId },
   });
   revalidatePath("/admin/users");
-  redirect(usersUrl({ q: email, [banned ? "banned" : "unbanned"]: "1" }));
+  redirect(
+    usersUrl({
+      q: email,
+      ...(result.ok
+        ? { done: banned ? "banned" : "unbanned" }
+        : { error: banned ? "ban_failed" : "unban_failed" }),
+    }),
+  );
 }
 
 export type RefundResult = { ok: true } | { ok: false; error: string };

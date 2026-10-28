@@ -3,7 +3,8 @@ import { AppShell } from "@/components/app-shell";
 import { Alert } from "@/components/brutal-ui";
 import { getAdminApiContext } from "@/lib/api-auth";
 import { env } from "@/lib/env";
-import { messageFor } from "@/lib/error-messages";
+import { messageFor, noticeFor, searchParam } from "@/lib/error-messages";
+import { serverApiFetch } from "@/lib/server-api";
 import { CopyLink } from "./CopyLink";
 import { RefundPanel } from "./RefundPanel";
 import { createResetLink, dismissResetRequest, setUserBan } from "./actions";
@@ -27,27 +28,27 @@ type ResetRequest = {
 async function searchUsers(
   headers: Record<string, string>,
   email: string,
-): Promise<AdminUser[]> {
+): Promise<AdminUser[] | null> {
   if (!email) return [];
-  const response = await fetch(
-    `${env.apiBaseUrl}/admin/users?email=${encodeURIComponent(email)}`,
-    { cache: "no-store", headers },
+  const result = await serverApiFetch<{ users?: AdminUser[] }>(
+    `/admin/users?email=${encodeURIComponent(email)}`,
+    { headers },
   );
-  if (!response.ok) return [];
-  const payload = (await response.json()) as { users: AdminUser[] };
-  return payload.users ?? [];
+  return result.ok && Array.isArray(result.data?.users)
+    ? result.data.users
+    : null;
 }
 
 async function fetchResetRequests(
   headers: Record<string, string>,
-): Promise<ResetRequest[]> {
-  const response = await fetch(`${env.apiBaseUrl}/admin/users/reset-requests`, {
-    cache: "no-store",
-    headers,
-  });
-  if (!response.ok) return [];
-  const payload = (await response.json()) as { requests: ResetRequest[] };
-  return payload.requests ?? [];
+): Promise<ResetRequest[] | null> {
+  const result = await serverApiFetch<{ requests?: ResetRequest[] }>(
+    "/admin/users/reset-requests",
+    { headers },
+  );
+  return result.ok && Array.isArray(result.data?.requests)
+    ? result.data.requests
+    : null;
 }
 
 export default async function AdminUsersPage({
@@ -62,6 +63,7 @@ export default async function AdminUsersPage({
   const query = typeof params.q === "string" ? params.q : "";
   const link = typeof params.link === "string" ? params.link : null;
   const errorCode = typeof params.error === "string" ? params.error : null;
+  const done = noticeFor("admin", searchParam(params, "done"));
 
   const [users, resetRequests] = await Promise.all([
     searchUsers(context.headers, query),
@@ -75,6 +77,11 @@ export default async function AdminUsersPage({
           {messageFor("admin", errorCode)}
         </Alert>
       )}
+      {done ? (
+        <Alert tone="success" className="mb-5">
+          {done}
+        </Alert>
+      ) : null}
       {link && (
         <section className="mb-6 rounded-neu-lg bg-surface p-5 shadow-neu-raised">
           <h2 className="mb-2 text-sm font-semibold text-foreground">
@@ -121,7 +128,11 @@ export default async function AdminUsersPage({
 
         {query && (
           <div className="mt-4 space-y-3">
-            {users.length === 0 ? (
+            {users === null ? (
+              <p role="alert" className="text-sm font-medium text-danger">
+                User search is unavailable right now. Try again in a moment.
+              </p>
+            ) : users.length === 0 ? (
               <p className="text-sm font-medium text-muted-foreground">
                 No users match “{query}”.
               </p>
@@ -176,7 +187,11 @@ export default async function AdminUsersPage({
       {/* Pending reset requests */}
       <section>
         <h2 className="mb-3 text-base font-bold">Pending reset requests</h2>
-        {resetRequests.length === 0 ? (
+        {resetRequests === null ? (
+          <p role="alert" className="text-sm font-medium text-danger">
+            Reset requests could not be loaded right now. Refresh to try again.
+          </p>
+        ) : resetRequests.length === 0 ? (
           <p className="text-sm font-medium text-muted-foreground">
             No pending requests.
           </p>

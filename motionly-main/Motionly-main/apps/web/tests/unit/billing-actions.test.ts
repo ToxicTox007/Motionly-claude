@@ -39,7 +39,9 @@ function form(values: Record<string, string>) {
 }
 
 function stubFetch(body: string | null, status = 200) {
-  const fetchMock = vi.fn(async () => new Response(body, { status }));
+  const fetchMock = vi.fn(
+    async (_url: string, _init?: RequestInit) => new Response(body, { status }),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }

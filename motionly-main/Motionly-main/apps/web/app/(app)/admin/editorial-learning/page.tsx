@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/button";
 import { getAdminApiContext } from "@/lib/api-auth";
-import { env } from "@/lib/env";
+import { messageFor, searchParam } from "@/lib/error-messages";
+import { serverApiFetch } from "@/lib/server-api";
 import {
   promoteEditorialDataset,
   rollbackEditorialDeployment,
@@ -33,24 +34,23 @@ async function editorialOperations(projectId: string) {
       ? { "x-motionly-admin-token": process.env.ADMIN_API_TOKEN }
       : {}),
   };
-  const base = `${env.apiBaseUrl}/admin/editorial-learning/projects/${encodeURIComponent(projectId)}`;
-  const [datasetsResponse, deploymentResponse] = await Promise.all([
-    fetch(`${base}/datasets`, { cache: "no-store", headers }),
-    fetch(`${base}/deployment`, { cache: "no-store", headers }),
+  const base = `/admin/editorial-learning/projects/${encodeURIComponent(projectId)}`;
+  const [datasets, deployment] = await Promise.all([
+    serverApiFetch<{ datasets?: Dataset[] }>(`${base}/datasets`, { headers }),
+    serverApiFetch<Deployment>(`${base}/deployment`, { headers }),
   ]);
-  if (!datasetsResponse.ok || !deploymentResponse.ok) {
+  if (!datasets.ok || !deployment.ok || !deployment.data) {
     return {
       datasets: [] as Dataset[],
       deployment: null,
       error: "editorial_operations_unavailable",
     };
   }
-  const datasetsPayload = await datasetsResponse.json();
   return {
-    datasets: Array.isArray(datasetsPayload?.datasets)
-      ? (datasetsPayload.datasets as Dataset[])
+    datasets: Array.isArray(datasets.data?.datasets)
+      ? datasets.data.datasets
       : [],
-    deployment: (await deploymentResponse.json()) as Deployment,
+    deployment: deployment.data,
     error: null,
   };
 }
@@ -69,8 +69,9 @@ export default async function EditorialLearningOperationsPage({
       : typeof params.rolled_back === "string"
         ? "Deployment rolled back."
         : null;
-  const error =
-    typeof params.error === "string" ? params.error.replaceAll("_", " ") : null;
+  const errorCode = searchParam(params, "error");
+  // Mapped copy only: a crafted ?error= never puts its text on the page.
+  const error = errorCode ? messageFor("editorial", errorCode) : null;
   const operations = projectId ? await editorialOperations(projectId) : null;
 
   return (
