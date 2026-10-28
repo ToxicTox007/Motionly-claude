@@ -1,6 +1,6 @@
 import { Users } from "lucide-react";
-import { logout } from "@/app/(auth)/actions";
 import { Button } from "@/components/button";
+import { LogoutForm } from "@/components/logout-form";
 
 /**
  * The viewer belongs to no active workspace (for example after leaving or
@@ -31,11 +31,11 @@ export function NoWorkspaceState() {
         projects to show. Ask a workspace owner or admin for an invite link and
         open it while signed in to join their workspace.
       </p>
-      <form action={logout} className="mt-6">
+      <LogoutForm className="mt-6">
         <Button type="submit" variant="secondary">
           Sign out
         </Button>
-      </form>
+      </LogoutForm>
     </section>
   );
 }

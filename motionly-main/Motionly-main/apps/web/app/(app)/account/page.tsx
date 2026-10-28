@@ -8,7 +8,7 @@ import { getActiveMemberships, getSessionSnapshot } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { messageFor, searchParam } from "@/lib/error-messages";
 import { requireWorkspaceApiContext } from "@/lib/require-context";
-import { logout } from "../../(auth)/actions";
+import { LogoutForm } from "@/components/logout-form";
 import { updatePassword, updateProfile } from "./actions";
 
 export default async function AccountPage({
@@ -157,11 +157,8 @@ export default async function AccountPage({
               <Fact label="Email" value={email} icon={Mail} />
             </div>
 
-            {/* Logout form */}
-            <form
-              action={logout}
-              className="rounded-neu-lg bg-surface p-5 shadow-neu-raised"
-            >
+            {/* Signs out here and tells other tabs (components/logout-form). */}
+            <LogoutForm className="rounded-neu-lg bg-surface p-5 shadow-neu-raised">
               <h3 className="text-lg font-bold text-foreground">Session</h3>
               <p className="mt-2 text-sm font-medium text-muted-foreground">
                 Log out on this browser before switching accounts.
@@ -169,7 +166,7 @@ export default async function AccountPage({
               <Button type="submit" variant="secondary" className="mt-4 w-full">
                 Log out
               </Button>
-            </form>
+            </LogoutForm>
           </aside>
         </div>
 

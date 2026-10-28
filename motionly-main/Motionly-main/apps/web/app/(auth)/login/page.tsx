@@ -49,9 +49,10 @@ function LoginFormContent() {
     return null;
   };
 
+  // Only presence is checked here: an existing account's password may predate
+  // today's policy, and a login form should not advertise the rules.
   const validatePassword = (val: string) => {
     if (!val) return "Password is required.";
-    if (val.length < 8) return "Password must be at least 8 characters.";
     return null;
   };
 
@@ -131,6 +132,7 @@ function LoginFormContent() {
           name="email"
           type="email"
           required
+          autoComplete="email"
           onChange={(e) => {
             if (emailError) setEmailError(validateEmail(e.target.value));
           }}
@@ -159,6 +161,7 @@ function LoginFormContent() {
           name="password"
           type="password"
           required
+          autoComplete="current-password"
           onChange={(e) => {
             if (passwordError)
               setPasswordError(validatePassword(e.target.value));

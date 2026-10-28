@@ -1,7 +1,8 @@
 "use server";
 
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { WORKSPACE_COOKIE_NAME } from "@/lib/api-auth";
 import { createClient } from "@/lib/supabase/server";
 import { env } from "@/lib/env";
 import { safeNextPath } from "@/lib/safe-redirect.mjs";
@@ -15,6 +16,13 @@ function authErrorReason(error: { code?: string; status?: number }) {
     return "rate_limited";
   }
   return "invalid_credentials";
+}
+
+/** The login page with an error, keeping where the viewer was going. */
+function loginErrorUrl(reason: string, nextPath: string) {
+  const params = new URLSearchParams({ error: reason });
+  if (nextPath !== "/dashboard") params.set("next", nextPath);
+  return `/login?${params.toString()}`;
 }
 
 export async function login(formData: FormData) {
@@ -40,13 +48,13 @@ export async function login(formData: FormData) {
         status: error.status,
         message: error.message,
       });
-      redirectTo = `/login?error=${authErrorReason(error)}`;
+      redirectTo = loginErrorUrl(authErrorReason(error), nextPath);
     } else {
       redirectTo = nextPath;
     }
   } catch (err: any) {
     console.error("motionly_login_system_error", err);
-    redirectTo = "/login?error=system_error";
+    redirectTo = loginErrorUrl("system_error", nextPath);
   }
 
   if (redirectTo) {
@@ -124,6 +132,10 @@ export async function signup(formData: FormData) {
 }
 
 export async function logout() {
+  // The selected workspace belongs to this session, not to the device: the
+  // next person signing in here must not inherit it.
+  const cookieStore = await cookies();
+  cookieStore.delete(WORKSPACE_COOKIE_NAME);
   if (env.skipAuthMiddleware) {
     redirect("/login");
   }

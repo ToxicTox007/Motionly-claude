@@ -51,6 +51,7 @@ import {
   type ReactNode,
 } from "react";
 import { logout } from "@/app/(auth)/actions";
+import { announceSignOut } from "@/lib/session-storage";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 import {
   commandKey,
@@ -346,6 +347,7 @@ function CommandPalettePanel({
       if (command.href) {
         router.push(command.href);
       } else if (command.action === "logout") {
+        announceSignOut();
         void logout();
       } else if (command.run) {
         command.run();

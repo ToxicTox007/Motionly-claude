@@ -14,18 +14,17 @@ import {
   SIGNUP_ERROR_MESSAGES,
   type SignupErrorReason,
 } from "@/lib/signup.mjs";
+import { PASSWORD_HINT, passwordFeedback } from "@/lib/password-feedback";
 
-function PasswordStrength({ password }: { password: string }) {
+function PasswordStrength({
+  password,
+  email,
+}: {
+  password: string;
+  email: string;
+}) {
   if (!password) return null;
-  const score =
-    password.length >= 12
-      ? 4
-      : password.length >= 10
-        ? 3
-        : password.length >= 8
-          ? 2
-          : 1;
-  const labels = ["", "Weak", "Fair", "Strong", "Very strong"];
+  const { score, label } = passwordFeedback(password, email);
   const colors = ["", "bg-danger", "bg-warning", "bg-success", "bg-primary"];
   const textColors = [
     "",
@@ -35,8 +34,8 @@ function PasswordStrength({ password }: { password: string }) {
     "text-primary",
   ];
   return (
-    <div className="mt-2 space-y-1">
-      <div className="flex gap-1">
+    <div className="mt-2 space-y-1" aria-live="polite">
+      <div className="flex gap-1" aria-hidden="true">
         {[1, 2, 3, 4].map((i) => (
           <div
             key={i}
@@ -45,7 +44,7 @@ function PasswordStrength({ password }: { password: string }) {
         ))}
       </div>
       <p className={`text-xs font-semibold ${textColors[score]}`}>
-        {labels[score]}
+        Password strength: {label}
       </p>
     </div>
   );
@@ -85,6 +84,7 @@ function SignupFormContent() {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   // Shown by the strength meter only; validation reads the submitted value.
   const [typedPassword, setTypedPassword] = useState("");
+  const [typedEmail, setTypedEmail] = useState("");
 
   const validateName = (val: string) =>
     !val.trim() ? "Name is required." : null;
@@ -94,17 +94,20 @@ function SignupFormContent() {
       return "Please enter a valid email address.";
     return null;
   };
-  const validatePassword = (val: string) => {
+  // The same policy the server applies (lib/password-policy.mjs).
+  const validatePassword = (val: string, email: string) => {
     if (!val) return "Password is required.";
-    if (val.length < 8) return "Password must be at least 8 characters.";
-    return null;
+    return passwordFeedback(val, email).problem;
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     const form = new FormData(e.currentTarget);
     const n = validateName(String(form.get("name") ?? ""));
     const em = validateEmail(String(form.get("email") ?? ""));
-    const pw = validatePassword(String(form.get("password") ?? ""));
+    const pw = validatePassword(
+      String(form.get("password") ?? ""),
+      String(form.get("email") ?? ""),
+    );
     if (n || em || pw) {
       e.preventDefault();
       setNameError(n);
@@ -167,6 +170,7 @@ function SignupFormContent() {
           name="name"
           type="text"
           required
+          autoComplete="name"
           onChange={(e) => {
             if (nameError) setNameError(validateName(e.target.value));
           }}
@@ -195,7 +199,9 @@ function SignupFormContent() {
           name="email"
           type="email"
           required
+          autoComplete="email"
           onChange={(e) => {
+            setTypedEmail(e.target.value);
             if (emailError) setEmailError(validateEmail(e.target.value));
           }}
           onBlur={(e) => setEmailError(validateEmail(e.currentTarget.value))}
@@ -223,13 +229,16 @@ function SignupFormContent() {
           name="password"
           type="password"
           required
+          autoComplete="new-password"
           onChange={(e) => {
             setTypedPassword(e.target.value);
             if (passwordError)
-              setPasswordError(validatePassword(e.target.value));
+              setPasswordError(validatePassword(e.target.value, typedEmail));
           }}
           onBlur={(e) =>
-            setPasswordError(validatePassword(e.currentTarget.value))
+            setPasswordError(
+              validatePassword(e.currentTarget.value, typedEmail),
+            )
           }
           aria-describedby={passwordError ? "password-error" : "password-hint"}
           aria-invalid={Boolean(passwordError)}
@@ -244,10 +253,10 @@ function SignupFormContent() {
             id="password-hint"
             className="text-xs font-medium text-muted-foreground"
           >
-            At least 8 characters.
+            {PASSWORD_HINT}
           </p>
         )}
-        <PasswordStrength password={typedPassword} />
+        <PasswordStrength password={typedPassword} email={typedEmail} />
       </div>
 
       <SubmitButton />

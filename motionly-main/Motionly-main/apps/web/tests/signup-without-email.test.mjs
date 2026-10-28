@@ -93,8 +93,12 @@ test("no email-confirmation paths remain", () => {
 });
 
 test("the form's password rule matches the API's minimum", () => {
+  // The form validates with the shared mirror of the API policy (behaviour in
+  // tests/unit/password-feedback.test.ts), whose minimum must match the API.
   const signupPage = read("app/(auth)/signup/page.tsx");
-  assert.match(signupPage, /val\.length < 8/);
+  assert.match(signupPage, /passwordFeedback\(val, email\)\.problem/);
+  const mirror = read("lib/password-policy.mjs");
+  assert.match(mirror, /export const PASSWORD_MIN_LENGTH = 8;/);
   const policy = readFileSync(
     resolve(webDir, "../api/app/services/signup_policy.py"),
     "utf8",

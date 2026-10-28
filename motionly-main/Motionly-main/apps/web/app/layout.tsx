@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { headers } from "next/headers";
+import { AuthSessionListener } from "@/components/auth-session-listener";
 import { CommandPaletteProvider } from "@/components/command-palette";
 import { MotionProvider } from "@/components/motion-provider";
 import { ToastProvider } from "@/components/toast";
@@ -54,6 +55,7 @@ export default async function RootLayout({
         />
       </head>
       <body>
+        <AuthSessionListener />
         <MotionProvider>
           <ToastProvider>
             <CommandPaletteProvider>{children}</CommandPaletteProvider>

@@ -115,6 +115,7 @@ function ForgotPasswordFormContent() {
               name="email"
               type="email"
               required
+              autoComplete="email"
               onChange={(e) => {
                 if (emailError) setEmailError(validateEmail(e.target.value));
               }}
