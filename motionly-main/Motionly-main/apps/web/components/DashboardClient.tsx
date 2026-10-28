@@ -541,7 +541,7 @@ export function DashboardClient({
 
         {bentoOtherProjects.length > 0 ? (
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {bentoOtherProjects.map((project, index) => {
+            {bentoOtherProjects.map((project) => {
               const upload = project.uploaded_videos?.[0];
               const warnings = upload?.metadata?.warnings ?? [];
               return (

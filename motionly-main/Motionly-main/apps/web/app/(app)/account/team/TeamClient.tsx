@@ -132,14 +132,12 @@ export function TeamClient({
   viewerRole,
   members,
   invitations,
-  seatUsed,
   seatLimit,
 }: {
   canManage: boolean;
   viewerRole: ViewerRole;
   members: TeamMember[];
   invitations: Invitation[];
-  seatUsed: number;
   /** null when the plan (and so the seat limit) could not be loaded. */
   seatLimit: number | null;
 }) {

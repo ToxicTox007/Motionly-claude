@@ -120,7 +120,6 @@ export default async function TeamPage() {
           viewerRole={role}
           members={members}
           invitations={invitations}
-          seatUsed={usage?.used ?? members.length + pending}
           seatLimit={usage?.limit ?? null}
         />
       </div>

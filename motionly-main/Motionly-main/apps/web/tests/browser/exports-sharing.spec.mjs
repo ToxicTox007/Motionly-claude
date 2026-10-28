@@ -32,7 +32,6 @@ test("a finished export is played, downloaded, shared, watched, and revoked", as
   await page.getByRole("button", { name: /Continue to Upload/i }).click();
   await expect(page).toHaveURL(/\/projects\/[0-9a-f-]{36}$/);
   await uploadSourceVideo(page, media.path);
-  const projectId = new URL(page.url()).pathname.split("/").pop();
 
   // 2. Reach the editor and render an export (Task 15's real render pipeline).
   await expect(async () => {

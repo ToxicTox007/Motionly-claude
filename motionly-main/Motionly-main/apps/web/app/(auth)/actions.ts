@@ -52,7 +52,7 @@ export async function login(formData: FormData) {
     } else {
       redirectTo = nextPath;
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error("motionly_login_system_error", err);
     redirectTo = loginErrorUrl("system_error", nextPath);
   }
@@ -121,7 +121,7 @@ export async function signup(formData: FormData) {
         redirectTo = nextPath;
       }
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error("motionly_signup_system_error", err);
     redirectTo = "/signup?error=system_error";
   }
@@ -145,7 +145,7 @@ export async function logout() {
     const supabase = await createClient();
     await supabase.auth.signOut();
     redirectTo = "/login";
-  } catch (err: any) {
+  } catch (err) {
     console.error("motionly_logout_system_error", err);
     redirectTo = "/login";
   }
@@ -185,7 +185,7 @@ export async function requestPasswordReset(formData: FormData) {
         });
         redirectTo = `/forgot-password?error=${reason}`;
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("motionly_password_reset_request_error", err);
       redirectTo = "/forgot-password?error=system_error";
     }
@@ -234,7 +234,7 @@ export async function resetPassword(formData: FormData) {
         redirectTo = "/dashboard?notice=password_updated";
       }
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error("motionly_reset_password_system_error", err);
     redirectTo = "/reset-password?error=system_error";
   }

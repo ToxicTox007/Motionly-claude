@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Label, Select, Slider } from "./ui";
-import { Button } from "../button";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -212,6 +211,13 @@ export function ExportStep({
   const streamAbortRef = useRef<AbortController | null>(null);
 
   const latestJob = jobs[0];
+  // Render lineage the API adds to jobs (not part of RenderJobSummary yet).
+  const latestJobLineage = latestJob as
+    | (typeof latestJob & {
+        stale?: boolean;
+        source_plan_revision?: number | null;
+      })
+    | undefined;
   const latestExport = exports[0];
   const activeStatuses = useMemo(
     () => ["queued", "processing", "preparing", "rendering", "uploading"],
@@ -1024,10 +1030,10 @@ export function ExportStep({
 
       {latestJob &&
         latestJob.status === "complete" &&
-        ((latestJob as any).stale === true ||
+        (latestJobLineage?.stale === true ||
           (planRevision != null &&
-            (latestJob as any).source_plan_revision != null &&
-            (latestJob as any).source_plan_revision < planRevision)) && (
+            latestJobLineage?.source_plan_revision != null &&
+            latestJobLineage.source_plan_revision < planRevision)) && (
           <StaleIndicator
             message="Render is outdated — timeline has been modified since last render"
             actionLabel="Re-render"

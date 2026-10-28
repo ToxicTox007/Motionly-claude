@@ -5,15 +5,16 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("processing screen refreshes after a direct page load", async () => {
-  const source = await readFile(
-    new URL("components/editor-client.tsx", root),
-    "utf8",
-  );
-  assert.match(
-    source,
-    /function ProcessingScreen[\s\S]*setInterval\(refresh, 4000\)/,
-  );
-  assert.match(source, /visibilitychange/);
+  // The project page renders ProcessingProjectScreen (project-early-phase);
+  // the editor's old, unused ProcessingScreen copy was removed. It polls with
+  // the shared visibility-aware poller (behaviour:
+  // tests/unit/adaptive-polling.test.ts).
+  const [page, screen] = await Promise.all([
+    readFile(new URL("app/(app)/projects/[projectId]/page.tsx", root), "utf8"),
+    readFile(new URL("components/project-early-phase.tsx", root), "utf8"),
+  ]);
+  assert.match(page, /<ProcessingProjectScreen/);
+  assert.match(screen, /startAdaptivePolling\(/);
 });
 
 test("undo and redo are serialized per workspace and project", async () => {

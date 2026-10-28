@@ -38,6 +38,12 @@ export function parseBooleanFlag(
   name: string,
   raw: string | undefined,
 ): boolean;
+/** Throws when production omits BILLING_MODE or the value is not allowed. */
+export function parseBillingMode(
+  deployment: Deployment,
+  raw: string | undefined,
+  billingEnabled: boolean,
+): ServerConfig["billingMode"];
 export function parseServerConfig(
   environment: Record<string, string | undefined>,
 ): ServerConfig;

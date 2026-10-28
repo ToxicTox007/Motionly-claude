@@ -61,6 +61,8 @@ export default function GlobalError({
                 Try again
               </button>
             ) : null}
+            {/* A full page load on purpose: the client router may be broken. */}
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/" className={buttonClassName({ variant: "ghost" })}>
               <Home className="size-4" aria-hidden="true" />
               Home

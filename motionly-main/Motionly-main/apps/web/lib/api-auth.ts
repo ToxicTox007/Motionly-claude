@@ -130,7 +130,3 @@ export const getAdminApiContext = cache(async () => {
   });
   return allowed ? context : null;
 });
-
-export type WorkspaceApiContext = NonNullable<
-  Awaited<ReturnType<typeof getWorkspaceApiContext>>
->;

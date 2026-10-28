@@ -2,7 +2,6 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Label, Slider, PanelSection } from "../ui";
-import { Button } from "../../button";
 import { Check, Loader2, Music, Volume2 } from "lucide-react";
 import type {
   MusicSelectionSummary,

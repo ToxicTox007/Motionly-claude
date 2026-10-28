@@ -173,14 +173,6 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   );
 }
 
-function useRegistry(): RegistryContextValue {
-  const context = useContext(RegistryContext);
-  if (!context) {
-    throw new Error("Command palette registry is not mounted");
-  }
-  return context;
-}
-
 export function useCommandPalette(): PaletteContextValue {
   const context = useContext(PaletteContext);
   if (!context) {

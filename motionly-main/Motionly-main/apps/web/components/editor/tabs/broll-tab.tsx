@@ -1,8 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Input, Label, Slider, PanelSection } from "../ui";
-import { Button } from "../../button";
+import { Label, Slider, PanelSection } from "../ui";
 import { Check, Film, Loader2, Sparkles, X } from "lucide-react";
 import type {
   BrollDensity,

@@ -23,10 +23,8 @@ import {
   type CollisionDetection,
 } from "@dnd-kit/core";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Film, Loader2, ChevronLeft } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Loader2 } from "lucide-react";
 import { shouldIgnoreShortcut } from "@/lib/keyboard-shortcuts";
 import { useToast } from "./toast";
 import { LoadingPixelSkeleton } from "./editor/ui";
@@ -35,7 +33,6 @@ import {
   editorApiRequest,
   pollPlanJob,
   resolveQueuedLayer,
-  RevisionConflictError,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
 import { buildTimelineState } from "@/lib/timeline";
@@ -59,19 +56,12 @@ import {
   failedPanelsForTab,
   type EditorPanelErrors,
 } from "@/lib/editor-panels";
-import {
-  PRODUCT_FLOW_STAGES,
-  productFlowStageIndex,
-  uploadStatusMessage,
-} from "@/lib/product-flow-status";
 import { EditorLayout } from "./editor-layout";
 import type { CreatorFlow, EditorCommandBar } from "./editor/layout/types";
 import {
   buildCreatorTasks,
   inspectorTabForCreatorTask,
 } from "./editor/creator-flow";
-import { MobileNav } from "./mobile-nav";
-import { UploadPanel } from "./upload-panel";
 import { type PaletteElement } from "./editor/dnd/element-catalog";
 import {
   editorDragAnnouncements,
@@ -99,7 +89,6 @@ import {
 } from "./editor/preview/VideoPreview";
 import { TimelinePanel } from "./editor/timeline/TimelinePanel";
 import type {
-  BrollDensity,
   BrollSlotSummary,
   CaptionTrackSummary,
   EditPlanRecordSummary,
@@ -247,15 +236,11 @@ export function EditorClient(props: EditorClientProps) {
     userId,
     title,
     upload,
-    uploadAssetUrls,
     transcript,
     captionTracks,
     brollSlots,
     musicSelection,
     effectsConfig,
-    renderJobs,
-    exports,
-    maxExportResolution,
     visualStatus,
   } = props;
   const router = useRouter();
@@ -590,21 +575,20 @@ export function EditorClient(props: EditorClientProps) {
         const expectedRev =
           revision ??
           (action.resultKind === "plan" ? getExpectedRevision() : undefined);
-        const payload = await editorApiRequest<Record<string, any>>(
-          `${env.apiBaseUrl}${action.path}`,
-          {
-            method: "PATCH",
-            workspaceId,
-            friendlyError:
-              "The saved editor history action could not be applied.",
-            body: {
-              ...action.body,
-              ...(expectedRev != null
-                ? { expected_revision: expectedRev }
-                : {}),
-            },
+        const payload = await editorApiRequest<{
+          plan?: EditPlanRecordSummary;
+          track?: CaptionTrackSummary;
+          slot?: BrollSlotSummary;
+        }>(`${env.apiBaseUrl}${action.path}`, {
+          method: "PATCH",
+          workspaceId,
+          friendlyError:
+            "The saved editor history action could not be applied.",
+          body: {
+            ...action.body,
+            ...(expectedRev != null ? { expected_revision: expectedRev } : {}),
           },
-        );
+        });
         if (action.resultKind === "plan" && payload.plan)
           handlePlanUpdated(payload.plan);
         if (action.resultKind === "caption" && payload.track)
@@ -880,14 +864,8 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     projectId,
     workspaceId,
     userId,
-    title,
     upload,
     uploadAssetUrls,
-    transcript,
-    captionTracks,
-    brollSlots,
-    musicSelection,
-    effectsConfig,
     renderJobs,
     exports,
     maxExportResolution,
@@ -902,7 +880,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     draftCaptionTrack,
     previewAudio,
     previewBroll,
-    previewLook,
     previewExport,
     activePlan,
     timelineState,
@@ -912,13 +889,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     saveStatus,
     selectedClipId,
     inspectorTab,
-    setLocalEditPlans,
-    setLocalActivePlanId,
-    setLocalCaptionTracks,
     setLocalTranscript,
-    setLocalBrollSlots,
-    setLocalMusicSelection,
-    setLocalEffectsConfig,
     setDraftCaptionTrack,
     setPreviewAudio,
     setPreviewBroll,
@@ -946,7 +917,6 @@ function EditorClientEditor(props: EditorClientEditorProps) {
     setPendingReviewProposal,
     onReviewProposalCreated,
   } = props;
-  const router = useRouter();
   const { toast } = useToast();
   const {
     undo,
@@ -2687,176 +2657,4 @@ function effectsRequestBody(
     after_effects_presets: config?.after_effects_presets ?? [],
     force: true,
   };
-}
-
-// ── Upload screen (phase 1 — no video yet) ────────────────────────────────────
-
-function UploadScreen({
-  title,
-  projectId,
-  workspaceId,
-}: {
-  title: string;
-  projectId: string;
-  workspaceId: string;
-}) {
-  return (
-    <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
-      <header className="flex min-h-12 flex-wrap items-center gap-3 border-b border-hairline bg-surface px-4 py-2">
-        <div className="flex items-center gap-3">
-          <Link
-            href="/dashboard"
-            className="neu-pressable flex items-center gap-1 rounded-neu bg-surface px-3 py-1.5 text-sm text-muted-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:text-foreground hover:shadow-neu-raised"
-          >
-            <ChevronLeft className="size-4" />
-            Dashboard
-          </Link>
-          <span className="text-sm font-semibold text-foreground">{title}</span>
-        </div>
-        <div className="ml-auto">
-          <MobileNav items={[{ href: "/dashboard", label: "Dashboard" }]} />
-        </div>
-      </header>
-      <div className="flex flex-1 items-start justify-center px-4 py-10 sm:px-6 lg:py-16">
-        <div className="w-full max-w-5xl">
-          <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-neu bg-surface text-primary shadow-neu-inset-sm">
-              <Film className="size-7 text-primary" />
-            </div>
-            <h1 className="text-2xl font-bold">Upload your footage</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Drop in your raw talking-head video. We&apos;ll transcribe it and
-              prepare an AI edit proposal for you to review before it reaches
-              the timeline.
-            </p>
-          </div>
-          <UploadPanel projectId={projectId} workspaceId={workspaceId} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Processing screen (phase 2 — upload processing) ───────────────────────────
-
-function ProcessingScreen({
-  title,
-  status,
-}: {
-  title: string;
-  status: string;
-}) {
-  const router = useRouter();
-
-  useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState === "visible") router.refresh();
-    };
-    const timer = window.setInterval(refresh, 4000);
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [router]);
-
-  const activeIdx = productFlowStageIndex(status);
-
-  return (
-    <div className="flex min-h-screen flex-col overflow-x-hidden bg-background">
-      <header className="flex min-h-12 flex-wrap items-center gap-3 border-b border-hairline bg-surface px-4 py-2">
-        <div className="flex items-center gap-3">
-          <Link
-            href="/dashboard"
-            className="neu-pressable flex items-center gap-1 rounded-neu bg-surface px-3 py-1.5 text-sm text-muted-foreground shadow-neu-raised-sm transition-shadow duration-200 hover:text-foreground hover:shadow-neu-raised"
-          >
-            <ChevronLeft className="size-4" />
-            Dashboard
-          </Link>
-          <span className="text-sm font-semibold text-foreground">{title}</span>
-        </div>
-        <div className="ml-auto">
-          <MobileNav items={[{ href: "/dashboard", label: "Dashboard" }]} />
-        </div>
-      </header>
-      <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-8 text-center max-w-lg mx-auto w-full">
-        <div className="flex size-16 items-center justify-center rounded-neu-lg bg-surface shadow-neu-raised">
-          <Loader2 className="size-8 animate-spin text-primary" />
-        </div>
-
-        <div className="space-y-1">
-          <h2 className="text-lg font-bold tracking-tight text-foreground">
-            Processing Video
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            {uploadStatusMessage(status)}
-          </p>
-        </div>
-
-        <div className="w-full space-y-4 rounded-neu-lg bg-surface p-5 text-left shadow-neu-raised">
-          <h3 className="border-b border-hairline pb-2 text-xs font-semibold text-primary">
-            Processing Stages
-          </h3>
-          <div className="space-y-2.5 font-semibold" aria-live="polite">
-            {PRODUCT_FLOW_STAGES.map((stage, idx) => {
-              const isCompleted = idx < activeIdx;
-              const isActive = idx === activeIdx;
-              return (
-                <div
-                  key={stage.key}
-                  className={cn(
-                    "flex items-start gap-3 rounded-neu-md p-2 transition-shadow duration-200",
-                    isActive
-                      ? "bg-surface shadow-neu-raised-sm ring-1 ring-primary/30"
-                      : "opacity-60",
-                  )}
-                >
-                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-2xs font-semibold text-foreground shadow-neu-inset-sm">
-                    {isCompleted ? "✓" : isActive ? "▶" : idx + 1}
-                  </div>
-                  <div className="min-w-0">
-                    <p
-                      className={cn(
-                        "text-xs font-semibold",
-                        isActive ? "text-primary" : "text-foreground",
-                      )}
-                    >
-                      {stage.label}
-                    </p>
-                    {isActive && (
-                      <p className="text-2xs text-muted-foreground font-medium mt-0.5 leading-normal">
-                        {stage.description}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-2 flex flex-col gap-0.5 border-t border-hairline pt-3 text-2xs font-semibold leading-relaxed text-muted-foreground">
-            <p className="text-foreground">
-              ⏱ Usually takes around 45 seconds.
-            </p>
-            <p>Large videos or complex templates may take longer.</p>
-          </div>
-        </div>
-
-        <div className="h-2.5 w-full max-w-xs overflow-hidden rounded-full bg-muted shadow-neu-inset-sm">
-          <div
-            className="h-full rounded-full bg-primary shadow-neu-glow transition-all duration-300"
-            style={{
-              width: `${Math.round(((activeIdx + 0.5) / PRODUCT_FLOW_STAGES.length) * 100)}%`,
-            }}
-          />
-        </div>
-        <p className="text-2xs font-semibold leading-4 text-muted-foreground">
-          This page will refresh automatically
-        </p>
-      </div>
-    </div>
-  );
 }

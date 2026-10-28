@@ -192,7 +192,6 @@ test("a member leaves the workspace from the Team page and loses access", async 
 // owner-only), proving the role actually changed.
 test("the owner transfers ownership and the new owner can open billing", async ({
   page,
-  context,
   browser,
   user,
   stack,

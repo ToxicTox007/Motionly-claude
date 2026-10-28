@@ -137,7 +137,7 @@ export function TimelinePanel({
     startMs: 0,
     endMs: 10000,
   });
-  const requestQueue = useRef<Promise<any>>(Promise.resolve());
+  const requestQueue = useRef<Promise<unknown>>(Promise.resolve());
 
   const getSnappedMs = useCallback(
     (targetMs: number, ignoreClipId?: string) => {
@@ -270,9 +270,9 @@ export function TimelinePanel({
   }
 
   const request = useCallback(
-    async (path: string, body: object) => {
+    async <T,>(path: string, body: object) => {
       const expectedRev = getExpectedRevision?.();
-      return editorApiRequest<Record<string, any>>(`${env.apiBaseUrl}${path}`, {
+      return editorApiRequest<T>(`${env.apiBaseUrl}${path}`, {
         method: "PATCH",
         workspaceId,
         friendlyError: "Timeline changes could not be saved. Please try again.",
@@ -288,7 +288,7 @@ export function TimelinePanel({
   const saveCuts = useCallback(
     async (cuts: EditPlanCut[]) => {
       if (!activePlan) throw new Error("Generate an AI edit first.");
-      const payload = await request(
+      const payload = await request<{ plan: EditPlanRecordSummary }>(
         `/projects/${projectId}/plans/${activePlan.id}/cuts`,
         { cuts },
       );
@@ -301,7 +301,7 @@ export function TimelinePanel({
   const saveCaptionSegments = useCallback(
     async (segments: CaptionSegment[]) => {
       if (!captionTrack) throw new Error("Generate captions first.");
-      const payload = await request(
+      const payload = await request<{ track: CaptionTrackSummary }>(
         `/projects/${projectId}/captions/${captionTrack.id}/segments`,
         {
           segments,
@@ -320,7 +320,7 @@ export function TimelinePanel({
       endMs: number,
       disabled?: boolean,
     ) => {
-      const payload = await request(
+      const payload = await request<{ slot: BrollSlotSummary }>(
         `/projects/${projectId}/broll/${slotId}/region`,
         {
           start_ms: outputMsToSourceMs(startMs, sourceClips),
@@ -337,9 +337,10 @@ export function TimelinePanel({
   const saveMusicRegions = useCallback(
     async (regions: MusicRegion[]) => {
       if (!musicSelection) throw new Error("Select music first.");
-      const payload = (await request(`/projects/${projectId}/music/regions`, {
-        regions,
-      })) as MusicSelectionSummary;
+      const payload = await request<MusicSelectionSummary>(
+        `/projects/${projectId}/music/regions`,
+        { regions },
+      );
       onMusicSelectionUpdated(payload);
       return "Music regions saved.";
     },

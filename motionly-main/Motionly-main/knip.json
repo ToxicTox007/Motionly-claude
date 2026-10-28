@@ -16,8 +16,7 @@
         "lib/**/*.{ts,tsx,mjs}",
         "hooks/**/*.{ts,tsx}"
       ],
-      "ignore": ["lib/**/*.d.mts"],
-      "ignoreDependencies": ["@typescript-eslint/parser"]
+      "ignore": ["lib/**/*.d.mts"]
     },
     "apps/worker": {
       "entry": ["src/worker.mjs", "src/*.test.mjs"],

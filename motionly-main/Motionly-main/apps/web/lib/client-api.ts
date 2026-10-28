@@ -106,7 +106,8 @@ export async function editorApiRequest<T>(
       },
       { workspaceId, json: json && method !== "GET" },
     );
-  } catch (err: any) {
+  } catch (caught) {
+    const err = caught as Error;
     if (err.name === "SessionExpiredError") {
       throw new EditorApiError({
         message: err.message,
@@ -143,14 +144,19 @@ export async function editorApiRequest<T>(
     // plan conflict to the standard envelope with code
     // "collaboration_revision_conflict"; the flat legacy string is still
     // accepted for forward/backward compatibility during rollout.
+    const conflict = payload as {
+      error?: unknown;
+      expected_revision?: number;
+      current_revision?: number;
+    } | null;
     const isRevisionConflict =
       response.status === 409 &&
       (error?.code === "collaboration_revision_conflict" ||
-        (payload as any)?.error === "revision_conflict");
+        conflict?.error === "revision_conflict");
     if (isRevisionConflict) {
       throw new RevisionConflictError({
-        expectedRevision: (payload as any)?.expected_revision ?? 0,
-        currentRevision: (payload as any)?.current_revision ?? 0,
+        expectedRevision: conflict?.expected_revision ?? 0,
+        currentRevision: conflict?.current_revision ?? 0,
         requestId: error?.request_id,
       });
     }

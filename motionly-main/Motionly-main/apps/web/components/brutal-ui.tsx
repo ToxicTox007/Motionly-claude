@@ -5,7 +5,6 @@ import type {
   SelectHTMLAttributes,
 } from "react";
 import { cn } from "@/lib/utils";
-import { IconButton } from "@/components/button";
 import { PixelIcon, type PixelIconName } from "@/components/pixel-icons";
 
 type AlertTone = "info" | "success" | "warning" | "danger";
@@ -165,5 +164,3 @@ export function Tooltip({
     </span>
   );
 }
-
-export { IconButton };

@@ -19,7 +19,7 @@ export function Label({
   );
 }
 
-export interface PixelInputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
+export type PixelInputProps = React.InputHTMLAttributes<HTMLInputElement>;
 
 export function PixelInput({ className, ...props }: PixelInputProps) {
   return (
@@ -35,7 +35,8 @@ export function PixelInput({ className, ...props }: PixelInputProps) {
 
 export const Input = PixelInput;
 
-export interface PixelTextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {}
+export type PixelTextareaProps =
+  React.TextareaHTMLAttributes<HTMLTextAreaElement>;
 
 export function PixelTextarea({ className, ...props }: PixelTextareaProps) {
   return (
@@ -117,7 +118,7 @@ export function PixelSelect({
 
 export const Select = PixelSelect;
 
-export interface LoadingPixelSkeletonProps extends React.HTMLAttributes<HTMLDivElement> {}
+export type LoadingPixelSkeletonProps = React.HTMLAttributes<HTMLDivElement>;
 
 export function LoadingPixelSkeleton({
   className,

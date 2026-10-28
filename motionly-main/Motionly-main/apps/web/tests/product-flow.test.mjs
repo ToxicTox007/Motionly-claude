@@ -48,9 +48,14 @@ test("Phase 6 uses a canonical product flow status model", async () => {
   assert.match(statusModel, /Wait band: short/);
   assert.match(statusModel, /Wait band: moderate/);
   assert.match(statusModel, /Wait band: extended/);
-  assert.match(editor, /PRODUCT_FLOW_STAGES\.map/);
-  assert.match(editor, /productFlowStageIndex\(status\)/);
-  assert.match(editor, /uploadStatusMessage\(status\)/);
+  // The processing screen the project page renders (project-early-phase).
+  const processing = await readFile(
+    new URL("components/project-early-phase.tsx", root),
+    "utf8",
+  );
+  assert.match(processing, /PRODUCT_FLOW_STAGES\.map/);
+  assert.match(processing, /productFlowStageIndex\(status\)/);
+  assert.match(processing, /uploadStatusMessage\(status\)/);
   assert.match(upload, /uploadStatusMessage\(status\)/);
   assert.match(exportStep, /renderStatusLabel\(status\)/);
   assert.doesNotMatch(exportStep, /publishStatusLabel|\/publish\b/);

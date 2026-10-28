@@ -12,7 +12,7 @@ import {
   Repeat2,
 } from "lucide-react";
 import { Button } from "../button";
-import { Input, Label, Select } from "./ui";
+import { Input, Select } from "./ui";
 import { apiFetch, editorApiRequest } from "@/lib/client-api";
 import { env } from "@/lib/env";
 

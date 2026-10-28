@@ -156,14 +156,8 @@ test("client-api detects 409 response and throws RevisionConflictError", async (
   assert.match(source, /error === "revision_conflict"/);
   // Throws RevisionConflictError with parsed fields
   assert.match(source, /throw new RevisionConflictError\(\{/);
-  // Extracts expected_revision from response payload
-  assert.match(
-    source,
-    /expectedRevision: \(payload as any\)\?\.expected_revision/,
-  );
-  // Extracts current_revision from response payload
-  assert.match(
-    source,
-    /currentRevision: \(payload as any\)\?\.current_revision/,
-  );
+  // Extracts expected_revision / current_revision from the response
+  // payload (behaviour: tests/unit/client-api-conflict.test.ts).
+  assert.match(source, /expectedRevision: conflict\?\.expected_revision/);
+  assert.match(source, /currentRevision: conflict\?\.current_revision/);
 });
