@@ -249,23 +249,6 @@ export function VideoPreview({
     };
   }, [failedPosterUrl, onPosterError, thumbnailUrl]);
 
-  // Keep isPlaying in sync with the actual video state
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onEnded = () => setIsPlaying(false);
-    video.addEventListener("play", onPlay);
-    video.addEventListener("pause", onPause);
-    video.addEventListener("ended", onEnded);
-    return () => {
-      video.removeEventListener("play", onPlay);
-      video.removeEventListener("pause", onPause);
-      video.removeEventListener("ended", onEnded);
-    };
-  }, [videoRef]);
-
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -389,6 +372,12 @@ export function VideoPreview({
                   }
                 }}
                 onError={onSourceError}
+                // isPlaying follows the element itself. React props (not a
+                // mount-time effect) also cover a <video> that renders after
+                // the first pass, once a source URL arrives.
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onEnded={() => setIsPlaying(false)}
                 playsInline
                 preload="metadata"
                 crossOrigin="anonymous"

@@ -35,7 +35,6 @@ import {
   editorApiRequest,
   pollPlanJob,
   resolveQueuedLayer,
-  startAdaptivePolling,
   RevisionConflictError,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
@@ -43,6 +42,7 @@ import { buildTimelineState } from "@/lib/timeline";
 import { createRebuildCoalescer } from "@/lib/coalesce-rebuild.mjs";
 import { useRevisionTracking } from "@/hooks/useRevisionTracking";
 import { useWorkflowStatus } from "@/hooks/useWorkflowStatus";
+import { useTranscriptPolling } from "@/hooks/useTranscriptPolling";
 import type {
   ConflictState,
   ConflictHandlers,
@@ -389,54 +389,14 @@ export function EditorClient(props: EditorClientProps) {
     setLocalTranscript(transcript);
   }, [transcript]);
 
-  useEffect(() => {
-    if (!upload || upload.status !== "ready") return;
-    if (
-      localTranscript?.status === "ready" ||
-      localTranscript?.status === "captions_unavailable"
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-    let stopPolling: (() => void) | null = null;
-    const poll = async () => {
-      if (document.visibilityState !== "visible") return;
-      try {
-        const response = await apiFetch(
-          `${env.apiBaseUrl}/projects/${projectId}/transcript`,
-          { cache: "no-store" },
-          { workspaceId },
-        );
-        if (cancelled) return;
-        if (response.status === 404) {
-          setLocalTranscript(null);
-          return;
-        }
-        if (!response.ok) return;
-        const nextTranscript = (await response.json()) as TranscriptSummary;
-        setLocalTranscript(nextTranscript);
-        if (
-          nextTranscript.status === "ready" ||
-          nextTranscript.status === "failed" ||
-          nextTranscript.status === "captions_unavailable"
-        ) {
-          stopPolling?.();
-        }
-      } catch (error) {
-        console.error(error);
-      }
-    };
-
-    stopPolling = startAdaptivePolling(() => poll(), {
-      intervalMs: 5000,
-      maxIntervalMs: 15000,
-    });
-    return () => {
-      cancelled = true;
-      stopPolling?.();
-    };
-  }, [localTranscript?.status, projectId, router, upload, workspaceId]);
+  useTranscriptPolling({
+    projectId,
+    workspaceId,
+    uploadId: upload?.id ?? null,
+    uploadReady: upload?.status === "ready",
+    transcriptStatus: localTranscript?.status ?? null,
+    onTranscript: setLocalTranscript,
+  });
 
   const fetchLatestRevision = useCallback(async (): Promise<number | null> => {
     if (!localActivePlanId) return null;

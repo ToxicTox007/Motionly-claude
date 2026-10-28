@@ -373,21 +373,26 @@ export function startAdaptivePolling(
   };
   const tick = async () => {
     if (stopped) return;
+    let succeeded = false;
     try {
       await waitForInteractivePollingTurn(controller.signal);
       if (stopped) return;
       await callback(controller.signal);
+      succeeded = true;
     } catch (error) {
       if (!controller.signal.aborted) {
         console.warn("Adaptive polling turn failed; retrying.", error);
       }
     } finally {
       if (!stopped) {
+        // Back off only across consecutive failures; a successful turn
+        // returns to the base interval.
+        if (succeeded) turn = 0;
         const nextDelay = Math.min(
           maxIntervalMs,
           intervalMs + turn * backoffStepMs,
         );
-        turn += 1;
+        if (!succeeded) turn += 1;
         schedule(nextDelay);
       }
     }

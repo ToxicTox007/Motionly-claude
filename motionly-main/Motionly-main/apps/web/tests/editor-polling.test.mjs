@@ -48,9 +48,21 @@ test("long-running editor status polling uses the shared adaptive poller", async
     "utf8",
   );
 
-  assert.match(editor, /startAdaptivePolling\(\(\) => poll\(\)/);
+  const transcriptPolling = await readFile(
+    new URL("hooks/useTranscriptPolling.ts", root),
+    "utf8",
+  );
+  const pollWhile = await readFile(
+    new URL("hooks/usePollWhile.ts", root),
+    "utf8",
+  );
+  // Cadence, backoff and restart behaviour are tested in
+  // tests/unit/{adaptive-polling,use-poll-while,transcript-polling}.test.*.
+  assert.match(editor, /useTranscriptPolling\(\{/);
+  assert.match(transcriptPolling, /startAdaptivePolling\(/);
   assert.match(ai, /startAdaptivePolling\(\(\) => poll\(\)/);
-  assert.match(scale, /startAdaptivePolling\(\(\) => load\(\)/);
+  assert.match(scale, /usePollWhile\(/);
+  assert.match(pollWhile, /startAdaptivePolling\(/);
   assert.doesNotMatch(exportStep, /refreshPublishing/);
 });
 

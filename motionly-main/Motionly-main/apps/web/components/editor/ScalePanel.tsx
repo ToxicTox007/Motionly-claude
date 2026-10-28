@@ -23,7 +23,6 @@ import {
   editorApiRequest,
   pollPlanJob,
   resolveQueuedLayer,
-  startAdaptivePolling,
   type PlanJobIdentity,
 } from "@/lib/client-api";
 import { env } from "@/lib/env";
@@ -45,6 +44,7 @@ import {
 } from "@/lib/collaboration-reload.mjs";
 import { cn } from "@/lib/utils";
 import { useCapabilities } from "@/hooks/useCapabilities";
+import { usePollWhile } from "@/hooks/usePollWhile";
 import { CAPABILITY_IDS, capabilityControlProps } from "@/lib/capabilities";
 import { BrandKitPanel, type BrandKitResource } from "./BrandKitPanel";
 import { CapabilityStatus } from "./CapabilityGate";
@@ -258,6 +258,16 @@ export function ScalePanel(props: ScalePanelProps) {
     [lifecycleController, workspaceId],
   );
 
+  // The realtime channel lives for the project and user. It reads the latest
+  // loaders from refs, so a new `load` identity does not tear the channel
+  // down and re-subscribe.
+  const loadRef = useRef(load);
+  const refreshOnlineMembersRef = useRef(refreshOnlineMembers);
+  useEffect(() => {
+    loadRef.current = load;
+    refreshOnlineMembersRef.current = refreshOnlineMembers;
+  }, [load, refreshOnlineMembers]);
+
   useEffect(() => {
     const supabase = createClient();
     // Task 25 private topic for this project's live channel; RLS
@@ -288,14 +298,16 @@ export function ScalePanel(props: ScalePanelProps) {
           collaborationRevision.current = mapped.revision;
         }
       }
-      void load().catch((error) => setMessage((error as Error).message));
+      void loadRef
+        .current()
+        .catch((error) => setMessage((error as Error).message));
     };
 
     channel
       .on("presence", { event: "sync" }, () => {
         const ids = new Set(Object.keys(channel.presenceState()));
         setPresenceCount(ids.size || 1);
-        void refreshOnlineMembers(ids);
+        void refreshOnlineMembersRef.current(ids);
       })
       .on("broadcast", { event: MANIFEST_UPDATED }, (message) =>
         applyBroadcast(message),
@@ -315,18 +327,20 @@ export function ScalePanel(props: ScalePanelProps) {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [load, projectId, refreshOnlineMembers, userId]);
+  }, [projectId, userId]);
 
-  useEffect(() => {
-    if (
-      !resources.some((item) => ["queued", "processing"].includes(item.status))
-    )
-      return;
-    return startAdaptivePolling(() => load(), {
-      intervalMs: 3000,
-      maxIntervalMs: 9000,
-    });
-  }, [load, resources]);
+  // Poll only while a job is queued or processing. Keyed on that boolean,
+  // not on the resources array, so each poll's fresh data does not restart
+  // the poller with an immediate extra request.
+  const hasPendingResources = useMemo(
+    () =>
+      resources.some((item) => ["queued", "processing"].includes(item.status)),
+    [resources],
+  );
+  usePollWhile(hasPendingResources, () => load(), {
+    intervalMs: 3000,
+    maxIntervalMs: 9000,
+  });
 
   const profiles = useMemo(
     () => resources.filter((item) => item.kind === "style_profile"),

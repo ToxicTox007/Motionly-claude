@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useEffectEvent } from "react";
 import { resolveSourceClipAtOutputMs } from "@motionly/shared";
 import type { ProjectTimelineSourceClip } from "@motionly/shared";
+
+const SYNC_EVENTS = ["timeupdate", "seeked", "play"] as const;
 
 /**
  * Keeps a numeric `playheadMs` state in sync with a <video> element.
@@ -12,6 +14,13 @@ import type { ProjectTimelineSourceClip } from "@motionly/shared";
  * Clip resolution uses the shared canonical source-timeline evaluator so the
  * preview playhead advances through removed source gaps exactly as the export
  * renderer assembles them (no browser-only boundary fudge).
+ *
+ * The listeners are attached once. Media events do not bubble, but they do
+ * pass through the document in the capture phase, so one capturing listener
+ * there follows whichever element `videoRef` points at, including one that
+ * mounts later or is swapped for a new source, without re-subscribing on
+ * every playhead tick. The latest clips and playhead are read through an
+ * effect event.
  *
  * Usage:
  *   const [playheadMs, setPlayheadMs] = useState(0);
@@ -23,45 +32,44 @@ export function usePlaybackSync(
   sourceClips: ProjectTimelineSourceClip[] = [],
   playheadMs = 0,
 ): void {
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    function sync() {
-      const sourceMs = Math.round((videoRef.current?.currentTime ?? 0) * 1000);
-      if (!sourceClips.length) {
-        setPlayheadMs(sourceMs);
-        return;
-      }
-      const currentClip =
-        resolveSourceClipAtOutputMs(playheadMs, sourceClips) ?? sourceClips[0];
-      if (sourceMs >= currentClip.source_end_ms) {
-        const nextIndex = sourceClips.indexOf(currentClip) + 1;
-        const next = sourceClips[nextIndex];
-        if (!next) {
-          videoRef.current?.pause();
-          setPlayheadMs(currentClip.output_end_ms);
-          return;
-        }
-        if (videoRef.current)
-          videoRef.current.currentTime = next.source_start_ms / 1000;
-        setPlayheadMs(next.output_start_ms);
-        return;
-      }
-      setPlayheadMs(
-        currentClip.output_start_ms +
-          Math.max(0, sourceMs - currentClip.source_start_ms),
-      );
+  const sync = useEffectEvent((video: HTMLVideoElement) => {
+    const sourceMs = Math.round((video.currentTime ?? 0) * 1000);
+    if (!sourceClips.length) {
+      setPlayheadMs(sourceMs);
+      return;
     }
+    const currentClip =
+      resolveSourceClipAtOutputMs(playheadMs, sourceClips) ?? sourceClips[0];
+    if (sourceMs >= currentClip.source_end_ms) {
+      const nextIndex = sourceClips.indexOf(currentClip) + 1;
+      const next = sourceClips[nextIndex];
+      if (!next) {
+        video.pause();
+        setPlayheadMs(currentClip.output_end_ms);
+        return;
+      }
+      video.currentTime = next.source_start_ms / 1000;
+      setPlayheadMs(next.output_start_ms);
+      return;
+    }
+    setPlayheadMs(
+      currentClip.output_start_ms +
+        Math.max(0, sourceMs - currentClip.source_start_ms),
+    );
+  });
 
-    video.addEventListener("timeupdate", sync);
-    video.addEventListener("seeked", sync);
-    video.addEventListener("play", sync);
-
-    return () => {
-      video.removeEventListener("timeupdate", sync);
-      video.removeEventListener("seeked", sync);
-      video.removeEventListener("play", sync);
+  useEffect(() => {
+    const onMediaEvent = (event: Event) => {
+      const video = videoRef.current;
+      if (video && event.target === video) sync(video);
     };
-  }, [playheadMs, setPlayheadMs, sourceClips, videoRef]);
+    for (const type of SYNC_EVENTS) {
+      document.addEventListener(type, onMediaEvent, true);
+    }
+    return () => {
+      for (const type of SYNC_EVENTS) {
+        document.removeEventListener(type, onMediaEvent, true);
+      }
+    };
+  }, [videoRef]);
 }
