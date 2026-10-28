@@ -134,11 +134,10 @@ function SignupFormContent() {
         <div className="flex size-9 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
           <Image
             src="/icon.svg"
-            alt="Motionly"
+            alt=""
             width={28}
             height={28}
             className="size-7"
-            priority
           />
         </div>
         <span className="text-base font-bold text-foreground">Motionly</span>

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ChevronLeft, Film, Loader2, XCircle } from "lucide-react";
 import type { UploadStatus } from "@motionly/shared";
-import { ThemeMenu } from "@/components/theme-menu";
+import { MobileNav } from "@/components/mobile-nav";
 import { UploadPanel } from "@/components/upload-panel";
 import { apiFetch, startAdaptivePolling } from "@/lib/client-api";
 import { env } from "@/lib/env";
@@ -227,7 +227,7 @@ function ProjectPhaseShell({
           </span>
         </div>
         <div className="ml-auto">
-          <ThemeMenu items={[{ href: "/dashboard", label: "Dashboard" }]} />
+          <MobileNav items={[{ href: "/dashboard", label: "Dashboard" }]} />
         </div>
       </header>
       <main

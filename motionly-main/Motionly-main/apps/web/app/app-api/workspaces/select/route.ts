@@ -2,11 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { WORKSPACE_COOKIE_NAME } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import { publicUrl } from "@/lib/public-url";
+import { isSameSiteRequest } from "@/lib/request-origin";
+import { safeNextPath } from "@/lib/safe-redirect.mjs";
 import { createClient } from "@/lib/supabase/server";
 
 export async function POST(request: NextRequest) {
+  // Only this site's own forms may switch the viewer's workspace.
+  if (!isSameSiteRequest(request.headers, env.appUrl)) {
+    return new NextResponse("Cross-site request refused.", { status: 403 });
+  }
+
   const formData = await request.formData();
   const workspaceId = String(formData.get("workspace_id") ?? "").trim();
+  // Back to the page the switch was made from (same-site paths only).
+  const returnTo = safeNextPath(formData.get("return_to"), env.appUrl);
   const redirectUrl = publicUrl("/dashboard");
 
   if (!workspaceId) {
@@ -20,7 +29,7 @@ export async function POST(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) {
     redirectUrl.pathname = "/login";
-    redirectUrl.searchParams.set("next", "/dashboard");
+    redirectUrl.searchParams.set("next", returnTo);
     return NextResponse.redirect(redirectUrl, 303);
   }
 
@@ -41,7 +50,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.redirect(redirectUrl, 303);
   }
 
-  const response = NextResponse.redirect(redirectUrl, 303);
+  const response = NextResponse.redirect(publicUrl(returnTo), 303);
   response.cookies.set({
     name: WORKSPACE_COOKIE_NAME,
     value: workspaceId,

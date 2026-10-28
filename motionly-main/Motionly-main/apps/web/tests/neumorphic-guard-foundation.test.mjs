@@ -12,7 +12,7 @@ test("foundation component files are free of neo-brutalist legacy tokens", () =>
     "components/toast.tsx",
     "components/empty-state.tsx",
     "components/pixel-icons.tsx",
-    "components/theme-menu.tsx",
+    "components/mobile-nav.tsx",
     "app/layout.tsx",
   ]);
 });

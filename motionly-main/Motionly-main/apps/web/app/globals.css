@@ -148,14 +148,19 @@ svg {
   max-width: 100%;
 }
 
+/* overflow-x: clip, not hidden: with both html and body "hidden", body
+   becomes a scroll container and every position: sticky inside it stops
+   sticking. "hidden" stays first as the fallback for browsers without clip. */
 html {
   overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* ── Body ────────────────────────────────────────────────────────────────── */
 body {
   min-height: 100vh;
   overflow-x: hidden;
+  overflow-x: clip;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family:

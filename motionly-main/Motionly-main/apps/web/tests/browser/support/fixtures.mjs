@@ -296,7 +296,7 @@ export async function navigate(page, name) {
     } else {
       if (!(await menu.isVisible())) {
         await page
-          .getByRole("button", { name: "Open menu" })
+          .getByRole("button", { name: "Menu", exact: true })
           .click({ timeout: 5_000 });
       }
       await menu

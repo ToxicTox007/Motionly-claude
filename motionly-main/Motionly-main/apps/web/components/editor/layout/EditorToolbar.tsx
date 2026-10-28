@@ -15,7 +15,7 @@ import {
   TriangleAlert,
   Undo2,
 } from "lucide-react";
-import { ThemeMenu } from "@/components/theme-menu";
+import { MobileNav } from "@/components/mobile-nav";
 import { cn } from "@/lib/utils";
 import type { EditorCommandBar, EditorMode } from "./types";
 import { EDITOR_MODE_SHORTCUT } from "./useEditorMode";
@@ -152,7 +152,7 @@ export function EditorToolbar({
 
       <div className="flex items-center gap-2">
         <ShortcutGuide />
-        <ThemeMenu
+        <MobileNav
           items={[
             { href: "/dashboard", label: "Dashboard" },
             { label: "Open AI Edit", onClick: onAiEdit },

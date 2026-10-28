@@ -2,7 +2,7 @@ import Image from "next/image";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { type PixelIconName } from "@/components/pixel-icons";
-import { ThemeMenu } from "@/components/theme-menu";
+import { MobileNav } from "@/components/mobile-nav";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { SidebarLink } from "@/components/sidebar-link";
 import { ProgressRing } from "@/components/progress-ring";
@@ -67,29 +67,33 @@ export async function AppShell({
     ...visibleSettings.map((item) => item.href),
   ];
   return (
-    <div className="min-h-screen w-full overflow-x-hidden bg-background text-foreground lg:flex lg:h-screen lg:overflow-hidden">
+    <div className="min-h-screen w-full overflow-x-clip bg-background text-foreground lg:flex lg:h-screen lg:overflow-hidden">
+      <a href="#main" className="skip-link">
+        Skip to content
+      </a>
       <PageTitle title={title} />
       <RegisterCommands source="app-shell" commands={shellCommands(shell)} />
-      {/* Sidebar */}
-      <aside className="flex bg-background lg:m-4 lg:h-[calc(100vh-2rem)] lg:w-64 lg:shrink-0 lg:flex-col lg:rounded-neu-xl lg:bg-surface lg:p-4 lg:shadow-neu-raised-lg">
+      {/* Site header: the logo and primary navigation (the banner landmark).
+          A sidebar from lg up; a top bar with the menu below it. */}
+      <header className="flex bg-background lg:m-4 lg:h-[calc(100vh-2rem)] lg:w-64 lg:shrink-0 lg:flex-col lg:rounded-neu-xl lg:bg-surface lg:p-4 lg:shadow-neu-raised-lg">
         {/* Logo */}
-        <div className="flex h-16 shrink-0 items-center justify-between px-4 lg:h-auto lg:px-1 lg:pb-4">
+        <div className="flex h-16 w-full shrink-0 items-center justify-between px-4 lg:h-auto lg:px-1 lg:pb-4">
           <div className="flex items-center gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
+              {/* Decorative: the wordmark next to it names the product. */}
               <Image
                 src="/icon.svg"
-                alt="Motionly"
+                alt=""
                 width={28}
                 height={28}
                 className="size-7"
-                priority
               />
             </div>
             <span className="text-lg font-bold tracking-tight text-foreground">
               Motionly
             </span>
           </div>
-          <ThemeMenu
+          <MobileNav
             items={[
               { href: "/dashboard", label: "Dashboard" },
               { href: "/projects/new", label: "New Video" },
@@ -104,6 +108,11 @@ export async function AppShell({
                 : []),
               { href: "/account", label: "Settings" },
             ]}
+            account={{
+              workspaces: shell.workspaces,
+              currentWorkspaceId: shell.workspaceId,
+              usageLabel: shell.usage.label,
+            }}
           />
         </div>
 
@@ -113,19 +122,25 @@ export async function AppShell({
             workspaces={shell.workspaces}
             currentWorkspaceId={shell.workspaceId}
           />
-          <p className="mb-2 px-3 text-xs font-semibold text-primary">
+          <p
+            id="nav-workspace-heading"
+            className="mb-2 px-3 text-xs font-semibold text-primary"
+          >
             Workspace
           </p>
-          <nav className="space-y-1">
+          <nav aria-labelledby="nav-workspace-heading" className="space-y-1">
             {navItems.map((item) => (
               <SidebarLink key={item.href} {...item} allHrefs={allHrefs} />
             ))}
           </nav>
 
-          <p className="mb-2 mt-6 px-3 text-xs font-semibold text-primary">
+          <p
+            id="nav-settings-heading"
+            className="mb-2 mt-6 px-3 text-xs font-semibold text-primary"
+          >
             Settings
           </p>
-          <nav className="space-y-1">
+          <nav aria-labelledby="nav-settings-heading" className="space-y-1">
             {visibleSettings.map((item) => (
               <SidebarLink key={item.href} {...item} allHrefs={allHrefs} />
             ))}
@@ -156,7 +171,10 @@ export async function AppShell({
         {/* User block */}
         <div className="hidden lg:mt-3 lg:block">
           <div className="flex items-center gap-3 rounded-neu-lg bg-surface p-3 shadow-neu-raised-sm">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground shadow-neu-raised-sm">
+            <div
+              aria-hidden="true"
+              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground shadow-neu-raised-sm"
+            >
               {shell.creatorName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0">
@@ -169,11 +187,16 @@ export async function AppShell({
             </div>
           </div>
         </div>
-      </aside>
+      </header>
 
-      <main className="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-hidden lg:py-4 lg:pr-4">
-        {/* Header */}
-        <header className="flex min-h-16 items-center justify-between gap-3 bg-surface px-4 sm:px-6 lg:mb-4 lg:rounded-neu-xl lg:px-6 lg:shadow-neu-raised">
+      {/* The page: its title bar and content. The skip link lands here, so
+          keyboard and screen-reader users start at the page's h1. */}
+      <main
+        id="main"
+        tabIndex={-1}
+        className="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-hidden lg:py-4 lg:pr-4"
+      >
+        <div className="flex min-h-16 items-center justify-between gap-3 bg-surface px-4 sm:px-6 lg:mb-4 lg:rounded-neu-xl lg:px-6 lg:shadow-neu-raised">
           <h1 className="min-w-0 truncate text-xl font-bold tracking-tight text-foreground">
             {title}
           </h1>
@@ -184,7 +207,7 @@ export async function AppShell({
             <CommandPaletteTrigger compact className="lg:hidden" />
             <CommandPaletteTrigger className="hidden lg:inline-flex" />
           </div>
-        </header>
+        </div>
 
         <div
           className="flex-1 overflow-y-auto bg-background px-4 py-6 sm:px-6 lg:rounded-neu-xl lg:p-8"

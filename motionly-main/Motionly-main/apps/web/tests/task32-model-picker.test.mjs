@@ -196,11 +196,11 @@ test("the project picker and fallback notice are mounted in the editor AI step",
 
 test("the AI-models settings section has a nav link consistent with team/api-keys", async () => {
   const shell = await source("components/app-shell.tsx");
-  // A settings nav entry and the mobile ThemeMenu entry both link it.
+  // A settings nav entry and the mobile MobileNav entry both link it.
   assert.match(shell, /href: "\/account\/ai-models", label: "AI models"/);
   const matches = shell.match(/\/account\/ai-models/g) ?? [];
   assert.ok(
     matches.length >= 2,
-    "AI models should be linked in both the sidebar and the theme menu",
+    "AI models should be linked in both the sidebar and the mobile menu",
   );
 });

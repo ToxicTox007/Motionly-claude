@@ -70,7 +70,7 @@ import {
   buildCreatorTasks,
   inspectorTabForCreatorTask,
 } from "./editor/creator-flow";
-import { ThemeMenu } from "./theme-menu";
+import { MobileNav } from "./mobile-nav";
 import { UploadPanel } from "./upload-panel";
 import { type PaletteElement } from "./editor/dnd/element-catalog";
 import { PropertiesInspector } from "./editor/PropertiesInspector";
@@ -2733,7 +2733,7 @@ function UploadScreen({
           <span className="text-sm font-semibold text-foreground">{title}</span>
         </div>
         <div className="ml-auto">
-          <ThemeMenu items={[{ href: "/dashboard", label: "Dashboard" }]} />
+          <MobileNav items={[{ href: "/dashboard", label: "Dashboard" }]} />
         </div>
       </header>
       <div className="flex flex-1 items-start justify-center px-4 py-10 sm:px-6 lg:py-16">
@@ -2798,7 +2798,7 @@ function ProcessingScreen({
           <span className="text-sm font-semibold text-foreground">{title}</span>
         </div>
         <div className="ml-auto">
-          <ThemeMenu items={[{ href: "/dashboard", label: "Dashboard" }]} />
+          <MobileNav items={[{ href: "/dashboard", label: "Dashboard" }]} />
         </div>
       </header>
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-8 text-center max-w-lg mx-auto w-full">

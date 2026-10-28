@@ -98,7 +98,7 @@ export function InviteClient() {
         <div className="flex size-9 items-center justify-center rounded-neu bg-primary text-primary-foreground shadow-neu-glow">
           <Image
             src="/icon.svg"
-            alt="Motionly"
+            alt=""
             width={28}
             height={28}
             className="size-7"
