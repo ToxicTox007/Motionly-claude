@@ -63,11 +63,17 @@ export function InspectorTabList({
   tab,
   onTabChange,
   hasActivePlan,
+  plansUnavailable = false,
 }: {
   tab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   hasActivePlan: boolean;
+  /** The plans failed to load: say so rather than "Generate an AI edit". */
+  plansUnavailable?: boolean;
 }) {
+  const disabledReason = plansUnavailable
+    ? "Edit plans couldn't be loaded"
+    : "Generate an AI edit first";
   function onTabKeyDown(
     event: React.KeyboardEvent<HTMLButtonElement>,
     currentIndex: number,
@@ -125,7 +131,7 @@ export function InspectorTabList({
             onClick={() => !disabled && onTabChange(id)}
             onKeyDown={(event) => onTabKeyDown(event, index)}
             disabled={disabled}
-            title={disabled ? "Generate an AI edit first" : label}
+            title={disabled ? disabledReason : label}
             className={cn(
               "flex min-h-11 min-w-[4.6rem] shrink-0 snap-start items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 py-2 text-xs font-semibold transition-shadow duration-200 sm:min-w-20 sm:px-4 sm:text-sm",
               selected

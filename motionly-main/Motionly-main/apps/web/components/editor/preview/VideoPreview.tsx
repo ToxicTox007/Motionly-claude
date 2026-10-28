@@ -93,6 +93,8 @@ export interface PreviewExportState {
 interface VideoPreviewProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   sourceUrl: string | null;
+  /** The media links failed to load (not "no video yet"). */
+  sourceUnavailable?: boolean;
   thumbnailUrl: string | null;
   onSourceError?: () => void;
   onPosterError?: () => void;
@@ -116,6 +118,7 @@ interface VideoPreviewProps {
 export function VideoPreview({
   videoRef,
   sourceUrl,
+  sourceUnavailable = false,
   thumbnailUrl,
   onSourceError,
   onPosterError,
@@ -416,7 +419,11 @@ export function VideoPreview({
                 ))}
               </div>
               <p className="text-xs font-medium text-white">
-                {isProcessing ? "Processing video…" : "No video yet"}
+                {sourceUnavailable
+                  ? "Couldn't load the video preview"
+                  : isProcessing
+                    ? "Processing video…"
+                    : "No video yet"}
               </p>
             </div>
           )}

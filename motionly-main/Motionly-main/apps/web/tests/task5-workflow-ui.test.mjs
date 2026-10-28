@@ -195,13 +195,15 @@ test("workflow and proposal intent keys are deterministic, bounded, and order in
 });
 
 test("source contracts hydrate list then detail, poll with headers, and never persist proposals", async () => {
-  const [page, hook, aiStep, client] = await Promise.all([
+  const [page, hook, aiStep, client, panelLoader] = await Promise.all([
     readFile(new URL("app/(app)/projects/[projectId]/page.tsx", root), "utf8"),
     readFile(new URL("hooks/useWorkflowStatus.ts", root), "utf8"),
     readFile(new URL("components/editor/ai-step.tsx", root), "utf8"),
     readFile(new URL("components/editor-client.tsx", root), "utf8"),
+    readFile(new URL("lib/editor-panel-loader.ts", root), "utf8"),
   ]);
-  assert.match(page, /\/workflows\?limit=50/);
+  // The workflow list is one of the independently loaded editor panels.
+  assert.match(panelLoader, /\/workflows\?limit=50/);
   assert.match(page, /selectLatestFirstDraftWorkflow/);
   assert.match(page, /initialWorkflow=/);
   assert.match(hook, /authenticated-adaptive-polling/);

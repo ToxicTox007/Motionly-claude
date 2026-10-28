@@ -1,18 +1,7 @@
 import type {
-  BrollSlotSummary,
-  BillingStatusSummary,
-  CaptionTrackSummary,
-  EditPlanRecordSummary,
-  EffectsConfigSummary,
-  ExportSummary,
   ExportResolution,
-  MusicSelectionSummary,
-  RenderJobSummary,
-  TranscriptSummary,
   UploadedVideoSummary,
-  VisualAnalysisStatusSummary,
   WorkflowDetail,
-  WorkflowList,
 } from "@motionly/shared";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
@@ -21,6 +10,8 @@ import {
   ProcessingProjectScreen,
   UploadProjectScreen,
 } from "@/components/project-early-phase";
+import { loadEditorPanels } from "@/lib/editor-panel-loader";
+import { panelErrorKey } from "@/lib/editor-panels";
 import { env } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -40,15 +31,6 @@ type ProjectResponse = {
   workspace_id: string;
   title: string;
   active_video_id?: string | null;
-};
-
-type UploadAssetUrlsResponse = {
-  source_video_url?: string;
-  thumbnail_url?: string | null;
-  expires_in_seconds?: number;
-  expires_at?: string | null;
-  source_reference_id?: string | null;
-  thumbnail_reference_id?: string | null;
 };
 
 type UploadResponse = {
@@ -146,33 +128,46 @@ export default async function ProjectDetailsPage({
     );
   }
 
-  const [
-    uploadAssetUrls,
+  // Each panel loads on its own (B27). A failed panel arrives as an entry in
+  // `panelErrors`, never as empty data, so the editor can say so and retry.
+  const { data: panels, errors: panelErrors } = await loadEditorPanels(
+    projectId,
+    headers,
+    upload,
+  );
+  const {
+    assetUrls: uploadAssetUrls,
     transcript,
-    captionsPayload,
-    plansPayload,
-    brollPayload,
-    musicSelection,
-    effectsConfig,
-    rendersPayload,
-    exportsPayload,
-    billingStatus,
-    visualStatus,
-    workflowsPayload,
-  ] = await loadEditorPanels(projectId, headers, upload);
+    captions: captionsPayload,
+    plans: plansPayload,
+    broll: brollPayload,
+    music: musicSelection,
+    effects: effectsConfig,
+    renders: rendersPayload,
+    exports: exportsPayload,
+    billing: billingStatus,
+    visual: visualStatus,
+    workflows: workflowsPayload,
+  } = panels;
 
   // The API is canonical latest-first. Select in response order, then hydrate
   // exact detail so reloads and other devices recover steps/artifacts safely.
+  // If the detail cannot be read, the editor's workflow poller fetches it.
   const workflowSummary = selectLatestFirstDraftWorkflow(
     workflowsPayload?.workflows ?? [],
     projectId,
   );
-  const workflowDetail = workflowSummary
-    ? await apiGet<WorkflowDetail>(
+  let workflowDetail: WorkflowDetail | null = null;
+  if (workflowSummary) {
+    try {
+      workflowDetail = await apiGet<WorkflowDetail>(
         `/projects/${projectId}/workflows/${workflowSummary.id}`,
         headers,
-      ).catch(() => null)
-    : null;
+      );
+    } catch {
+      panelErrors.workflows = { requestId: null };
+    }
+  }
   const initialWorkflow = workflowDetail
     ? assertCanonicalWorkflowIdentity(workflowDetail, {
         projectId,
@@ -190,6 +185,10 @@ export default async function ProjectDetailsPage({
     <>
       <PageTitle title={project.title} />
       <EditorClient
+        // A Retry that loads a failed panel changes this key, so the editor
+        // remounts with the fresh data instead of keeping its empty copy.
+        key={`panels:${panelErrorKey(panelErrors)}`}
+        panelErrors={panelErrors}
         projectId={projectId}
         workspaceId={workspaceId}
         userId={context.userId}
@@ -219,8 +218,9 @@ export default async function ProjectDetailsPage({
         visualStatus={
           visualStatus ?? {
             status: "unavailable",
-            message:
-              "Visual context is unavailable; editing will continue using transcript and audio.",
+            message: panelErrors.visual
+              ? "Visual analysis status couldn't be loaded; editing will continue using transcript and audio."
+              : "Visual context is unavailable; editing will continue using transcript and audio.",
           }
         }
         initialWorkflow={initialWorkflow}
@@ -285,100 +285,6 @@ async function apiGet<T>(
     );
   }
   return (await response.json()) as T;
-}
-
-// B27: load each editor panel independently so one failed request does not
-// crash the whole editor. A panel that fails degrades to a safe default
-// (null / empty) instead of rejecting the page; its own panel surfaces the
-// error + Retry in the client.
-async function loadEditorPanels(
-  projectId: string,
-  headers: Record<string, string>,
-  upload: UploadedVideoSummary | null,
-): Promise<
-  [
-    UploadAssetUrlsResponse | null,
-    TranscriptSummary | null,
-    { tracks?: CaptionTrackSummary[] } | null,
-    { plans?: EditPlanRecordSummary[]; active_plan_id?: string | null } | null,
-    { slots?: BrollSlotSummary[] } | null,
-    MusicSelectionSummary | null,
-    EffectsConfigSummary | null,
-    { jobs?: RenderJobSummary[] } | null,
-    { exports?: ExportSummary[] } | null,
-    BillingStatusSummary | null,
-    VisualAnalysisStatusSummary | null,
-    WorkflowList | null,
-  ]
-> {
-  const panel = <T,>(loader: Promise<T | null>): Promise<T | null> =>
-    loader.catch(() => null);
-
-  return Promise.all([
-    panel(
-      upload
-        ? apiGet<UploadAssetUrlsResponse>(
-            `/projects/${projectId}/uploads/${upload.id}/asset-urls`,
-            headers,
-          )
-        : Promise.resolve(null),
-    ),
-    panel(
-      apiGet<TranscriptSummary>(`/projects/${projectId}/transcript`, headers),
-    ),
-    panel(
-      apiGet<{ tracks?: CaptionTrackSummary[] }>(
-        `/projects/${projectId}/captions`,
-        headers,
-      ),
-    ),
-    panel(
-      apiGet<{
-        plans?: EditPlanRecordSummary[];
-        active_plan_id?: string | null;
-      }>(`/projects/${projectId}/plans`, headers),
-    ),
-    panel(
-      apiGet<{ slots?: BrollSlotSummary[] }>(
-        `/projects/${projectId}/broll`,
-        headers,
-      ),
-    ),
-    panel(
-      apiGet<MusicSelectionSummary>(
-        `/projects/${projectId}/music/selection`,
-        headers,
-      ),
-    ),
-    panel(
-      apiGet<EffectsConfigSummary>(`/projects/${projectId}/effects`, headers),
-    ),
-    panel(
-      apiGet<{ jobs?: RenderJobSummary[] }>(
-        `/projects/${projectId}/renders`,
-        headers,
-      ),
-    ),
-    panel(
-      apiGet<{ exports?: ExportSummary[] }>(
-        `/projects/${projectId}/exports`,
-        headers,
-      ),
-    ),
-    panel(apiGet<BillingStatusSummary>(`/billing/status`, headers)),
-    panel(
-      apiGet<VisualAnalysisStatusSummary>(
-        `/projects/${projectId}/visual/status`,
-        headers,
-      ),
-    ),
-    panel(
-      apiGet<WorkflowList>(
-        `/projects/${projectId}/workflows?limit=50`,
-        headers,
-      ),
-    ),
-  ]);
 }
 
 function toUploadSummary(

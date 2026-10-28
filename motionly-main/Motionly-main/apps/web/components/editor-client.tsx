@@ -48,6 +48,11 @@ import type {
   ConflictHandlers,
 } from "@/hooks/useRevisionTracking";
 import { ConflictDialog } from "./editor/ConflictDialog";
+import { PanelLoadError } from "./editor/PanelLoadError";
+import {
+  failedPanelsForTab,
+  type EditorPanelErrors,
+} from "@/lib/editor-panels";
 import {
   PRODUCT_FLOW_STAGES,
   productFlowStageIndex,
@@ -135,6 +140,8 @@ interface EditorClientProps {
   maxExportResolution: ExportResolution;
   visualStatus: VisualAnalysisStatusSummary;
   initialWorkflow: WorkflowDetail | null;
+  /** Panels whose server load failed; each shows "couldn't load" + Retry. */
+  panelErrors?: EditorPanelErrors;
 }
 
 type PendingReviewProposal = {
@@ -222,6 +229,8 @@ const ElementPalette = dynamic(
   () => import("./editor/dnd/ElementPalette").then((mod) => mod.ElementPalette),
   { loading: () => <InspectorLoading /> },
 );
+
+const NO_PANEL_ERRORS: EditorPanelErrors = {};
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -865,6 +874,7 @@ interface EditorClientEditorProps extends EditorClientProps {
 
 function EditorClientEditor(props: EditorClientEditorProps) {
   const {
+    panelErrors = NO_PANEL_ERRORS,
     projectId,
     workspaceId,
     userId,
@@ -1889,6 +1899,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
             <VideoPreview
               videoRef={videoRef}
               sourceUrl={mediaAssetUrls.source_video_url}
+              sourceUnavailable={Boolean(panelErrors.assetUrls)}
               thumbnailUrl={mediaAssetUrls.thumbnail_url}
               onSourceError={handlePreviewSourceError}
               onPosterError={handlePreviewPosterError}
@@ -1943,6 +1954,7 @@ function EditorClientEditor(props: EditorClientEditorProps) {
               tab={inspectorTab}
               onTabChange={setInspectorTabWrapped}
               hasActivePlan={Boolean(localActivePlanId)}
+              panelErrors={panelErrors}
               projectId={projectId}
               workspaceId={workspaceId}
               userId={userId}
@@ -2052,6 +2064,7 @@ interface InspectorPanelProps {
   tab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   hasActivePlan: boolean;
+  panelErrors: EditorPanelErrors;
   projectId: string;
   workspaceId: string;
   userId: string;
@@ -2097,6 +2110,7 @@ function InspectorPanel({
   tab,
   onTabChange,
   hasActivePlan,
+  panelErrors,
   projectId,
   workspaceId,
   userId,
@@ -2143,6 +2157,9 @@ function InspectorPanel({
     null) as VisualPresetKey | null;
   const activeTabMeta =
     INSPECTOR_TABS.find((item) => item.id === tab) ?? INSPECTOR_TABS[0];
+  // A tab whose data failed to load says so instead of showing its empty
+  // state (which would invite, say, generating a second AI edit).
+  const failedTabPanels = failedPanelsForTab(tab, panelErrors);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
@@ -2150,6 +2167,7 @@ function InspectorPanel({
         tab={tab}
         onTabChange={onTabChange}
         hasActivePlan={hasActivePlan}
+        plansUnavailable={Boolean(panelErrors.plans)}
       />
 
       {/* Tab content — scrollable */}
@@ -2160,144 +2178,164 @@ function InspectorPanel({
         className="min-h-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto p-2 sm:p-4"
       >
         <h2 className="sr-only">{activeTabMeta.label}</h2>
-        <SelectedElementInsight
-          clip={selectedTimelineClip}
-          activePlan={activePlan}
-          captionTracks={captionTracks}
-          brollSlots={brollSlots}
-          musicSelection={musicSelection}
+        {/* The video preview needs its media links on every tab; billing
+            only limits export settings, so the export tab still works. */}
+        <PanelLoadError
+          panels={panelErrors.assetUrls ? ["assetUrls"] : []}
+          errors={panelErrors}
+          compact
         />
-        {tab === "ai" && (
-          <AIStep
-            projectId={projectId}
-            workspaceId={workspaceId}
-            initialPlans={localEditPlans}
-            activePlanId={localActivePlanId}
-            transcript={transcript}
-            initialVisualStatus={visualStatus}
-            workflow={workflow}
-            onWorkflowRefresh={onWorkflowRefresh}
-            onTranscriptUpdated={onTranscriptUpdated}
-            onPlanGenerated={onPlanGenerated}
-            onCaptionTrackUpdated={onCaptionTrackUpdated}
-            onBrollSlotsUpdated={onBrollSlotsUpdated}
-            onMusicSelectionUpdated={onMusicSelectionUpdated}
-            onClipSelected={onClipSelected}
-            externalProposal={pendingReviewProposal}
-            onExternalProposalHandled={onReviewProposalHandled}
+        {tab === "export" ? (
+          <PanelLoadError
+            panels={panelErrors.billing ? ["billing"] : []}
+            errors={panelErrors}
+            compact
           />
-        )}
-        {tab === "captions" && (
-          <CaptionsTab
-            projectId={projectId}
-            workspaceId={workspaceId}
-            initialTracks={captionTracks}
-            activePlan={activePlan}
-            onTrackUpdated={onCaptionTrackUpdated}
-            onPreviewTrackUpdated={onPreviewCaptionTrackUpdated}
-            onPlanUpdated={onPlanUpdated}
-          />
-        )}
-        {tab === "broll" && (
-          <BrollTab
-            projectId={projectId}
-            workspaceId={workspaceId}
-            initialSlots={brollSlots}
-            activePlanId={localActivePlanId}
-            activePlanBrollDensity={brollDensity}
-            onSlotUpdated={onBrollSlotUpdated}
-            onSlotsUpdated={onBrollSlotsUpdated}
-            onPreviewBrollUpdated={onPreviewBrollUpdated}
-          />
-        )}
-        {tab === "audio" && (
-          <AudioTab
-            projectId={projectId}
-            workspaceId={workspaceId}
-            initialSelection={musicSelection}
-            activePlanMusicMood={musicMood}
-            onSelectionUpdated={onMusicSelectionUpdated}
-            onPreviewAudioUpdated={onPreviewAudioUpdated}
-          />
-        )}
-        {tab === "look" && (
-          <LookTab
-            projectId={projectId}
-            workspaceId={workspaceId}
-            initialConfig={effectsConfig}
-            suggestedPreset={suggestedPreset}
-            selectedTimelineClip={selectedTimelineClip}
-            onConfigUpdated={onEffectsConfigUpdated}
-            onPreviewLookUpdated={onPreviewLookUpdated}
-          />
-        )}
-        {tab === "localize" && (
-          <PublishingLibraryPanel
-            projectId={projectId}
-            workspaceId={workspaceId}
-            captionTrackId={captionTracks[0]?.id ?? null}
-            activePlanId={localActivePlanId}
-          />
-        )}
-        {tab === "export" && (
-          <ExportStep
-            projectId={projectId}
-            workspaceId={workspaceId}
-            initialJobs={renderJobs}
-            initialExports={exports}
-            captionTrackId={captionTracks[0]?.id ?? null}
-            activePlanId={localActivePlanId}
-            sourceWidth={upload.width}
-            sourceHeight={upload.height}
-            maxExportResolution={maxExportResolution}
-            onPreviewExportUpdated={onPreviewExportUpdated}
-            planRevision={planRevision}
-          />
-        )}
-        {tab === "export" && exports.length > 0 && (
-          <div className="mt-6">
-            <ExportsPanel
-              projectId={projectId}
-              workspaceId={workspaceId}
-              exports={exports}
+        ) : null}
+        {failedTabPanels.length > 0 ? (
+          <PanelLoadError panels={failedTabPanels} errors={panelErrors} />
+        ) : (
+          <>
+            <SelectedElementInsight
+              clip={selectedTimelineClip}
+              activePlan={activePlan}
+              captionTracks={captionTracks}
+              brollSlots={brollSlots}
+              musicSelection={musicSelection}
             />
-          </div>
-        )}
-        {tab === "history" && (
-          <VersionHistoryPanel
-            projectId={projectId}
-            workspaceId={workspaceId}
-            activePlan={activePlan}
-            onPlanRestored={onPlanUpdated}
-          />
-        )}
-        {tab === "review" && (
-          <ReviewPanel
-            projectId={projectId}
-            workspaceId={workspaceId}
-            activePlan={activePlan}
-            mediaRevision={mediaRevision}
-            uploadedVideoId={upload.id}
-            sourceObjectReferenceId={upload.sourceObjectReferenceId}
-            sourceSha256={upload.verifiedSha256}
-            playheadMs={playheadMs}
-            onSeek={onClipSelected}
-            onProposalCreated={onReviewProposalCreated}
-          />
-        )}
-        {tab === "scale" && (
-          <ScalePanel
-            projectId={projectId}
-            workspaceId={workspaceId}
-            userId={userId}
-            activePlan={activePlan}
-            captionTrack={captionTracks[0] ?? null}
-            effectsConfig={effectsConfig}
-            onPlanUpdated={onPlanUpdated}
-            onProposalCreated={onReviewProposalCreated}
-            onCaptionTrackUpdated={onCaptionTrackUpdated}
-            onEffectsConfigUpdated={onEffectsConfigUpdated}
-          />
+            {tab === "ai" && (
+              <AIStep
+                projectId={projectId}
+                workspaceId={workspaceId}
+                initialPlans={localEditPlans}
+                activePlanId={localActivePlanId}
+                transcript={transcript}
+                initialVisualStatus={visualStatus}
+                workflow={workflow}
+                onWorkflowRefresh={onWorkflowRefresh}
+                onTranscriptUpdated={onTranscriptUpdated}
+                onPlanGenerated={onPlanGenerated}
+                onCaptionTrackUpdated={onCaptionTrackUpdated}
+                onBrollSlotsUpdated={onBrollSlotsUpdated}
+                onMusicSelectionUpdated={onMusicSelectionUpdated}
+                onClipSelected={onClipSelected}
+                externalProposal={pendingReviewProposal}
+                onExternalProposalHandled={onReviewProposalHandled}
+              />
+            )}
+            {tab === "captions" && (
+              <CaptionsTab
+                projectId={projectId}
+                workspaceId={workspaceId}
+                initialTracks={captionTracks}
+                activePlan={activePlan}
+                onTrackUpdated={onCaptionTrackUpdated}
+                onPreviewTrackUpdated={onPreviewCaptionTrackUpdated}
+                onPlanUpdated={onPlanUpdated}
+              />
+            )}
+            {tab === "broll" && (
+              <BrollTab
+                projectId={projectId}
+                workspaceId={workspaceId}
+                initialSlots={brollSlots}
+                activePlanId={localActivePlanId}
+                activePlanBrollDensity={brollDensity}
+                onSlotUpdated={onBrollSlotUpdated}
+                onSlotsUpdated={onBrollSlotsUpdated}
+                onPreviewBrollUpdated={onPreviewBrollUpdated}
+              />
+            )}
+            {tab === "audio" && (
+              <AudioTab
+                projectId={projectId}
+                workspaceId={workspaceId}
+                initialSelection={musicSelection}
+                activePlanMusicMood={musicMood}
+                onSelectionUpdated={onMusicSelectionUpdated}
+                onPreviewAudioUpdated={onPreviewAudioUpdated}
+              />
+            )}
+            {tab === "look" && (
+              <LookTab
+                projectId={projectId}
+                workspaceId={workspaceId}
+                initialConfig={effectsConfig}
+                suggestedPreset={suggestedPreset}
+                selectedTimelineClip={selectedTimelineClip}
+                onConfigUpdated={onEffectsConfigUpdated}
+                onPreviewLookUpdated={onPreviewLookUpdated}
+              />
+            )}
+            {tab === "localize" && (
+              <PublishingLibraryPanel
+                projectId={projectId}
+                workspaceId={workspaceId}
+                captionTrackId={captionTracks[0]?.id ?? null}
+                activePlanId={localActivePlanId}
+              />
+            )}
+            {tab === "export" && (
+              <ExportStep
+                projectId={projectId}
+                workspaceId={workspaceId}
+                initialJobs={renderJobs}
+                initialExports={exports}
+                captionTrackId={captionTracks[0]?.id ?? null}
+                activePlanId={localActivePlanId}
+                sourceWidth={upload.width}
+                sourceHeight={upload.height}
+                maxExportResolution={maxExportResolution}
+                onPreviewExportUpdated={onPreviewExportUpdated}
+                planRevision={planRevision}
+              />
+            )}
+            {tab === "export" && exports.length > 0 && (
+              <div className="mt-6">
+                <ExportsPanel
+                  projectId={projectId}
+                  workspaceId={workspaceId}
+                  exports={exports}
+                />
+              </div>
+            )}
+            {tab === "history" && (
+              <VersionHistoryPanel
+                projectId={projectId}
+                workspaceId={workspaceId}
+                activePlan={activePlan}
+                onPlanRestored={onPlanUpdated}
+              />
+            )}
+            {tab === "review" && (
+              <ReviewPanel
+                projectId={projectId}
+                workspaceId={workspaceId}
+                activePlan={activePlan}
+                mediaRevision={mediaRevision}
+                uploadedVideoId={upload.id}
+                sourceObjectReferenceId={upload.sourceObjectReferenceId}
+                sourceSha256={upload.verifiedSha256}
+                playheadMs={playheadMs}
+                onSeek={onClipSelected}
+                onProposalCreated={onReviewProposalCreated}
+              />
+            )}
+            {tab === "scale" && (
+              <ScalePanel
+                projectId={projectId}
+                workspaceId={workspaceId}
+                userId={userId}
+                activePlan={activePlan}
+                captionTrack={captionTracks[0] ?? null}
+                effectsConfig={effectsConfig}
+                onPlanUpdated={onPlanUpdated}
+                onProposalCreated={onReviewProposalCreated}
+                onCaptionTrackUpdated={onCaptionTrackUpdated}
+                onEffectsConfigUpdated={onEffectsConfigUpdated}
+              />
+            )}
+          </>
         )}
       </div>
     </div>
