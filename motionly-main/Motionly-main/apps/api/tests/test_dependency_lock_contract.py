@@ -71,4 +71,4 @@ def test_readiness_workflow_installs_application_python_only_from_hash_locks() -
     assert workflow.count("apps/api/requirements-dev.lock") >= 11
     assert workflow.count("apps/api/requirements-ml.lock") >= 6
     assert "pypa/gh-action-pip-audit@v1.1.0" in workflow
-    assert "inputs: -r apps/api/requirements.lock" in workflow
+    assert "inputs: apps/api/requirements.lock" in workflow

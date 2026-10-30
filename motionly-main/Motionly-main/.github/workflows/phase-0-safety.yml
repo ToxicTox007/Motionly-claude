@@ -465,6 +465,8 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
           pnpm install --frozen-lockfile
           python -m pip install --disable-pip-version-check --require-hashes -r apps/api/requirements-dev.lock
       - name: Verify documentation structure
