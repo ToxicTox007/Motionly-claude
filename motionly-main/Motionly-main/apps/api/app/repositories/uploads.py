@@ -8,7 +8,7 @@ import httpx
 from app.api.errors import ApiError
 from app.schemas.uploads import UploadReadResponse, UploadStatus, VideoMetadata
 from app.services.supabase import SupabaseRestClient
-from app.services.upload_state import assert_upload_transition
+from app.services.upload_state import ALLOWED_TRANSITIONS, assert_upload_transition
 
 UPLOAD_RESPONSE_COLUMNS = (
     "id,project_id,workspace_id,storage_bucket,storage_path,original_filename,mime_type,"
@@ -17,6 +17,45 @@ UPLOAD_RESPONSE_COLUMNS = (
     "storage_quota_reservation_id,legacy_quota_reservation_id,"
     "legacy_upload_expires_at,created_at,updated_at"
 )
+
+# complete_upload_for_processing moves an upload to processing from either of
+# these (uploading goes through uploaded in one step).
+_COMPLETABLE = frozenset({UploadStatus.UPLOADING, UploadStatus.UPLOADED})
+
+
+def _tenant_row_params(upload: "UploadRecord") -> dict[str, str]:
+    """Filters that pin a write to the upload's own row and tenant."""
+    return {
+        "id": f"eq.{upload.id}",
+        "workspace_id": f"eq.{upload.workspace_id}",
+        "project_id": f"eq.{upload.project_id}",
+        "select": UPLOAD_RESPONSE_COLUMNS,
+    }
+
+
+def _status_cas_params(
+    upload: "UploadRecord",
+    status: UploadStatus,
+    *,
+    allowed_from: frozenset[UploadStatus] | None = None,
+) -> dict[str, str]:
+    """Tenant-scoped filters that match only while the stored status may still
+    move to ``status`` (the database half of assert_upload_transition)."""
+    sources = allowed_from or frozenset(
+        source for source, targets in ALLOWED_TRANSITIONS.items() if status in targets
+    )
+    statuses = ",".join(sorted(source.value for source in sources))
+    return {**_tenant_row_params(upload), "status": f"in.({statuses})"}
+
+
+def _settled_transition(current: "UploadRecord", status: UploadStatus) -> "UploadRecord":
+    if current.status == status:
+        return current
+    raise ApiError(
+        409,
+        "upload_invalid_state_transition",
+        f"Upload is now {current.status}; it cannot move to {status}.",
+    )
 
 
 @dataclass
@@ -647,11 +686,10 @@ class SupabaseUploadRepository:
         response = self.client.request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_status_cas_params(upload, status),
             json={"status": status, "updated_at": datetime.now(UTC).isoformat()},
         )
-        self._raise_for_supabase(response)
-        return self._upload_from_row(response.json()[0])
+        return self._transitioned_upload(response, upload=upload, status=status)
 
     def mark_processed(
         self,
@@ -664,7 +702,7 @@ class SupabaseUploadRepository:
         response = self.client.request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_status_cas_params(upload, UploadStatus.READY),
             json={
                 "status": UploadStatus.READY.value,
                 "metadata": metadata.model_dump(mode="json"),
@@ -677,8 +715,7 @@ class SupabaseUploadRepository:
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         )
-        self._raise_for_supabase(response)
-        return self._upload_from_row(response.json()[0])
+        return self._transitioned_upload(response, upload=upload, status=UploadStatus.READY)
 
     def mark_failed(
         self,
@@ -691,7 +728,7 @@ class SupabaseUploadRepository:
         response = self.client.request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_status_cas_params(upload, UploadStatus.FAILED),
             json={
                 "status": UploadStatus.FAILED.value,
                 "error_code": error_code,
@@ -699,8 +736,7 @@ class SupabaseUploadRepository:
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         )
-        self._raise_for_supabase(response)
-        return self._upload_from_row(response.json()[0])
+        return self._transitioned_upload(response, upload=upload, status=UploadStatus.FAILED)
 
     async def mark_failed_async(
         self,
@@ -713,7 +749,7 @@ class SupabaseUploadRepository:
         response = await self.client.async_request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_status_cas_params(upload, UploadStatus.FAILED),
             json={
                 "status": UploadStatus.FAILED.value,
                 "error_code": error_code,
@@ -722,7 +758,37 @@ class SupabaseUploadRepository:
             },
         )
         self._raise_for_supabase(response)
-        return self._upload_from_row(response.json()[0])
+        rows = response.json()
+        if rows:
+            return self._upload_from_row(rows[0])
+        current = await self.get_upload_for_project_async(
+            project_id=upload.project_id,
+            video_id=upload.id,
+            workspace_id=upload.workspace_id,
+        )
+        return _settled_transition(current, UploadStatus.FAILED)
+
+    def _transitioned_upload(
+        self, response: httpx.Response, *, upload: UploadRecord, status: UploadStatus
+    ) -> UploadRecord:
+        """The row a compare-and-set status PATCH changed, or the conflict it lost.
+
+        The PATCH only matches while the stored status may still move to
+        ``status`` (database audit DB-10: a concurrent worker, retry or cancel
+        used to be overwritten). Zero rows means another writer moved it first:
+        an upload already in ``status`` is returned (a retried request), any
+        other state is a 409 instead of a silent overwrite.
+        """
+        self._raise_for_supabase(response)
+        rows = response.json()
+        if rows:
+            return self._upload_from_row(rows[0])
+        current = self.get_upload_for_project(
+            project_id=upload.project_id,
+            video_id=upload.id,
+            workspace_id=upload.workspace_id,
+        )
+        return _settled_transition(current, status)
 
     def attach_active_video(self, *, project_id: UUID, video_id: UUID) -> None:
         response = self.client.request(
@@ -746,7 +812,7 @@ class SupabaseUploadRepository:
         response = self.client.request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_tenant_row_params(upload),
             json={"storage_path": storage_path, "updated_at": datetime.now(UTC).isoformat()},
         )
         self._raise_for_supabase(response)
@@ -839,7 +905,7 @@ class SupabaseUploadRepository:
         response = self.client.request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_tenant_row_params(upload),
             json={
                 "source_object_reference_id": str(source_object_reference_id),
                 "verified_size_bytes": verified_size_bytes,
@@ -861,7 +927,7 @@ class SupabaseUploadRepository:
         response = await self.client.async_request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_tenant_row_params(upload),
             json={
                 "source_object_reference_id": str(source_object_reference_id),
                 "verified_size_bytes": verified_size_bytes,
@@ -987,14 +1053,15 @@ class SupabaseUploadRepository:
         response = self.client.request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_status_cas_params(upload, UploadStatus.PROCESSING, allowed_from=_COMPLETABLE),
             json={
                 "status": UploadStatus.PROCESSING.value,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         )
-        self._raise_for_supabase(response)
-        updated = self._upload_from_row(response.json()[0])
+        updated = self._transitioned_upload(
+            response, upload=upload, status=UploadStatus.PROCESSING
+        )
         self.attach_active_video(project_id=project_id, video_id=video_id)
         return updated
 
@@ -1029,14 +1096,23 @@ class SupabaseUploadRepository:
         response = await self.client.async_request(
             "PATCH",
             "/uploaded_videos",
-            params={"id": f"eq.{upload.id}", "select": UPLOAD_RESPONSE_COLUMNS},
+            params=_status_cas_params(upload, UploadStatus.PROCESSING, allowed_from=_COMPLETABLE),
             json={
                 "status": UploadStatus.PROCESSING.value,
                 "updated_at": datetime.now(UTC).isoformat(),
             },
         )
         self._raise_for_supabase(response)
-        updated = self._upload_from_row(response.json()[0])
+        rows = response.json()
+        if rows:
+            updated = self._upload_from_row(rows[0])
+        else:
+            current = await self.get_upload_for_project_async(
+                project_id=project_id,
+                video_id=video_id,
+                workspace_id=workspace_id,
+            )
+            updated = _settled_transition(current, UploadStatus.PROCESSING)
         await self.attach_active_video_async(project_id=project_id, video_id=video_id)
         return updated
 

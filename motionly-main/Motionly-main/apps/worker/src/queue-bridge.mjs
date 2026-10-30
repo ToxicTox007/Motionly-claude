@@ -36,8 +36,29 @@ async function findJob(connection, jobId, preferredQueueName = null) {
   return null;
 }
 
+// BullMQ resolves `queue.add` with an existing jobId to the existing job, even
+// when that job already completed or failed and is only retained for history.
+// A deliberate re-run (render retry, forced re-transcription, ...) would then
+// silently do nothing (audit WJ-02). Remove the retained finished job first so
+// the add creates a fresh one. Queued/active jobs are left alone, so ordinary
+// duplicate enqueues still dedupe. A removal that loses a race (another caller
+// re-added and a worker locked it) falls through to the add, which dedupes.
+export async function removeTerminalJob(queue, jobId) {
+  const existing = await Job.fromId(queue, jobId);
+  if (!existing) return false;
+  const state = await existing.getState();
+  if (state !== "completed" && state !== "failed") return false;
+  try {
+    await existing.remove();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function enqueue(connection, payload) {
   const queue = queueFor(payload.queue_name, connection);
+  if (payload.replace_terminal) await removeTerminalJob(queue, payload.id);
   const now = new Date().toISOString();
   const workflowFields = workflowJobFields(payload);
   const transportAttempts = bullTransportAttempts(payload);
@@ -393,6 +414,10 @@ async function recoverStuck(connection, payload) {
       if (!job) continue;
       const state = await job.getState();
       if (state === "active") continue;
+      // A job canceled while it was active keeps its cancellation: relabelling
+      // it "queued" would let the next worker run it again (database audit
+      // DB-11). The worker's cancellation checkpoint drops it when picked up.
+      if (job.data?.status === "canceled") continue;
       const exhausted = state === "failed";
       await job.updateData({
         ...job.data,

@@ -4,7 +4,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
+import pytest
 
+from app.api.errors import ApiError
 from app.repositories.billing import InMemoryBillingRepository
 from app.repositories.captions import InMemoryCaptionRepository
 from app.repositories.renders import InMemoryRenderRepository, SupabaseRenderRepository
@@ -378,7 +380,12 @@ def test_phase8_supabase_export_create_reuses_existing_row(monkeypatch) -> None:
             ],
         )
 
-    monkeypatch.setattr("app.services.supabase.httpx.request", fake_request)
+    monkeypatch.setattr(
+        "app.services.supabase._sync_client",
+        lambda timeout: SimpleNamespace(
+            request=lambda *args, **kwargs: fake_request(*args, timeout=timeout, **kwargs)
+        ),
+    )
 
     upload_repository = InMemoryUploadRepository()
     upload_repository.seed_project(project_id=project_id, workspace_id=workspace_id)
@@ -476,9 +483,9 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
     def fake_request(method, url, headers, timeout, **kwargs):
         nonlocal run_count
         calls.append((method, url, kwargs))
-        if method == "POST" and url.endswith("/retention_runs"):
+        if method == "POST" and url.endswith("/rpc/motionly_begin_retention_run"):
             run_count += 1
-            return httpx.Response(200, json=[{"id": f"run-{run_count}"}])
+            return httpx.Response(200, json=f"run-{run_count}")
         if method == "POST" and url.endswith("/rpc/motionly_expire_upload_sessions"):
             return httpx.Response(200, json=[0])
         if method == "POST" and url.endswith("/rpc/motionly_expire_storage_quota_reservations"):
@@ -511,7 +518,9 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
     assert second["expired_storage_reservations"] == 0
     assert second["expired_generic_media_upload_sessions"] == 0
     retention_starts = [
-        call for call in calls if call[0] == "POST" and call[1].endswith("/retention_runs")
+        call
+        for call in calls
+        if call[0] == "POST" and call[1].endswith("/rpc/motionly_begin_retention_run")
     ]
     generic_media_expiries = [
         call
@@ -565,12 +574,14 @@ def test_phase8_retention_run_scheduled_is_safe_to_rerun(monkeypatch, tmp_path) 
 def test_retention_cleanup_steps_are_independent_b19(monkeypatch, tmp_path) -> None:
     """B19: one failing cleanup step does not stop the rest of the run."""
     seen = []
+    patches = []
 
     def fake_request(method, url, headers, timeout, **kwargs):
         seen.append(url)
-        if method == "POST" and url.endswith("/retention_runs"):
-            return httpx.Response(200, json=[{"id": "run-1"}])
+        if method == "POST" and url.endswith("/rpc/motionly_begin_retention_run"):
+            return httpx.Response(200, json="run-1")
         if method == "PATCH" and "/retention_runs" in url:
+            patches.append(kwargs["json"])
             return httpx.Response(200, json=[{"id": "run-1"}])
         # The first expiry step fails hard.
         if url.endswith("/rpc/motionly_expire_upload_sessions"):
@@ -598,11 +609,12 @@ def test_retention_cleanup_steps_are_independent_b19(monkeypatch, tmp_path) -> N
 
     assert counts["expired_upload_sessions"] == 0  # failed step defaulted
     assert any(url.endswith("/exports") for url in seen), "exports step still ran"
-    # The run was recorded as completed, not failed, because steps are isolated.
-    completed = [
-        url for url in seen if "/retention_runs" in url
-    ]
-    assert len(completed) >= 2  # started + completed PATCH
+    # Steps are isolated, but the run is not reported clean: it is recorded as
+    # failed with the failed step named, so operators see it (audit WJ-14).
+    assert any(url.endswith("/rpc/motionly_begin_retention_run") for url in seen)
+    assert len(patches) == 1
+    assert patches[0]["status"] == "failed"
+    assert "expire_upload_sessions" in patches[0]["error_message"]
 
 
 def test_retention_acknowledges_generic_media_only_after_storage_delete(
@@ -709,3 +721,174 @@ def test_retention_continues_after_one_storage_delete_failure(monkeypatch, tmp_p
 
     assert service._drain_storage_deletion_queue(minimum_age_days=None) == 1
     assert acknowledgements == [{"p_queue_id": "healthy-queue", "p_lease_token": "lease-healthy"}]
+
+
+def _retention_service(tmp_path, signer):
+    return RetentionService(
+        settings=SimpleNamespace(
+            supabase_url="https://supabase.example",
+            supabase_service_role_key="service-role",
+            retention_export_days=90,
+            retention_local_cache_days=7,
+            media_cache_max_bytes=1024,
+            media_work_dir=str(tmp_path),
+        ),
+        storage_signer=signer,
+    )
+
+
+def test_retention_refuses_to_run_twice_concurrently(monkeypatch, tmp_path) -> None:
+    # Audit WJ-11: a worker-side timeout plus BullMQ retry started a second run.
+    import asyncio
+
+    from app.api.internal_retention import run_retention
+    from app.services.retention import RetentionAlreadyRunning
+
+    def fake_request(method, url, headers, timeout, **kwargs):
+        if url.endswith("/rpc/motionly_begin_retention_run"):
+            return httpx.Response(200, json=None)  # another run is live
+        raise AssertionError(f"no cleanup may run without admission: {method} {url}")
+
+    monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
+    service = _retention_service(tmp_path, SimpleNamespace(delete_object=lambda **_k: None))
+    with pytest.raises(RetentionAlreadyRunning):
+        service.run_scheduled()
+
+    state = SimpleNamespace(
+        settings=SimpleNamespace(
+            worker_api_token="worker-secret",
+            supabase_url="https://supabase.example",
+            supabase_service_role_key="service-role",
+            retention_export_days=90,
+            retention_local_cache_days=7,
+            media_work_dir=str(tmp_path),
+        ),
+        storage_signer=SimpleNamespace(delete_object=lambda **_k: None),
+        analytics_recovery_queue=SimpleNamespace(drain=lambda _repository: 0),
+        analytics_repository=object(),
+    )
+    response = asyncio.run(
+        run_retention(
+            request=SimpleNamespace(app=SimpleNamespace(state=state)),
+            x_motionly_worker_token="worker-secret",
+        )
+    )
+    assert response["status"] == "already_running"
+
+
+def test_retention_drains_the_queue_in_batches_and_notes_failures(monkeypatch, tmp_path) -> None:
+    # Audit WJ-14: one 100-row claim per drain capped throughput, and a failing
+    # row left no trace of why.
+    from app.services import retention as retention_module
+
+    monkeypatch.setattr(retention_module, "DRAIN_BATCH_SIZE", 2)
+    batches = [
+        [
+            {"id": "q-1", "storage_bucket": "b", "storage_path": "ok-1", "lease_token": "l-1"},
+            {"id": "q-2", "storage_bucket": "b", "storage_path": "bad", "lease_token": "l-2"},
+        ],
+        [{"id": "q-3", "storage_bucket": "b", "storage_path": "ok-2", "lease_token": "l-3"}],
+    ]
+    notes = []
+
+    def fake_request(method, url, headers, timeout, **kwargs):
+        if url.endswith("/rpc/motionly_claim_storage_deletion_queue"):
+            assert kwargs["json"]["p_limit"] == 2
+            return httpx.Response(200, json=batches.pop(0) if batches else [])
+        if url.endswith("/rpc/motionly_ack_storage_deletion_queue"):
+            return httpx.Response(200, json=True)
+        if url.endswith("/rpc/motionly_note_storage_deletion_failure"):
+            notes.append(kwargs["json"])
+            return httpx.Response(200, json=True)
+        return httpx.Response(200, json=[])
+
+    def delete_object(*, bucket, path):
+        if path == "bad":
+            raise ApiError(502, "storage_delete_failed", "boom")
+
+    monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
+    service = _retention_service(tmp_path, SimpleNamespace(delete_object=delete_object))
+    assert service._drain_storage_deletion_queue(minimum_age_days=None) == 2
+    assert batches == [], "a full batch is followed by another claim"
+    assert notes == [
+        {"p_queue_id": "q-2", "p_lease_token": "l-2", "p_error_code": "storage_delete_failed"}
+    ]
+
+
+def test_expired_export_cleanup_isolates_failing_rows(monkeypatch, tmp_path) -> None:
+    deleted_rows = []
+    pages = []
+
+    def fake_request(method, url, headers, timeout, **kwargs):
+        if method == "GET" and url.endswith("/exports"):
+            pages.append(kwargs["params"]["offset"])
+            if kwargs["params"]["offset"] != "0":
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": "e-1", "storage_bucket": "exports", "storage_path": "bad.mp4"},
+                    {"id": "e-2", "storage_bucket": "exports", "storage_path": "ok.mp4"},
+                ],
+            )
+        if method == "DELETE" and url.endswith("/exports"):
+            deleted_rows.append(kwargs["params"]["id"])
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=[])
+
+    def delete_object(*, bucket, path):
+        if path == "bad.mp4":
+            raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr("app.services.retention.httpx.request", fake_request)
+    service = _retention_service(tmp_path, SimpleNamespace(delete_object=delete_object))
+    assert service._delete_media_rows(table="exports", older_than_days=90) == 1
+    assert deleted_rows == ["eq.e-2"], "one failing export does not stop the others"
+    assert service.failed_steps == ["delete_exports:partial"]
+
+
+def test_worker_diagnostic_reports_required_queues_without_a_worker() -> None:
+    # Audit WJ-20: one live heartbeat (any worker) made every queue look served.
+    import asyncio
+
+    from app.api.health import _probe_workers
+    from app.services.operations import WorkerHeartbeat
+
+    heartbeats = [
+        WorkerHeartbeat(
+            worker_id="planning-1",
+            worker_role="worker",
+            queues=["planning", "maintenance"],
+            version=None,
+            metadata={},
+        ),
+        WorkerHeartbeat(
+            worker_id="dead-render",
+            worker_role="worker",
+            queues=["render"],
+            version=None,
+            metadata={},
+            last_seen_at=datetime.now(UTC) - timedelta(hours=1),
+        ),
+    ]
+
+    def request_for(required: str):
+        settings = SimpleNamespace(
+            app_env="production",
+            redis_url="redis://redis:6379/0",
+            worker_heartbeat_max_age_seconds=90,
+            required_worker_queues=required,
+        )
+        state = SimpleNamespace(
+            settings=settings,
+            operations_repository=SimpleNamespace(latest_heartbeats=lambda: heartbeats),
+        )
+        return SimpleNamespace(app=SimpleNamespace(state=state))
+
+    healthy = asyncio.run(_probe_workers(request_for("")))
+    assert healthy.status == "ok"
+    assert healthy.metadata["queues"] == ["maintenance", "planning"]
+
+    degraded = asyncio.run(_probe_workers(request_for("planning,render")))
+    assert degraded.status == "degraded"
+    assert degraded.metadata["missing_queues"] == ["render"]

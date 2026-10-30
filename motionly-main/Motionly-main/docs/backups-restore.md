@@ -1,13 +1,19 @@
 # Backup and restore runbook
 
-Motionly uses Supabase Postgres as the source of truth. Production must keep automated daily
-database backups, retain at least 30 days, and test restore before launch and after any destructive
-schema class is proposed.
+Motionly uses Supabase Postgres as the source of truth. Production keeps continuous WAL archiving
+and daily base backups (point-in-time recovery for 30 days, copies retained 35 days in the backups
+bucket) plus daily data-volume snapshots. [Database operations](ops/database-operations.md)
+describes the backup layers, their alarms and the point-in-time recovery procedure. Test restore
+before launch and after any destructive schema class is proposed.
 
 ## Required restore drill
 
-1. Export from the source database with `pg_dump --format=custom --no-owner --no-acl`.
-2. Restore into an empty throwaway database with `pg_restore --clean --if-exists --no-owner`.
+1. Describe the source and an empty throwaway target as libpq services in a `pg_service.conf`, with
+   their passwords in a `pgpass` file, both mode `0600`; export `PGSERVICEFILE` and `PGPASSFILE`.
+2. Run `MOTIONLY_BACKUP_RESTORE_ACK=restore-target scripts/verify_backup_restore.sh <source-service>
+<restore-service>`. It dumps with `pg_dump --format=custom --no-owner`, loads the dump with
+   `pg_restore --no-owner` including the application schemas' grants, and fails unless table data
+   fingerprints, API-role privileges, row-level security and policies all match the source.
 3. Run migrations/schema tests against the restored database.
 4. Run repository integration contracts against the restored database.
 5. Record the drill timestamp, source backup ID, restore target, and test results in the launch

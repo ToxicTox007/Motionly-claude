@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -29,6 +30,28 @@ from app.repositories.workflows import (
     WorkflowStepRecord,
     WorkflowStepState,
 )
+
+logger = logging.getLogger(__name__)
+
+# Run states the first-draft workflow itself drives. Later states (refining,
+# exporting, ...) are owned by the API after the workflow completed, so a
+# closed Temporal execution is normal for them.
+WORKFLOW_DRIVEN_STATES = frozenset(
+    {
+        WorkflowRunState.UPLOADED,
+        WorkflowRunState.ANALYZING,
+        WorkflowRunState.PROPOSAL_READY,
+        WorkflowRunState.AWAITING_APPROVAL,
+        WorkflowRunState.ASSEMBLING,
+        WorkflowRunState.DRAFT_RENDERING,
+    }
+)
+# Temporal statuses that mean the execution ended without completing.
+FAILED_TEMPORAL_STATUSES = frozenset({"failed", "terminated", "timed_out", "canceled"})
+# Terminal runs are re-checked for this long (a cancel/fail signal to a still
+# running Temporal execution may be pending); older terminal history is not
+# rescanned on every pass (audit WJ-18).
+RECENT_TERMINAL_WINDOW = timedelta(hours=24)
 
 
 class ReconciliationRepositoryProtocol(Protocol):
@@ -121,6 +144,18 @@ class WorkflowReconciler:
         else:
             self._cursor_updated_at = None
             self._cursor_id = None
+        recent_terminal = getattr(self.repository, "list_recent_terminal_runs_async", None)
+        if recent_terminal is not None:
+            seen = {run.id for run in runs}
+            runs = runs + [
+                run
+                for run in await recent_terminal(
+                    updated_since=stale_before - RECENT_TERMINAL_WINDOW,
+                    stale_before=stale_before,
+                    limit=self.limit,
+                )
+                if run.id not in seen
+            ]
         return await self._reconcile_runs(
             runs,
             dispatch=dispatch,
@@ -148,14 +183,27 @@ class WorkflowReconciler:
         actions: list[ReconciliationAction] = []
         repaired = 0
         for run in runs:
-            description = await self.temporal.describe_workflow(
-                workflow_id=run.temporal_workflow_id
-            )
-            action = await self._reconcile_run(run, description)
+            try:
+                description = await self.temporal.describe_workflow(
+                    workflow_id=run.temporal_workflow_id
+                )
+                action = await self._reconcile_run(run, description)
+            except Exception as exc:  # noqa: BLE001 - one bad run must not stop the pass
+                action = f"error_{_error_name(exc)}"
             if action is None:
                 continue
             actions.append(ReconciliationAction(workflow_run_id=run.id, action=action))
-            repaired += action.startswith("signalled_")
+            repaired += action.startswith(("signalled_", "repaired_"))
+            # Every action is visible to operators (it used to be discarded).
+            log = logger.warning if action.startswith(("reported_", "error_")) else logger.info
+            log(
+                "workflow_reconciliation_action",
+                extra={
+                    "workflow_run_id": str(run.id),
+                    "workflow_state": run.state.value,
+                    "action": action,
+                },
+            )
         return ReconciliationReport(
             inspected=len(runs),
             repaired=repaired,
@@ -173,6 +221,12 @@ class WorkflowReconciler:
         if description is None:
             if run.state in TERMINAL_RUN_STATES:
                 return None
+            if run.temporal_run_id is not None and run.state in WORKFLOW_DRIVEN_STATES:
+                # The execution was started (fenced ack) and is gone (namespace
+                # retention after it closed): nothing will ever advance the run.
+                return await self._fail_run(
+                    run, "temporal_execution_missing", "repaired_failed_missing_temporal"
+                )
             return "reported_missing_temporal_execution"
         temporal_running = description.status in {
             "running",
@@ -227,6 +281,17 @@ class WorkflowReconciler:
             if run.temporal_run_id is None:
                 return "reported_awaiting_fenced_start_ack"
             if not temporal_running:
+                if (
+                    run.state in WORKFLOW_DRIVEN_STATES
+                    and description.status in FAILED_TEMPORAL_STATUSES
+                ):
+                    # The workflow failed/was terminated on the Temporal side
+                    # (or timed out) without the canonical run following (WJ-06).
+                    return await self._fail_run(
+                        run,
+                        f"temporal_execution_{description.status}",
+                        "repaired_failed_closed_temporal",
+                    )
                 return "reported_active_canonical_terminal_temporal"
             return None
         if not temporal_running:
@@ -260,6 +325,27 @@ class WorkflowReconciler:
         return "reported_completed_canonical_running_temporal"
 
 
+    async def _fail_run(self, run: WorkflowRunRecord, error_code: str, action: str) -> str:
+        fail = getattr(self.repository, "fail_workflow_run_async", None)
+        if fail is None:
+            return "reported_active_canonical_terminal_temporal"
+        await fail(
+            workflow_run_id=run.id,
+            workspace_id=run.workspace_id,
+            project_id=run.project_id,
+            error_code=error_code,
+            error_message="The workflow stopped before it finished.",
+        )
+        return action
+
+
+def _error_name(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code[:80]
+    return type(exc).__name__.lower()[:80]
+
+
 async def run_reconciler_loop(
     reconciler: WorkflowReconciler,
     settings: Settings,
@@ -267,11 +353,40 @@ async def run_reconciler_loop(
     once: bool = False,
     clock: Callable[[], datetime] | None = None,
     sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    progress: Callable[[], None] | None = None,
 ) -> ReconciliationReport | None:
     now = clock or (lambda: datetime.now(UTC))
+    failures = 0
     while True:
         stale_before = now() - timedelta(seconds=settings.workflow_reconciler_staleness_seconds)
-        report = await reconciler.reconcile_once(stale_before=stale_before)
+        try:
+            report = await reconciler.reconcile_once(stale_before=stale_before)
+        except Exception as exc:  # noqa: BLE001 - the loop must outlive transient faults
+            if once:
+                raise
+            failures += 1
+            logger.error(
+                "workflow_reconciliation_pass_failed",
+                extra={"error_code": _error_name(exc), "consecutive_failures": failures},
+            )
+            await sleeper(
+                min(300.0, settings.workflow_reconciler_interval_seconds * (2 ** min(failures, 4)))
+            )
+            continue
+        failures = 0
+        if progress is not None:
+            progress()
+        inspected = getattr(report, "inspected", 0)
+        if inspected or getattr(report, "upload_workflows_started", 0):
+            logger.info(
+                "workflow_reconciliation_pass",
+                extra={
+                    "inspected": inspected,
+                    "repaired": getattr(report, "repaired", 0),
+                    "reported": getattr(report, "reported", 0),
+                    "upload_workflows_started": getattr(report, "upload_workflows_started", 0),
+                },
+            )
         if once:
             return report
         await sleeper(settings.workflow_reconciler_interval_seconds)
@@ -283,6 +398,7 @@ async def run_reconciler(
     once: bool = False,
     clock: Callable[[], datetime] | None = None,
     sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    progress: Callable[[], None] | None = None,
 ) -> ReconciliationReport | None:
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
@@ -314,6 +430,7 @@ async def run_reconciler(
         once=once,
         clock=clock,
         sleeper=sleeper,
+        progress=progress,
     )
 
 

@@ -79,8 +79,11 @@
       "expected_ports": [],
       "healthcheck": "none",
       "worker_queues": [],
-      "feature_ownership": ["isolated media and model-cache volume ownership"],
-      "startup_predicate": "The one-shot initializer exits successfully after creating and chowning the shared media and model-cache paths.",
+      "feature_ownership": [
+        "isolated media and model-cache volume ownership",
+        "database WAL archive and base backup volume ownership"
+      ],
+      "startup_predicate": "The one-shot initializer exits successfully after creating and chowning the shared media and model-cache paths and the database backup volumes.",
       "verification": {
         "owner": "data-foundations",
         "smoke_action": "Inspect one-shot completion and shared-volume ownership inside the isolated Compose project.",
@@ -94,10 +97,43 @@
       }
     },
     {
+      "name": "db-tls",
+      "order": 15,
+      "phase": "data-foundations",
+      "dependencies": [],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": [
+        "internal database CA and server certificate for postgres and temporal-postgres"
+      ],
+      "startup_predicate": "The one-shot issuer exits successfully after the CA certificate and a server certificate valid for at least 60 days exist in their volumes.",
+      "verification": {
+        "owner": "data-foundations",
+        "smoke_action": "Inspect one-shot completion and that postgres reports ssl=on with the issued certificate.",
+        "log_pattern": "db-tls: server certificate valid until",
+        "cleanup_responsibility": "Remove only resources whose Compose project name is motionly-local-audit after evidence capture."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
       "name": "postgres",
       "order": 20,
       "phase": "data-foundations",
-      "dependencies": [],
+      "dependencies": [
+        {
+          "service": "volume-permissions",
+          "condition": "service_completed_successfully"
+        },
+        {
+          "service": "db-tls",
+          "condition": "service_completed_successfully"
+        }
+      ],
       "expected_ports": [],
       "healthcheck": "required",
       "worker_queues": [],
@@ -119,7 +155,16 @@
       "name": "temporal-postgres",
       "order": 30,
       "phase": "data-foundations",
-      "dependencies": [],
+      "dependencies": [
+        {
+          "service": "volume-permissions",
+          "condition": "service_completed_successfully"
+        },
+        {
+          "service": "db-tls",
+          "condition": "service_completed_successfully"
+        }
+      ],
       "expected_ports": [],
       "healthcheck": "required",
       "worker_queues": [],
@@ -268,6 +313,35 @@
       }
     },
     {
+      "name": "db-roles",
+      "order": 85,
+      "phase": "supabase-control-plane",
+      "dependencies": [
+        {
+          "service": "postgres",
+          "condition": "service_healthy"
+        }
+      ],
+      "expected_ports": [],
+      "healthcheck": "none",
+      "worker_queues": [],
+      "feature_ownership": [
+        "per-service database passwords for Supabase Auth, REST and Storage"
+      ],
+      "startup_predicate": "The one-shot exits successfully after setting each service role's password from its credentials volume.",
+      "verification": {
+        "owner": "supabase-control-plane",
+        "smoke_action": "Inspect one-shot completion before Auth, REST and Storage start.",
+        "log_pattern": "db-roles: service role passwords applied",
+        "cleanup_responsibility": "Remove only resources whose Compose project name is motionly-local-audit after evidence capture."
+      },
+      "external_side_effects": {
+        "can_invoke_external_systems": false,
+        "systems": [],
+        "preflight": "not-applicable"
+      }
+    },
+    {
       "name": "supabase-auth",
       "order": 90,
       "phase": "supabase-control-plane",
@@ -275,6 +349,10 @@
         {
           "service": "postgres",
           "condition": "service_healthy"
+        },
+        {
+          "service": "db-roles",
+          "condition": "service_completed_successfully"
         }
       ],
       "expected_ports": [],
@@ -302,6 +380,10 @@
         {
           "service": "postgres",
           "condition": "service_healthy"
+        },
+        {
+          "service": "db-roles",
+          "condition": "service_completed_successfully"
         }
       ],
       "expected_ports": [],
@@ -329,6 +411,10 @@
         {
           "service": "postgres",
           "condition": "service_healthy"
+        },
+        {
+          "service": "db-roles",
+          "condition": "service_completed_successfully"
         }
       ],
       "expected_ports": [],

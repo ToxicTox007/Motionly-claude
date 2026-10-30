@@ -1,3 +1,6 @@
+import asyncio
+import threading
+import weakref
 from time import perf_counter
 from typing import Any
 
@@ -9,6 +12,40 @@ from app.services.request_counters import increment_supabase_calls
 logger = get_logger(__name__)
 
 _RETRYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"})
+
+# Shared connection pools (database audit DB-20). Building an httpx client
+# loads the CA bundle into a new SSL context: measured 27 ms (async) and 47 ms
+# (sync) per client, which every PostgREST call used to pay. Clients are now
+# reused: per process for sync calls, per event loop for async calls (an
+# AsyncClient is bound to the loop it first runs on), and per timeout. httpx's
+# default pool limits apply (100 connections, 20 kept alive for 5 s, well
+# inside the gateway's keep-alive). The client class is part of the key so a
+# test that substitutes httpx.Client/AsyncClient gets its own instance.
+_sync_pools: dict[tuple[object, float], httpx.Client] = {}
+_sync_pool_lock = threading.Lock()
+_async_pools: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[tuple[object, float], httpx.AsyncClient]]" = weakref.WeakKeyDictionary()  # noqa: E501
+
+
+def _sync_client(timeout: float) -> httpx.Client:
+    key = (httpx.Client, timeout)
+    client = _sync_pools.get(key)
+    if client is None or getattr(client, "is_closed", False):
+        with _sync_pool_lock:
+            client = _sync_pools.get(key)
+            if client is None or getattr(client, "is_closed", False):
+                client = httpx.Client(timeout=timeout)
+                _sync_pools[key] = client
+    return client
+
+
+def _async_client(timeout: float) -> httpx.AsyncClient:
+    pools = _async_pools.setdefault(asyncio.get_running_loop(), {})
+    key = (httpx.AsyncClient, timeout)
+    client = pools.get(key)
+    if client is None or getattr(client, "is_closed", False):
+        client = httpx.AsyncClient(timeout=timeout)
+        pools[key] = client
+    return client
 
 
 def _can_retry(method: str) -> bool:
@@ -56,13 +93,12 @@ class SupabaseRestClient:
             attempt += 1
             started_at = perf_counter()
             try:
-                response = httpx.request(
+                response = _sync_client(timeout or self.timeout_seconds).request(
                     method,
                     f"{self.rest_url}/{path.lstrip('/')}",
                     headers={**self.headers, **(headers or {})},
                     params=params,
                     json=json,
-                    timeout=timeout or self.timeout_seconds,
                 )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 latency_ms = round((perf_counter() - started_at) * 1000)
@@ -135,14 +171,13 @@ class SupabaseRestClient:
             attempt += 1
             started_at = perf_counter()
             try:
-                async with httpx.AsyncClient(timeout=timeout or self.timeout_seconds) as client:
-                    response = await client.request(
-                        method,
-                        f"{self.rest_url}/{path.lstrip('/')}",
-                        headers={**self.headers, **(headers or {})},
-                        params=params,
-                        json=json,
-                    )
+                response = await _async_client(timeout or self.timeout_seconds).request(
+                    method,
+                    f"{self.rest_url}/{path.lstrip('/')}",
+                    headers={**self.headers, **(headers or {})},
+                    params=params,
+                    json=json,
+                )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 latency_ms = round((perf_counter() - started_at) * 1000)
                 self._observe(

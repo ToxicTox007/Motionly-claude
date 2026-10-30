@@ -9,6 +9,101 @@ MIGRATIONS = ROOT / "supabase" / "migrations"
 SQL_TESTS = ROOT / "supabase" / "tests"
 
 MIGRATION_TEST_CONTRACTS = {
+    "202610280101_retention_reliability.sql": (
+        "worker_retention_reliability_test.sql",
+        (
+            "attempt_count",
+            "dead_lettered_at",
+            "motionly_claim_storage_deletion_queue",
+            "motionly_note_storage_deletion_failure",
+            "motionly_begin_retention_run",
+            "motionly_redact_transcript_raw_payloads",
+            "audio_intelligence",
+        ),
+    ),
+    "202610280102_workflow_cancellation_leases.sql": (
+        "workflow_cancellation_leases_test.sql",
+        (
+            "motionly_claim_workflow_cancellations",
+            "motionly_complete_workflow_cancellation",
+            "motionly_release_workflow_cancellation",
+            "dead_lettered_at",
+        ),
+    ),
+    "202610280103_workflow_run_orchestration_failure.sql": (
+        "workflow_run_orchestration_failure_test.sql",
+        ("motionly_fail_workflow_run", "WORKFLOW_NOT_FOUND", "workflow.run.failed"),
+    ),
+    "202610280104_gateway_webhook_event_claims.sql": (
+        "gateway_webhook_event_claims_test.sql",
+        (
+            "motionly_claim_gateway_webhook_event",
+            "motionly_finish_gateway_webhook_event",
+            "in_progress",
+        ),
+    ),
+    # Database audit fixes (docs/ops/database-operations.md).
+    "202610280201_db_audit_api_role_privileges.sql": (
+        "db_audit_api_role_privileges_test.sql",
+        (
+            "is_workspace_member",
+            "update_own_profile",
+            "motionly_invalidate_on_media_replace",
+            "motionly_invalidate_stale_derivatives",
+            "music_mood_synonyms",
+            "ai_secrets",
+        ),
+    ),
+    "202610280202_db_audit_integrity_guards.sql": (
+        "db_audit_integrity_guards_test.sql",
+        ("RENDER_TERMINAL_STATE", "task5_workflow_artifact_export_fk", "amount_paise"),
+    ),
+    "202610280203_db_audit_foreign_key_indexes.sql": (
+        "db_audit_foreign_key_indexes_test.sql",
+        ("_fk_idx", "transcript_words_project_id_fk_idx"),
+    ),
+    "202610280204_db_audit_rls_membership_set.sql": (
+        "db_audit_rls_membership_set_test.sql",
+        ("motionly_member_workspace_ids", "is_workspace_member", "workspace_members"),
+    ),
+    "202610280205_db_audit_usage_aggregates_and_atomic_children.sql": (
+        "db_audit_usage_aggregates_and_atomic_children_test.sql",
+        (
+            "motionly_sum_cost_usage",
+            "motionly_sum_usage_ledger",
+            "motionly_cost_summary",
+            "motionly_replace_transcript_words",
+            "motionly_replace_caption_segments",
+            "motionly_worker",
+        ),
+    ),
+    "202610280206_db_audit_validate_deferred_constraints.sql": (
+        "db_audit_validate_deferred_constraints_test.sql",
+        ("convalidated", "NOT VALID"),
+    ),
+    "202610280207_db_audit_realtime_presence_only.sql": (
+        "db_audit_realtime_presence_only_test.sql",
+        ("presence", "realtime.messages", "extension"),
+    ),
+    "202610280208_db_audit_gateway_event_order.sql": (
+        "db_audit_gateway_event_order_test.sql",
+        (
+            "last_gateway_event_at",
+            "subscriptions_skip_stale_gateway_event",
+            "motionly_skip_stale_gateway_subscription_event",
+        ),
+    ),
+    "202610280209_db_audit_render_attempt_fencing.sql": (
+        "db_audit_render_attempt_fencing_test.sql",
+        (
+            "motionly_claim_render_attempt",
+            "RENDER_ATTEMPT_SUPERSEDED",
+            "RENDER_ALREADY_COMPLETE",
+            "RENDER_CANCELED",
+            "attempt_id",
+            "motionly_worker",
+        ),
+    ),
     "202610250201_model_choice_settings.sql": (
         "model_choice_settings_test.sql",
         (

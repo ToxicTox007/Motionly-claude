@@ -17,6 +17,7 @@ this engine does not re-check it.
 
 import json
 from typing import Any
+from uuid import UUID as _UUID  # _execute_job binds a local UUID in some branches
 
 from pydantic import BaseModel, Field
 
@@ -312,6 +313,7 @@ def _execute_job(*, job: EnqueuedJob, request: Any) -> dict[str, Any]:
                 getattr(settings, "app_env", "test") != "production"
                 or getattr(settings, "allow_fixture_providers", False)
             ),
+            attempt_id=_UUID(job.render_attempt_id) if job.render_attempt_id else None,
         )
         record_render_success_outcome(request=request, job=render)
         return {

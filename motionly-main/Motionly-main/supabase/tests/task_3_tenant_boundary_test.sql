@@ -407,14 +407,14 @@ select is(
 
 select ok(
   (
-    select bool_and(not convalidated)
+    select bool_and(convalidated)
     from pg_constraint
     where conname in (
       'task3_cost_events_render_requires_project',
       'task3_cost_events_export_requires_project'
     )
   ),
-  'cost attribution reference guards are safe NOT VALID constraints'
+  'cost attribution reference guards, added NOT VALID, are validated by 202610280206'
 );
 
 select throws_ok(
@@ -549,10 +549,10 @@ select is(
       'task3_exports_render_job_tenant_fk'
     ])
       and contype = 'f'
-      and not convalidated
+      and convalidated
   ),
   8,
-  'core tenant-consistency foreign keys are present as safe NOT VALID constraints'
+  'core tenant-consistency foreign keys, added NOT VALID, are validated by 202610280206'
 );
 
 select ok(

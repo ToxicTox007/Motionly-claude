@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from shutil import which
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -37,7 +37,16 @@ def complete_render_job(
     service_role_key: str | None,
     renderer: object | None = None,
     allow_fixture_media: bool = False,
+    attempt_id: UUID | None = None,
 ) -> RenderJobRecord:
+    """Run one worker attempt of an FFmpeg render.
+
+    The attempt claims the render first (``attempt_id``, generated per run by
+    the BullMQ worker; database audit DB-11) and every later status write is
+    conditional on still owning it. If another attempt takes the render over,
+    or it is requeued, this attempt stops with 409 ``render_attempt_superseded``
+    instead of writing over the newer one.
+    """
     # Renders always execute a real CPU render. Tests that need a fast renderer
     # inject one explicitly via `renderer`; no setting can select a stand-in
     # (see apps/api/tests/test_fixture_leakage.py for the leakage assertion).
@@ -58,13 +67,19 @@ def complete_render_job(
             error_message=None,
         )
 
-    job = repository.transition_job(
-        job=job,
-        status=RenderJobStatus.PREPARING,
-        progress_pct=10,
-        message="Running render preflight.",
-        event_type="preflight_started",
-    )
+    try:
+        job = repository.claim_render_attempt(
+            job=job,
+            attempt_id=attempt_id or uuid4(),
+            progress_pct=10,
+            message="Running render preflight.",
+            event_type="preflight_started",
+        )
+    except ApiError as exc:
+        if exc.code == "render_already_complete":
+            return repository.get_render_job_by_id(render_job_id=job.id)
+        raise
+    owner = job.attempt_id
     export_storage_path = (
         f"workspaces/{job.workspace_id}/projects/{job.project_id}/exports/{job.id}.mp4"
     )
@@ -108,6 +123,7 @@ def complete_render_job(
             progress_pct=70,
             message=_rendering_message(job),
             event_type="rendering_started",
+            attempt_id=owner,
         )
         _ensure_render_not_cancelled(job=job, repository=repository)
         benchmark_ms, file_size_bytes = renderer.render(
@@ -136,6 +152,7 @@ def complete_render_job(
             progress_pct=90,
             message="Uploading render output.",
             event_type="upload_started",
+            attempt_id=owner,
         )
         storage.upload_file(
             bucket=export_bucket,
@@ -145,6 +162,9 @@ def complete_render_job(
         )
         artifact_uploaded = True
     except ApiError as exc:
+        if exc.code == "render_attempt_superseded":
+            # The render belongs to another attempt now: write nothing.
+            raise
         job.logs = [*job.logs, _render_failure_log(exc)]
         if exc.code == "render_cancelled":
             return _return_cancelled_render_job(
@@ -162,6 +182,7 @@ def complete_render_job(
             event_type=(
                 "preflight_failed" if job.status == RenderJobStatus.PREPARING else "failed"
             ),
+            attempt_id=owner,
         )
     finally:
         if ass_path is not None:
@@ -185,6 +206,9 @@ def complete_render_job(
             repository=repository,
             message=exc.message,
         )
+    # Publish only while this attempt still owns the render: a superseded
+    # attempt must not add an export row for the newer attempt's render.
+    _ensure_attempt_owns_render(job=job, repository=repository, attempt_id=owner)
     export = repository.create_export(
         workspace_id=job.workspace_id,
         project_id=job.project_id,
@@ -222,6 +246,7 @@ def complete_render_job(
         message="Export is ready to download.",
         event_type="completed",
         metadata={"export_id": str(export.id)},
+        attempt_id=owner,
     )
 
 
@@ -260,6 +285,7 @@ def complete_render_job_by_id(
     service_role_key: str | None,
     renderer: object | None = None,
     allow_fixture_media: bool = False,
+    attempt_id: UUID | None = None,
 ) -> RenderJobRecord:
     job = repository.get_render_job(
         project_id=project_id,
@@ -276,6 +302,7 @@ def complete_render_job_by_id(
         service_role_key=service_role_key,
         renderer=renderer,
         allow_fixture_media=allow_fixture_media,
+        attempt_id=attempt_id,
     )
 
 
@@ -296,7 +323,25 @@ def _return_cancelled_render_job(
         event_type="cancelled",
         error_code="render_cancelled",
         error_message=message,
+        attempt_id=job.attempt_id,
     )
+
+
+def _ensure_attempt_owns_render(
+    *,
+    job: RenderJobRecord,
+    repository: InMemoryRenderRepository,
+    attempt_id: UUID | None,
+) -> None:
+    if attempt_id is None:
+        return
+    latest = repository.get_render_job_by_id(render_job_id=job.id)
+    if latest.attempt_id != attempt_id:
+        raise ApiError(
+            409,
+            "render_attempt_superseded",
+            "Another attempt owns this render now; this attempt stops.",
+        )
 
 
 def _ensure_render_not_cancelled(

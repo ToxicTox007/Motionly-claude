@@ -14,7 +14,8 @@ The `aws` stage is static validation only: it never calls AWS. Live deployment i
 - **CloudFront** with the default `*.cloudfront.net` certificate, the behaviours, managed cache and origin-request policies, response-header policy and error caching from the edge contract. It sends `X-Motionly-Origin-Verify` to the origin; the origin's Caddy guard rejects requests without it ([Runtime secrets](../security/secrets.md) describes rotation).
 - **One EC2 instance** behind an Elastic IP. `ComputeProfile=gpu` is the production `g6.12xlarge` on the Deep Learning Base OSS NVIDIA Driver AMI (Amazon Linux 2023); `ComputeProfile=cpu` is an `m7i.2xlarge` on Amazon Linux 2023 for rehearsals, where GPU-dependent capabilities are unavailable. `ComputeProfile=cpu` can also run CPU-only production by setting `MOTIONLY_CPU_TOPOLOGY=gpu-free` on the host, which deploys the GPU-free remote overlay so GPU work goes to remote Bedrock routes and CPU work stays local (see [Compose production deployment](compose-vm-deployment.md)). The security group admits only the CloudFront origin-facing prefix list on port 80 and allows HTTPS out; there is no SSH and no key pair. Instance metadata requires IMDSv2 with a hop limit of 1, so containers cannot read the instance's credentials.
 - **A persistent data volume** (encrypted gp3, snapshot on deletion) mounted at `/srv/motionly` by `infra/aws/bootstrap.sh`, which also installs Docker and a pinned, checksum-verified Docker Compose plugin. Docker's data root is on this volume.
-- **Three S3 buckets** for releases, media and backups: encrypted, versioned, ACLs disabled, all public access blocked, TLS required. Media and backups are retained when the stack is deleted, and the instance cannot delete backups.
+- **Three S3 buckets** for releases, media and backups: encrypted, versioned, ACLs disabled, all public access blocked, TLS required. Media and backups are retained when the stack is deleted, and the instance cannot delete backups. Database backups under `database/` in the backups bucket expire after 35 days.
+- **Database backups and alarms**: a Data Lifecycle Manager policy snapshots the data volume daily (14 kept), and CloudWatch alarms on the host backup agent's metrics (database down, base backup older than 26 hours, WAL archive not in S3 for 30 minutes, WAL archiving failing, data volume over 80% full) notify the `DatabaseAlarmTopic` SNS topic. [Database operations](database-operations.md) describes the agent and the restore procedure.
 - **A GitHub OIDC deploy role** that only workflows in one repository environment can assume. It can upload releases and run `AWS-RunShellScript` on this instance through SSM Run Command, nothing else.
 
 The instance reads its secrets from SSM Parameter Store under `/motionly/<environment>/`; secrets are never in the template. The origin secret is a `NoEcho` parameter whose value the deploy job reads from `/motionly/<environment>/edge/origin-verify`.
@@ -29,8 +30,9 @@ The instance reads its secrets from SSM Parameter Store under `/motionly/<enviro
 | `OriginVerifySecret`           | current value of `/motionly/<environment>/edge/origin-verify`                                                 |
 | `GitHubRepository`             | `owner/name`                                                                                                  |
 | `GitHubOidcProviderArn`        | existing provider ARN, or empty to create one                                                                 |
+| `AlarmEmail`                   | optional address subscribed to the database alarms (confirm the subscription email); empty: topic only        |
 
-The `PublicOrigin` output is the release's `PUBLIC_ORIGIN`.
+The `PublicOrigin` output is the release's `PUBLIC_ORIGIN`. Put the `BackupsBucketName` output in the host's `MOTIONLY_BACKUP_BUCKET` (`/etc/motionly/host.env`).
 
 ## Releases
 
@@ -38,4 +40,4 @@ Releases are published and applied by `.github/workflows/deploy-aws.yml` and reh
 
 ## Not covered yet
 
-There is no WAF, access logging or alarms in the stack.
+There is no WAF or access logging in the stack, and no alarms beyond the database ones.

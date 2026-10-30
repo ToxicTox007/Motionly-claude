@@ -15,6 +15,7 @@ from app.schemas.billing import (
     PlanEntitlements,
     SubscriptionStatus,
 )
+from app.services.operations import UsageUnavailableError
 
 # ---------------------------------------------------------------------------
 # Single source of truth for plan prices + entitlements: app/config/plans.json.
@@ -285,13 +286,22 @@ def check_quota(
     settings = get_settings()
     limit = spec.limit(settings, plan_key)
     count_provider = provider if quota_scope(settings) == "provider" else None
-    used = operations_repository.count_usage(
-        workspace_id=workspace_id,
-        provider=count_provider,
-        category=category,
-        period_start=start,
-        period_end=end,
-    )
+    try:
+        used = operations_repository.count_usage(
+            workspace_id=workspace_id,
+            provider=count_provider,
+            category=category,
+            period_start=start,
+            period_end=end,
+        )
+    except UsageUnavailableError as exc:
+        # Fail closed: a billable call is refused when its quota cannot be read
+        # (database audit DB-07), exactly as the model gateway does.
+        raise ApiError(
+            503,
+            f"{feature}_quota_unavailable",
+            "Usage could not be checked right now. Try again shortly.",
+        ) from exc
 
     if used + estimated_quantity > limit:
         raise ApiError(

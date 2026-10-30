@@ -433,7 +433,7 @@ def test_render_create_completes_export_and_events() -> None:
     )
 
     assert response.status == "complete"
-    assert response.queue_job_id.startswith(f"render:{project_id}:")
+    assert response.queue_job_id.startswith(f"render--{project_id}--")
     assert response.job.specs.width == 720
     assert response.job.specs.height == 1280
     assert response.job.manifest["billing"]["watermark"] is True

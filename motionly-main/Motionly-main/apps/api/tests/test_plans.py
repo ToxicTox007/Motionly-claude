@@ -839,6 +839,12 @@ def test_plan_api_prefers_async_repository_methods() -> None:
             self.async_calls.append("update")
             return self.update_plan_cuts(**kwargs)
 
+        # An edit without expected_revision is saved compare-and-set against the
+        # revision the API just read (database audit DB-10).
+        async def update_plan_with_revision_async(self, **kwargs):
+            self.async_calls.append("update")
+            return self.update_plan_with_revision(**kwargs)
+
     async_repository = AsyncPlanRepository(repository.caption_repository)
     record = async_repository.create_plan(
         workspace_id=workspace_id,

@@ -23,6 +23,7 @@ This directory is the canonical home for maintained Motionly documentation. Link
 
 - [Operations](operations.md)
 - [Backups and restore](backups-restore.md)
+- [Database operations](ops/database-operations.md) — backups and point-in-time recovery, database alarms, migration rollout, account deletion.
 - [Data retention](data-retention.md)
 - [AWS infrastructure](ops/aws-infrastructure.md)
 - [Compose VM deployment](ops/compose-vm-deployment.md)
@@ -58,6 +59,7 @@ Operator guide for running Motionly on AWS with Amazon Bedrock inference.
 ## Workers and rendering
 
 - [Job idempotency matrix](workers/job-idempotency-matrix.md)
+- [Background job recovery runbook](workers/job-recovery-runbook.md) — alerts, log signals, replaying failed jobs and dead letters.
 - [Render correctness](workers/render-correctness.md)
 
 ## Verification and historical reference

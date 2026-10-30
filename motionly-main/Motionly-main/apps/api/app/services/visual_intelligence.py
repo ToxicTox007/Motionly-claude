@@ -1,6 +1,6 @@
 import hashlib
+import logging
 import math
-import sys
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -23,6 +23,8 @@ from app.schemas.visual import (
 from app.services.local_storage import create_object_storage
 from app.services.ml_failures import CudaOomFailure, clear_cuda_cache, is_cuda_oom_error
 from app.services.worker_media import materialize_upload_source
+
+logger = logging.getLogger(__name__)
 
 
 class VisualIntelligenceProvider(Protocol):
@@ -339,11 +341,10 @@ def run_visual_analysis_for_upload(
     sample_rate_fps: float,
     scene_threshold: float,
 ) -> VideoManifestRecord:
-    print(
-        "VISUAL_DEBUG load_upload "
-        f"workspace_id={workspace_id} project_id={project_id} video_id={video_id}",
-        file=sys.stderr,
-        flush=True,
+    logger.debug(
+        "visual_analysis_load_upload",
+        extra={"workspace_id": str(workspace_id), "project_id": str(project_id),
+               "video_id": str(video_id)},
     )
     upload = repository.get_upload(
         project_id=project_id,
@@ -364,7 +365,7 @@ def run_visual_analysis_for_upload(
     if record is not None and record.status == VisualManifestStatus.READY and record.manifest:
         return record
     if record is None:
-        print("VISUAL_DEBUG create_manifest_record", file=sys.stderr, flush=True)
+        logger.debug("visual_analysis_create_manifest")
         record = repository.create_manifest(
             workspace_id=workspace_id,
             project_id=project_id,
@@ -375,25 +376,22 @@ def run_visual_analysis_for_upload(
             manifest=None,
         )
     else:
-        print(
-            "VISUAL_DEBUG transition_manifest_processing "
-            f"current_status={record.status.value}",
-            file=sys.stderr,
-            flush=True,
+        logger.debug(
+            "visual_analysis_manifest_processing", extra={"status": record.status.value}
         )
         record = repository.transition_manifest(
             record=record,
             status=VisualManifestStatus.PROCESSING,
         )
-    print("VISUAL_DEBUG fetch_source_object", file=sys.stderr, flush=True)
-    storage = create_object_storage(
-        root=media_work_dir,
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
-    )
-    source_path = materialize_upload_source(upload=upload, storage=storage)
     try:
-        print("VISUAL_DEBUG provider_analyze_start", file=sys.stderr, flush=True)
+        # Inside the try: a failed download/sign must mark the manifest FAILED,
+        # never leave it PROCESSING (the stuck-state pattern of audit WJ-09).
+        storage = create_object_storage(
+            root=media_work_dir,
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+        )
+        source_path = materialize_upload_source(upload=upload, storage=storage)
         contextual_analyze = getattr(provider, "analyze_with_context", None)
         if callable(contextual_analyze):
             manifest = contextual_analyze(
@@ -411,7 +409,6 @@ def run_visual_analysis_for_upload(
                 sample_rate_fps=sample_rate_fps,
                 scene_threshold=scene_threshold,
             )
-        print("VISUAL_DEBUG provider_analyze_done", file=sys.stderr, flush=True)
     except CudaOomFailure as exc:
         repository.transition_manifest(
             record=record,
@@ -431,21 +428,23 @@ def run_visual_analysis_for_upload(
         )
         raise
     except Exception as exc:
-        import traceback
-        traceback.print_exc()
+        from app.core.logging import redact_string
+
+        logger.exception("visual_analysis_failed")
+        detail = redact_string(f"{type(exc).__name__}: {str(exc)}")[:300]
         repository.transition_manifest(
             record=record,
             status=VisualManifestStatus.FAILED,
             manifest=None,
             error_code="visual_analysis_failed",
-            error_message=f"Visual analysis failed: {type(exc).__name__}: {str(exc)}",
+            error_message=f"Visual analysis failed: {detail}",
         )
         raise ApiError(
             502,
             "visual_analysis_failed",
-            f"Visual analysis failed: {type(exc).__name__}: {str(exc)}",
+            f"Visual analysis failed: {detail}",
         ) from exc
-    print("VISUAL_DEBUG transition_manifest_ready", file=sys.stderr, flush=True)
+    logger.debug("visual_analysis_manifest_ready")
     return repository.transition_manifest(
         record=record,
         status=VisualManifestStatus.READY,

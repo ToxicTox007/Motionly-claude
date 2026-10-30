@@ -3,7 +3,6 @@ import json
 import sys
 from uuid import UUID
 
-from app.api.errors import ApiError
 from app.core.config import get_settings
 from app.core.production import validate_production_settings
 from app.repositories.uploads import SupabaseUploadRepository
@@ -17,7 +16,7 @@ from app.services.model_gateway import ModelOperation, validate_gateway_operatio
 from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider
 from app.services.visual_jobs import local_visual_model_identity
-from app.workers.executor_protocol import open_protocol_channel
+from app.workers.executor_protocol import error_reply, open_protocol_channel
 from app.workers.inference_fingerprint import (
     MATTE_CAPABILITY_IDS,
     enforce_registry_fingerprint,
@@ -176,16 +175,8 @@ def _serve() -> None:
                 "id": request.get("id"),
                 "result": execute(dict(request.get("payload") or {})),
             }
-        except ApiError as exc:
-            response = {"id": request.get("id"), "error": exc.message, "error_code": exc.code}
         except Exception as exc:
-            from app.core.logging import redact_string
-
-            response = {
-                "id": request.get("id"),
-                "error": redact_string(str(exc)),
-                "error_code": type(exc).__name__,
-            }
+            response = error_reply(request.get("id"), exc)
         channel.send(response)
 
 

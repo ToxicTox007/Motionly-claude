@@ -103,6 +103,9 @@ def test_retention_keeps_assets_expires_exports(tmp_path) -> None:
             calls.append(("row", table, kwargs.get("params", {}).get("id")))
         if method == "PATCH" and table == "transcripts":
             calls.append(("patch", table, kwargs.get("json", {})))
+        if method == "POST" and table == "rpc/motionly_redact_transcript_raw_payloads":
+            calls.append(("redact", table, kwargs.get("json", {})))
+            return 3
         return []
 
     service._request = request
@@ -113,10 +116,13 @@ def test_retention_keeps_assets_expires_exports(tmp_path) -> None:
     assert ("storage", "x.mp4") in calls
     assert ("row", "exports", "eq.export-1") in calls
 
-    # Transcripts payloads should be patched/redacted
-    assert any(
-        c[0] == "patch" and c[1] == "transcripts" and c[2] == {"raw_payload": {}} for c in calls
-    )
+    # Transcript provider payloads are redacted by the targeted RPC, which keeps
+    # derived audio intelligence; the old wholesale {} PATCH is gone (WJ-15).
+    redactions = [c for c in calls if c[0] == "redact"]
+    assert len(redactions) == 1
+    assert redactions[0][2]["p_limit"] == 500 and redactions[0][2]["p_before"]
+    assert counts["transcripts"] == 3
+    assert not any(c[0] == "patch" and c[1] == "transcripts" for c in calls)
 
     # Database sources, transcripts, and generated assets are not deleted by age
     # in the Python retention service.

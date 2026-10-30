@@ -63,6 +63,8 @@ select is(
     'is_workspace_member',
     'motionly_begin_workflow_step',
     'motionly_capture_editorial_feedback_delta',
+    -- Migration 202610280209: render workers claim their attempt.
+    'motionly_claim_render_attempt',
     'motionly_commit_storage_quota',
     'motionly_complete_render',
     'motionly_complete_workflow_step',
@@ -70,7 +72,12 @@ select is(
     'motionly_create_ai_edit_proposal',
     'motionly_fail_workflow_step',
     'motionly_prepare_workflow_step',
+    -- Migration 202610280205: transcription saves words in one transaction,
+    -- and the quota guard and render allowance read usage as one SUM.
+    'motionly_replace_transcript_words',
     'motionly_reserve_storage_quota',
+    'motionly_sum_cost_usage',
+    'motionly_sum_usage_ledger',
     'motionly_transition_ai_edit_proposal',
     'motionly_upsert_base_export'
   ]::text[],

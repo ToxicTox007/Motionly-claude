@@ -608,8 +608,23 @@ async def _probe_workers(request: Request) -> DependencyHealth:
     live = [item for item in heartbeats if item.last_seen_at.timestamp() >= cutoff]
     if not live:
         return DependencyHealth(status="down", message="No current worker heartbeat.")
+    covered = sorted({queue for item in live for queue in (item.queues or [])})
+    required = [
+        queue.strip()
+        for queue in str(getattr(settings, "required_worker_queues", "") or "").split(",")
+        if queue.strip()
+    ]
+    missing = [queue for queue in required if queue not in covered]
+    metadata = {"workers": len(live), "queues": covered}
+    if missing:
+        # One live worker used to make every queue look served (audit WJ-20).
+        return DependencyHealth(
+            status="degraded",
+            message="Required queues have no current worker heartbeat.",
+            metadata={**metadata, "missing_queues": missing},
+        )
     return DependencyHealth(
-        status="ok", message="Current worker heartbeat found.", metadata={"workers": len(live)}
+        status="ok", message="Current worker heartbeat found.", metadata=metadata
     )
 
 

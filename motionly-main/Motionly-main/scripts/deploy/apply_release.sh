@@ -406,7 +406,8 @@ environment = {
     "SECRETS_DIR": secrets_dir,
     # These upstream images do not support a *_FILE interface.  They are
     # read only from protected files in this process, never passed via argv.
-    "POSTGRES_PASSWORD": secret("postgres_password"),
+    # (No database password: Auth, REST and Storage read their own from
+    # per-service credentials volumes; database audit DB-21.)
     "REDIS_PASSWORD": secret("redis_password"),
     "SUPABASE_JWT_SECRET": secret("supabase_jwt_secret"),
     "SUPABASE_ANON_KEY": secret("supabase_anon_key"),
@@ -488,6 +489,38 @@ validate_temporal_canary_gate() {
     --overlap-proof "$MOTIONLY_TEMPORAL_CANARY_OVERLAP_PROOF_FILE"
 }
 
+# Releases from before database audit DB-21 log Auth, REST and Storage in
+# with the postgres password itself; later releases give those three roles
+# their own passwords (infra/db/apply-role-passwords.sh, the db-roles
+# service). Before such an older release starts again (an operator rollback,
+# or restoring it after a failed upgrade), set the roles back to the postgres
+# password so its services can connect. The password goes from the release's
+# protected secret file to psql's stdin; postgres trusts its own loopback.
+restore_shared_role_passwords() {
+  local release_dir="$1"
+  local compose_file="$release_dir/bundle/infra/docker-compose.gpu.yml"
+  if [[ ! -f "$compose_file" ]] || grep -q '^  db-roles:' "$compose_file"; then
+    return 0
+  fi
+  compose_for "$release_dir" up -d --wait --wait-timeout 300 postgres || return 1
+  python3 - "$release_dir/secrets/postgres_password" <<'PY' \
+    | compose_for "$release_dir" exec -T postgres \
+      psql -X --no-psqlrc -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -U supabase_admin -d postgres \
+    || return 1
+from pathlib import Path
+import sys
+password = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+if not password or "\n" in password or "\r" in password:
+    raise SystemExit("postgres password is invalid")
+literal = "'" + password.replace("'", "''") + "'"
+print("set log_statement = 'none';")
+print("set log_min_duration_statement = -1;")
+for role in ("authenticator", "supabase_auth_admin", "supabase_storage_admin"):
+    print(f"alter role {role} with password {literal};")
+PY
+  echo "Restored the shared database role passwords this older release expects" >&2
+}
+
 # Called as `if ! activate_release ...`, where bash ignores `set -e`; every
 # step therefore fails the function explicitly.
 activate_release() {
@@ -497,6 +530,7 @@ activate_release() {
   [[ "$MOTIONLY_COMPUTE_PROFILE" != gpu ]] || wait_timeout=1200
   compose_for "$release_dir" config -q || return 1
   compose_for "$release_dir" pull --quiet || return 1
+  restore_shared_role_passwords "$release_dir" || return 1
   compose_for "$release_dir" up -d --wait --wait-timeout "$wait_timeout" --remove-orphans || return 1
   compose_for "$release_dir" exec -T api \
     python -c "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8000/health/live').status == 200" \

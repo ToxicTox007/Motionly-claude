@@ -400,7 +400,12 @@ def check_schema(state: dict) -> dict:
     """The schema-matches-code test against the database the production image built."""
     env = dict(line.split("=", 1) for line in Path(state["env_file"]).read_text().splitlines())
     network = f"{PROJECT}_app"
-    database_url = f"postgresql://postgres:{env['POSTGRES_PASSWORD']}@postgres:5432/postgres"
+    # Logins from other containers must use TLS (database audit DB-21); verify
+    # the server against the stack's internal database CA.
+    database_url = (
+        f"postgresql://postgres:{env['POSTGRES_PASSWORD']}@postgres:5432/postgres"
+        "?sslmode=verify-full&sslrootcert=/etc/motionly-db-tls/ca/ca.crt"
+    )
     result = run(
         [
             "docker",
@@ -410,6 +415,8 @@ def check_schema(state: dict) -> dict:
             network,
             "--env",
             f"DATABASE_URL={database_url}",
+            "--volume",
+            f"{PROJECT}_postgres-tls-ca:/etc/motionly-db-tls/ca:ro",
             "--volume",
             f"{ROOT}:/repo:ro",
             "--workdir",

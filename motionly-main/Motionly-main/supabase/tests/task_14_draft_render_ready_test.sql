@@ -358,7 +358,14 @@ select is(
  1,'exact completion replay is idempotent'
 );
 
+-- Simulate a render still uploading when the run is cancelled. A complete
+-- render can no longer change status (RENDER_TERMINAL_STATE, migration
+-- 202610280202), so the test steps around that guard for its own setup only.
+reset role;
+alter table public.render_jobs disable trigger task25_guard_render_terminal_state;
 update public.render_jobs set status='uploading' where id=(select id from task14_render);
+alter table public.render_jobs enable trigger task25_guard_render_terminal_state;
+set local role service_role;
 select * from public.motionly_cancel_workflow_run(
  '3e000000-0000-4000-8000-000000000001','4e000000-0000-4000-8000-000000000001',
  'ae000000-0000-4000-8000-000000000001',

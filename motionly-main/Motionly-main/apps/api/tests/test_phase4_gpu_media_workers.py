@@ -780,3 +780,176 @@ def test_persistent_ml_subprocesses_keep_stdout_for_protocol_replies() -> None:
             if not (to_stderr or json_reply):
                 offenders.append(f"{path.name}:{node.lineno}")
     assert offenders == []
+
+
+class _FreshWorkerVisualRepository(InMemoryVisualRepository):
+    """A worker process's view: API-created rows are not in its local cache.
+
+    ``get_matte`` reads the shared "database" the API wrote to, like the
+    Supabase repository does; ``mattes`` (the per-process cache) starts empty.
+    """
+
+    def __init__(self, api_repository: InMemoryVisualRepository) -> None:
+        super().__init__(api_repository.upload_repository)
+        self._database = api_repository
+
+    def get_matte(self, *, matte_id, workspace_id, project_id):
+        return self._database.get_matte(
+            matte_id=matte_id, workspace_id=workspace_id, project_id=project_id
+        )
+
+    def transition_matte(self, **kwargs):
+        return self._database.transition_matte(**kwargs)
+
+    def find_matte_by_cache_key(self, **kwargs):
+        return self._database.find_matte_by_cache_key(**kwargs)
+
+
+def test_worker_processes_the_enqueued_matte_row_with_its_settings(matte_context, monkeypatch):
+    # Audit WJ-08: the worker used to look the matte up in its own (empty)
+    # in-process dict, then processed a fresh default-settings row instead.
+    custom = BackgroundRemovalSettings(enabled=True, feather_px=24)
+    record, _job = enqueue_matte_for_upload(
+        repository=matte_context.repository,
+        matte_queue=matte_context.matte_queue,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        upload_id=matte_context.upload.id,
+        background_removal=custom,
+    )
+
+    def fake_generate(*, output_path, **_kwargs):
+        output_path.write_bytes(b"matte")
+        return {"fps": 30.0, "width": 1920, "height": 1080, "frame_count": 12}
+
+    monkeypatch.setattr("app.services.matte_jobs.generate_selfie_segmentation_matte", fake_generate)
+    worker_repository = _FreshWorkerVisualRepository(matte_context.repository)
+    completed = run_matte_for_upload(
+        repository=worker_repository,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        video_id=matte_context.upload.id,
+        matte_id=record.id,
+        media_work_dir=matte_context.media_root,
+        supabase_url=None,
+        service_role_key=None,
+        provider_models={"cv2": object(), "np": object(), "selfie_segmentation": object()},
+    )
+
+    assert completed.id == record.id
+    assert completed.status == MatteStatus.COMPLETED
+    assert completed.segmentation_settings == matte_segmentation_settings(custom)
+    assert worker_repository.mattes == {}, "no substitute row was created"
+    assert len(matte_context.repository.mattes) == 1
+
+
+def test_matte_job_for_a_deleted_matte_fails_without_inventing_a_row(matte_context):
+    with pytest.raises(ApiError) as exc_info:
+        run_matte_for_upload(
+            repository=matte_context.repository,
+            workspace_id=matte_context.workspace_id,
+            project_id=matte_context.project_id,
+            video_id=matte_context.upload.id,
+            matte_id=uuid4(),
+            media_work_dir=matte_context.media_root,
+            supabase_url=None,
+            service_role_key=None,
+            provider_models={},
+        )
+    assert exc_info.value.code == "matte_not_found"
+    assert matte_context.repository.mattes == {}
+
+
+def test_source_download_failure_marks_matte_failed_not_processing(matte_context, monkeypatch):
+    # Audit WJ-09: the download ran after the PROCESSING transition but outside
+    # the try, so a failure left the matte PROCESSING (a permanent cache hit).
+    record, _job = enqueue_matte_for_upload(
+        repository=matte_context.repository,
+        matte_queue=matte_context.matte_queue,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        upload_id=matte_context.upload.id,
+    )
+
+    def failing_download(**_kwargs):
+        raise ApiError(502, "worker_media_download_failed", "Source download failed.")
+
+    monkeypatch.setattr("app.services.matte_jobs.materialize_upload_source", failing_download)
+    with pytest.raises(ApiError) as exc_info:
+        run_matte_for_upload(
+            repository=matte_context.repository,
+            workspace_id=matte_context.workspace_id,
+            project_id=matte_context.project_id,
+            video_id=matte_context.upload.id,
+            matte_id=record.id,
+            media_work_dir=matte_context.media_root,
+            supabase_url=None,
+            service_role_key=None,
+            provider_models={},
+        )
+    assert exc_info.value.code == "worker_media_download_failed"
+    stored = matte_context.repository.get_matte(
+        matte_id=record.id,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+    )
+    assert stored.status == MatteStatus.FAILED
+    assert stored.error_code == "worker_media_download_failed"
+
+
+def test_failed_matte_enqueue_does_not_leave_a_pending_cache_hit(matte_context):
+    # Audit WJ-13: the row was written before the enqueue; a failed enqueue
+    # left PENDING, which every later request treated as in-progress work.
+    class BrokenQueue(MatteQueue):
+        def enqueue_matte(self, **_kwargs):
+            raise RuntimeError("BullMQ bridge timed out handling 'enqueue'")
+
+    with pytest.raises(RuntimeError):
+        enqueue_matte_for_upload(
+            repository=matte_context.repository,
+            matte_queue=BrokenQueue(matte_context.registry),
+            workspace_id=matte_context.workspace_id,
+            project_id=matte_context.project_id,
+            upload_id=matte_context.upload.id,
+        )
+    [failed] = matte_context.repository.mattes.values()
+    assert failed.status == MatteStatus.FAILED
+    assert failed.error_code == "queue_enqueue_failed"
+
+    retried, job = enqueue_matte_for_upload(
+        repository=matte_context.repository,
+        matte_queue=matte_context.matte_queue,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        upload_id=matte_context.upload.id,
+    )
+    assert retried.id == failed.id
+    assert retried.status == MatteStatus.PENDING
+    assert job is not None
+
+
+def test_stale_pending_matte_is_requeued_instead_of_reported_in_progress(matte_context):
+    record, first_job = enqueue_matte_for_upload(
+        repository=matte_context.repository,
+        matte_queue=matte_context.matte_queue,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        upload_id=matte_context.upload.id,
+    )
+    # The job was lost (worker killed after its retries): mark it finished in
+    # the queue and age the row past the stale threshold.
+    matte_context.registry.fail(first_job.id, error_code="lost")
+    matte_context.registry.fail(first_job.id, error_code="lost")
+    matte_context.registry.fail(first_job.id, error_code="lost")
+    record.updated_at = datetime.now(UTC) - timedelta(hours=3)
+
+    again, job = enqueue_matte_for_upload(
+        repository=matte_context.repository,
+        matte_queue=matte_context.matte_queue,
+        workspace_id=matte_context.workspace_id,
+        project_id=matte_context.project_id,
+        upload_id=matte_context.upload.id,
+    )
+    assert again.id == record.id
+    assert job is not None
+    assert matte_context.registry.jobs[job.id].status.value == "queued"

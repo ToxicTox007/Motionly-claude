@@ -1072,7 +1072,12 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         response = self.client.request(
             "PATCH",
             "/edit_plans",
-            params={"id": f"eq.{plan_id}", "select": EDIT_PLAN_COLUMNS},
+            params={
+                "id": f"eq.{plan_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EDIT_PLAN_COLUMNS,
+            },
             json=self._json_safe(
                 {
                     "plan": plan,
@@ -1112,7 +1117,12 @@ class SupabasePlanRepository(InMemoryPlanRepository):
         response = await self.client.async_request(
             "PATCH",
             "/edit_plans",
-            params={"id": f"eq.{plan_id}", "select": EDIT_PLAN_COLUMNS},
+            params={
+                "id": f"eq.{plan_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": EDIT_PLAN_COLUMNS,
+            },
             json=self._json_safe(
                 {
                     "plan": plan,

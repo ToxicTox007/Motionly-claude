@@ -17,6 +17,15 @@
 set -eu
 
 migrations_dir="${MIGRATIONS_DIR:-/opt/motionly-db/migrations}"
+# How long one DDL statement may wait for a table lock before the release fails.
+# Without a bound, an ALTER TABLE queued behind a long transaction blocks every
+# later query on that table until it is granted. A failed migration rolls back
+# and can be retried; a stalled one is an outage.
+lock_timeout="${MIGRATION_LOCK_TIMEOUT:-15s}"
+if ! printf '%s\n' "$lock_timeout" | grep -Eq '^[0-9]+(ms|s|min)?$'; then
+  echo "db-migrate: MIGRATION_LOCK_TIMEOUT must look like 15s, 500ms or 2min" >&2
+  exit 1
+fi
 PGPASSWORD="$(cat /run/secrets/postgres_password)"
 export PGPASSWORD
 export PGHOST="${PGHOST:-postgres}"
@@ -37,6 +46,11 @@ trap 'rm -f "$plan"' EXIT
   cat <<'SQL'
 set client_min_messages = warning;
 select pg_advisory_lock(hashtext('motionly.db-migrate')) as locked \gset
+SQL
+  # Set after the advisory lock so a release waiting for another release's
+  # migrations is not cut short; a migration may still `set local` its own.
+  printf "set lock_timeout = '%s';\n" "$lock_timeout"
+  cat <<'SQL'
 create schema if not exists supabase_migrations;
 create table if not exists supabase_migrations.schema_migrations (
   version text not null primary key

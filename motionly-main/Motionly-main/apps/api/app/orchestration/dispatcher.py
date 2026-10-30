@@ -53,6 +53,12 @@ class WorkflowRepositoryProtocol(Protocol):
         self, *, limit: int
     ) -> list[WorkflowCancellationRecord]: ...
 
+    async def complete_workflow_cancellation_async(self, *, request_id: object) -> bool: ...
+
+    async def release_workflow_cancellation_async(
+        self, *, request_id: object, error_code: str, retry_after_seconds: int
+    ) -> bool: ...
+
 
 class TemporalClientProtocol(Protocol):
     async def start_workflow(
@@ -142,14 +148,24 @@ class OutboxDispatcher:
                     reason=request.reason,
                 )
             except Exception as exc:  # noqa: BLE001 - keep one bad id from blocking the rest
+                error_code = _error_code(exc)
                 logger.warning(
                     "temporal_cancellation_failed",
                     extra={
                         "workflow_run_id": str(request.workflow_run_id),
-                        "error_code": _error_code(exc),
+                        "error_code": error_code,
+                        "attempt_count": request.attempt_count,
                     },
                 )
+                # The claim is a lease: release it with a backoff so the next
+                # pass retries it, instead of losing the cancellation (WJ-05).
+                await self._settle_cancellation(
+                    request,
+                    succeeded=False,
+                    error_code=error_code,
+                )
                 continue
+            await self._settle_cancellation(request, succeeded=True)
             processed += 1
             logger.info(
                 "temporal_cancellation_dispatched",
@@ -239,6 +255,33 @@ class OutboxDispatcher:
         )
         return "failed"
 
+    async def _settle_cancellation(
+        self,
+        request: WorkflowCancellationRecord,
+        *,
+        succeeded: bool,
+        error_code: str | None = None,
+    ) -> None:
+        try:
+            if succeeded:
+                await self.repository.complete_workflow_cancellation_async(request_id=request.id)
+            else:
+                await self.repository.release_workflow_cancellation_async(
+                    request_id=request.id,
+                    error_code=error_code or "temporal_cancel_failed",
+                    retry_after_seconds=max(
+                        1, min(3600, int(self.backoff_seconds(max(1, request.attempt_count))))
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001 - an unsettled lease simply expires
+            logger.warning(
+                "temporal_cancellation_settle_failed",
+                extra={
+                    "workflow_run_id": str(request.workflow_run_id),
+                    "error_code": _error_code(exc),
+                },
+            )
+
     def backoff_seconds(self, attempt_count: int) -> float:
         exponent = max(0, min(attempt_count - 1, 20))
         return min(self.max_backoff_seconds, self.base_backoff_seconds * (2**exponent))
@@ -257,6 +300,7 @@ async def run_dispatcher(
     *,
     once: bool = False,
     sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    progress: Callable[[], None] | None = None,
 ) -> DispatchBatchResult | None:
     if not settings.supabase_url or not settings.supabase_service_role_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
@@ -276,12 +320,65 @@ async def run_dispatcher(
         base_backoff_seconds=settings.workflow_dispatcher_backoff_initial_seconds,
         max_backoff_seconds=settings.workflow_dispatcher_backoff_max_seconds,
     )
+    return await run_dispatcher_loop(
+        dispatcher,
+        poll_interval_seconds=settings.workflow_dispatcher_poll_interval_seconds,
+        max_backoff_seconds=settings.workflow_dispatcher_backoff_max_seconds,
+        once=once,
+        sleeper=sleeper,
+        progress=progress,
+    )
+
+
+async def run_dispatcher_loop(
+    dispatcher: OutboxDispatcher,
+    *,
+    poll_interval_seconds: float,
+    max_backoff_seconds: float = 60.0,
+    once: bool = False,
+    sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    progress: Callable[[], None] | None = None,
+) -> DispatchBatchResult | None:
+    """Dispatch until cancelled.
+
+    A transient failure (Supabase or Temporal unavailable, an expired lease)
+    is logged and retried with backoff; it no longer ends the process, which
+    used to put the dispatcher into a crash loop while it held its leases
+    (audit WJ-04). Cancellation (SIGTERM, see main.py) still propagates.
+    """
+    failures = 0
     while True:
-        result = await dispatcher.dispatch_once()
+        try:
+            result = await dispatcher.dispatch_once()
+        except Exception as exc:  # noqa: BLE001 - the loop must outlive transient faults
+            if once:
+                raise
+            failures += 1
+            delay = min(max_backoff_seconds, poll_interval_seconds * (2 ** min(failures, 10)))
+            logger.error(
+                "temporal_dispatch_iteration_failed",
+                extra={"error_code": _error_code(exc), "consecutive_failures": failures},
+            )
+            await sleeper(delay)
+            continue
+        failures = 0
+        if progress is not None:
+            progress()
+        if result.claimed or result.dispatched or result.failed or result.cancellations_claimed:
+            logger.info(
+                "temporal_dispatch_batch",
+                extra={
+                    "claimed": result.claimed,
+                    "dispatched": result.dispatched,
+                    "failed": result.failed,
+                    "stale": result.stale,
+                    "cancellations_processed": result.cancellations_processed,
+                },
+            )
         if once:
             return result
         if result.claimed == 0:
-            await sleeper(settings.workflow_dispatcher_poll_interval_seconds)
+            await sleeper(poll_interval_seconds)
 
 
 def _error_code(exc: Exception) -> str:

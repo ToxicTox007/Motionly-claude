@@ -161,6 +161,18 @@ func TestProductionConfigTemplateLoadsMandatoryFrontendAndInternodeMTLS(t *testi
 	if loaded.Global.TLS.Frontend.Client.ServerName != "temporal" {
 		t.Fatal("frontend TLS server name is not pinned")
 	}
+	// Database audit DB-21: both datastores verify temporal-postgres over TLS.
+	if len(loaded.Persistence.DataStores) != 2 {
+		t.Fatalf("expected two datastores, got %d", len(loaded.Persistence.DataStores))
+	}
+	for name, store := range loaded.Persistence.DataStores {
+		if store.SQL == nil || store.SQL.TLS == nil || !store.SQL.TLS.Enabled ||
+			!store.SQL.TLS.EnableHostVerification ||
+			store.SQL.TLS.ServerName != "temporal-postgres" ||
+			store.SQL.TLS.CaFile != "/etc/motionly-db-tls/ca/ca.crt" {
+			t.Fatalf("datastore %s does not verify temporal-postgres over TLS", name)
+		}
+	}
 }
 
 func TestClusterSystemIdentityIsAdminAndOnlyItReachesTheSystemNamespace(t *testing.T) {

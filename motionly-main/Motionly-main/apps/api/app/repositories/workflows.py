@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import RLock
@@ -67,6 +67,9 @@ TERMINAL_RUN_STATES = frozenset(
         WorkflowRunState.CANCELLED,
         WorkflowRunState.SUPERSEDED,
     }
+)
+_NON_TERMINAL_RUN_STATE_VALUES = frozenset(
+    state.value for state in WorkflowRunState if state not in TERMINAL_RUN_STATES
 )
 
 LEGAL_RUN_TRANSITIONS: dict[WorkflowRunState, frozenset[WorkflowRunState]] = {
@@ -508,6 +511,13 @@ class WorkflowCancellationRecord:
     reason: str
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     dispatched_at: datetime | None = None
+    # Lease semantics (audit WJ-05): a claim is retired only by an explicit
+    # completion; a failed Temporal call releases it for retry.
+    lease_expires_at: datetime | None = None
+    attempt_count: int = 0
+    completed_at: datetime | None = None
+    dead_lettered_at: datetime | None = None
+    last_error_code: str | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> WorkflowCancellationRecord:
@@ -520,6 +530,11 @@ class WorkflowCancellationRecord:
             reason=row.get("reason") or "project_deleted",
             created_at=_datetime(row.get("created_at")),
             dispatched_at=_optional_datetime(row.get("dispatched_at")),
+            lease_expires_at=_optional_datetime(row.get("lease_expires_at")),
+            attempt_count=int(row.get("attempt_count") or 0),
+            completed_at=_optional_datetime(row.get("completed_at")),
+            dead_lettered_at=_optional_datetime(row.get("dead_lettered_at")),
+            last_error_code=row.get("last_error_code"),
         )
 
 
@@ -943,6 +958,43 @@ class InMemoryWorkflowRepository:
             self._command_keys[command_key] = (request_hash, None)
             return run, False
 
+    def fail_workflow_run(
+        self,
+        *,
+        workflow_run_id: UUID,
+        workspace_id: UUID,
+        project_id: UUID,
+        error_code: str,
+        error_message: str | None = None,
+    ) -> tuple[WorkflowRunRecord, bool]:
+        """Orchestration-side terminal failure (audit WJ-06); idempotent."""
+        with self._lock:
+            run = self.get_workflow(
+                workflow_run_id=workflow_run_id,
+                workspace_id=workspace_id,
+                project_id=project_id,
+            )
+            if run.state in TERMINAL_RUN_STATES:
+                return run, False
+            self._transition_run(run, WorkflowRunState.FAILED)
+            run.failure_code = normalize_workflow_error_code(error_code or "orchestration_failed")
+            run.failure_message = (
+                error_message or "The workflow stopped before it finished."
+            )[:500]
+            run.revision += 1
+            run.updated_at = datetime.now(UTC)
+            self._append_event(
+                run=run,
+                event_type="workflow.run.failed",
+                event_key=f"run-failed:{run.id}",
+                payload={
+                    "workflow_run_id": str(run.id),
+                    "error_code": run.failure_code,
+                    "source": "orchestration",
+                },
+            )
+            return run, True
+
     def retry_workflow(
         self,
         *,
@@ -1084,12 +1136,36 @@ class InMemoryWorkflowRepository:
             raise ValueError("reconciliation limit must be between 1 and 100")
         if (after_updated_at is None) != (after_id is None):
             raise ValueError("reconciliation cursor fields must be provided together")
-        candidates = [run for run in self.runs.values() if run.updated_at <= stale_before]
+        # Only runs the orchestration still owns (audit WJ-18): terminal history
+        # is not rescanned on every pass.
+        candidates = [
+            run
+            for run in self.runs.values()
+            if run.updated_at <= stale_before and run.state not in TERMINAL_RUN_STATES
+        ]
         ordered = sorted(candidates, key=lambda run: (run.updated_at, str(run.id)))
         if after_updated_at is not None and after_id is not None:
             cursor = (after_updated_at, str(after_id))
             ordered = [run for run in ordered if (run.updated_at, str(run.id)) > cursor]
         return ordered[:limit]
+
+    def list_recent_terminal_runs(
+        self,
+        *,
+        updated_since: datetime,
+        stale_before: datetime,
+        limit: int = 50,
+    ) -> list[WorkflowRunRecord]:
+        """Recently terminal runs, newest first: the only terminal runs whose
+        Temporal execution can still be running (cancel/fail signal pending)."""
+        if not 1 <= limit <= 100:
+            raise ValueError("reconciliation limit must be between 1 and 100")
+        runs = [
+            run
+            for run in self.runs.values()
+            if run.state in TERMINAL_RUN_STATES and updated_since <= run.updated_at <= stale_before
+        ]
+        return sorted(runs, key=lambda run: (run.updated_at, str(run.id)), reverse=True)[:limit]
 
     def claim_outbox(
         self,
@@ -1266,6 +1342,9 @@ class InMemoryWorkflowRepository:
             self.cancellations[record.id] = record
             return record
 
+    CANCELLATION_LEASE = timedelta(minutes=5)
+    CANCELLATION_MAX_ATTEMPTS = 20
+
     def claim_workflow_cancellations(
         self, *, limit: int = 50, now: datetime | None = None
     ) -> list[WorkflowCancellationRecord]:
@@ -1277,25 +1356,70 @@ class InMemoryWorkflowRepository:
                 "Cancellation claim limit is invalid.",
             )
         with self._lock:
+            for record in list(self.cancellations.values()):
+                if (
+                    record.completed_at is None
+                    and record.dead_lettered_at is None
+                    and record.attempt_count >= self.CANCELLATION_MAX_ATTEMPTS
+                    and (record.lease_expires_at is None or record.lease_expires_at <= now)
+                ):
+                    self.cancellations[record.id] = replace(
+                        record, dead_lettered_at=now, lease_expires_at=None
+                    )
             pending = sorted(
-                (c for c in self.cancellations.values() if c.dispatched_at is None),
+                (
+                    c
+                    for c in self.cancellations.values()
+                    if c.completed_at is None
+                    and c.dead_lettered_at is None
+                    and (c.lease_expires_at is None or c.lease_expires_at <= now)
+                ),
                 key=lambda c: c.created_at,
             )[:limit]
             claimed: list[WorkflowCancellationRecord] = []
             for record in pending:
-                dispatched = WorkflowCancellationRecord(
-                    id=record.id,
-                    workspace_id=record.workspace_id,
-                    project_id=record.project_id,
-                    workflow_run_id=record.workflow_run_id,
-                    temporal_workflow_id=record.temporal_workflow_id,
-                    reason=record.reason,
-                    created_at=record.created_at,
+                leased = replace(
+                    record,
                     dispatched_at=now,
+                    lease_expires_at=now + self.CANCELLATION_LEASE,
+                    attempt_count=record.attempt_count + 1,
                 )
-                self.cancellations[record.id] = dispatched
-                claimed.append(dispatched)
+                self.cancellations[record.id] = leased
+                claimed.append(leased)
             return claimed
+
+    def complete_workflow_cancellation(self, *, request_id: UUID) -> bool:
+        with self._lock:
+            record = self.cancellations.get(request_id)
+            if record is None:
+                return False
+            self.cancellations[request_id] = replace(
+                record,
+                completed_at=record.completed_at or datetime.now(UTC),
+                lease_expires_at=None,
+                last_error_code=None,
+            )
+            return True
+
+    def release_workflow_cancellation(
+        self, *, request_id: UUID, error_code: str, retry_after_seconds: int = 30
+    ) -> bool:
+        if not 1 <= retry_after_seconds <= 3600:
+            raise ApiError(
+                422,
+                "workflow_cancellation_backoff_invalid",
+                "Cancellation retry backoff is invalid.",
+            )
+        with self._lock:
+            record = self.cancellations.get(request_id)
+            if record is None or record.completed_at is not None:
+                return False
+            self.cancellations[request_id] = replace(
+                record,
+                lease_expires_at=datetime.now(UTC) + timedelta(seconds=retry_after_seconds),
+                last_error_code=(error_code or "temporal_cancel_failed")[:120],
+            )
+            return True
 
     def begin_step(
         self,
@@ -1881,6 +2005,9 @@ class InMemoryWorkflowRepository:
     async def cancel_workflow_async(self, **values: Any) -> tuple[WorkflowRunRecord, bool]:
         return self.cancel_workflow(**values)
 
+    async def fail_workflow_run_async(self, **values: Any) -> tuple[WorkflowRunRecord, bool]:
+        return self.fail_workflow_run(**values)
+
     async def retry_workflow_async(self, **values: Any) -> tuple[WorkflowRunRecord, bool]:
         return self.retry_workflow(**values)
 
@@ -1902,6 +2029,9 @@ class InMemoryWorkflowRepository:
     async def list_reconciliation_candidates_async(self, **values: Any) -> list[WorkflowRunRecord]:
         return self.list_reconciliation_candidates(**values)
 
+    async def list_recent_terminal_runs_async(self, **values: Any) -> list[WorkflowRunRecord]:
+        return self.list_recent_terminal_runs(**values)
+
     async def claim_outbox_async(self, **values: Any) -> list[OutboxRecord]:
         return self.claim_outbox(**values)
 
@@ -1915,6 +2045,12 @@ class InMemoryWorkflowRepository:
         self, **values: Any
     ) -> list[WorkflowCancellationRecord]:
         return self.claim_workflow_cancellations(**values)
+
+    async def complete_workflow_cancellation_async(self, **values: Any) -> bool:
+        return self.complete_workflow_cancellation(**values)
+
+    async def release_workflow_cancellation_async(self, **values: Any) -> bool:
+        return self.release_workflow_cancellation(**values)
 
 
 class SupabaseWorkflowRepository:
@@ -2098,6 +2234,41 @@ class SupabaseWorkflowRepository:
         row = self._rows(response)[0]
         return WorkflowRunRecord.from_row(row), bool(row.get("deduplicated"))
 
+    @staticmethod
+    def _fail_run_payload(values: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "p_workspace_id": str(values["workspace_id"]),
+            "p_project_id": str(values["project_id"]),
+            "p_workflow_run_id": str(values["workflow_run_id"]),
+            "p_error_code": str(values.get("error_code") or "orchestration_failed")[:120],
+            "p_error_message": values.get("error_message"),
+        }
+
+    @classmethod
+    def _fail_run_result(cls, response: httpx.Response) -> tuple[WorkflowRunRecord, bool]:
+        if response.status_code >= 400:
+            cls._rows(response)
+        body = response.json()
+        if isinstance(body, list):
+            body = body[0] if body else None
+        if isinstance(body, dict) and "motionly_fail_workflow_run" in body:
+            body = body["motionly_fail_workflow_run"]
+        if not isinstance(body, dict) or not isinstance(body.get("run"), dict):
+            raise ApiError(502, "workflow_response_invalid", "Workflow RPC returned no run.")
+        return WorkflowRunRecord.from_row(body["run"]), bool(body.get("changed"))
+
+    def fail_workflow_run(self, **values: Any) -> tuple[WorkflowRunRecord, bool]:
+        response = self.client.request(
+            "POST", "/rpc/motionly_fail_workflow_run", json=self._fail_run_payload(values)
+        )
+        return self._fail_run_result(response)
+
+    async def fail_workflow_run_async(self, **values: Any) -> tuple[WorkflowRunRecord, bool]:
+        response = await self.client.async_request(
+            "POST", "/rpc/motionly_fail_workflow_run", json=self._fail_run_payload(values)
+        )
+        return self._fail_run_result(response)
+
     def retry_workflow(self, **values: Any) -> tuple[WorkflowRunRecord, bool]:
         response = self.client.request(
             "POST",
@@ -2276,6 +2447,33 @@ class SupabaseWorkflowRepository:
         response = await self.client.async_request("GET", "/workflow_runs", params=params)
         return [WorkflowRunRecord.from_row(row) for row in self._query_rows(response)]
 
+    @staticmethod
+    def _recent_terminal_params(
+        *, updated_since: datetime, stale_before: datetime, limit: int
+    ) -> dict[str, str]:
+        if not 1 <= limit <= 100:
+            raise ValueError("reconciliation limit must be between 1 and 100")
+        return {
+            "state": "in.(" + ",".join(sorted(s.value for s in TERMINAL_RUN_STATES)) + ")",
+            "and": (
+                f"(updated_at.gte.{updated_since.isoformat()},"
+                f"updated_at.lte.{stale_before.isoformat()})"
+            ),
+            "select": _WORKFLOW_RUN_SELECT,
+            "order": "updated_at.desc,id.desc",
+            "limit": str(limit),
+        }
+
+    def list_recent_terminal_runs(self, **values: Any) -> list[WorkflowRunRecord]:
+        params = self._recent_terminal_params(**values)
+        response = self.client.request("GET", "/workflow_runs", params=params)
+        return [WorkflowRunRecord.from_row(row) for row in self._query_rows(response)]
+
+    async def list_recent_terminal_runs_async(self, **values: Any) -> list[WorkflowRunRecord]:
+        params = self._recent_terminal_params(**values)
+        response = await self.client.async_request("GET", "/workflow_runs", params=params)
+        return [WorkflowRunRecord.from_row(row) for row in self._query_rows(response)]
+
     def claim_outbox(
         self, *, lease_owner: str, limit: int = 25, lease_seconds: int = 60
     ) -> list[OutboxRecord]:
@@ -2329,6 +2527,39 @@ class SupabaseWorkflowRepository:
             WorkflowCancellationRecord.from_row(row)
             for row in self._rows(response, allow_empty=True)
         ]
+
+    async def complete_workflow_cancellation_async(self, *, request_id: UUID) -> bool:
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_complete_workflow_cancellation",
+            json={"p_request_id": str(request_id)},
+        )
+        return self._boolean_result(response, "motionly_complete_workflow_cancellation")
+
+    async def release_workflow_cancellation_async(
+        self, *, request_id: UUID, error_code: str, retry_after_seconds: int = 30
+    ) -> bool:
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_release_workflow_cancellation",
+            json={
+                "p_request_id": str(request_id),
+                "p_error_code": (error_code or "temporal_cancel_failed")[:120],
+                "p_retry_after_seconds": max(1, min(int(retry_after_seconds), 3600)),
+            },
+        )
+        return self._boolean_result(response, "motionly_release_workflow_cancellation")
+
+    @classmethod
+    def _boolean_result(cls, response: httpx.Response, function_name: str) -> bool:
+        if response.status_code >= 400:
+            cls._rows(response)
+        value = response.json()
+        if isinstance(value, list):
+            value = value[0] if value else False
+        if isinstance(value, dict):
+            value = value.get(function_name)
+        return bool(value)
 
     def ack_outbox(
         self,
@@ -2503,6 +2734,8 @@ class SupabaseWorkflowRepository:
             raise ValueError("reconciliation cursor fields must be provided together")
         params = {
             "updated_at": f"lte.{stale_before.isoformat()}",
+            # Only runs the orchestration still owns (audit WJ-18).
+            "state": "in.(" + ",".join(sorted(_NON_TERMINAL_RUN_STATE_VALUES)) + ")",
             "select": _WORKFLOW_RUN_SELECT,
             "order": "updated_at.asc,id.asc",
             "limit": str(limit),
@@ -2554,11 +2787,29 @@ class SupabaseWorkflowRepository:
             message = str(body.get("message") or "Workflow persistence failed.")
             code = str(body.get("code") or "workflow_persistence_failed")
             status = 409 if code in {"P0001", "23505"} else 404 if code == "P0002" else 502
-            raise ApiError(status, code.lower(), message)
+            raise ApiError(status, _workflow_error_code(code, message), message)
         rows = response.json()
         if not isinstance(rows, list) or (not rows and not allow_empty):
             raise ApiError(502, "workflow_response_invalid", "Workflow RPC returned no rows.")
         return rows
+
+
+# The workflow RPCs raise their business errors as
+# ``raise exception 'OUTBOX_STALE_CLAIM' using errcode = 'P0001'``, and PostgREST
+# reports the SQLSTATE (P0001/P0002) as ``code`` with the token in ``message``.
+# Callers compare against the token (``outbox_stale_claim``,
+# ``workflow_not_found``, ...), so the token is the ApiError code. Using the
+# lowercased SQLSTATE made every such comparison dead code in production
+# (audit WJ-04).
+_SQL_ERROR_TOKEN = re.compile(r"^([A-Z][A-Z0-9_]{2,119})\b")
+
+
+def _workflow_error_code(sqlstate: str, message: str) -> str:
+    if sqlstate in {"P0001", "P0002"}:
+        token = _SQL_ERROR_TOKEN.match(message.strip())
+        if token:
+            return token.group(1).lower()
+    return sqlstate.lower()
 
 
 def _start_payload(values: dict[str, Any]) -> dict[str, Any]:

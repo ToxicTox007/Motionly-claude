@@ -23,7 +23,13 @@ services:
   volume-permissions:
     profiles: [local-audit]
 
+  db-tls:
+    profiles: [local-audit]
+
   postgres:
+    profiles: [local-audit]
+
+  db-roles:
     profiles: [local-audit]
 
   temporal-postgres:

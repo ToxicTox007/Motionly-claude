@@ -2,6 +2,8 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.api.dependencies import Actor
 from app.api.visual import get_visual_status
 from app.repositories.uploads import InMemoryUploadRepository, UploadRecord
@@ -545,3 +547,105 @@ def _seed_upload(context: SimpleNamespace, *, status: UploadStatus) -> UploadRec
         content=b"fake mp4",
     )
     return upload
+
+
+def test_supabase_matte_transitions_compare_and_set_on_the_read_status(monkeypatch) -> None:
+    # Audit WJ-19: the PATCH used to match on id only, so a second execution of
+    # the same matte job could overwrite a transition the first already made.
+    from datetime import UTC, datetime
+
+    from app.api.errors import ApiError
+    from app.repositories.visual import MatteRecord
+    from app.schemas.visual import MatteStatus
+
+    repository = SupabaseVisualRepository(
+        upload_repository=InMemoryUploadRepository(),
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    record = MatteRecord(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        uploaded_video_id=uuid4(),
+        status=MatteStatus.PENDING,
+        cache_key="matte:v1:pending",
+        source_file_hash=None,
+        segmentation_settings={"enabled": True},
+        model_version="matte.segmentation",
+    )
+    calls = []
+    rows: list[dict] = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: rows)
+
+    monkeypatch.setattr("app.repositories.visual.SupabaseRestClient.request", fake_request)
+
+    with pytest.raises(ApiError) as exc_info:
+        repository.transition_matte(record=record, status=MatteStatus.PROCESSING)
+    assert exc_info.value.code == "matte_transition_conflict"
+    assert calls[0][2]["params"] == {
+        "id": f"eq.{record.id}",
+        "status": "eq.pending",
+        "select": SEGMENTATION_MATTE_COLUMNS,
+    }
+
+    now = datetime.now(UTC).isoformat()
+    rows.append(
+        {
+            "id": str(record.id),
+            "workspace_id": str(record.workspace_id),
+            "project_id": str(record.project_id),
+            "uploaded_video_id": str(record.uploaded_video_id),
+            "status": "processing",
+            "cache_key": record.cache_key,
+            "source_file_hash": None,
+            "segmentation_settings": record.segmentation_settings,
+            "model_version": record.model_version,
+            "matte": None,
+            "error_code": None,
+            "error_message": None,
+            "retry_count": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    moved = repository.transition_matte(record=record, status=MatteStatus.PROCESSING)
+    assert moved.status == MatteStatus.PROCESSING
+
+
+def test_supabase_get_matte_is_tenant_scoped(monkeypatch) -> None:
+    repository = SupabaseVisualRepository(
+        upload_repository=InMemoryUploadRepository(),
+        supabase_url="https://supabase.example.com",
+        service_role_key="service-role",
+    )
+    calls = []
+
+    def fake_request(_self, method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: [])
+
+    monkeypatch.setattr("app.repositories.visual.SupabaseRestClient.request", fake_request)
+    matte_id, workspace_id, project_id = uuid4(), uuid4(), uuid4()
+    assert (
+        repository.get_matte(matte_id=matte_id, workspace_id=workspace_id, project_id=project_id)
+        is None
+    )
+    assert calls == [
+        (
+            "GET",
+            "/segmentation_mattes",
+            {
+                "params": {
+                    "id": f"eq.{matte_id}",
+                    "workspace_id": f"eq.{workspace_id}",
+                    "project_id": f"eq.{project_id}",
+                    "select": SEGMENTATION_MATTE_COLUMNS,
+                    "limit": "1",
+                }
+            },
+        )
+    ]

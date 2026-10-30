@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from app.orchestration.contracts import (
+    ACTIVITY_RETRY_BUDGET_PATCH,
+    BOUNDED_STEP_WAIT_PATCH,
+    FAIL_CANONICAL_RUN_PATCH,
     ApprovalDecision,
     ApprovalGateSignal,
     EnqueueStepRequest,
@@ -14,6 +19,7 @@ from app.orchestration.contracts import (
     EnsureDraftRenderResult,
     EnsureProposalRequest,
     EnsureProposalResult,
+    FailWorkflowRunRequest,
     StepOutcome,
     StepOutcomeSignal,
     WorkflowExecutionState,
@@ -22,7 +28,25 @@ from app.orchestration.contracts import (
     WorkflowStatus,
     assert_identifier_only_history,
     attempt_key_for,
+    orchestration_error_code,
 )
+
+# Patch ids (defined in contracts so the history guard knows them) gate
+# behaviour changes, so executions started by an older worker replay
+# deterministically: their first ``patched`` call during replay returns False
+# and is memoized for the run.
+#
+# BOUNDED_STEP_WAIT_PATCH (WJ-06): a BullMQ step whose outcome never arrives
+#   (job lost, failure callback lost) no longer keeps the workflow open for its
+#   30-day execution timeout.
+# FAIL_CANONICAL_RUN_PATCH (WJ-06): a Temporal-side failure also fails the
+#   canonical database run.
+# ACTIVITY_RETRY_BUDGET_PATCH (WJ-06): activities ride out a few minutes of
+#   Redis/Supabase/API outage instead of failing after ~30 s of retries.
+
+# Longer than a step can legitimately take: the worker's step lease (1 h) plus
+# BullMQ stall recovery and the fail/complete RPC retries.
+STEP_OUTCOME_TIMEOUT = timedelta(hours=2)
 
 
 @workflow.defn(name="motionly.identifier_orchestration")
@@ -42,6 +66,85 @@ class MotionlyWorkflow:
 
     @workflow.run
     async def run(self, input: WorkflowStartInput) -> WorkflowResult:
+        try:
+            result = await self._run_first_draft(input)
+        except ActivityError as error:
+            if workflow.patched(FAIL_CANONICAL_RUN_PATCH):
+                await self._fail_canonical_run(input, _activity_failure_code(error))
+            raise
+        if result.state == WorkflowExecutionState.FAILED and workflow.patched(
+            FAIL_CANONICAL_RUN_PATCH
+        ):
+            # Idempotent: a run the database already failed (terminal step
+            # failure) is left unchanged by the activity.
+            await self._fail_canonical_run(
+                input, result.error_code or "workflow_terminal_failure"
+            )
+        return result
+
+    async def _fail_canonical_run(self, input: WorkflowStartInput, error_code: str) -> None:
+        request = FailWorkflowRunRequest(
+            workflow_run_id=input.workflow_run_id,
+            workspace_id=input.workspace_id,
+            project_id=input.project_id,
+            error_code=orchestration_error_code(error_code),
+        )
+        try:
+            await workflow.execute_activity(
+                "fail_workflow_run",
+                request,
+                activity_id="fail-canonical-run",
+                start_to_close_timeout=timedelta(seconds=30),
+                schedule_to_close_timeout=timedelta(days=1),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(minutes=5),
+                    maximum_attempts=0,
+                ),
+            )
+        except ActivityError:
+            # The reconciler fails runs whose Temporal execution has closed, so
+            # a database outage longer than a day is still repaired later.
+            pass
+
+    async def _wait_for_step_outcome(self, condition: Callable[[], bool]) -> bool:
+        """Wait for a step outcome; False when it did not arrive in time."""
+        if workflow.patched(BOUNDED_STEP_WAIT_PATCH):
+            try:
+                await workflow.wait_condition(condition, timeout=STEP_OUTCOME_TIMEOUT)
+            except TimeoutError:
+                return False
+            return True
+        await workflow.wait_condition(condition)
+        return True
+
+    def _step_outcome_timed_out(self) -> WorkflowResult:
+        self._state = WorkflowExecutionState.FAILED
+        self._error_code = "workflow_step_outcome_timeout"
+        return self._result()
+
+    @staticmethod
+    def _activity_retry(non_retryable: list[str]) -> RetryPolicy:
+        if workflow.patched(ACTIVITY_RETRY_BUDGET_PATCH):
+            return RetryPolicy(
+                initial_interval=timedelta(seconds=1),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=60),
+                maximum_attempts=12,
+                non_retryable_error_types=non_retryable,
+            )
+        return RetryPolicy(
+            initial_interval=timedelta(seconds=1),
+            backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=30),
+            maximum_attempts=5,
+            non_retryable_error_types=non_retryable,
+        )
+
+    # Unique name: tests/worker_db_reachability.py resolves calls by name, and a
+    # generic `_run` would put the workflow on the media workers' call graph.
+    async def _run_first_draft(self, input: WorkflowStartInput) -> WorkflowResult:
         assert_identifier_only_history(input)
         self._workflow_run_id = input.workflow_run_id
         self._state = WorkflowExecutionState.RUNNING
@@ -84,19 +187,14 @@ class MotionlyWorkflow:
                     result_type=EnqueueStepResult,
                     activity_id=f"enqueue:{step.step_key}:{attempt_number}",
                     start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=1),
-                        backoff_coefficient=2.0,
-                        maximum_interval=timedelta(seconds=30),
-                        maximum_attempts=5,
-                        non_retryable_error_types=["bullmq_job_identity_conflict"],
-                    ),
+                    retry_policy=self._activity_retry(["bullmq_job_identity_conflict"]),
                 )
-                await workflow.wait_condition(
+                if not await self._wait_for_step_outcome(
                     lambda step_key=step.step_key, attempt=attempt_number: self._has_outcome(
                         step_key, attempt
                     )
-                )
+                ):
+                    return self._step_outcome_timed_out()
                 outcome = self._pop_outcome(step.step_key, attempt_number)
                 if outcome.step_key is None:
                     return self._terminal_result(outcome)
@@ -132,17 +230,13 @@ class MotionlyWorkflow:
                 result_type=EnsureProposalResult,
                 activity_id="ensure-proposal-v2",
                 start_to_close_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=1),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=30),
-                    maximum_attempts=5,
-                    non_retryable_error_types=[
+                retry_policy=self._activity_retry(
+                    [
                         "workflow_proposal_rejected",
                         "workflow_proposal_response_invalid",
                         "workflow_proposal_identity_conflict",
                         "workflow_proposal_transport_missing",
-                    ],
+                    ]
                 ),
             )
             assert_identifier_only_history(proposal)
@@ -187,17 +281,12 @@ class MotionlyWorkflow:
                     result_type=EnqueueStepResult,
                     activity_id=f"enqueue:{planning_step_key}:{attempt_number}",
                     start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=1),
-                        backoff_coefficient=2.0,
-                        maximum_interval=timedelta(seconds=30),
-                        maximum_attempts=5,
-                        non_retryable_error_types=["bullmq_job_identity_conflict"],
-                    ),
+                    retry_policy=self._activity_retry(["bullmq_job_identity_conflict"]),
                 )
-                await workflow.wait_condition(
+                if not await self._wait_for_step_outcome(
                     lambda attempt=attempt_number: self._has_outcome(planning_step_key, attempt)
-                )
+                ):
+                    return self._step_outcome_timed_out()
                 outcome = self._pop_outcome(planning_step_key, attempt_number)
                 if outcome.step_key is None:
                     return self._terminal_result(outcome)
@@ -235,17 +324,13 @@ class MotionlyWorkflow:
                 result_type=EnsureDraftRenderResult,
                 activity_id="ensure-draft-render-v2",
                 start_to_close_timeout=timedelta(seconds=60),
-                retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=1),
-                    backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=30),
-                    maximum_attempts=5,
-                    non_retryable_error_types=[
+                retry_policy=self._activity_retry(
+                    [
                         "workflow_render_rejected",
                         "workflow_render_response_invalid",
                         "workflow_render_identity_conflict",
                         "workflow_render_transport_missing",
-                    ],
+                    ]
                 ),
             )
             assert_identifier_only_history(render)
@@ -289,17 +374,12 @@ class MotionlyWorkflow:
                     result_type=EnqueueStepResult,
                     activity_id=f"enqueue:{render_step_key}:{attempt_number}",
                     start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=RetryPolicy(
-                        initial_interval=timedelta(seconds=1),
-                        backoff_coefficient=2.0,
-                        maximum_interval=timedelta(seconds=30),
-                        maximum_attempts=5,
-                        non_retryable_error_types=["bullmq_job_identity_conflict"],
-                    ),
+                    retry_policy=self._activity_retry(["bullmq_job_identity_conflict"]),
                 )
-                await workflow.wait_condition(
+                if not await self._wait_for_step_outcome(
                     lambda attempt=attempt_number: self._has_outcome(render_step_key, attempt)
-                )
+                ):
+                    return self._step_outcome_timed_out()
                 outcome = self._pop_outcome(render_step_key, attempt_number)
                 if outcome.step_key is None:
                     return self._terminal_result(outcome)
@@ -481,3 +561,10 @@ class MotionlyWorkflow:
             else:
                 retained.append(signal)
         self._signals = retained
+
+
+def _activity_failure_code(error: ActivityError) -> str:
+    cause = error.cause
+    if isinstance(cause, ApplicationError) and cause.type:
+        return orchestration_error_code(cause.type)
+    return "workflow_activity_failed"

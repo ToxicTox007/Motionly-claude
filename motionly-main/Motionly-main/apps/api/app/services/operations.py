@@ -9,13 +9,25 @@ from typing import Any
 import httpx
 
 WORKER_HEARTBEAT_COLUMNS = "worker_id,worker_role,queues,version,metadata,last_seen_at"
-COST_ATTRIBUTION_SUMMARY_COLUMNS = (
-    "workspace_id,render_job_id,export_id,provider,category,quantity,unit_cost_usd,approved_at"
-)
 PROVIDER_SLO_SUMMARY_COLUMNS = (
     "provider,operation,success,latency_ms,error_code,model,model_revision,route_id,"
     "request_id,fallback_count,estimated_cost_usd,actual_cost_usd,usage,created_at"
 )
+
+
+class UsageUnavailableError(RuntimeError):
+    """The database could not report usage, so a quota cannot be evaluated."""
+
+
+def _rpc_number(value: Any, function_name: str) -> float:
+    """A scalar RPC result: PostgREST returns it bare, or wrapped by name."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        value = value.get(function_name)
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{function_name} returned no number")
+    return float(value)
 
 
 @dataclass
@@ -186,6 +198,12 @@ class OperationsRepository:
                 for key in ("render_job_id", "project_id", "provider", "category", "metadata")
             )
             values["source_id"] = hashlib.sha256(identity.encode()).hexdigest()[:32]
+        if self.base_url and self.headers:
+            # The database deduplicates on (workspace, provider, category,
+            # source_id) and is the only copy: keeping every event in this
+            # process too grew without bound (database audit DB-07).
+            self._insert("cost_attribution_events", values, upsert=True)
+            return
         if any(
             row.get("workspace_id") == values.get("workspace_id")
             and row.get("provider") == values.get("provider")
@@ -195,7 +213,6 @@ class OperationsRepository:
         ):
             return
         self.cost_events.append(values)
-        self._insert("cost_attribution_events", values, upsert=True)
 
     def count_usage(
         self,
@@ -206,66 +223,46 @@ class OperationsRepository:
         period_end: datetime,
         provider: str | None = None,
     ) -> float:
-        if not self.base_url or not self.headers:
-            total = 0.0
-            for row in self.cost_events:
-                if (
-                    str(row.get("workspace_id")) == str(workspace_id)
-                    and (provider is None or row.get("provider") == provider)
-                    and row.get("category") == category
-                ):
-                    created_at = row.get("created_at") or datetime.now(UTC)
-                    if isinstance(created_at, str):
-                        try:
-                            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                        except Exception:
-                            continue
-                    if period_start <= created_at < period_end:
-                        total += float(row.get("quantity") or 0.0)
-            return total
+        """Feature usage in the period, summed by the database.
 
-        # Query PostgREST
-        start_str = period_start.isoformat()
-        end_str = period_end.isoformat()
-        params = [
-            ("workspace_id", f"eq.{workspace_id}"),
-            ("category", f"eq.{category}"),
-            ("created_at", f"gte.{start_str}"),
-            ("created_at", f"lt.{end_str}"),
-            ("select", "quantity"),
-            ("limit", "10000"),
-        ]
-        if provider is not None:
-            params.insert(1, ("provider", f"eq.{provider}"))
-        try:
-            response = httpx.get(
-                f"{self.base_url}/cost_attribution_events",
-                headers=self.headers,
-                params=params,
-                timeout=10,
-            )
-            response.raise_for_status()
-            rows = response.json()
-            return sum(float(row.get("quantity") or 0.0) for row in rows)
-        except Exception:
-            total = 0.0
-            for row in self.cost_events:
-                if (
-                    str(row.get("workspace_id")) == str(workspace_id)
-                    and (provider is None or row.get("provider") == provider)
-                    and row.get("category") == category
-                ):
-                    created_at = row.get("created_at") or datetime.now(UTC)
-                    if isinstance(created_at, str):
-                        try:
-                            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                        except Exception:
-                            continue
-                    if period_start <= created_at < period_end:
-                        total += float(row.get("quantity") or 0.0)
-            return total
+        Raises :class:`UsageUnavailableError` when the database cannot answer:
+        a quota check must fail closed, never count from a partial or local
+        copy (database audit DB-07).
+        """
+        if self.base_url and self.headers:
+            payload = {
+                "p_workspace_id": str(workspace_id),
+                "p_category": category,
+                "p_period_start": period_start.isoformat(),
+                "p_period_end": period_end.isoformat(),
+            }
+            if provider is not None:
+                payload["p_provider"] = provider
+            try:
+                result = self._rpc("motionly_sum_cost_usage", payload)
+                return _rpc_number(result, "motionly_sum_cost_usage")
+            except Exception as exc:
+                raise UsageUnavailableError("Feature usage could not be read.") from exc
+        total = 0.0
+        for row in self.cost_events:
+            if (
+                str(row.get("workspace_id")) == str(workspace_id)
+                and (provider is None or row.get("provider") == provider)
+                and row.get("category") == category
+            ):
+                created_at = row.get("created_at") or datetime.now(UTC)
+                if isinstance(created_at, str):
+                    try:
+                        created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                if period_start <= created_at < period_end:
+                    total += float(row.get("quantity") or 0.0)
+        return total
 
     def cost_summary(self, *, render_job_id=None) -> dict[str, Any]:
+        if self.base_url and self.headers:
+            return self._database_cost_summary(render_job_id=render_job_id)
         rows = self._cost_rows(render_job_id=render_job_id)
         by_category: dict[str, float] = defaultdict(float)
         by_provider: dict[str, float] = defaultdict(float)
@@ -310,24 +307,49 @@ class OperationsRepository:
             )
             response.raise_for_status()
 
-    def _cost_rows(self, *, render_job_id=None) -> list[dict[str, Any]]:
-        if not self.base_url or not self.headers:
-            return [
-                row
-                for row in self.cost_events
-                if render_job_id is None or str(row.get("render_job_id")) == str(render_job_id)
-            ]
-        params = {"select": COST_ATTRIBUTION_SUMMARY_COLUMNS, "limit": "10000"}
-        if render_job_id is not None:
-            params["render_job_id"] = f"eq.{render_job_id}"
-        response = httpx.get(
-            f"{self.base_url}/cost_attribution_events",
+    def _database_cost_summary(self, *, render_job_id=None) -> dict[str, Any]:
+        """One aggregate over every matching row (the row read stopped at 10,000)."""
+        payload = {"p_render_job_id": str(render_job_id) if render_job_id is not None else None}
+        summary = self._rpc("motionly_cost_summary", payload)
+        if isinstance(summary, list):
+            summary = summary[0] if summary else {}
+        if isinstance(summary, dict) and "motionly_cost_summary" in summary:
+            summary = summary["motionly_cost_summary"]
+        summary = summary if isinstance(summary, dict) else {}
+        total = float(summary.get("total_usd") or 0.0)
+        approved = int(summary.get("approved_exports") or 0)
+        return {
+            "currency": "usd",
+            "total_usd": round(total, 6),
+            "by_category": {
+                str(key): round(float(value or 0.0), 6)
+                for key, value in (summary.get("by_category") or {}).items()
+            },
+            "by_provider": {
+                str(key): round(float(value or 0.0), 6)
+                for key, value in (summary.get("by_provider") or {}).items()
+            },
+            "approved_exports": approved,
+            "cost_per_approved_export_usd": round(total / approved, 6) if approved else None,
+        }
+
+    def _rpc(self, name: str, payload: dict[str, Any]) -> Any:
+        """POST the PostgREST function ``name`` and return its JSON result."""
+        response = httpx.post(
+            f"{self.base_url}/rpc/{name}",
             headers=self.headers,
-            params=params,
+            json=payload,
             timeout=10,
         )
         response.raise_for_status()
         return response.json()
+
+    def _cost_rows(self, *, render_job_id=None) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in self.cost_events
+            if render_job_id is None or str(row.get("render_job_id")) == str(render_job_id)
+        ]
 
     def _provider_slo_rows(self, *, limit: int = 500) -> list[dict[str, Any]]:
         if not self.base_url or not self.headers:

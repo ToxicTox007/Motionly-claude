@@ -12,7 +12,9 @@ x-media-environment: &media-environment
   # role, never with the service-role key. PostgREST switches role from the JWT's
   # `role` claim, so this file is a drop-in replacement for the key workers read.
   SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_worker_key
-  SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
+  # Workers never receive the JWT signing secret: with it a compromised worker
+  # could mint a service_role token and step around motionly_worker (database
+  # audit DB-04). Only the API and orchestration services verify JWTs.
   WORKER_API_TOKEN_FILE: /run/secrets/worker_api_token
   APP_ENV: production
   PROCESS_ROLE: worker
@@ -103,26 +105,97 @@ services:
     read_only: true
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE]
+    # FOWNER: chmod of the backup directories once they belong to postgres.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
     command:
       - sh
       - -ec
       - |
         mkdir -p /var/data/motionly /var/cache/motionly
         chown -R 10001:10001 /var/data/motionly /var/cache/motionly
-    volumes: *media-volumes
+        # WAL archives and base backups (database audit DB-02) belong to the
+        # postgres user of the supabase/postgres image (uid 101, gid 102).
+        chown 101:102 /var/lib/motionly-backups/postgres /var/lib/motionly-backups/temporal
+        chmod 0700 /var/lib/motionly-backups/postgres /var/lib/motionly-backups/temporal
+    volumes:
+      - motionly-media:/var/data/motionly
+      - motionly-model-cache:/var/cache/motionly
+      - postgres-backups:/var/lib/motionly-backups/postgres
+      - temporal-postgres-backups:/var/lib/motionly-backups/temporal
 
+  # TLS for the two database servers (database audit DB-21): issues the
+  # internal database CA and the server certificate once and re-issues the
+  # certificate before it expires (infra/db/generate-tls.sh). Nothing to
+  # provision; the CA key never leaves its volume.
+  db-tls:
+    image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    entrypoint: ["/bin/sh", "/opt/motionly-db/generate-tls.sh"]
+    volumes:
+      - postgres-tls-ca-key:/var/lib/motionly-db-tls/ca-key
+      - postgres-tls-ca:/var/lib/motionly-db-tls/ca
+      - postgres-tls-server:/var/lib/motionly-db-tls/server
+      - ./db/generate-tls.sh:/opt/motionly-db/generate-tls.sh:ro
+
+  # PostgreSQL settings (database audit DB-02, DB-14) are passed on the command
+  # line through a small wrapper so an overlay can size memory from the
+  # container environment (docker-compose.cpu-stage.yml does). Every WAL
+  # segment is archived with WAL-G (shipped in the image) to the
+  # postgres-backups volume; scripts/deploy/db_backup.sh takes the daily base
+  # backup and copies the volume to the BackupsBucket. Together they give
+  # point-in-time recovery: docs/ops/database-operations.md.
   postgres:
     image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
     restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        exec docker-entrypoint.sh postgres -D /etc/postgresql \
+          -c shared_buffers="$${POSTGRES_SHARED_BUFFERS:-2GB}" \
+          -c effective_cache_size="$${POSTGRES_EFFECTIVE_CACHE_SIZE:-6GB}" \
+          -c work_mem="$${POSTGRES_WORK_MEM:-16MB}" \
+          -c maintenance_work_mem="$${POSTGRES_MAINTENANCE_WORK_MEM:-256MB}" \
+          -c idle_in_transaction_session_timeout=5min \
+          -c log_min_duration_statement=1000 \
+          -c log_lock_waits=on \
+          -c log_temp_files=10MB \
+          -c log_autovacuum_min_duration=10s \
+          -c track_io_timing=on \
+          -c archive_mode=on \
+          -c "archive_command=wal-g wal-push %p" \
+          -c archive_timeout=300 \
+          -c ssl=on \
+          -c ssl_cert_file=/etc/motionly-db-tls/server/server.crt \
+          -c ssl_key_file=/etc/motionly-db-tls/server/server.key \
+          -c ssl_min_protocol_version=TLSv1.2 \
+          -c hba_file=/etc/motionly-db/pg_hba.conf
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: postgres
+      WALG_FILE_PREFIX: /var/lib/motionly-backups/postgres
+      WALG_COMPRESSION_METHOD: lz4
     secrets: [postgres_password]
+    depends_on:
+      volume-permissions: { condition: service_completed_successfully }
+      db-tls: { condition: service_completed_successfully }
     volumes:
       - supabase-db:/var/lib/postgresql/data
+      - postgres-backups:/var/lib/motionly-backups/postgres
+      # TLS (database audit DB-21): password logins from other containers
+      # must use TLS (pg_hba.conf); clients verify the certificate.
+      - postgres-tls-server:/etc/motionly-db-tls/server:ro
+      - ./db/pg_hba.conf:/etc/motionly-db/pg_hba.conf:ro
       # The image's own init scripts create the Supabase roles and the auth and
-      # storage schemas; only add the role passwords. Migrations run in db-migrate.
+      # storage schemas; only add initial role passwords (db-roles replaces
+      # them with per-service ones). Migrations run in db-migrate.
       - ./db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
       # Realtime migrates into _realtime; it cannot create the schema itself.
       - ./db/realtime.sql:/docker-entrypoint-initdb.d/init-scripts/98-realtime.sql:ro
@@ -140,11 +213,39 @@ services:
   temporal-postgres:
     image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
     restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        exec docker-entrypoint.sh postgres -D /etc/postgresql \
+          -c shared_buffers="$${POSTGRES_SHARED_BUFFERS:-512MB}" \
+          -c effective_cache_size="$${POSTGRES_EFFECTIVE_CACHE_SIZE:-2GB}" \
+          -c idle_in_transaction_session_timeout=5min \
+          -c log_min_duration_statement=1000 \
+          -c log_lock_waits=on \
+          -c archive_mode=on \
+          -c "archive_command=wal-g wal-push %p" \
+          -c archive_timeout=300 \
+          -c ssl=on \
+          -c ssl_cert_file=/etc/motionly-db-tls/server/server.crt \
+          -c ssl_key_file=/etc/motionly-db-tls/server/server.key \
+          -c ssl_min_protocol_version=TLSv1.2 \
+          -c hba_file=/etc/motionly-db/pg_hba.conf
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: postgres
+      WALG_FILE_PREFIX: /var/lib/motionly-backups/temporal
+      WALG_COMPRESSION_METHOD: lz4
     secrets: [postgres_password]
-    volumes: [temporal-db:/var/lib/postgresql/data]
+    depends_on:
+      volume-permissions: { condition: service_completed_successfully }
+      db-tls: { condition: service_completed_successfully }
+    volumes:
+      - temporal-db:/var/lib/postgresql/data
+      - temporal-postgres-backups:/var/lib/motionly-backups/temporal
+      # Every login from another container uses TLS (database audit DB-21).
+      - postgres-tls-server:/etc/motionly-db-tls/server:ro
+      - ./db/pg_hba.temporal.conf:/etc/motionly-db/pg_hba.conf:ro
     networks: [temporal-persistence]
     healthcheck:
       # TCP, not the socket: see postgres above.
@@ -157,10 +258,14 @@ services:
     image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
     restart: "no"
     entrypoint: ["/bin/sh", "/opt/motionly-temporal/init-postgres.sh"]
+    environment:
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /etc/motionly-db-tls/ca/ca.crt
     depends_on: { temporal-postgres: { condition: service_healthy } }
     secrets: [postgres_password, temporal_db_password]
     volumes:
       - ./temporal:/opt/motionly-temporal:ro
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
     networks: [temporal-persistence]
 
   temporal-schema:
@@ -172,6 +277,7 @@ services:
     secrets: [temporal_db_password]
     volumes:
       - ./temporal:/opt/motionly-temporal:ro
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
     networks: [temporal-persistence]
 
   temporal:
@@ -196,6 +302,8 @@ services:
       ]
     volumes:
       - ./temporal:/opt/motionly-temporal:ro
+      # Verifies temporal-postgres (sql.tls in config/production.yaml.tmpl).
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
     networks: [temporal-control, temporal-persistence]
     healthcheck:
       test:
@@ -240,6 +348,10 @@ services:
       - |
         umask 077
         printf 'requirepass %s\nappendonly yes\n' "$(cat /run/secrets/redis_password)" > /tmp/redis.conf
+        # BullMQ requires noeviction; a memory ceiling makes Redis reject
+        # writes under a backlog instead of growing until it is OOM-killed
+        # (audit WJ-24).
+        printf 'maxmemory %s\nmaxmemory-policy noeviction\n' "$${REDIS_MAXMEMORY:-2gb}" >> /tmp/redis.conf
         exec redis-server /tmp/redis.conf
     secrets: [redis_password]
     volumes: [redis-data:/data]
@@ -257,12 +369,20 @@ services:
   supabase-auth:
     image: supabase/gotrue:v2.170.0@sha256:0cfa54e096dcae4ed30162811fa8794f7c443708c41973329e07f7d44c1cc3e7
     restart: unless-stopped
-    depends_on: { postgres: { condition: service_healthy } }
+    depends_on:
+      postgres: { condition: service_healthy }
+      db-roles: { condition: service_completed_successfully }
+    # Connects as supabase_auth_admin with its own password over verified TLS
+    # (infra/db/start-auth.sh; database audit DB-21).
+    entrypoint: ["/bin/sh", "/opt/motionly-db/start-auth.sh"]
+    volumes:
+      - db-auth-credentials:/var/lib/motionly-db-credentials:ro
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
+      - ./db/start-auth.sh:/opt/motionly-db/start-auth.sh:ro
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production Compose}@postgres:5432/postgres
       GOTRUE_SITE_URL: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required for production Compose}
       GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required for production Compose}
       # Tokens must say aud and role "authenticated": the API checks the
@@ -303,9 +423,17 @@ services:
   supabase-rest:
     image: postgrest/postgrest:v12.2.8@sha256:e5978740a590628f2114730bb942f35342ea70b8b7a86697a3df283c0caea109
     restart: unless-stopped
-    depends_on: { postgres: { condition: service_healthy } }
+    depends_on:
+      postgres: { condition: service_healthy }
+      db-roles: { condition: service_completed_successfully }
+    volumes:
+      - db-rest-credentials:/var/lib/motionly-db-credentials:ro
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
     environment:
-      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production Compose}@postgres:5432/postgres
+      # The image has no shell: PostgREST reads the whole connection string
+      # (authenticator's own password, sslmode=verify-full) from the file
+      # db-roles writes (infra/db/apply-role-passwords.sh; database audit DB-21).
+      PGRST_DB_URI: "@/var/lib/motionly-db-credentials/db-uri"
       # `mock_gateway` is served for the payment gateway's own role only: the
       # gateway presents a mock_gateway_role JWT + Accept/Content-Profile:
       # mock_gateway. anon/authenticated/service_role have every privilege on
@@ -320,20 +448,28 @@ services:
   supabase-storage:
     image: supabase/storage-api:v1.14.5@sha256:ee0826bde4966c4cb70b79605ea5197d708dfa6ceeee7f427c4cad8b539ffda3
     restart: unless-stopped
-    depends_on: { postgres: { condition: service_healthy } }
+    depends_on:
+      postgres: { condition: service_healthy }
+      db-roles: { condition: service_completed_successfully }
+    # Connects as supabase_storage_admin with its own password over verified
+    # TLS (infra/db/start-storage.sh; database audit DB-21).
+    entrypoint: ["/bin/sh", "/opt/motionly-db/start-storage.sh"]
     environment:
       ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required for production Compose}
       SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required for production Compose}
       POSTGREST_URL: http://supabase-rest:3000
       PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET:?SUPABASE_JWT_SECRET is required for production Compose}
-      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production Compose}@postgres:5432/postgres
       FILE_SIZE_LIMIT: 536870912
       STORAGE_BACKEND: file
       FILE_STORAGE_BACKEND_PATH: /var/lib/storage
       # The file backend stores objects under <path>/<GLOBAL_S3_BUCKET>/; unset,
       # objects land in an "undefined" folder and deletes fail.
       GLOBAL_S3_BUCKET: motionly-media
-    volumes: [supabase-storage:/var/lib/storage]
+    volumes:
+      - supabase-storage:/var/lib/storage
+      - db-storage-credentials:/var/lib/motionly-db-credentials:ro
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
+      - ./db/start-storage.sh:/opt/motionly-db/start-storage.sh:ro
     # Storage migrates the storage schema before it serves /status.
     healthcheck:
       test:
@@ -385,6 +521,11 @@ services:
       DB_PORT: "5432"
       DB_USER: supabase_admin
       DB_NAME: postgres
+      # Realtime's own connection verifies the server over TLS. The realtime-dev
+      # tenant it seeds pins ssl_enforced=false, so its tenant connection is the
+      # one plain-TCP login infra/db/pg_hba.conf still allows (DB-21).
+      DB_SSL: "true"
+      DB_SSL_CA_CERT: /etc/motionly-db-tls/ca/ca.crt
       # Realtime keeps its own state under the _realtime schema.
       DB_AFTER_CONNECT_QUERY: "SET search_path TO _realtime"
       APP_NAME: realtime
@@ -403,6 +544,8 @@ services:
         realtime_secret_key_base,
         realtime_metrics_jwt_secret,
       ]
+    volumes:
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
     healthcheck:
       # Realtime answers /api/ping for the seeded realtime-dev tenant (named by
       # the Host header, as Kong sends it) once its migrations and seed have run.
@@ -449,6 +592,27 @@ services:
       retries: 30
     networks: [app]
 
+  # Gives Auth, REST and Storage their own database passwords on every release
+  # (database audit DB-21; infra/db/apply-role-passwords.sh). It shares the
+  # postgres container's network namespace and logs in over its loopback, so
+  # it needs no password; each service reads only its own credentials volume.
+  db-roles:
+    image: supabase/postgres:17.4.1.069@sha256:6900ef3bde159491c8774249dfd213926416f716ef0c897897ae4f88e6819c72
+    user: "0:0"
+    restart: "no"
+    network_mode: "service:postgres"
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ["/bin/sh", "/opt/motionly-db/apply-role-passwords.sh"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - db-auth-credentials:/var/lib/motionly-db-credentials/auth
+      - db-rest-credentials:/var/lib/motionly-db-credentials/rest
+      - db-storage-credentials:/var/lib/motionly-db-credentials/storage
+      - ./db/apply-role-passwords.sh:/opt/motionly-db/apply-role-passwords.sh:ro
+
   # Applies pending migrations on every `docker compose up` (every release),
   # after Auth and Storage have created their schemas. See infra/db/migrate.sh.
   db-migrate:
@@ -459,6 +623,8 @@ services:
       PGHOST: postgres
       PGUSER: postgres
       PGDATABASE: postgres
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /etc/motionly-db-tls/ca/ca.crt
     depends_on:
       postgres: { condition: service_healthy }
       supabase-auth: { condition: service_healthy }
@@ -471,6 +637,7 @@ services:
     volumes:
       - ../supabase/migrations:/opt/motionly-db/migrations:ro
       - ./db/migrate.sh:/opt/motionly-db/migrate.sh:ro
+      - postgres-tls-ca:/etc/motionly-db-tls/ca:ro
     networks: [app]
 
   api:
@@ -494,6 +661,7 @@ services:
       # The shared media environment points workers at their restricted
       # supabase_worker_key (Task 18); the API keeps the service-role key.
       SUPABASE_SERVICE_ROLE_KEY_FILE: /run/secrets/supabase_service_role_key
+      SUPABASE_JWT_SECRET_FILE: /run/secrets/supabase_jwt_secret
       ADMIN_API_TOKEN_FILE: /run/secrets/admin_api_token
       METRICS_BEARER_TOKEN_FILE: /run/secrets/metrics_bearer_token
       TEMPORAL_CLIENT_ROLE: api
@@ -534,6 +702,8 @@ services:
   temporal-dispatcher:
     image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
     restart: unless-stopped
+    # The Temporal worker's graceful shutdown is 30 s (audit WJ-07).
+    stop_grace_period: 45s
     healthcheck: *orchestration-healthcheck
     command:
       - python
@@ -570,6 +740,8 @@ services:
   temporal-worker:
     image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
     restart: unless-stopped
+    # The Temporal worker's graceful shutdown is 30 s (audit WJ-07).
+    stop_grace_period: 45s
     healthcheck: *orchestration-healthcheck
     command:
       - python
@@ -610,6 +782,8 @@ services:
   workflow-reconciler:
     image: ${MOTIONLY_API_IMAGE:?MOTIONLY_API_IMAGE must be a digest-pinned GHCR image}
     restart: unless-stopped
+    # The Temporal worker's graceful shutdown is 30 s (audit WJ-07).
+    stop_grace_period: 45s
     healthcheck: *orchestration-healthcheck
     command:
       - python
@@ -722,16 +896,14 @@ services:
       WORKER_QUEUES: upload_preprocess,render
       WORKER_CONCURRENCY: "2"
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck: *worker-healthcheck
     depends_on: *worker-depends-on
     volumes: *media-volumes
     secrets:
-      &worker-secrets [
-        supabase_worker_key,
-        supabase_jwt_secret,
-        worker_api_token,
-        ai_secrets_bundle,
-      ]
+      &worker-secrets [supabase_worker_key, worker_api_token, ai_secrets_bundle]
 
     networks: [app]
 
@@ -746,6 +918,9 @@ services:
       VISUAL_ANALYSIS_WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck:
       <<: *worker-healthcheck
       start_period: 900s
@@ -757,7 +932,6 @@ services:
     secrets:
       &inference-worker-secrets [
         supabase_worker_key,
-        supabase_jwt_secret,
         worker_api_token,
         ai_secrets_bundle,
         aws_inference_access_key_id,
@@ -777,6 +951,9 @@ services:
       MATTE_WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck:
       <<: *worker-healthcheck
       start_period: 900s
@@ -797,6 +974,9 @@ services:
       FFMPEG_GPU_ENABLED: "true"
       FFMPEG_GPU_ENCODER: h264_nvenc
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck:
       <<: *worker-healthcheck
       start_period: 900s
@@ -814,6 +994,9 @@ services:
       WORKER_CONCURRENCY: "1"
       MODEL_PREFETCH: "true"
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck: *worker-healthcheck
     depends_on: *worker-depends-on
     volumes: *media-volumes
@@ -828,6 +1011,9 @@ services:
       WORKER_QUEUES: provider_calls
       WORKER_CONCURRENCY: "4"
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck: *worker-healthcheck
     depends_on: *worker-depends-on
     volumes: *media-volumes
@@ -842,6 +1028,9 @@ services:
       WORKER_QUEUES: planning,stock_search,stock_asset_enrichment,audio,intelligence,maintenance
       WORKER_CONCURRENCY: "3"
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck: *worker-healthcheck
     depends_on: *worker-depends-on
     volumes: *media-volumes
@@ -863,6 +1052,9 @@ services:
       REMOTION_ENABLED: "true"
       WORKER_CONCURRENCY: "1"
     restart: unless-stopped
+    # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
+    # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).
+    stop_grace_period: 15m
     healthcheck: *worker-healthcheck
     depends_on: *worker-depends-on
     volumes: *media-volumes
@@ -875,6 +1067,15 @@ volumes:
   motionly-model-cache:
   supabase-db:
   temporal-db:
+  postgres-backups:
+  temporal-postgres-backups:
+  # Database TLS (db-tls) and per-service database credentials (db-roles).
+  postgres-tls-ca-key:
+  postgres-tls-ca:
+  postgres-tls-server:
+  db-auth-credentials:
+  db-rest-credentials:
+  db-storage-credentials:
   supabase-storage:
   redis-data:
   caddy-data:

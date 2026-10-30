@@ -240,6 +240,7 @@ test("domain jobs propagate identifier-only workflow context", () => {
     project_id: IDS.project,
     resource_id: "77000000-0000-4000-8000-000000000001",
     render_engine: "ffmpeg_basic",
+    attempts_made: 0,
     workflow_run_id: IDS.run,
     workflow_step_id: IDS.step,
     step_key: "analyze-source-v1",

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.orchestration.contracts import (
+    WORKFLOW_PATCH_IDS,
     HistoryPayloadRejected,
     assert_identifier_only_history,
 )
@@ -45,8 +46,35 @@ def validate_history_document(document: Mapping[str, Any]) -> None:
     _scan_history_value(document, path="history")
 
 
+# ``workflow.patched`` makes the SDK upsert the TemporalChangeVersion search
+# attribute: a KeywordList of the patch ids. It is the only payload allowed to
+# carry metadata besides ``encoding``, and only with known patch ids.
+_CHANGE_VERSION_SUFFIX = ".indexedFields.TemporalChangeVersion"
+
+
+def _validate_change_version(value: Mapping[object, object], *, path: str) -> None:
+    metadata = value.get("metadata")
+    if set(value) != {"metadata", "data"} or not isinstance(metadata, Mapping):
+        raise HistoryPayloadRejected(f"{path} has invalid payload fields")
+    try:
+        decoded = {
+            str(key): base64.b64decode(str(item), validate=True).decode("ascii")
+            for key, item in metadata.items()
+        }
+        data = json.loads(base64.b64decode(str(value.get("data")), validate=True))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HistoryPayloadRejected(f"{path} has invalid change-version data") from exc
+    if decoded != {"encoding": "json/plain", "type": "KeywordList"}:
+        raise HistoryPayloadRejected(f"{path} has forbidden payload metadata")
+    if not isinstance(data, list) or any(item not in WORKFLOW_PATCH_IDS for item in data):
+        raise HistoryPayloadRejected(f"{path} lists an unknown workflow patch")
+
+
 def _scan_history_value(value: object, *, path: str) -> None:
     if isinstance(value, Mapping):
+        if path.endswith(_CHANGE_VERSION_SUFFIX) and _looks_like_payload(value):
+            _validate_change_version(value, path=path)
+            return
         if _looks_like_payload(value):
             decoded = _decode_payload(value, path=path)
             if decoded is not None:

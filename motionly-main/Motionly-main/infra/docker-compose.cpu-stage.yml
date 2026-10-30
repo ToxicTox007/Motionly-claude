@@ -36,16 +36,30 @@ x-cpu-stage-environment: &cpu-stage-environment
   AUDIO_ML_PROVIDER: disabled
   FFMPEG_GPU_ENABLED: "false"
   MODEL_PREFETCH: "false"
+  # Memory-limited stage containers keep one persistent Python executor per
+  # worker (each loads the whole application); production uses the default 2.
+  PYTHON_EXECUTOR_POOL_SIZE: "1"
 
 services:
   volume-permissions:
     mem_limit: 64m
 
+  db-tls:
+    mem_limit: 128m
+
   postgres:
     mem_limit: 1024m
+    environment:
+      # Sized for the 1 GiB stage limit; production uses the base defaults.
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 768MB
+      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
 
   temporal-postgres:
     mem_limit: 512m
+    environment:
+      POSTGRES_SHARED_BUFFERS: 128MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 384MB
 
   temporal-db-init:
     mem_limit: 128m
@@ -61,6 +75,10 @@ services:
 
   redis:
     mem_limit: 256m
+    environment:
+      # Below the container limit: Redis rejects writes (noeviction) instead of
+      # being OOM-killed with the queue state in memory (audit WJ-24).
+      REDIS_MAXMEMORY: 200mb
 
   supabase-auth:
     mem_limit: 256m
@@ -87,6 +105,9 @@ services:
 
   supabase-gateway:
     mem_limit: 512m
+
+  db-roles:
+    mem_limit: 128m
 
   db-migrate:
     mem_limit: 256m

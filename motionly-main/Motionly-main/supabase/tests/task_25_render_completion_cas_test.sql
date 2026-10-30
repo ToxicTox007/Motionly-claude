@@ -1,17 +1,18 @@
 begin;
 select plan(12);
 
+-- p_attempt_id was added by 202610280209 (render attempt fencing).
 select has_function(
   'public', 'motionly_complete_render',
-  array['uuid','uuid','uuid','text','text','text','integer','integer','integer','integer','bigint','text','jsonb','integer'],
+  array['uuid','uuid','uuid','text','text','text','integer','integer','integer','integer','bigint','text','jsonb','integer','uuid'],
   'transactional render completion RPC exists'
 );
 select ok(
   has_function_privilege('service_role',
-    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer)',
+    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer,uuid)',
     'EXECUTE')
   and not has_function_privilege('authenticated',
-    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer)',
+    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer,uuid)',
     'EXECUTE'),
   'render completion is service-role-only'
 );
@@ -131,10 +132,10 @@ select throws_ok(
 );
 select ok(
   position('RENDER_WORKFLOW_LINEAGE_INVALID' in pg_get_functiondef(
-    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer)'::regprocedure
+    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer,uuid)'::regprocedure
   )) > 0
   and position('RENDER_WORKFLOW_PLAN_LINEAGE_INVALID' in pg_get_functiondef(
-    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer)'::regprocedure
+    'public.motionly_complete_render(uuid,uuid,uuid,text,text,text,integer,integer,integer,integer,bigint,text,jsonb,integer,uuid)'::regprocedure
   )) > 0,
   'completion validates workflow and plan lineage before publication'
 );

@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -49,6 +50,7 @@ from app.services.offload import run_blocking
 from app.services.payment_gateway import DEMO_NOTICE, PaymentGateway
 
 router = APIRouter(tags=["billing"])
+logger = logging.getLogger(__name__)
 
 ActorDep = Annotated[Actor, Depends(get_actor)]
 AdminActorDep = Annotated[Actor, Depends(require_admin)]
@@ -174,6 +176,8 @@ async def cancel_subscription(
         current_period_end=subscription.current_period_end,
         cancel_at_period_end=True,
     )
+    if updated is None:  # only gateway-event writes can be skipped
+        updated = subscription
     return CancelSubscriptionResponse(
         subscription=subscription_to_summary(updated),
         demo_notice=_demo_notice(request),
@@ -390,21 +394,44 @@ async def handle_gateway_webhook(
         signature=x_mock_gateway_signature,
         webhook_secret=getattr(request.app.state.settings, "mock_gateway_webhook_secret", None),
     )
-    if await _repository_call(
+    # Claim the event before applying it (audit WJ-23): a concurrent delivery
+    # of the same event gets 409 and is retried by the gateway, and a delivery
+    # after success is acknowledged as a duplicate. A failed apply releases the
+    # claim so the redelivery applies it.
+    claim = await _repository_call(
         repository,
-        "has_processed_gateway_event_async",
-        "has_processed_gateway_event",
-        event_id=envelope.id,
-    ):
-        return GatewayWebhookResponse(received=True, duplicate=True)
-
-    await apply_gateway_event_async(envelope=envelope, repository=repository)
-    await _repository_call(
-        repository,
-        "record_gateway_event_async",
-        "record_gateway_event",
+        "claim_gateway_event_async",
+        "claim_gateway_event",
         event_id=envelope.id,
         event_type=str(envelope.event),
+    )
+    if claim == "duplicate":
+        return GatewayWebhookResponse(received=True, duplicate=True)
+    if claim == "in_progress":
+        raise ApiError(
+            409,
+            "gateway_event_in_progress",
+            "This webhook event is being processed; deliver it again later.",
+        )
+    try:
+        await apply_gateway_event_async(envelope=envelope, repository=repository)
+    except Exception:
+        await _repository_call(
+            repository,
+            "finish_gateway_event_async",
+            "finish_gateway_event",
+            event_id=envelope.id,
+            event_type=str(envelope.event),
+            succeeded=False,
+        )
+        raise
+    await _repository_call(
+        repository,
+        "finish_gateway_event_async",
+        "finish_gateway_event",
+        event_id=envelope.id,
+        event_type=str(envelope.event),
+        succeeded=True,
     )
     return GatewayWebhookResponse(received=True)
 
@@ -428,15 +455,61 @@ def _workspace_and_plan(notes: dict[str, str]) -> tuple[UUID | None, BillingPlan
     return workspace_id, plan
 
 
+def _gateway_event_time(envelope) -> datetime | None:
+    """When the gateway created the event (UTC), or None if it cannot be read.
+
+    The envelope's ``created_at`` is set once per event, so every redelivery
+    carries the same value (unlike the per-attempt signature timestamp).
+    """
+    raw = getattr(envelope, "created_at", None)
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _event_order(event_at: datetime | None) -> dict[str, datetime]:
+    """The ordering field a webhook-driven subscription write carries.
+
+    Omitted when the event time is unreadable: the write then applies in
+    arrival order, as before, and leaves the stored watermark alone.
+    """
+    return {"last_gateway_event_at": event_at} if event_at is not None else {}
+
+
+def _log_stale_gateway_event(envelope, workspace_id: UUID) -> None:
+    logger.info(
+        "gateway_event_stale",
+        extra={
+            "event_id": str(envelope.id),
+            "event_type": str(envelope.event),
+            "workspace_id": str(workspace_id),
+        },
+    )
+
+
 async def apply_gateway_event_async(
     *,
     envelope,
     repository: InMemoryBillingRepository,
 ) -> None:
+    """Apply one gateway webhook event (database audit DB-12).
+
+    Subscription changes are applied in the order the gateway created the
+    events: a write for an event older than the one the subscription already
+    reflects is skipped (the repository returns None). Money movements (charge
+    and refund ledger rows) are always recorded, whatever the order.
+    """
     event = str(envelope.event)
     order = envelope.order
     subscription = envelope.subscription
     refund = envelope.refund
+    event_at = _gateway_event_time(envelope)
 
     if event in {"payment.captured", "subscription.charged"} and order is not None:
         workspace_id, plan = _workspace_and_plan(order.notes)
@@ -448,8 +521,10 @@ async def apply_gateway_event_async(
                 plan = plan_sub
         if workspace_id is None:
             raise ApiError(400, "gateway_workspace_missing", "Event is missing workspace id.")
-        start, end = monthly_period()
-        await _repository_call(
+        # The billing month the payment was made in, not the month the
+        # webhook happened to be delivered in.
+        start, end = monthly_period(event_at)
+        applied = await _repository_call(
             repository,
             "upsert_subscription_async",
             "upsert_subscription",
@@ -462,7 +537,10 @@ async def apply_gateway_event_async(
             current_period_start=start,
             current_period_end=end,
             cancel_at_period_end=False,
+            **_event_order(event_at),
         )
+        if applied is None:
+            _log_stale_gateway_event(envelope, workspace_id)
         await _repository_call(
             repository,
             "record_billing_adjustment_async",
@@ -494,7 +572,7 @@ async def apply_gateway_event_async(
             "get_subscription",
             workspace_id=workspace_id,
         )
-        await _repository_call(
+        applied = await _repository_call(
             repository,
             "upsert_subscription_async",
             "upsert_subscription",
@@ -507,7 +585,10 @@ async def apply_gateway_event_async(
             current_period_start=existing.current_period_start,
             current_period_end=existing.current_period_end,
             cancel_at_period_end=existing.cancel_at_period_end,
+            **_event_order(event_at),
         )
+        if applied is None:
+            _log_stale_gateway_event(envelope, workspace_id)
         return
 
     if event == "subscription.cancelled" and subscription is not None:
@@ -527,7 +608,7 @@ async def apply_gateway_event_async(
             "get_subscription",
             workspace_id=workspace_id,
         )
-        await _repository_call(
+        applied = await _repository_call(
             repository,
             "upsert_subscription_async",
             "upsert_subscription",
@@ -538,7 +619,10 @@ async def apply_gateway_event_async(
             gateway_subscription_id=subscription.id,
             gateway_price_id=existing.gateway_price_id,
             cancel_at_period_end=False,
+            **_event_order(event_at),
         )
+        if applied is None:
+            _log_stale_gateway_event(envelope, workspace_id)
         return
 
     if event == "payment.refunded" and order is not None and refund is not None:

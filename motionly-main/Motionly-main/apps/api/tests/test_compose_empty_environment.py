@@ -72,22 +72,41 @@ def test_postgres_keeps_the_image_init_scripts_on_an_empty_disk() -> None:
     )
 
 
-def test_role_passwords_come_from_the_postgres_secret() -> None:
+def test_service_roles_get_their_own_passwords_on_every_release() -> None:
+    # First boot: the image creates the roles without passwords; roles.sql
+    # gives them an initial one. Init scripts run as the postgres OS user, which
+    # cannot open root-owned secret files; the entrypoint exports the password.
     roles = ROLES_SQL.read_text(encoding="utf-8")
-
-    # Init scripts run as the postgres OS user, which cannot open root-owned
-    # secret files; the entrypoint exports the password from the secret as root.
     assert '\\set pgpass `echo "$POSTGRES_PASSWORD"`' in roles
     assert "/run/secrets" not in roles
-    # The roles that Auth, REST and Storage log in as (see their database URLs).
-    for role in ("authenticator", "supabase_auth_admin", "supabase_storage_admin"):
-        assert f"alter user {role} with password :'pgpass';" in roles
+
+    # Every release (database audit DB-21): db-roles replaces them with one
+    # password per service, before Auth, REST and Storage start.
     services = _services()
-    assert (
-        "supabase_auth_admin:" in services["supabase-auth"]["environment"]["GOTRUE_DB_DATABASE_URL"]
+    db_roles = services["db-roles"]
+    assert db_roles["network_mode"] == "service:postgres"
+    assert db_roles["entrypoint"] == ["/bin/sh", "/opt/motionly-db/apply-role-passwords.sh"]
+    assert db_roles["depends_on"] == {"postgres": {"condition": "service_healthy"}}
+    script = (ROOT / "infra" / "db" / "apply-role-passwords.sh").read_text(encoding="utf-8")
+    owned = {
+        "supabase-auth": ("db-auth-credentials", "supabase_auth_admin"),
+        "supabase-rest": ("db-rest-credentials", "authenticator"),
+        "supabase-storage": ("db-storage-credentials", "supabase_storage_admin"),
+    }
+    credential_volumes = {volume for volume, _role in owned.values()}
+    for name, (volume, role) in owned.items():
+        assert f"alter role {role} with password :'" in script
+        service = services[name]
+        assert service["depends_on"]["db-roles"] == {"condition": "service_completed_successfully"}
+        mounted = [entry.split(":")[0] for entry in service["volumes"]]
+        # Its own credentials only, read-only; never the superuser password.
+        assert f"{volume}:/var/lib/motionly-db-credentials:ro" in service["volumes"]
+        assert set(mounted) & credential_volumes == {volume}, name
+        assert "postgres_password" not in service.get("secrets", []), name
+        assert "POSTGRES_PASSWORD" not in str(service.get("environment", {})), name
+    assert services["supabase-rest"]["environment"]["PGRST_DB_URI"] == (
+        "@/var/lib/motionly-db-credentials/db-uri"
     )
-    assert "authenticator:" in services["supabase-rest"]["environment"]["PGRST_DB_URI"]
-    assert "supabase_storage_admin:" in services["supabase-storage"]["environment"]["DATABASE_URL"]
 
 
 def test_storage_file_backend_names_the_folder_it_stores_objects_in() -> None:

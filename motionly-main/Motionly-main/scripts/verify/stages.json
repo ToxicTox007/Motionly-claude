@@ -131,6 +131,10 @@
           "run": "node_modules/.bin/supabase test db"
         },
         {
+          "name": "every migration and pgTAP test on the production Postgres, Auth, Storage and Realtime images",
+          "run": "bash scripts/db/test_production_image.sh"
+        },
+        {
           "name": "repository contracts and schema-matches-code",
           "cwd": "apps/api",
           "env": {

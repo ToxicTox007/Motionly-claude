@@ -267,6 +267,19 @@ class InMemoryVisualRepository:
             else None
         )
 
+    def get_matte(
+        self,
+        *,
+        matte_id: UUID,
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> MatteRecord | None:
+        """The matte row a job was enqueued for, scoped to its tenant."""
+        record = self.mattes.get(matte_id)
+        if record is None or record.workspace_id != workspace_id or record.project_id != project_id:
+            return None
+        return record
+
     def create_matte(
         self,
         *,
@@ -708,6 +721,33 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
         rows = response.json()
         return self._matte_from_row(rows[0]) if rows else None
 
+    def get_matte(
+        self,
+        *,
+        matte_id: UUID,
+        workspace_id: UUID,
+        project_id: UUID,
+    ) -> MatteRecord | None:
+        """Load the exact matte row a job was enqueued for (audit WJ-08).
+
+        The worker process has no in-memory cache of API-created rows, so the
+        id must be resolved against the database, scoped to the job's tenant.
+        """
+        response = self.client.request(
+            "GET",
+            "/segmentation_mattes",
+            params={
+                "id": f"eq.{matte_id}",
+                "workspace_id": f"eq.{workspace_id}",
+                "project_id": f"eq.{project_id}",
+                "select": SEGMENTATION_MATTE_COLUMNS,
+                "limit": "1",
+            },
+        )
+        self._raise_for_supabase(response)
+        rows = response.json()
+        return self._matte_from_row(rows[0]) if rows else None
+
     async def latest_matte_for_upload_async(
         self,
         *,
@@ -858,7 +898,7 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
         response = self.client.request(
             "PATCH",
             "/segmentation_mattes",
-            params={"id": f"eq.{record.id}", "select": SEGMENTATION_MATTE_COLUMNS},
+            params=self._matte_transition_params(record),
             json={
                 "status": status.value,
                 "cache_key": cache_key or record.cache_key,
@@ -878,7 +918,7 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
             timeout=20,
         )
         self._raise_for_supabase(response)
-        return self._matte_from_row(response.json()[0])
+        return self._transitioned_matte(response)
 
     async def transition_matte_async(
         self,
@@ -895,7 +935,7 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
         response = await self.client.async_request(
             "PATCH",
             "/segmentation_mattes",
-            params={"id": f"eq.{record.id}", "select": SEGMENTATION_MATTE_COLUMNS},
+            params=self._matte_transition_params(record),
             json={
                 "status": status.value,
                 "cache_key": cache_key or record.cache_key,
@@ -915,7 +955,7 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
             timeout=20,
         )
         self._raise_for_supabase(response)
-        return self._matte_from_row(response.json()[0])
+        return self._transitioned_matte(response)
 
     def transition_manifest(
         self,
@@ -998,6 +1038,27 @@ class SupabaseVisualRepository(InMemoryVisualRepository):
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),
         )
+
+    @staticmethod
+    def _matte_transition_params(record: MatteRecord) -> dict[str, str]:
+        # Compare-and-set on the status this caller read (audit WJ-19): a second
+        # execution of the same matte job cannot overwrite a transition the
+        # first one already made.
+        return {
+            "id": f"eq.{record.id}",
+            "status": f"eq.{record.status.value}",
+            "select": SEGMENTATION_MATTE_COLUMNS,
+        }
+
+    def _transitioned_matte(self, response) -> MatteRecord:
+        rows = response.json()
+        if not isinstance(rows, list) or not rows:
+            raise ApiError(
+                409,
+                "matte_transition_conflict",
+                "The matte changed state concurrently; this transition was not applied.",
+            )
+        return self._matte_from_row(rows[0])
 
     def _matte_from_row(self, row: dict[str, object]) -> MatteRecord:
         raw_matte = row.get("matte")

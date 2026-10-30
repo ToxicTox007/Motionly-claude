@@ -53,12 +53,16 @@ def _guard_project(tmp_path: Path, *, subdirectory: str = "") -> tuple[Path, Pat
     (project / "scripts").mkdir(parents=True)
     (project / "supabase" / "migrations").mkdir(parents=True)
     shutil.copy(GUARD, project / "scripts" / GUARD.name)
-    (project / "supabase/migrations/0001_first.sql").write_text("create table a (id int);\n")
-    (project / "supabase/migrations/0002_second.sql").write_text("create table b (id int);\n")
+    (project / "supabase/migrations/202601010001_first.sql").write_text(
+        "create table a (id int);\n"
+    )
+    (project / "supabase/migrations/202601010002_second.sql").write_text(
+        "create table b (id int);\n"
+    )
     repaired = "create table b (id int primary key);\n"
     digest = hashlib.sha256(repaired.encode()).hexdigest()
     (project / "scripts/migration-repairs.sha256").write_text(
-        f"# pinned repair\n{digest}  supabase/migrations/0002_second.sql\n"
+        f"# pinned repair\n{digest}  supabase/migrations/202601010002_second.sql\n"
     )
     _git(git_root, "init", "-q", "-b", "main")
     _git(git_root, "add", "-A")
@@ -81,7 +85,9 @@ def _commit_and_guard(git_root: Path, project: Path) -> subprocess.CompletedProc
 
 def test_forward_migration_guard_allows_new_migrations(tmp_path: Path) -> None:
     git_root, project = _guard_project(tmp_path)
-    (project / "supabase/migrations/0003_third.sql").write_text("create table c (id int);\n")
+    (project / "supabase/migrations/202601010003_third.sql").write_text(
+        "create table c (id int);\n"
+    )
 
     result = _commit_and_guard(git_root, project)
 
@@ -89,56 +95,91 @@ def test_forward_migration_guard_allows_new_migrations(tmp_path: Path) -> None:
     assert "forward-only" in result.stdout
 
 
+def test_forward_migration_guard_rejects_new_migrations_ordered_before_the_base(
+    tmp_path: Path,
+) -> None:
+    # migrate.sh and the Supabase CLI refuse a pending migration older than the
+    # latest applied one, so the guard catches it before the release does.
+    git_root, project = _guard_project(tmp_path)
+    (project / "supabase/migrations/202601010001_late.sql").write_text("select 1;\n")
+
+    result = _commit_and_guard(git_root, project)
+
+    assert result.returncode == 1
+    assert "202601010001_late.sql" in result.stderr
+    assert "not after 202601010002" in result.stderr
+
+
+def test_forward_migration_guard_rejects_names_migrate_sh_would_refuse(tmp_path: Path) -> None:
+    git_root, project = _guard_project(tmp_path)
+    (project / "supabase/migrations/20260102_Short-Name.sql").write_text("select 1;\n")
+
+    result = _commit_and_guard(git_root, project)
+
+    assert result.returncode == 1
+    assert "invalid name" in result.stderr
+    assert "20260102_Short-Name.sql" in result.stderr
+
+
 def test_forward_migration_guard_rejects_edits_renames_and_deletions(tmp_path: Path) -> None:
     git_root, project = _guard_project(tmp_path / "edit")
-    (project / "supabase/migrations/0001_first.sql").write_text("create table a (id bigint);\n")
+    (project / "supabase/migrations/202601010001_first.sql").write_text(
+        "create table a (id bigint);\n"
+    )
     edited = _commit_and_guard(git_root, project)
 
     git_root, project = _guard_project(tmp_path / "rename")
-    _git(git_root, "mv", "supabase/migrations/0001_first.sql", "supabase/migrations/0001_moved.sql")
+    _git(
+        git_root,
+        "mv",
+        "supabase/migrations/202601010001_first.sql",
+        "supabase/migrations/202601010001_moved.sql",
+    )
     renamed = _commit_and_guard(git_root, project)
 
     git_root, project = _guard_project(tmp_path / "delete")
-    (project / "supabase/migrations/0001_first.sql").unlink()
+    (project / "supabase/migrations/202601010001_first.sql").unlink()
     deleted = _commit_and_guard(git_root, project)
 
     for result in (edited, renamed, deleted):
         assert result.returncode == 1
-        assert "0001_first.sql" in result.stderr
+        assert "202601010001_first.sql" in result.stderr
         assert "add a forward-fix migration" in result.stderr
     assert "R100" in renamed.stderr
 
 
 def test_forward_migration_guard_allows_only_the_pinned_repair_content(tmp_path: Path) -> None:
     git_root, project = _guard_project(tmp_path)
-    (project / "supabase/migrations/0002_second.sql").write_text(
+    (project / "supabase/migrations/202601010002_second.sql").write_text(
         "create table b (id int primary key);\n"
     )
     pinned = _commit_and_guard(git_root, project)
 
-    (project / "supabase/migrations/0002_second.sql").write_text(
+    (project / "supabase/migrations/202601010002_second.sql").write_text(
         "create table b (id int primary key, note text);\n"
     )
     changed_again = _commit_and_guard(git_root, project)
 
     assert pinned.returncode == 0, pinned.stderr
     assert changed_again.returncode == 1
-    assert "0002_second.sql" in changed_again.stderr
+    assert "202601010002_second.sql" in changed_again.stderr
 
 
 def test_forward_migration_guard_handles_a_project_below_the_git_root(tmp_path: Path) -> None:
     git_root, project = _guard_project(tmp_path, subdirectory="nested/project")
-    (project / "supabase/migrations/0002_second.sql").write_text(
+    (project / "supabase/migrations/202601010002_second.sql").write_text(
         "create table b (id int primary key);\n"
     )
     pinned = _commit_and_guard(git_root, project)
 
-    (project / "supabase/migrations/0001_first.sql").write_text("create table a (id bigint);\n")
+    (project / "supabase/migrations/202601010001_first.sql").write_text(
+        "create table a (id bigint);\n"
+    )
     edited = _commit_and_guard(git_root, project)
 
     assert pinned.returncode == 0, pinned.stderr
     assert edited.returncode == 1
-    assert "supabase/migrations/0001_first.sql" in edited.stderr
+    assert "supabase/migrations/202601010001_first.sql" in edited.stderr
 
 
 def test_forward_migration_guard_fails_when_it_cannot_compare(tmp_path: Path) -> None:

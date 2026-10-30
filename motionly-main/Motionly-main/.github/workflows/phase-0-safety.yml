@@ -475,7 +475,14 @@ jobs:
           psql "$DB_URL" --command "drop database if exists motionly_restore;"
           psql "$DB_URL" --command "create database motionly_restore;"
           psql "$DB_URL" --set ON_ERROR_STOP=1 --file scripts/backup_restore_seed.sql
-          MOTIONLY_BACKUP_RESTORE_ACK=restore-target bash scripts/verify_backup_restore.sh "$DB_URL" "postgresql://postgres:postgres@127.0.0.1:54322/motionly_restore"
+          # The verifier accepts only named libpq services backed by protected
+          # credential files, never database URLs (local Supabase defaults).
+          install -m 700 -d "$RUNNER_TEMP/pg"
+          export PGSERVICEFILE="$RUNNER_TEMP/pg/pg_service.conf" PGPASSFILE="$RUNNER_TEMP/pg/pgpass"
+          printf '[motionly_source]\nhost=127.0.0.1\nport=54322\ndbname=postgres\nuser=postgres\n[motionly_restore]\nhost=127.0.0.1\nport=54322\ndbname=motionly_restore\nuser=postgres\n' > "$PGSERVICEFILE"
+          printf '127.0.0.1:54322:*:postgres:postgres\n' > "$PGPASSFILE"
+          chmod 600 "$PGSERVICEFILE" "$PGPASSFILE"
+          MOTIONLY_BACKUP_RESTORE_ACK=restore-target bash scripts/verify_backup_restore.sh motionly_source motionly_restore
 
   staging-canary:
     if: github.event_name == 'workflow_dispatch' && inputs.run_staging_canary == true

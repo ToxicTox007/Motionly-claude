@@ -1,9 +1,9 @@
 import argparse
 import json
+import logging
 import sys
 from uuid import UUID
 
-from app.api.errors import ApiError
 from app.core.config import get_settings
 from app.core.production import validate_production_settings
 from app.repositories.billing import SupabaseBillingRepository
@@ -22,11 +22,13 @@ from app.services.operations import MetricsRegistry, OperationsRepository
 from app.services.remote_visual import remote_visual_provider_from_settings
 from app.services.visual_intelligence import LocalMLVisualIntelligenceProvider
 from app.services.visual_jobs import local_visual_model_identity
-from app.workers.executor_protocol import open_protocol_channel
+from app.workers.executor_protocol import error_reply, open_protocol_channel
 from app.workers.inference_fingerprint import (
     VISUAL_CAPABILITY_IDS,
     enforce_registry_fingerprint,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -159,7 +161,7 @@ def _serve() -> None:
     # Before the models load: only `channel` may write to the real stdout.
     channel = open_protocol_channel()
     execute = _runner()
-    print("VISUAL_DEBUG executor_ready", file=sys.stderr, flush=True)
+    logger.info("visual_executor_ready")
     for line in sys.stdin:
         request: dict[str, object] = {}
         try:
@@ -168,31 +170,20 @@ def _serve() -> None:
                 channel.send({"id": request.get("id"), "result": {"ok": True}})
                 continue
             payload = dict(request.get("payload") or {})
-            print(
-                "VISUAL_DEBUG request_received "
-                f"workspace_id={payload.get('workspace_id')} "
-                f"project_id={payload.get('project_id')} "
-                f"video_id={payload.get('video_id')}",
-                file=sys.stderr,
-                flush=True,
+            logger.info(
+                "visual_job_received",
+                extra={
+                    "workspace_id": payload.get("workspace_id"),
+                    "project_id": payload.get("project_id"),
+                    "video_id": payload.get("video_id"),
+                },
             )
             response = {
                 "id": request.get("id"),
                 "result": execute(payload),
             }
-        except ApiError as exc:
-            response = {
-                "id": request.get("id"),
-                "error": exc.message,
-                "error_code": exc.code,
-            }
         except Exception as exc:
-            from app.core.logging import redact_string
-            response = {
-                "id": request.get("id"),
-                "error": redact_string(str(exc)),
-                "error_code": type(exc).__name__,
-            }
+            response = error_reply(request.get("id"), exc)
         channel.send(response)
 
 

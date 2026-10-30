@@ -11,6 +11,7 @@ from app.api.errors import ApiError
 from app.orchestration.contracts import (
     EnqueueStepRequest,
     EnqueueStepResult,
+    FailWorkflowRunRequest,
     assert_identifier_only_history,
     job_id_for,
 )
@@ -88,9 +89,12 @@ class BullMQActivities:
             # dispatcher is cancelling this Temporal workflow via the durable
             # cancellation request written by the project-delete trigger. Log it
             # at info, never error.
+            # These codes are the SQL error tokens (WORKFLOW_NOT_FOUND, ...),
+            # which the repository now maps from PostgREST errors (WJ-04).
             non_retryable_codes = {
                 "workflow_step_transport_conflict",
                 "workflow_not_found",
+                "workflow_terminal",
             }
             if error.code == "workflow_not_found":
                 activity.logger.info(
@@ -110,6 +114,41 @@ class BullMQActivities:
                 "BullMQ identifier enqueue is temporarily unavailable.",
                 type="bullmq_enqueue_unavailable",
             ) from None
+
+    @activity.defn(name="fail_workflow_run")
+    async def fail_workflow_run(self, request: FailWorkflowRunRequest) -> None:
+        """Mark the canonical run failed when its Temporal execution fails.
+
+        Without this, a workflow that failed on the Temporal side (activity
+        retries exhausted, step outcome timeout, plan revision conflict) left
+        the database run non-terminal forever (audit WJ-06). Idempotent: an
+        already-terminal or deleted run is left alone.
+        """
+        assert_identifier_only_history(request)
+        if self.workflow_repository is None or not hasattr(
+            self.workflow_repository, "fail_workflow_run"
+        ):
+            return
+        try:
+            _run, changed = await asyncio.to_thread(
+                self.workflow_repository.fail_workflow_run,
+                workflow_run_id=UUID(request.workflow_run_id),
+                workspace_id=UUID(request.workspace_id),
+                project_id=UUID(request.project_id),
+                error_code=request.error_code,
+            )
+        except ApiError as error:
+            if error.code == "workflow_not_found":
+                return
+            raise ApplicationError(error.message, type=error.code) from None
+        activity.logger.warning(
+            "workflow_run_failed_by_orchestration",
+            extra={
+                "workflow_run_id": request.workflow_run_id,
+                "error_code": request.error_code,
+                "changed": changed,
+            },
+        )
 
     def _enqueue(self, request: EnqueueStepRequest) -> EnqueueStepResult:
         job_id = job_id_for(request)

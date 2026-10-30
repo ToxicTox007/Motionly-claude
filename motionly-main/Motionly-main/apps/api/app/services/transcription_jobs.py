@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -31,9 +32,14 @@ def queue_transcription_for_upload(
     if (
         existing
         and existing.uploaded_video_id == upload.id
-        and existing.status
-        in {TranscriptStatus.QUEUED, TranscriptStatus.PROCESSING, TranscriptStatus.READY}
         and not force
+        and (
+            existing.status == TranscriptStatus.READY
+            or (
+                existing.status in {TranscriptStatus.QUEUED, TranscriptStatus.PROCESSING}
+                and not _transcript_is_stale(existing)
+            )
+        )
     ):
         return existing
 
@@ -72,12 +78,38 @@ def queue_transcription_for_upload(
             quality_status=TranscriptQualityStatus.AUDIO_FAILED,
             quality_reasons=["audio_extraction_failed"],
         )
-    transcription_queue.enqueue_transcription(
-        project_id=upload.project_id,
-        workspace_id=upload.workspace_id,
-        video_id=upload.id,
-    )
+    try:
+        transcription_queue.enqueue_transcription(
+            project_id=upload.project_id,
+            workspace_id=upload.workspace_id,
+            video_id=upload.id,
+        )
+    except Exception:
+        # The row is already committed; never leave a QUEUED transcript that no
+        # job will process, because later requests would return it as
+        # in-progress work (audit WJ-13).
+        caption_repository.update_transcript(
+            transcript=transcript,
+            status=TranscriptStatus.FAILED,
+            error_code="queue_enqueue_failed",
+            error_message="Transcription could not be queued; it can be retried.",
+        )
+        raise
     return transcript
+
+
+# Longer than a transcription can legitimately take across all BullMQ attempts
+# (3 x the 15 min executor timeout plus backoff).
+TRANSCRIPT_STALE_AFTER = timedelta(hours=2)
+
+
+def _transcript_is_stale(transcript: TranscriptRecord, *, now: datetime | None = None) -> bool:
+    """A QUEUED/PROCESSING transcript nobody touched for TRANSCRIPT_STALE_AFTER:
+    its job was lost (worker killed, enqueue lost), so it is re-queued."""
+    updated_at = transcript.updated_at
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    return (now or datetime.now(UTC)) - updated_at > TRANSCRIPT_STALE_AFTER
 
 
 def run_transcription_for_upload(

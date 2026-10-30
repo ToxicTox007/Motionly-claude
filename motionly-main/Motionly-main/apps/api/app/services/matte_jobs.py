@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -30,6 +31,10 @@ logger = logging.getLogger(__name__)
 # no runtime/route is available (a test or a non-registry enqueue path) so the
 # pending cache key and the stored identity still agree with each other.
 _FALLBACK_MATTE_MODEL_VERSION = "matte.segmentation"
+
+# Longer than the worker can legitimately spend on one matte across all BullMQ
+# attempts (3 x the 15 min executor timeout plus backoff).
+MATTE_STALE_AFTER = timedelta(hours=2)
 
 
 def matte_model_version(runtime: object | None) -> str:
@@ -201,11 +206,13 @@ def enqueue_matte_for_upload(
         uploaded_video_id=upload_id,
     )
     if not force:
-        if existing and existing.status in {
-            MatteStatus.PENDING,
-            MatteStatus.PROCESSING,
-            MatteStatus.COMPLETED,
-        }:
+        if existing and (
+            existing.status == MatteStatus.COMPLETED
+            or (
+                existing.status in {MatteStatus.PENDING, MatteStatus.PROCESSING}
+                and not _matte_is_stale(existing)
+            )
+        ):
             logger.info(
                 "matte_enqueue_cache_hit",
                 extra={"queue_name": MatteQueue.queue_name, "status": existing.status.value},
@@ -230,18 +237,47 @@ def enqueue_matte_for_upload(
         segmentation_settings=settings,
         model_version=version,
     )
-    job = matte_queue.enqueue_matte(
-        project_id=project_id,
-        workspace_id=workspace_id,
-        video_id=upload_id,
-        matte_id=record.id,
-        registry_fingerprint=_matte_registry_fingerprint(runtime),
-    )
+    try:
+        job = matte_queue.enqueue_matte(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            video_id=upload_id,
+            matte_id=record.id,
+            registry_fingerprint=_matte_registry_fingerprint(runtime),
+        )
+    except Exception:
+        # Never leave a PENDING row that no job will ever process: a later
+        # request would treat it as a cache hit (audit WJ-13).
+        _mark_matte_failed(
+            repository,
+            record,
+            error_code="queue_enqueue_failed",
+            error_message="The matte job could not be queued; it can be retried.",
+            log_extra={"queue_name": MatteQueue.queue_name, "matte_id": str(record.id)},
+        )
+        raise
     logger.info(
         "matte_job_enqueued",
-        extra={"queue_name": job.queue_name, "status": record.status.value, "cache_hit": False},
+        extra={
+            "queue_name": job.queue_name,
+            "matte_id": str(record.id),
+            "status": record.status.value,
+            "cache_hit": False,
+        },
     )
     return record, job
+
+
+def _matte_is_stale(record: MatteRecord, *, now: datetime | None = None) -> bool:
+    """A PENDING/PROCESSING matte nobody has touched for MATTE_STALE_AFTER.
+
+    Its job was lost (worker killed, enqueue lost) and BullMQ's own retries are
+    long exhausted, so a new request re-queues it instead of waiting forever.
+    """
+    updated_at = record.updated_at
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    return (now or datetime.now(UTC)) - updated_at > MATTE_STALE_AFTER
 
 
 def run_matte_for_upload(
@@ -264,15 +300,26 @@ def run_matte_for_upload(
         video_id=video_id,
         workspace_id=workspace_id,
     )
-    record = (
-        repository.mattes.get(matte_id)
-        if matte_id and hasattr(repository, "mattes")
-        else repository.latest_matte_for_upload(
+    if matte_id is not None:
+        # Resolve the exact row the API enqueued, from the database, scoped to
+        # this tenant (audit WJ-08). A worker process has no in-memory copy of
+        # API-created rows, so the old dict lookup always missed and the job
+        # processed a different, default-settings row instead.
+        record = repository.get_matte(
+            matte_id=matte_id, workspace_id=workspace_id, project_id=project_id
+        )
+        if record is None:
+            raise ApiError(
+                404,
+                "matte_not_found",
+                "The matte this job was queued for no longer exists.",
+            )
+    else:
+        record = repository.latest_matte_for_upload(
             workspace_id=workspace_id,
             project_id=project_id,
             uploaded_video_id=video_id,
         )
-    )
     if record is None:
         # The matte identity comes from the executed gateway route (plan Task
         # 33); without one (a degraded/fixture path) the neutral fallback keeps
@@ -303,35 +350,44 @@ def run_matte_for_upload(
         return record
 
     record = repository.transition_matte(record=record, status=MatteStatus.PROCESSING)
-    storage = create_object_storage(
-        root=media_work_dir,
-        supabase_url=supabase_url,
-        service_role_key=service_role_key,
-    )
-    source_path = materialize_upload_source(upload=upload, storage=storage)
-    source_hash = source_file_sha256(source_path)
-    final_cache_key = build_matte_cache_key(
-        upload_id=video_id,
-        source_file_hash=source_hash,
-        segmentation_settings=record.segmentation_settings,
-        model_version=record.model_version,
-    )
-    completed = repository.find_matte_by_cache_key(
-        workspace_id=workspace_id,
-        project_id=project_id,
-        uploaded_video_id=video_id,
-        cache_key=final_cache_key,
-    )
-    if completed and completed.status == MatteStatus.COMPLETED and completed.matte:
-        return repository.transition_matte(
-            record=record,
-            status=MatteStatus.COMPLETED,
-            cache_key=final_cache_key,
-            source_file_hash=source_hash,
-            matte=completed.matte,
-        )
-
+    log_extra = {
+        "queue_name": MatteQueue.queue_name,
+        "matte_id": str(record.id),
+        "workspace_id": str(workspace_id),
+        "project_id": str(project_id),
+    }
+    # Everything after the PROCESSING transition runs inside the try, so a
+    # failed download, hash or cache lookup marks the matte FAILED instead of
+    # leaving it PROCESSING forever (audit WJ-09).
     try:
+        storage = create_object_storage(
+            root=media_work_dir,
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
+        )
+        source_path = materialize_upload_source(upload=upload, storage=storage)
+        source_hash = source_file_sha256(source_path)
+        final_cache_key = build_matte_cache_key(
+            upload_id=video_id,
+            source_file_hash=source_hash,
+            segmentation_settings=record.segmentation_settings,
+            model_version=record.model_version,
+        )
+        completed = repository.find_matte_by_cache_key(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            uploaded_video_id=video_id,
+            cache_key=final_cache_key,
+        )
+        if completed and completed.status == MatteStatus.COMPLETED and completed.matte:
+            return repository.transition_matte(
+                record=record,
+                status=MatteStatus.COMPLETED,
+                cache_key=final_cache_key,
+                source_file_hash=source_hash,
+                matte=completed.matte,
+            )
+
         matte_path = (
             f"workspaces/{workspace_id}/projects/{project_id}/segmentation/"
             f"{video_id}/{final_cache_key.removeprefix('matte:v1:')}.mp4"
@@ -402,6 +458,7 @@ def run_matte_for_upload(
                     ],
                     check=True,
                     env=media_tool_env(),
+                    timeout=120,
                 )
                 matte_model = FIXTURE_MATTE_MODEL
                 matte_provenance = FIXTURE_MATTE_LABEL
@@ -438,8 +495,7 @@ def run_matte_for_upload(
             status=MatteStatus.COMPLETED,
         )
         logger.info(
-            "matte_job_completed",
-            extra={"queue_name": MatteQueue.queue_name, "status": MatteStatus.COMPLETED.value},
+            "matte_job_completed", extra={**log_extra, "status": MatteStatus.COMPLETED.value}
         )
         return repository.transition_matte(
             record=record,
@@ -450,38 +506,60 @@ def run_matte_for_upload(
         )
     except ApiError as exc:
         logger.warning(
-            "matte_job_failed",
-            extra={"queue_name": MatteQueue.queue_name, "status": "failed", "error_code": exc.code},
+            "matte_job_failed", extra={**log_extra, "status": "failed", "error_code": exc.code}
         )
-        repository.transition_matte(
-            record=record,
-            status=MatteStatus.FAILED,
+        _mark_matte_failed(
+            repository,
+            record,
             error_code=exc.code,
             error_message=exc.message,
-            increment_retry=True,
+            log_extra=log_extra,
         )
         raise
     except Exception as exc:
         logger.warning(
             "matte_job_failed",
-            extra={
-                "queue_name": MatteQueue.queue_name,
-                "status": "failed",
-                "error_code": type(exc).__name__,
-            },
+            extra={**log_extra, "status": "failed", "error_code": type(exc).__name__},
         )
-        repository.transition_matte(
-            record=record,
-            status=MatteStatus.FAILED,
+        _mark_matte_failed(
+            repository,
+            record,
             error_code="matte_generation_failed",
             error_message="Background matte generation failed and can be retried.",
-            increment_retry=True,
+            log_extra=log_extra,
         )
         raise ApiError(
             502,
             "matte_generation_failed",
             "Background matte generation failed and can be retried.",
         ) from exc
+
+
+def _mark_matte_failed(
+    repository: InMemoryVisualRepository,
+    record: MatteRecord,
+    *,
+    error_code: str,
+    error_message: str,
+    log_extra: dict[str, str],
+) -> None:
+    """Record a failed attempt without masking the original error.
+
+    The PROCESSING -> FAILED write is compare-and-set; if a concurrent execution
+    already finished the matte, its result stands and this attempt only logs.
+    """
+    try:
+        repository.transition_matte(
+            record=record,
+            status=MatteStatus.FAILED,
+            error_code=error_code,
+            error_message=error_message,
+            increment_retry=True,
+        )
+    except ApiError as conflict:
+        logger.warning(
+            "matte_failure_not_recorded", extra={**log_extra, "error_code": conflict.code}
+        )
 
 
 def matte_availability(record: MatteRecord | None) -> dict[str, object]:

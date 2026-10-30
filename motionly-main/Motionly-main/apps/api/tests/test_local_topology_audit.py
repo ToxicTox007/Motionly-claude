@@ -38,6 +38,7 @@ def test_plan_only_report_covers_every_service_queue_and_feature_path() -> None:
     features = report["feature_test_order"]
     expected_service_order = [
         "volume-permissions",
+        "db-tls",
         "postgres",
         "temporal-postgres",
         "redis",
@@ -45,6 +46,7 @@ def test_plan_only_report_covers_every_service_queue_and_feature_path() -> None:
         "temporal-schema",
         "temporal",
         "temporal-namespace",
+        "db-roles",
         "supabase-auth",
         "supabase-rest",
         "supabase-storage",
@@ -175,8 +177,9 @@ def test_plan_only_mode_is_required_and_json_report_is_machine_readable(
 
     report = json.loads(capsys.readouterr().out)
     assert report["audit"]["mode"] == "plan-only"
-    assert [service["name"] for service in report["service_start_order"]][:4] == [
+    assert [service["name"] for service in report["service_start_order"]][:5] == [
         "volume-permissions",
+        "db-tls",
         "postgres",
         "temporal-postgres",
         "redis",

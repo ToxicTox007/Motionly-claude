@@ -50,6 +50,28 @@ if [[ -n "$violations" ]]; then
   exit 1
 fi
 
+# A new migration must sort after every migration on the base ref and use the
+# name infra/db/migrate.sh accepts. Both the Supabase CLI and migrate.sh refuse
+# to apply a pending migration older than the latest applied one, so a late
+# version would pass review and then fail the release.
+base_latest="$(git ls-tree --name-only "$base_ref" -- "$canonical_dir/" 2>/dev/null \
+  | xargs -r -n1 basename | grep -E '^[0-9]{12}_' | LC_ALL=C sort | tail -n 1 | cut -d_ -f1 || true)"
+ordering_violations=""
+while IFS=$'\t' read -r status path rest; do
+  [[ "$status" == "A" ]] || continue
+  file="$(basename "$path")"
+  if [[ ! "$file" =~ ^[0-9]{12}_[a-z0-9_]+\.sql$ ]]; then
+    ordering_violations+="invalid name (want <12-digit version>_<lower_snake_name>.sql): $path"$'\n'
+  elif [[ -n "$base_latest" && ! "${file%%_*}" > "$base_latest" ]]; then
+    ordering_violations+="version not after $base_latest on $base_ref: $path"$'\n'
+  fi
+done <<<"$canonical_changes"
+if [[ -n "$ordering_violations" ]]; then
+  echo "New migrations must be named and ordered after the base branch:" >&2
+  printf '%s' "$ordering_violations" >&2
+  exit 1
+fi
+
 deprecated_additions="$(changes "$deprecated_dir" | awk '$1 == "A" { print }')"
 if [[ -n "$deprecated_additions" ]]; then
   echo "$deprecated_dir is deprecated; use $canonical_dir instead:" >&2

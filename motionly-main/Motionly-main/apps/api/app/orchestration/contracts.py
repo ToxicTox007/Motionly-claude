@@ -68,6 +68,16 @@ _RUN_STATES = frozenset(
 )
 _MAX_STEPS = 32
 
+# Temporal ``workflow.patched`` ids used by MotionlyWorkflow. Their marker
+# payload ({"id": ..., "deprecated": ...}) is part of history, so the
+# identifier-only history guard must recognise exactly these ids.
+BOUNDED_STEP_WAIT_PATCH = "bounded-step-outcome-wait-v1"
+FAIL_CANONICAL_RUN_PATCH = "fail-canonical-run-v1"
+ACTIVITY_RETRY_BUDGET_PATCH = "activity-retry-budget-v2"
+WORKFLOW_PATCH_IDS = frozenset(
+    {BOUNDED_STEP_WAIT_PATCH, FAIL_CANONICAL_RUN_PATCH, ACTIVITY_RETRY_BUDGET_PATCH}
+)
+
 
 class HistoryPayloadRejected(ValueError):
     """Raised without echoing a rejected value that may contain sensitive data."""
@@ -181,6 +191,19 @@ class EnsureProposalRequest:
     workspace_id: str
     project_id: str
     request_hash: str
+
+    def __post_init__(self) -> None:
+        assert_identifier_only_history(self)
+
+
+@dataclass(frozen=True)
+class FailWorkflowRunRequest:
+    """Orchestration-side terminal failure of the canonical run (audit WJ-06)."""
+
+    workflow_run_id: str
+    workspace_id: str
+    project_id: str
+    error_code: str
 
     def __post_init__(self) -> None:
         assert_identifier_only_history(self)
@@ -306,6 +329,9 @@ def assert_identifier_only_history(value: object, *, path: str = "payload") -> N
     if isinstance(value, EnsureDraftRenderRequest):
         _validate_ensure_draft_render_request(asdict(value), path)
         return
+    if isinstance(value, FailWorkflowRunRequest):
+        _validate_fail_run_request(asdict(value), path)
+        return
     if isinstance(value, EnsureDraftRenderResult):
         _validate_ensure_draft_render_result(asdict(value), path)
         return
@@ -337,6 +363,10 @@ def _validate_known_mapping(value: Mapping[object, object], path: str) -> None:
         _validate_ensure_proposal_result(mapping, path)
     elif keys == frozenset({"workflow_run_id", "workspace_id", "project_id", "request_hash"}):
         _validate_ensure_proposal_request(mapping, path)
+    elif keys == frozenset({"workflow_run_id", "workspace_id", "project_id", "error_code"}):
+        _validate_fail_run_request(mapping, path)
+    elif keys == frozenset({"id", "deprecated"}):
+        _validate_patch_marker(mapping, path)
     elif "proposal_id" in keys and "decision_id" in keys and "decision" in keys:
         _validate_approval_gate_signal(mapping, path)
     elif "job_id" in keys:
@@ -530,6 +560,27 @@ def _validate_ensure_proposal_result(value: Mapping[str, object], path: str) -> 
     _hash_field(value, "request_id", path)
     _hash_field(value, "context_digest", path)
     _enum_field(value, "proposal_state", _PROPOSAL_STATES, path)
+
+
+def _validate_fail_run_request(value: Mapping[str, object], path: str) -> None:
+    fields = {"workflow_run_id", "workspace_id", "project_id", "error_code"}
+    _exact_fields(value, fields, fields, path)
+    _uuid_field(value, "workflow_run_id", path)
+    _uuid_field(value, "workspace_id", path)
+    _uuid_field(value, "project_id", path)
+    _name_field(value, "error_code", path, maximum=120)
+
+
+def _validate_patch_marker(value: Mapping[str, object], path: str) -> None:
+    if value.get("id") not in WORKFLOW_PATCH_IDS or not isinstance(value.get("deprecated"), bool):
+        raise HistoryPayloadRejected(f"{path} is not a known workflow patch marker")
+
+
+def orchestration_error_code(value: object) -> str:
+    """An identifier-safe error code for history (``_NAME_RE``)."""
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value or ""))
+    text = re.sub(r"[^a-z0-9_.-]+", "_", text.lower()).strip("_.-")[:120]
+    return text if text and _NAME_RE.match(text) else "orchestration_failed"
 
 
 def _validate_ensure_draft_render_request(value: Mapping[str, object], path: str) -> None:

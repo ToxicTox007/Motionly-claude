@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from threading import RLock
 from uuid import UUID, uuid4
@@ -25,7 +25,8 @@ RENDER_JOB_COLUMNS = (
     "id,workspace_id,project_id,uploaded_video_id,caption_track_id,workflow_run_id,edit_plan_id,"
     "source_plan_revision,timeline_revision_id,source_media_revision,status,planner_version,"
     "manifest,keep_segments,specs,template_id,render_engine,renderer_version,props_hash,"
-    "artifact_path,benchmark_ms,logs,progress_pct,error_code,error_message,created_at,updated_at"
+    "artifact_path,benchmark_ms,logs,progress_pct,error_code,error_message,created_at,updated_at,"
+    "attempt_id,attempt_number"
 )
 RENDER_JOB_EVENT_COLUMNS = (
     "id,render_job_id,workspace_id,project_id,event_type,from_status,to_status,progress_pct,"
@@ -48,6 +49,42 @@ RENDER_TERMINAL_STATUSES = frozenset(
 )
 # Terminal states as stored, including the legacy 'succeeded' alias of complete.
 _RENDER_TERMINAL_DB_STATUSES = "(complete,succeeded,failed,canceled)"
+# motionly_claim_render_attempt refusals, by the state that caused them.
+_CLAIM_ERRORS = {
+    "RENDER_ALREADY_COMPLETE": RenderJobStatus.COMPLETE,
+    "RENDER_CANCELED": RenderJobStatus.CANCELED,
+    "RENDER_TERMINAL_STATE": RenderJobStatus.FAILED,
+}
+
+
+def _attempt_superseded() -> ApiError:
+    return ApiError(
+        409,
+        "render_attempt_superseded",
+        "Another attempt owns this render now; this attempt stops.",
+    )
+
+
+def _raise_unclaimable(status: RenderJobStatus) -> None:
+    """A worker attempt cannot start on a finished, canceled or failed render."""
+    if status == RenderJobStatus.COMPLETE:
+        raise ApiError(409, "render_already_complete", "This render has already completed.")
+    if status == RenderJobStatus.CANCELED:
+        raise ApiError(409, "render_cancelled", "Canceled renders cannot be processed.")
+    if status == RenderJobStatus.FAILED:
+        raise ApiError(409, "render_terminal_state", "This render has already failed.")
+
+
+def _supabase_error_message(response: httpx.Response) -> str | None:
+    """The RAISE message of a failed PostgREST RPC call, if any."""
+    if response.status_code < 400:
+        return None
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    message = body.get("message") if isinstance(body, dict) else None
+    return message if isinstance(message, str) else None
 
 
 @dataclass
@@ -113,6 +150,10 @@ class RenderJobRecord:
     error_message: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # The worker attempt that owns the render (database audit DB-11): set by
+    # claim_render_attempt, released when the render is requeued.
+    attempt_id: UUID | None = None
+    attempt_number: int = 0
 
     def to_response(self, events: list[RenderJobEventRecord] | None = None) -> RenderJobResponse:
         return RenderJobResponse(
@@ -381,6 +422,7 @@ class InMemoryRenderRepository:
         error_message: str | None = None,
         metadata: dict[str, object] | None = None,
         require_active: bool = False,
+        attempt_id: UUID | None = None,
     ) -> RenderJobRecord:
         """Move ``job`` to ``status`` and record the event.
 
@@ -388,7 +430,28 @@ class InMemoryRenderRepository:
         while the stored job is still queued or running, and raises 409
         ``render_not_cancelable`` otherwise (e.g. the worker completed it
         concurrently). Callers that race the worker, like user cancel, use it.
+
+        ``attempt_id`` makes it conditional on the worker attempt still owning
+        the render (database audit DB-11); otherwise 409
+        ``render_attempt_superseded``. Moving a render to queued releases its
+        attempt, as the database trigger does.
         """
+        if attempt_id is not None:
+            with self._lock:
+                stored = self.render_jobs.get(job.id, job)
+                if stored.attempt_id != attempt_id:
+                    raise _attempt_superseded()
+                return self.transition_job(
+                    job=stored,
+                    status=status,
+                    progress_pct=progress_pct,
+                    message=message,
+                    event_type=event_type,
+                    error_code=error_code,
+                    error_message=error_message,
+                    metadata=metadata,
+                    require_active=require_active,
+                )
         if require_active:
             with self._lock:
                 stored = self.render_jobs.get(job.id, job)
@@ -441,6 +504,8 @@ class InMemoryRenderRepository:
                     "Workflow render completion requires one canonical export.",
                 )
         from_status = job.status
+        if status == RenderJobStatus.QUEUED and from_status != RenderJobStatus.QUEUED:
+            job.attempt_id = None
         job.status = status
         job.progress_pct = progress_pct
         job.error_code = error_code
@@ -457,6 +522,46 @@ class InMemoryRenderRepository:
             metadata=metadata,
         )
         return job
+
+    def claim_render_attempt(
+        self,
+        *,
+        job: RenderJobRecord,
+        attempt_id: UUID,
+        progress_pct: int = 10,
+        message: str = "Render attempt started.",
+        event_type: str = "attempt_started",
+    ) -> RenderJobRecord:
+        """Start worker attempt ``attempt_id`` on the render (database audit DB-11).
+
+        Mirrors ``motionly_claim_render_attempt``: the render moves to
+        preparing and belongs to this attempt; a newer claim takes over an
+        attempt still marked running; finished, failed and canceled renders
+        cannot be claimed.
+        """
+        with self._lock:
+            stored = self.render_jobs.get(job.id, job)
+            if stored.attempt_id == attempt_id:
+                return stored
+            _raise_unclaimable(stored.status)
+            from_status = stored.status
+            stored.status = RenderJobStatus.PREPARING
+            stored.progress_pct = progress_pct
+            stored.attempt_id = attempt_id
+            stored.attempt_number += 1
+            stored.error_code = None
+            stored.error_message = None
+            stored.updated_at = datetime.now(UTC)
+            self.add_event(
+                job=stored,
+                event_type=event_type,
+                from_status=from_status,
+                to_status=RenderJobStatus.PREPARING,
+                progress_pct=progress_pct,
+                message=message,
+                metadata={"attempt_id": str(attempt_id), "attempt_number": stored.attempt_number},
+            )
+            return stored
 
     def get_render_job(
         self,
@@ -740,6 +845,7 @@ class InMemoryRenderRepository:
         thumbnail_url: str | None = None,
         settings_summary: dict[str, object] | None = None,
         benchmark_ms: int,
+        attempt_id: UUID | None = None,
     ) -> tuple[RenderJobRecord, ExportRecord]:
         """Atomically publish a rendered artifact or return its exact prior result.
 
@@ -769,8 +875,11 @@ class InMemoryRenderRepository:
                     "p_thumbnail_url": thumbnail_url,
                     "p_settings_summary": self._json_safe(summary),
                     "p_benchmark_ms": benchmark_ms,
+                    "p_attempt_id": str(attempt_id) if attempt_id is not None else None,
                 },
             )
+            if _supabase_error_message(response) == "RENDER_ATTEMPT_SUPERSEDED":
+                raise _attempt_superseded()
             self._raise_for_supabase(response)
             rows = response.json()
             if not isinstance(rows, list) or len(rows) != 1 or not rows[0].get("export_id"):
@@ -869,6 +978,8 @@ class InMemoryRenderRepository:
                     "render_completion_status_invalid",
                     "Render is not in a completable state.",
                 )
+            if job.attempt_id != attempt_id:
+                raise _attempt_superseded()
             if canonical is not None:
                 actual = (
                     canonical.storage_bucket,
@@ -1166,6 +1277,9 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             "updated_at": datetime.now(UTC).isoformat(),
         }
         params: dict[str, object] = {"id": f"eq.{job.id}", "select": RENDER_JOB_COLUMNS}
+        if values.get("attempt_id") is not None:
+            # Only while this worker attempt still owns the render (DB-11).
+            params["attempt_id"] = f"eq.{values['attempt_id']}"
         if values.get("require_active"):
             params["status"] = f"not.in.{_RENDER_TERMINAL_DB_STATUSES}"
         else:
@@ -1184,9 +1298,14 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             compat.pop("logs", None)
         return compat
 
-    def _transitioned_row(self, response: httpx.Response) -> RenderJobRecord:
+    def _transitioned_row(
+        self, response: httpx.Response, *, attempt_id: object = None
+    ) -> RenderJobRecord:
         self._raise_for_supabase(response)
         rows = response.json()
+        if not rows and attempt_id is not None:
+            # Another attempt owns the render now, or it was requeued.
+            raise _attempt_superseded()
         if not rows:
             # Conditional transition matched nothing: the job reached a
             # terminal state first (or was deleted).
@@ -1209,7 +1328,7 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
                 params=params,
                 json=self._transition_compat_payload(job=job, values=values, payload=payload),
             )
-        updated = self._transitioned_row(response)
+        updated = self._transitioned_row(response, attempt_id=values.get("attempt_id"))
         self.add_event(
             job=updated,
             event_type=values.get("event_type") or status.value,
@@ -1236,7 +1355,7 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
                 params=params,
                 json=self._transition_compat_payload(job=job, values=values, payload=payload),
             )
-        updated = self._transitioned_row(response)
+        updated = self._transitioned_row(response, attempt_id=values.get("attempt_id"))
         await self.add_event_async(
             job=updated,
             event_type=values.get("event_type") or status.value,
@@ -1248,6 +1367,51 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             metadata=values.get("metadata"),
         )
         return updated
+
+    def claim_render_attempt(
+        self,
+        *,
+        job: RenderJobRecord,
+        attempt_id: UUID,
+        progress_pct: int = 10,
+        message: str = "Render attempt started.",
+        event_type: str = "attempt_started",
+    ) -> RenderJobRecord:
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_claim_render_attempt",
+            json={
+                "p_workspace_id": str(job.workspace_id),
+                "p_project_id": str(job.project_id),
+                "p_render_job_id": str(job.id),
+                "p_attempt_id": str(attempt_id),
+                "p_progress_pct": progress_pct,
+                "p_message": message,
+                "p_event_type": event_type,
+            },
+        )
+        refusal = _supabase_error_message(response) or ""
+        if refusal == "RENDER_NOT_FOUND":
+            raise ApiError(404, "render_job_not_found", "Render job was not found.")
+        if refusal in _CLAIM_ERRORS:
+            _raise_unclaimable(_CLAIM_ERRORS[refusal])
+        self._raise_for_supabase(response)
+        claim = response.json()
+        if isinstance(claim, list):
+            claim = claim[0] if claim else {}
+        if not isinstance(claim, dict) or not claim.get("attempt_id"):
+            raise ApiError(
+                502, "render_attempt_claim_invalid", "Render attempt claim returned no attempt."
+            )
+        return replace(
+            job,
+            status=self._app_status(claim.get("status")),
+            progress_pct=progress_pct if claim.get("claimed") else job.progress_pct,
+            attempt_id=UUID(str(claim["attempt_id"])),
+            attempt_number=int(claim.get("attempt_number") or 0),
+            error_code=None if claim.get("claimed") else job.error_code,
+            error_message=None if claim.get("claimed") else job.error_message,
+        )
 
     def create_export(self, **values: object) -> ExportRecord:
         payload = self._json_safe(values)
@@ -1773,6 +1937,8 @@ class SupabaseRenderRepository(InMemoryRenderRepository):
             error_message=str(row["error_message"]) if row.get("error_message") else None,
             created_at=datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00")),
             updated_at=datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00")),
+            attempt_id=UUID(str(row["attempt_id"])) if row.get("attempt_id") else None,
+            attempt_number=int(row.get("attempt_number") or 0),
         )
 
     def _event_from_row(self, row: dict[str, object]) -> RenderJobEventRecord:

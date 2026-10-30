@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,6 +26,8 @@ import httpx
 from app.api.errors import ApiError
 from app.schemas.api_keys import ApiKeyResponse
 from app.services.supabase import SupabaseRestClient
+
+logger = logging.getLogger(__name__)
 
 API_KEY_COLUMNS = (
     "id,workspace_id,name,fingerprint,prefix,last4,created_by,created_at,last_used_at,revoked_at"
@@ -290,7 +293,13 @@ class SupabaseApiKeyRepository(InMemoryApiKeyRepository):
     def _raise_for_supabase(response: httpx.Response) -> None:
         if response.status_code < 400:
             return
-        raise ApiError(502, "supabase_request_failed", response.text)
+        # The PostgREST body names tables, constraints and values; log it for
+        # operators, never return it to the caller (database audit DB-19).
+        logger.warning(
+            "supabase_api_key_request_failed",
+            extra={"status_code": response.status_code, "response": response.text[:1000]},
+        )
+        raise ApiError(502, "supabase_request_failed", "API key data could not be saved.")
 
 
 def _parse_datetime(value: str) -> datetime:

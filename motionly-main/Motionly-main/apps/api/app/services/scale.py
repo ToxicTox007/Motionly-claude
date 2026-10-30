@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -488,7 +489,7 @@ def _generate_broll(
 
     # Blocking poll loop (Tier 1, plan Task 18 / 16B). Poll the bound route until
     # it returns artifacts; a ``GenerationOperationOutput`` means still running.
-    max_wait_s = float(getattr(video_generation_route, "timeout_s", None) or 900.0)
+    max_wait_s = _bounded_poll_budget_s(getattr(video_generation_route, "timeout_s", None))
     poll_interval_s = 2.0
     deadline = time.monotonic() + max_wait_s
     video_url: str | None = None
@@ -533,6 +534,8 @@ def _generate_broll(
                 "Generated B-roll did not complete in time.",
             )
         time.sleep(poll_interval_s)
+        # Back off up to 15 s: a long generation is polled ~60 times, not 450.
+        poll_interval_s = min(15.0, poll_interval_s * 1.5)
 
     operation = _transition_operation(
         inference_operations_repository,
@@ -765,7 +768,7 @@ def _generate_broll_non_blocking(
     # worker would apply before re-enqueuing the poll job (delay_seconds); here
     # the same engine drives it to the terminal artifact.
     delay_s = handle.first_delay_s
-    deadline = time.monotonic() + float(getattr(route, "timeout_s", None) or 900.0)
+    deadline = time.monotonic() + _bounded_poll_budget_s(getattr(route, "timeout_s", None))
     while True:
         result = engine.poll_once(operation.id)
         if result.is_terminal:
@@ -784,6 +787,23 @@ def _generate_broll_non_blocking(
                 "Generated B-roll did not complete in time.",
             )
         time.sleep(max(0.0, result.retry_after_s or delay_s))
+
+
+def _bounded_poll_budget_s(route_timeout_s: object) -> float:
+    """How long a job may poll a provider inside one worker attempt.
+
+    The route's own timeout, but always a minute short of the persistent
+    executor's request timeout (PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS, 15 min by
+    default): the poll gives up first with a clean 504 instead of the executor
+    being killed mid-poll (audit WJ-22). The operation stays resumable by its
+    idempotency key, so a later attempt resumes polling and never resubmits.
+    """
+    route_budget = float(route_timeout_s or 900.0)
+    try:
+        executor_ms = float(os.environ.get("PYTHON_EXECUTOR_REQUEST_TIMEOUT_MS") or 900_000)
+    except ValueError:
+        executor_ms = 900_000.0
+    return max(30.0, min(route_budget, executor_ms / 1000.0 - 60.0))
 
 
 def _transition_operation(

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, statfsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,8 +46,96 @@ function rendererPath() {
 }
 
 const pythonExecutors = new Map();
+// One pool of persistent executors per executor name (audit WJ-03). Each child
+// serves one request at a time, so a request is only written to an idle child:
+// its timeout measures its own execution, never time spent queued behind other
+// jobs, and a timeout or crash only fails the request that child was running.
+const executorPools = new Map();
 const workerStartedAt = Date.now();
 let firstJobStarted = false;
+
+const DEFAULT_DOMAIN_EXECUTOR_POOL_CAP = 2;
+const SPECIALIZED_EXECUTOR_QUEUES = new Map([
+  ["visual-ml", ["visual_analysis"]],
+  ["matte-gpu", ["matte_extraction"]],
+]);
+const NON_PYTHON_QUEUES = new Set([
+  "visual_analysis",
+  "matte_extraction",
+  "render_remotion",
+  "maintenance",
+]);
+
+/**
+ * Persistent executors kept for `name`. Specialized GPU executors get one child
+ * per configured slot of their queue; the shared `domain` executor gets one per
+ * BullMQ slot of the queues it serves, capped by PYTHON_EXECUTOR_POOL_SIZE
+ * (default 2) because every child loads the full application.
+ */
+export function executorPoolSize(
+  name,
+  queues = queueNames,
+  environment = null,
+) {
+  const read = (key) =>
+    environment ? environment[key] : env(key) || undefined;
+  const demandFor = (names) =>
+    names.reduce((total, queueName) => total + workerConcurrency(queueName), 0);
+  const specialized = SPECIALIZED_EXECUTOR_QUEUES.get(name);
+  const demand = specialized
+    ? demandFor(queues.filter((queueName) => specialized.includes(queueName)))
+    : demandFor(
+        queues.filter((queueName) => !NON_PYTHON_QUEUES.has(queueName)),
+      );
+  const configured = Number.parseInt(
+    String(read("PYTHON_EXECUTOR_POOL_SIZE") || ""),
+    10,
+  );
+  const cap = specialized
+    ? Math.max(1, demand)
+    : Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_DOMAIN_EXECUTOR_POOL_CAP;
+  return Math.max(1, Math.min(Math.max(1, demand), cap));
+}
+
+function executorPool(name, size) {
+  let pool = executorPools.get(name);
+  if (!pool) {
+    pool = { name, size, members: [], waiters: [] };
+    executorPools.set(name, pool);
+  }
+  pool.size = Math.max(1, size);
+  return pool;
+}
+
+function acquireExecutorSlot(pool) {
+  const idle = pool.members.find((member) => !member.busy);
+  if (idle) {
+    idle.busy = true;
+    return Promise.resolve(idle);
+  }
+  if (pool.members.length < pool.size) {
+    const index = pool.members.length;
+    // The first child keeps the bare name so single-slot logs are unchanged.
+    const member = {
+      key: index === 0 ? pool.name : `${pool.name}-${index + 1}`,
+      busy: true,
+    };
+    pool.members.push(member);
+    return Promise.resolve(member);
+  }
+  return new Promise((resolveSlot) => pool.waiters.push(resolveSlot));
+}
+
+function releaseExecutorSlot(pool, member) {
+  const next = pool.waiters.shift();
+  if (next) {
+    next(member);
+    return;
+  }
+  member.busy = false;
+}
 
 function diskFreeBytes(path = env("MEDIA_WORK_DIR", "/tmp")) {
   try {
@@ -298,6 +386,9 @@ function handleSupervisorStdout(state, chunk) {
       const error = pythonExecutorError(
         response.error_code || "python_worker_error",
         String(response.error),
+        // The executor classifies failures that cannot succeed on a retry
+        // (invalid payload, catalog mismatch, ...); see WJ-17.
+        { retryable: response.retryable !== false },
       );
       pending.reject(error);
       continue;
@@ -406,8 +497,19 @@ export async function persistentPythonExecutor(
   payload,
   options = {},
 ) {
-  const state = await ensurePythonExecutor(name, moduleName, options);
-  return sendSupervisorRequest(state, payload);
+  const pool = executorPool(
+    name,
+    Number.isInteger(options.poolSize) && options.poolSize > 0
+      ? options.poolSize
+      : executorPoolSize(name),
+  );
+  const member = await acquireExecutorSlot(pool);
+  try {
+    const state = await ensurePythonExecutor(member.key, moduleName, options);
+    return await sendSupervisorRequest(state, payload);
+  } finally {
+    releaseExecutorSlot(pool, member);
+  }
 }
 
 export function closePythonExecutors() {
@@ -420,6 +522,7 @@ export function closePythonExecutors() {
     }
   }
   pythonExecutors.clear();
+  executorPools.clear();
 }
 
 export function resetPythonExecutorsForTest() {
@@ -465,6 +568,7 @@ async function runRenderJob(job) {
         id: String(job.id),
         attemptsMade: Number(job.attemptsMade || 0),
       },
+      renderAttemptId: job.motionlyRenderAttemptId || null,
       onProgress: async ({ progressPct, message, eventType, metadata }) => {
         await job.updateProgress(progressPct);
         console.log(
@@ -526,8 +630,19 @@ export function domainJobPayload(job) {
     queue_name: String(job?.queueName),
     workspace_id: String(data.workspace_id),
     project_id: String(data.project_id),
-    resource_id: String(data.resource_id),
+    resource_id: data.resource_id ? String(data.resource_id) : null,
     render_engine: String(data.render_engine || "ffmpeg_basic"),
+    // Transport attempts already made, so per-kind retry caps (the paid
+    // edit-planner limit) see the real attempt number (audit WJ-12).
+    attempts_made: Math.max(0, Number(job?.attemptsMade || 0)),
+    ...(data.registry_fingerprint
+      ? { registry_fingerprint: String(data.registry_fingerprint) }
+      : {}),
+    ...(data.trace_id ? { trace_id: String(data.trace_id) } : {}),
+    // The FFmpeg render path fences its render writes with this run's attempt.
+    ...(job?.motionlyRenderAttemptId
+      ? { render_attempt_id: String(job.motionlyRenderAttemptId) }
+      : {}),
     ...workflowJobFields(data),
   };
 }
@@ -545,71 +660,77 @@ async function runDomainJob(job) {
   );
 }
 
-async function runRetentionJob() {
+// Bounded calls to the API's internal endpoints (audit WJ-10/WJ-11). The
+// long-running endpoints (retention, batch) are singleton-guarded on the API,
+// so a client-side timeout followed by a BullMQ retry is answered with
+// `already_running` instead of starting the work twice. The defaults stay under
+// Node fetch's built-in 300 s header timeout so behaviour is deterministic.
+function internalTimeoutMs(name, fallback) {
+  const parsed = Number.parseInt(String(env(name, "") || ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function internalApiPost(path, { timeoutMs, body = undefined, label }) {
   if (!hasApiConfig()) {
     throw new Error(
-      "maintenance retention requires WORKER_API_BASE_URL and WORKER_API_TOKEN",
+      `${label} requires WORKER_API_BASE_URL and WORKER_API_TOKEN`,
     );
   }
-  const response = await fetch(`${apiBaseUrl()}/internal/retention/run`, {
+  const headers = { "x-motionly-worker-token": workerToken() };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
     method: "POST",
-    headers: { "x-motionly-worker-token": workerToken() },
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok)
-    throw new Error(`retention endpoint returned HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(
+      `${label} endpoint returned HTTP ${response.status}`,
+    );
+    error.code = `internal_api_http_${response.status}`;
+    // 4xx answers (other than throttling/conflict) cannot succeed on retry.
+    error.retryable = !(
+      response.status >= 400 &&
+      response.status < 500 &&
+      ![408, 409, 425, 429].includes(response.status)
+    );
+    throw error;
+  }
   return response.json();
+}
+
+async function runRetentionJob() {
+  return internalApiPost("/internal/retention/run", {
+    label: "maintenance retention",
+    timeoutMs: internalTimeoutMs("RETENTION_REQUEST_TIMEOUT_MS", 290_000),
+  });
 }
 
 async function runGpuAutoscalingJob() {
-  if (!hasApiConfig()) {
-    throw new Error(
-      "maintenance autoscaling requires WORKER_API_BASE_URL and WORKER_API_TOKEN",
-    );
-  }
-  const response = await fetch(
-    `${apiBaseUrl()}/internal/operations/gpu-autoscaling/run`,
-    {
-      method: "POST",
-      headers: { "x-motionly-worker-token": workerToken() },
-    },
-  );
-  if (!response.ok)
-    throw new Error(
-      `gpu autoscaling endpoint returned HTTP ${response.status}`,
-    );
-  return response.json();
+  return internalApiPost("/internal/operations/gpu-autoscaling/run", {
+    label: "maintenance autoscaling",
+    timeoutMs: internalTimeoutMs("GPU_AUTOSCALING_REQUEST_TIMEOUT_MS", 60_000),
+  });
 }
 
 async function runBatchJob(job) {
-  if (!hasApiConfig()) {
-    throw new Error(
-      "batch planning requires WORKER_API_BASE_URL and WORKER_API_TOKEN",
-    );
-  }
-  const response = await fetch(
-    `${apiBaseUrl()}/internal/batches/${job.data.workspace_id}/${job.data.resource_id}/run`,
-    { method: "POST", headers: { "x-motionly-worker-token": workerToken() } },
+  return internalApiPost(
+    `/internal/batches/${job.data.workspace_id}/${job.data.resource_id}/run`,
+    {
+      label: "batch planning",
+      timeoutMs: internalTimeoutMs("BATCH_REQUEST_TIMEOUT_MS", 290_000),
+    },
   );
-  if (!response.ok)
-    throw new Error(`batch endpoint returned HTTP ${response.status}`);
-  return response.json();
 }
 
 async function sendHeartbeat() {
   if (!hasApiConfig()) return;
-  const response = await fetch(
-    `${apiBaseUrl()}/internal/operations/heartbeat`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-motionly-worker-token": workerToken(),
-      },
-      body: JSON.stringify(workerHeartbeatPayload(queueNames)),
-    },
-  );
-  if (!response.ok)
-    throw new Error(`heartbeat endpoint returned HTTP ${response.status}`);
+  await internalApiPost("/internal/operations/heartbeat", {
+    label: "heartbeat",
+    timeoutMs: 10_000,
+    body: workerHeartbeatPayload(queueNames),
+  });
 }
 
 async function reportProviderSlo(job, success, latencyMs, errorCode = null) {
@@ -623,25 +744,17 @@ async function reportProviderSlo(job, success, latencyMs, errorCode = null) {
     "batch_plan",
   ]);
   if (!providerKinds.has(String(job.data.kind))) return;
-  const response = await fetch(
-    `${apiBaseUrl()}/internal/operations/provider-slo`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-motionly-worker-token": workerToken(),
-      },
-      body: JSON.stringify({
-        provider: String(job.data.provider || job.queueName),
-        operation: String(job.data.kind),
-        success,
-        latency_ms: latencyMs,
-        error_code: errorCode,
-      }),
+  await internalApiPost("/internal/operations/provider-slo", {
+    label: "provider SLO",
+    timeoutMs: 10_000,
+    body: {
+      provider: String(job.data.provider || job.queueName),
+      operation: String(job.data.kind),
+      success,
+      latency_ms: latencyMs,
+      error_code: errorCode,
     },
-  );
-  if (!response.ok)
-    throw new Error(`provider SLO endpoint returned HTTP ${response.status}`);
+  });
 }
 
 function processEnv() {
@@ -661,6 +774,37 @@ export const MAX_WORKFLOW_RESULT_BYTES = 1_048_576;
 const MIN_WORKFLOW_RESULT_BYTES = 1_024;
 const DEFAULT_WORKFLOW_RESULT_BYTES = 262_144;
 const DEFAULT_WORKFLOW_LEASE_SECONDS = 3_600;
+const WORKFLOW_RPC_TIMEOUT_MS = 30_000;
+
+// A workflow step's outcome reaches Temporal only through these RPCs, so a
+// transient Supabase/gateway failure must not drop it (audit WJ-06). Business
+// rejections (PostgREST SQLSTATE codes such as P0001 for a stale claim) are not
+// retried; network errors, timeouts and gateway errors are, a few times.
+export function isTransientWorkflowRpcError(error) {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "TimeoutError" || error.name === "AbortError") return true;
+  if (error instanceof TypeError) return true; // fetch network failure
+  const code = String(error.code || "");
+  return code === "workflow_rpc_failed" || code === "workflow_rpc_invalid";
+}
+
+export async function withWorkflowRpcRetry(
+  operation,
+  { attempts = 3, baseDelayMs = 1_000, sleepImpl = sleep } = {},
+) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isTransientWorkflowRpcError(error))
+        throw error;
+      await sleepImpl(baseDelayMs * 2 ** (attempt - 1));
+    }
+  }
+  throw lastError;
+}
 
 function workflowError(code, message) {
   const error = new Error(message);
@@ -961,6 +1105,7 @@ export async function callWorkflowRpc(
     method: "POST",
     headers: supabaseHeaders(),
     body: JSON.stringify(parameters),
+    signal: AbortSignal.timeout(WORKFLOW_RPC_TIMEOUT_MS),
   });
   let payload = null;
   try {
@@ -974,7 +1119,13 @@ export async function callWorkflowRpc(
       500,
       "workflow RPC failed",
     );
-    throw workflowError(payload?.code || "workflow_rpc_failed", message);
+    // A gateway/server error without a PostgREST SQLSTATE is transient.
+    const code =
+      payload?.code ||
+      (response.status >= 500 || response.status === 429
+        ? "workflow_rpc_failed"
+        : "workflow_rpc_rejected");
+    throw workflowError(code, message);
   }
   return firstRpcResult(payload, rpcName);
 }
@@ -984,7 +1135,10 @@ export async function beginWorkflowStep(job, options = {}) {
   const parameters = workflowBeginParameters(job, options);
   if (!parameters) return null;
   return firstRpcResult(
-    await rpcCall("motionly_begin_workflow_step", parameters),
+    await withWorkflowRpcRetry(
+      () => rpcCall("motionly_begin_workflow_step", parameters),
+      options.rpcRetry,
+    ),
     "motionly_begin_workflow_step",
   );
 }
@@ -1019,7 +1173,10 @@ export async function completeWorkflowStep(
   };
   const rpcCall = options.rpcCall || callWorkflowRpc;
   const rpcResult = firstRpcResult(
-    await rpcCall("motionly_complete_workflow_step", parameters),
+    await withWorkflowRpcRetry(
+      () => rpcCall("motionly_complete_workflow_step", parameters),
+      options.rpcRetry,
+    ),
     "motionly_complete_workflow_step",
   );
   return { compact, rpcResult };
@@ -1064,7 +1221,10 @@ export async function failWorkflowStep(
   };
   const rpcCall = options.rpcCall || callWorkflowRpc;
   return firstRpcResult(
-    await rpcCall("motionly_fail_workflow_step", parameters),
+    await withWorkflowRpcRetry(
+      () => rpcCall("motionly_fail_workflow_step", parameters),
+      options.rpcRetry,
+    ),
     "motionly_fail_workflow_step",
   );
 }
@@ -1209,7 +1369,18 @@ function throwIfJobResultFailed(job, result) {
     typeof result.error_code === "string" && result.error_code.trim()
       ? result.error_code
       : defaultCode;
+  // An unhandled/skipped kind or an explicitly non-retryable domain failure
+  // cannot succeed on another attempt (audit WJ-17).
+  error.retryable = !(result.skipped === true || result.retryable === false);
   throw error;
+}
+
+/** True when another BullMQ attempt cannot change the outcome (WJ-17). */
+export function isPermanentJobFailure(error) {
+  if (!(error instanceof Error)) return false;
+  if (error.code === "upload_not_found" || error.code === "job_canceled")
+    return true;
+  return error.retryable === false;
 }
 
 export async function runJob(job, testOverrides = {}) {
@@ -1247,6 +1418,10 @@ export async function runJob(job, testOverrides = {}) {
   );
 
   await job.updateProgress(1);
+  // One render attempt id per run (database audit DB-11): the render belongs
+  // to this run until it finishes, is requeued or another run takes it over.
+  // A stalled redelivery is a new run with a new id.
+  if (job?.data?.kind === "render") job.motionlyRenderAttemptId = randomUUID();
   let result;
   let workflowContext = null;
   let claimToken = null;
@@ -1322,16 +1497,14 @@ export async function runJob(job, testOverrides = {}) {
       });
     }
   } catch (error) {
-    const uploadMissing =
-      error instanceof Error && error.code === "upload_not_found";
-    const canceled = error instanceof Error && error.code === "job_canceled";
-    if ((uploadMissing || canceled) && typeof job.discard === "function") {
+    const permanent = isPermanentJobFailure(error);
+    if (permanent && typeof job.discard === "function") {
       job.discard();
     }
     if (workflowContext && claimToken) {
       await failWorkflowStep(job, claimToken, error, {
         ...workflowOptions,
-        retryable: uploadMissing || canceled ? false : workflowRetryable(job),
+        retryable: permanent ? false : workflowRetryable(job),
       }).catch((callbackError) => {
         console.error(
           JSON.stringify({
@@ -1414,8 +1587,12 @@ function createWorker(queueName, connection) {
       error instanceof Error ? error.code || error.name : "worker_error";
     const canceled =
       errorCode === "job_canceled" || jobData.status === "canceled";
+    // A discarded (permanent) failure is not retried by BullMQ, so it must be
+    // persisted as terminal rather than "queued for retry" (WJ-17).
     const retrying =
       !canceled &&
+      !isPermanentJobFailure(error) &&
+      !job?.discarded &&
       Boolean(job && job.attemptsMade < Number(job.opts?.attempts || 1));
     console.error(
       JSON.stringify({
@@ -1458,6 +1635,7 @@ function createWorker(queueName, connection) {
           error instanceof Error ? error.message : String(error),
           retrying,
           failureCode,
+          job?.motionlyRenderAttemptId || null,
         );
       } catch (callbackError) {
         console.error(
@@ -1535,6 +1713,46 @@ function validateRemotionConfig() {
   }
 }
 
+/**
+ * Register the maintenance crons as BullMQ job schedulers (WJ-16).
+ *
+ * `upsertJobScheduler` keys a schedule by its stable name, so a changed
+ * RETENTION_CRON replaces the old pattern instead of adding a second schedule,
+ * and every replica converges on the same definition. Schedules are pinned to
+ * UTC. Anything else on the maintenance queue -- legacy `add(..., { repeat })`
+ * definitions from earlier releases, or a schedule this deployment no longer
+ * wants (gpu-autoscaling with GPU workers disabled) -- is removed.
+ */
+export async function registerMaintenanceSchedulers(queue, jobs) {
+  const wanted = new Set(jobs.map((job) => job.name));
+  for (const job of jobs) {
+    await queue.upsertJobScheduler(
+      job.name,
+      { pattern: job.pattern, tz: "UTC" },
+      { name: job.name, data: job.data },
+    );
+  }
+  const removed = [];
+  for (const scheduler of await queue.getJobSchedulers()) {
+    const key = String(scheduler.key || scheduler.id || "");
+    if (!key || wanted.has(key)) continue;
+    // Legacy repeatable entries use a hashed key; current schedulers use their id.
+    const done =
+      (await queue.removeJobScheduler(key).catch(() => false)) ||
+      (await queue.removeRepeatableByKey(key).catch(() => false));
+    if (done) removed.push(key);
+  }
+  if (removed.length > 0) {
+    console.log(
+      JSON.stringify({
+        event: "maintenance_schedulers_removed",
+        count: removed.length,
+      }),
+    );
+  }
+  return { registered: [...wanted], removed };
+}
+
 async function main() {
   // Before anything logs: every write to stdout/stderr is credential-redacted.
   installLogRedaction();
@@ -1579,12 +1797,10 @@ async function main() {
   let maintenanceQueue = null;
   if (queueNames.includes("maintenance")) {
     maintenanceQueue = queueFor("maintenance", connection);
-    for (const job of maintenanceRepeatJobs()) {
-      await maintenanceQueue.add(job.name, job.data, {
-        jobId: job.name,
-        repeat: { pattern: job.pattern },
-      });
-    }
+    await registerMaintenanceSchedulers(
+      maintenanceQueue,
+      maintenanceRepeatJobs(),
+    );
   }
   const workers = queueNames.map((queueName) =>
     createWorker(queueName, connection),
@@ -1613,9 +1829,33 @@ async function main() {
       queues: queueNames,
     }),
   );
+  const redisReachable = async () => {
+    try {
+      await Promise.race([
+        connection.ping(),
+        sleep(5_000).then(() => {
+          throw new Error("Redis ping timed out");
+        }),
+      ]);
+      return true;
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "worker_redis_unreachable",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return false;
+    }
+  };
   const heartbeatTimer = setInterval(
     () => {
-      markAlive();
+      // Liveness follows the queue connection, not just the timer (WJ-20): a
+      // worker that cannot reach Redis stops refreshing the file, so the
+      // container health check fails and the container is restarted.
+      void redisReachable().then((reachable) => {
+        if (reachable) markAlive();
+      });
       void sendHeartbeat().catch((error) =>
         console.error(
           JSON.stringify({
@@ -1632,7 +1872,25 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`Received ${signal}; closing BullMQ workers.`);
-    await Promise.allSettled(workers.map((worker) => worker.close()));
+    // Let active jobs finish, but never past the container's stop grace period
+    // (WJ-07): after WORKER_SHUTDOWN_TIMEOUT_MS the workers are force-closed
+    // and their unfinished jobs are recovered by BullMQ's stalled-job check.
+    const timeoutMs = internalTimeoutMs("WORKER_SHUTDOWN_TIMEOUT_MS", 840_000);
+    const drained = await Promise.race([
+      Promise.allSettled(workers.map((worker) => worker.close())).then(
+        () => true,
+      ),
+      sleep(timeoutMs).then(() => false),
+    ]);
+    if (!drained) {
+      console.error(
+        JSON.stringify({
+          event: "worker_shutdown_forced",
+          timeout_ms: timeoutMs,
+        }),
+      );
+      await Promise.allSettled(workers.map((worker) => worker.close(true)));
+    }
     clearInterval(heartbeatTimer);
     if (maintenanceQueue) await maintenanceQueue.close();
     closePythonExecutors();

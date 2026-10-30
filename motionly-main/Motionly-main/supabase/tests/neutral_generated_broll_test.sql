@@ -39,9 +39,10 @@ insert into auth.users (id, email, raw_user_meta_data) values
 insert into public.workspaces (id, name, owner_user_id) values
   ('18400000-0000-4000-8000-0000000000a1', 'Generated B-roll workspace',
    '18400000-0000-4000-8000-000000000001');
-insert into public.projects (id, workspace_id, name, created_by) values
+insert into public.projects (id, workspace_id, title, created_by) values
   ('18400000-0000-4000-8000-0000000000b1',
-   '18400000-0000-4000-8000-0000000000a1', 'Project', NULL);
+   '18400000-0000-4000-8000-0000000000a1', 'Project',
+   '18400000-0000-4000-8000-000000000001');
 
 set local role service_role;
 
@@ -65,7 +66,7 @@ select throws_ok(
     values
       ('18400000-0000-4000-8000-0000000000a1',
        '18400000-0000-4000-8000-0000000000b1',
-       'run' || 'way', 'op-2', 'clip', 'generated_user_content',
+       ('run' || 'way')::public.stock_provider, 'op-2', 'clip', 'generated_user_content',
        768, 1280, 5000, 'portrait', 1.0)$$,
   '23514', null,
   'a legacy-value provider asset is rejected'

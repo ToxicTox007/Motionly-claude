@@ -266,6 +266,46 @@ def test_upi_capture_webhook_unlocks_agency_and_is_idempotent() -> None:
     assert len(repository.list_billing_adjustments(workspace_id=workspace_id)) == 1
 
 
+def test_a_concurrent_delivery_of_an_event_being_applied_is_deferred() -> None:
+    # Audit WJ-23: check-then-apply let two concurrent deliveries both apply.
+    repository = InMemoryBillingRepository()
+    envelope = _captured_order_envelope(event_id="evt_concurrent", workspace_id=uuid4())
+    assert (
+        repository.claim_gateway_event(event_id=envelope.id, event_type="payment.captured")
+        == "claimed"
+    )
+    with pytest.raises(ApiError) as exc:
+        _run_webhook(envelope, repository)
+    assert exc.value.status_code == 409
+    assert exc.value.code == "gateway_event_in_progress"
+
+
+def test_a_failed_apply_releases_the_event_for_redelivery(monkeypatch) -> None:
+    repository = InMemoryBillingRepository()
+    workspace_id = uuid4()
+    envelope = _captured_order_envelope(event_id="evt_retry", workspace_id=workspace_id)
+    import app.api.billing as billing_api
+
+    real_apply = billing_api.apply_gateway_event_async
+    calls = {"n": 0}
+
+    async def flaky_apply(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ledger unavailable")
+        return await real_apply(**kwargs)
+
+    monkeypatch.setattr(billing_api, "apply_gateway_event_async", flaky_apply)
+    with pytest.raises(RuntimeError):
+        _run_webhook(envelope, repository)
+    assert not repository.has_processed_gateway_event(envelope.id)
+
+    redelivered = _run_webhook(envelope, repository)
+    assert redelivered.duplicate is False
+    assert repository.has_processed_gateway_event(envelope.id)
+    assert len(repository.list_billing_adjustments(workspace_id=workspace_id)) == 1
+
+
 def test_charge_failed_marks_past_due_then_charged_restores_plan() -> None:
     repository = InMemoryBillingRepository()
     workspace_id = uuid4()

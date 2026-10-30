@@ -1,0 +1,73 @@
+# Prometheus alerting rules for the background-job system (audit WJ-20).
+#
+# Load with `rule_files: [prometheus-alerts.yml]` in a Prometheus that scrapes
+# the API's GET /metrics (Authorization: Bearer $METRICS_BEARER_TOKEN). Every
+# metric used here is exported by apps/api/app/api/operations.py; the test
+# apps/api/tests/test_monitoring_alert_rules.py keeps the two in sync.
+# Signals that live only in logs (Temporal reconciliation, retention runs) are
+# listed in docs/workers/job-recovery-runbook.md.
+groups:
+  - name: motionly-queues
+    rules:
+      - alert: MotionlyQueueWithoutWorker
+        expr: motionly_queue_live_workers == 0 and on(queue) motionly_queue_queued > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Queue {{ $labels.queue }} has waiting jobs and no live worker"
+          description: >-
+            No worker heartbeat (WORKER_HEARTBEAT_MAX_AGE_SECONDS) lists this
+            queue while jobs wait in it. Check the worker service that serves it.
+
+      - alert: MotionlyQueueOldestJobStale
+        expr: motionly_queue_oldest_seconds > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest job in {{ $labels.queue }} waited more than 120 s"
+          description: >-
+            The queue is backing up (SLO: oldest queued job under 120 s). Add
+            worker capacity or check PYTHON_EXECUTOR_POOL_SIZE for the service.
+
+      - alert: MotionlyQueueBackpressure
+        expr: motionly_queue_backpressure > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue {{ $labels.queue }} is rejecting new work (backpressure)"
+
+      - alert: MotionlyQueueDeadLetters
+        expr: motionly_queue_dead_letter > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue {{ $labels.queue }} has dead-lettered jobs"
+          description: See "Replaying failed jobs" in docs/workers/job-recovery-runbook.md.
+
+      - alert: MotionlyQueueFailureBurst
+        expr: delta(motionly_queue_failed[1h]) > 20
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 20 jobs failed in {{ $labels.queue }} in the last hour"
+
+  - name: motionly-workers
+    rules:
+      - alert: MotionlyWorkerHeartbeatStale
+        expr: motionly_worker_heartbeat_age_seconds > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker {{ $labels.worker_id }} stopped sending heartbeats"
+
+      - alert: MotionlyWorkerHeartbeatReadFailing
+        expr: motionly_worker_heartbeat_error_count > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The API cannot read worker heartbeats ({{ $labels.error }})"

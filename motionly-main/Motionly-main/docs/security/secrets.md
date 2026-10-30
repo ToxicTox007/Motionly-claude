@@ -8,11 +8,11 @@ The release process must never commit a local secret directory. Application cont
 
 Create or retrieve these file names before starting `infra/docker-compose.gpu.yml`:
 
-- `postgres_password`
+- `postgres_password`: the `postgres` (and Supabase `supabase_admin`) database password. Only the database servers, `db-migrate`, `temporal-db-init` and Realtime receive it; Auth, REST and Storage log in with their own passwords (see [Database credentials and TLS](#database-credentials-and-tls)).
 - `redis_password`
 - `supabase_service_role_key`
 - `supabase_worker_key`: a Supabase JWT whose `role` claim is `motionly_worker` — the restricted database role (migration `202610190501_task18_restricted_worker_role.sql`) that PostgREST switches into for worker requests. It is mounted ONLY into the media worker services (never the API or web) so a compromised worker image cannot reach the `auth` schema or storage buckets outside the four workers use. Workers read it as `SUPABASE_SERVICE_ROLE_KEY_FILE`; it is NOT the service-role key.
-- `supabase_jwt_secret`
+- `supabase_jwt_secret`: the HS256 key that signs every Supabase JWT. Mounted only into the services that verify or issue tokens (GoTrue, PostgREST, Storage, Realtime, the API, the Temporal dispatcher/worker and the reconciler). Media workers never receive it: with it a compromised worker could mint a `service_role` token and step around `motionly_worker`. Workers start with `PROCESS_ROLE=worker`, which does not require it.
 - `realtime_db_enc_key`: Supabase Realtime's 16-byte key for encrypting tenant settings it stores in Postgres
 - `realtime_secret_key_base`: Realtime's Phoenix endpoint secret
 - `realtime_metrics_jwt_secret`: signs the tokens Realtime's own `/metrics` endpoint accepts; the pinned release refuses to start without it
@@ -40,6 +40,15 @@ Operators upgrading from a release with per-vendor keys remove these old secret 
 
 Temporal PEM values are retrieved from SSM Parameter Store as single-line base64 values, decoded directly into protected files, and never placed in Compose environment values or command arguments. Certificate identities and authorization roles are defined in [Temporal mTLS/authZ staged canary](../ops/temporal-mtls-canary.md).
 
+## Database credentials and TLS
+
+Two one-shot Compose services create database credentials on the host itself; there is nothing to provision in SSM (database audit DB-21):
+
+- `db-tls` (`infra/db/generate-tls.sh`) issues an internal database CA (ten years) and a server certificate for `postgres` and `temporal-postgres` (two years, re-issued by the same CA 60 days before it expires). The CA key stays in the `postgres-tls-ca-key` volume, which only `db-tls` mounts; the servers mount `postgres-tls-server`, every client mounts the CA certificate (`postgres-tls-ca`). Both servers accept password logins from other containers only over TLS (`infra/db/pg_hba.conf`, `pg_hba.temporal.conf`), and every client verifies the certificate and host name. The one exception is Supabase Realtime's tenant connection, which its self-hosted seed pins to plain TCP: `supabase_admin` may still log in to the Supabase database without TLS.
+- `db-roles` (`infra/db/apply-role-passwords.sh`) gives `supabase_auth_admin`, `authenticator` and `supabase_storage_admin` their own random passwords, kept in the `db-auth-credentials`, `db-rest-credentials` and `db-storage-credentials` volumes. Each volume is mounted read-only into its one service; every release sets the passwords on the roles again. To rotate one, delete its volume and release.
+
+Rolling back to a release from before these services existed would leave its Auth, REST and Storage unable to log in, so the release agent first sets those three roles back to `postgres_password` when the release it activates has no `db-roles` service.
+
 ## Environment-file contract
 
-The protected environment file also supplies bootstrap values consumed directly by upstream images, including `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `SUPABASE_JWT_SECRET`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`, plus the required application domains. See [Compose VM deployment](../ops/compose-vm-deployment.md) for release-agent behavior.
+The protected environment file also supplies bootstrap values consumed directly by upstream images, including `REDIS_PASSWORD`, `SUPABASE_JWT_SECRET`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`, plus the required application domains. It carries no database password. See [Compose VM deployment](../ops/compose-vm-deployment.md) for release-agent behavior.

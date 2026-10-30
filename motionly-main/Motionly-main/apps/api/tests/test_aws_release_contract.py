@@ -255,6 +255,8 @@ def test_activation_fails_when_any_compose_step_fails_even_inside_an_if(failing:
             "set -euo pipefail",
             "MOTIONLY_COMPUTE_PROFILE=cpu",
             f'compose_for() {{ shift; echo "compose $1" >>"$CALLS"; [[ "$1" != {failing} ]]; }}',
+            # A current release (no older compose file to adapt to): no-op.
+            _function(agent, "restore_shared_role_passwords"),
             _function(agent, "activate_release"),
             'if ! activate_release /release; then echo "activation failed"; fi',
         ]
@@ -274,6 +276,54 @@ def test_activation_fails_when_any_compose_step_fails_even_inside_an_if(failing:
     assert "activation failed" in result.stdout
     order = ["config", "pull", "up", "exec"]
     assert [s for s in steps if s != "compose"] == order[: order.index(failing) + 1]
+
+
+@pytest.mark.parametrize("has_db_roles", [True, False])
+def test_activating_a_release_from_before_db_roles_restores_the_shared_passwords(
+    has_db_roles: bool, tmp_path: Path
+) -> None:
+    """Database audit DB-21: newer releases give Auth, REST and Storage their own
+    database passwords. An older release (rollback, or restoring it after a
+    failed upgrade) logs them in with the postgres password, so the agent sets
+    the three roles back first; the password reaches psql only on stdin."""
+    agent = AGENT.read_text("utf-8")
+    release = tmp_path / "release"
+    (release / "bundle" / "infra").mkdir(parents=True)
+    (release / "secrets").mkdir()
+    (release / "secrets" / "postgres_password").write_text("it's-secret\n", encoding="utf-8")
+    compose = "services:\n  postgres:\n    image: x\n"
+    if has_db_roles:
+        compose += "  db-roles:\n    image: x\n"
+    (release / "bundle" / "infra" / "docker-compose.gpu.yml").write_text(compose, encoding="utf-8")
+    calls = tmp_path / "calls"
+    stdin = tmp_path / "stdin"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            'compose_for() { shift; echo "$*" >>"$CALLS"; '
+            'if [[ "$1" == exec ]]; then cat >"$STDIN"; fi; }',
+            _function(agent, "restore_shared_role_passwords"),
+            f'restore_shared_role_passwords "{release}"',
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "CALLS": str(calls), "STDIN": str(stdin)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    if has_db_roles:
+        assert not calls.exists()
+        return
+    steps = calls.read_text().splitlines()
+    assert steps[0].startswith("up -d --wait") and steps[0].endswith(" postgres")
+    assert steps[1].startswith("exec -T postgres psql") and "it's-secret" not in steps[1]
+    sql = stdin.read_text()
+    for role in ("authenticator", "supabase_auth_admin", "supabase_storage_admin"):
+        assert f"alter role {role} with password 'it''s-secret';" in sql
+    assert "set log_statement = 'none';" in sql
 
 
 @pytest.mark.parametrize("failing", ["validate_release", "validate_release_bundle", "s3_download"])
@@ -329,7 +379,14 @@ def test_the_host_installs_only_tools_the_release_agent_runs() -> None:
         r'install -m 755 "\$source_root/[^"]+" "\$agent_root/bin/([^"]+)"', bootstrap
     )
     assert "apply-release" in installed
-    unused = [name for name in installed if name != "apply-release" and f"bin/{name}" not in agent]
+    # A tool is used when the release agent runs it, or when a systemd unit the
+    # bootstrap installs runs it (the database backup timers run db-backup).
+    unit_commands = set(re.findall(r"ExecStart=/opt/motionly/agent/bin/([a-z0-9-]+)", bootstrap))
+    unused = [
+        name
+        for name in installed
+        if name != "apply-release" and f"bin/{name}" not in agent and name not in unit_commands
+    ]
     assert unused == []
 
 
@@ -341,9 +398,7 @@ def test_the_release_agent_writes_every_secret_file_production_compose_mounts() 
     import yaml
 
     compose = yaml.safe_load((ROOT / "infra" / "docker-compose.gpu.yml").read_text("utf-8"))
-    mounted = {
-        Path(entry["file"]).name for entry in compose["secrets"].values() if "file" in entry
-    }
+    mounted = {Path(entry["file"]).name for entry in compose["secrets"].values() if "file" in entry}
     agent = (ROOT / "scripts" / "deploy" / "apply_release.sh").read_text("utf-8")
     written = set(re.findall(r'"\$secrets_dir/([a-z0-9_]+)"', agent))
     for loop in re.findall(r"for name in ([a-z0-9 -]+); do\n\s+fetch_base64_secret_to_file", agent):

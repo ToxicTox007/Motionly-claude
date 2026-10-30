@@ -92,4 +92,4 @@ RUN useradd --create-home --uid 10001 motionly \
     && chown -R motionly:motionly /home/motionly /app /var/cache/motionly /var/data/motionly /tmp/motionly
 WORKDIR /app/apps/worker
 USER motionly
-CMD ["sh", "-c", "cd /app && python -m app.workers.prefetch_models && cd /app/apps/worker && node src/worker.mjs --loop"]
+CMD ["sh", "-c", "cd /app && python -m app.workers.prefetch_models && cd /app/apps/worker && exec node src/worker.mjs --loop"]

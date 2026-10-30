@@ -5,6 +5,7 @@ import os
 import select
 import subprocess
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -25,6 +26,21 @@ class QueueJobStatus(StrEnum):
     FAILED = "failed"
     CANCELED = "canceled"
     DEAD_LETTER = "dead_letter"
+
+
+ACTIVE_QUEUE_JOB_STATUSES = frozenset({QueueJobStatus.QUEUED, QueueJobStatus.RUNNING})
+
+
+def assert_valid_queue_job_id(job_id: str) -> None:
+    """Reject ids BullMQ would refuse, before any row depends on the enqueue.
+
+    BullMQ rejects a custom job id that is an integer, or that contains ``:``
+    unless it splits into exactly three parts (its legacy repeatable-job form).
+    Motionly ids are ``--``-joined and never contain ``:``, so the in-memory
+    registry used in tests fails the same way production would.
+    """
+    if not job_id or ":" in job_id or str(job_id).strip().isdigit():
+        raise ValueError(f"Queue job id is not a valid BullMQ custom id: {job_id!r}")
 
 
 @dataclass(frozen=True)
@@ -59,6 +75,9 @@ class EnqueuedJob:
     trace_id: str | None = None
     error_code: str | None = None
     error_message: str | None = None
+    # The render attempt id the BullMQ worker generated for this run (database
+    # audit DB-11); render writes are conditional on it. Never enqueued.
+    render_attempt_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,8 +128,27 @@ class QueueRegistry:
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
         registry_fingerprint: str | None = None,
+        replace_terminal: bool = False,
     ) -> EnqueuedJob:
+        """Add a job with BullMQ's id semantics.
+
+        An existing job with the same id is returned unchanged while it is
+        queued or running (BullMQ jobId dedupe). A finished job (succeeded,
+        failed, dead-lettered, canceled) is also returned unchanged unless
+        ``replace_terminal`` is set, in which case a fresh job replaces it, so a
+        deliberate re-run executes instead of silently resolving to the old
+        record (audit WJ-02).
+        """
         increment_queue_calls()
+        assert_valid_queue_job_id(job_id)
+        existing = self.jobs.get(job_id)
+        # BullMQ ids are unique per queue: an id in another queue is another job.
+        if (
+            existing is not None
+            and existing.queue_name == queue_name
+            and (existing.status in ACTIVE_QUEUE_JOB_STATUSES or not replace_terminal)
+        ):
+            return existing
         job = EnqueuedJob(
             id=job_id,
             kind=kind,
@@ -483,8 +521,10 @@ class BullMQQueueRegistry:
         max_attempts: int = 3,
         render_engine: str = "ffmpeg_basic",
         registry_fingerprint: str | None = None,
+        replace_terminal: bool = False,
     ) -> EnqueuedJob:
         increment_queue_calls()
+        assert_valid_queue_job_id(job_id)
         payload = {
             "id": job_id,
             "kind": kind,
@@ -506,6 +546,9 @@ class BullMQQueueRegistry:
             "render_engine": render_engine,
             "registry_fingerprint": registry_fingerprint,
             "trace_id": current_trace_id.get(),
+            # A finished BullMQ job with this id is replaced instead of being
+            # returned as a silent duplicate (audit WJ-02).
+            "replace_terminal": bool(replace_terminal),
         }
         return self._job_from_bridge(self._bridge("enqueue", payload))
 
@@ -613,11 +656,14 @@ class BullMQQueueRegistry:
                     raise TimeoutError(f"BullMQ bridge timed out handling {command!r}")
                 line = process.stdout.readline()
             if not line:
-                stderr = process.stderr.read() if process.stderr else ""
+                stderr = self._bridge_stderr_tail()
                 self.close()
-                raise RuntimeError(stderr.strip() or "Persistent BullMQ bridge stopped")
+                raise RuntimeError(stderr or "Persistent BullMQ bridge stopped")
             response = json.loads(line)
             if response.get("id") != request_id:
+                # A late reply would shift every later answer by one; restart
+                # the bridge rather than keep a desynchronized channel.
+                self.close()
                 raise RuntimeError("Persistent BullMQ bridge response was out of sequence")
             if response.get("error"):
                 raise RuntimeError(str(response["error"]))
@@ -634,18 +680,57 @@ class BullMQQueueRegistry:
                 bufsize=1,
                 env=env,
             )
+            self._start_stderr_drain(self._bridge_process)
         return self._bridge_process
+
+    def _start_stderr_drain(self, process: subprocess.Popen[str]) -> None:
+        """Read the bridge's stderr continuously.
+
+        An undrained pipe fills (about 64 KiB) during, for example, a Redis
+        reconnect storm, and the bridge then blocks on its next stderr write and
+        stops answering (audit WJ-25). The tail is kept for error messages.
+        """
+        tail: deque[str] = deque(maxlen=20)
+        self._bridge_stderr_lines = tail
+        stream = process.stderr
+        if stream is None or not hasattr(stream, "__iter__"):
+            return
+
+        def drain() -> None:
+            try:
+                for line in stream:
+                    text = str(line).rstrip()
+                    if not text:
+                        continue
+                    tail.append(text)
+                    logger.warning("queue_bridge_stderr", extra={"message": text[-500:]})
+            except Exception:  # noqa: BLE001 - a closed/broken pipe just ends the drain
+                return
+
+        threading.Thread(target=drain, name="bullmq-bridge-stderr", daemon=True).start()
+
+    def _bridge_stderr_tail(self) -> str:
+        lines = getattr(self, "_bridge_stderr_lines", None)
+        return "\n".join(lines).strip() if lines else ""
 
     def close(self) -> None:
         process, self._bridge_process = self._bridge_process, None
         if process is None or process.poll() is not None:
             return
         if process.stdin:
-            process.stdin.close()
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
 
     def _job_from_bridge(self, data: object) -> EnqueuedJob:
         if not isinstance(data, dict):
@@ -734,6 +819,7 @@ class BaseQueue:
             )
             return duplicate
         raise_if_queue_backpressured(self.registry, target_queue_name)
+        assert_valid_queue_job_id(job_id)
         return self.registry.enqueue(
             job_id=job_id,
             kind=kind or self.kind,
@@ -744,9 +830,14 @@ class BaseQueue:
             resource_id=resource_id,
             render_engine=render_engine,
             registry_fingerprint=registry_fingerprint,
+            # Callers reach this point only when no queued/running duplicate
+            # exists, i.e. they deliberately want the work (re-)run. A retained
+            # finished job with the same deterministic id must not swallow it.
+            replace_terminal=True,
         )
 
     def _job_id(self, *parts: object) -> str:
+        """Deterministic BullMQ-safe id: parts joined with ``--`` (never ``:``)."""
         return "--".join(str(part) for part in parts if part is not None)
 
     def _active_duplicate(self, *, job_id: str, queue_name: str) -> EnqueuedJob | None:
@@ -917,9 +1008,7 @@ class BrollQueue(BaseQueue):
         job_payload: str = "{}",
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=":".join(
-                str(part) for part in ("broll", project_id, edit_plan_id, workspace_id)
-            ),
+            job_id=self._job_id("broll", project_id, edit_plan_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=edit_plan_id,
@@ -945,15 +1034,12 @@ class StockAssetEnrichmentQueue(BaseQueue):
             raise ValueError("stock asset enrichment refresh_key is required")
         refresh_digest = hashlib.sha256(normalized_refresh_key.encode("utf-8")).hexdigest()[:24]
         return self._enqueue(
-            job_id=":".join(
-                str(part)
-                for part in (
-                    "stock-asset-enrichment",
-                    project_id,
-                    asset_id,
-                    workspace_id,
-                    refresh_digest,
-                )
+            job_id=self._job_id(
+                "stock-asset-enrichment",
+                project_id,
+                asset_id,
+                workspace_id,
+                refresh_digest,
             ),
             workspace_id=workspace_id,
             project_id=project_id,
@@ -974,7 +1060,8 @@ class RenderQueue(BaseQueue):
         workspace_id: UUID,
         priority: int = 0,
     ) -> str:
-        return ":".join(
+        # ``--``-joined: BullMQ rejects custom ids containing ``:`` (audit WJ-01).
+        return "--".join(
             str(part)
             for part in (
                 "render",
@@ -1103,9 +1190,7 @@ class RegenerationQueue(BaseQueue):
         job_payload: str = "{}",
     ) -> EnqueuedJob:
         return self._enqueue(
-            job_id=":".join(
-                str(part) for part in ("regenerate", project_id, control_settings_id, workspace_id)
-            ),
+            job_id=self._job_id("regenerate", project_id, control_settings_id, workspace_id),
             workspace_id=workspace_id,
             project_id=project_id,
             resource_id=control_settings_id,

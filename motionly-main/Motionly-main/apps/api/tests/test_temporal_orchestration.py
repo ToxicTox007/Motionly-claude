@@ -1307,8 +1307,10 @@ def test_exact_role_main_validates_and_invokes_dispatcher(
     )
     calls = []
 
-    async def runner(value):
+    async def runner(value, *, progress=None):
         calls.append(("runner", value))
+        # The loop role reports progress for the liveness check (WJ-20).
+        assert callable(progress)
 
     def validate(value):
         calls.append(("validate", value))
@@ -1356,15 +1358,20 @@ def test_reconciler_cursor_prevents_old_noop_rows_from_starving_later_repairs() 
     )
     reconciler = WorkflowReconciler(repository=repository, temporal=temporal, limit=2)
 
+    # Terminal runs are no longer swept through the cursor with all history
+    # (audit WJ-18): the newest recently-terminal runs are checked directly, so
+    # the cancelled run whose Temporal execution still runs is repaired on the
+    # first pass instead of after every older no-op row.
     first = asyncio.run(reconciler.reconcile_once(stale_before=base + timedelta(minutes=1)))
-    second = asyncio.run(reconciler.reconcile_once(stale_before=base + timedelta(minutes=1)))
 
     assert first.inspected == 2
-    assert first.repaired == 0
-    assert second.inspected == 1
-    assert second.repaired == 1
+    assert first.repaired == 1
     assert temporal.signals[0][1].workflow_run_id == str(runs[2].id)
     assert temporal.signals[0][1].outcome == StepOutcome.CANCELLED
+
+    # Terminal history older than the recheck window is not inspected at all.
+    later = asyncio.run(reconciler.reconcile_once(stale_before=base + timedelta(days=2)))
+    assert later.inspected == 0
 
 
 def test_generic_worker_error_is_normalized_before_temporal_signal() -> None:
@@ -1539,7 +1546,9 @@ def test_v2_is_the_only_executable_contract_with_durable_proposal_gate() -> None
         )
     ).startswith(f"workflow--{run_id}--preprocess-source-v2--")
 
-    source = inspect.getsource(MotionlyWorkflow.run)
+    # The step sequence lives in ``_run_first_draft``; ``run`` wraps it to fail
+    # the canonical run on Temporal-side failures (audit WJ-06).
+    source = inspect.getsource(MotionlyWorkflow._run_first_draft)
     assert 'if input.workflow_version == "first-draft-v2"' in source
     assert '"ensure_workflow_proposal"' in source
     assert 'step_kind="generate_proposal"' in source

@@ -130,6 +130,52 @@ async def _update_plan_cuts(
     )
 
 
+async def _update_plan_unversioned(
+    repository,
+    *,
+    record,
+    project_id: UUID,
+    workspace_id: UUID,
+    plan_id: UUID,
+    plan,
+    summary,
+    target_duration_s: int,
+    change_type: str,
+    request: Request | None,
+):
+    """A plan edit whose client sent no expected_revision.
+
+    The edit was computed from ``record``, so it is saved only if the plan is
+    still at ``record.revision`` (database audit DB-10). Without this a second
+    editor's save between the read and the write was silently overwritten; now
+    it is a revision conflict (409) the editor already handles. A legacy row
+    without a revision keeps the old unconditional save.
+    """
+    revision = getattr(record, "revision", None)
+    if revision is None:
+        return await _update_plan_cuts(
+            repository,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            plan_id=plan_id,
+            plan=plan,
+            summary=summary,
+            target_duration_s=target_duration_s,
+        )
+    return await _update_plan_with_revision(
+        repository,
+        plan_id=plan_id,
+        expected_revision=revision,
+        new_plan=plan,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        summary=summary,
+        target_duration_s=target_duration_s,
+        change_type=change_type,
+        request=request,
+    )
+
+
 async def _update_plan_with_revision(
     repository,
     *,
@@ -710,14 +756,17 @@ async def update_plan_cuts(
             "plan_mutation_without_revision",
             extra={"plan_id": str(plan_id), "endpoint": "cuts", "project_id": str(project_id)},
         )
-        updated = await _update_plan_cuts(
+        updated = await _update_plan_unversioned(
             repository,
+            record=record,
             project_id=project_id,
             workspace_id=actor.workspace_id,
             plan_id=plan_id,
             plan=plan,
             summary=summary,
             target_duration_s=target_duration_s,
+            change_type="cuts_update",
+            request=request,
         )
     record_ai_feedback(
         request=request,
@@ -781,14 +830,17 @@ async def update_plan_caption_highlights(
                 "project_id": str(project_id),
             },
         )
-        updated = await _update_plan_cuts(
+        updated = await _update_plan_unversioned(
             repository,
+            record=record,
             project_id=project_id,
             workspace_id=actor.workspace_id,
             plan_id=plan_id,
             plan=plan,
             summary=summary,
             target_duration_s=record.target_duration_s,
+            change_type="caption_highlights_update",
+            request=request,
         )
     record_ai_feedback(
         request=request,
@@ -874,14 +926,17 @@ async def update_plan_manual_elements(
                 "project_id": str(project_id),
             },
         )
-        updated = await _update_plan_cuts(
+        updated = await _update_plan_unversioned(
             repository,
+            record=record,
             project_id=project_id,
             workspace_id=actor.workspace_id,
             plan_id=plan_id,
             plan=plan,
             summary=summary,
             target_duration_s=record.target_duration_s,
+            change_type="manual_elements_update",
+            request=request,
         )
     record_ai_feedback(
         request=request,

@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -14,9 +15,12 @@ from app.schemas.billing import (
 from app.services.billing import monthly_period
 from app.services.supabase import SupabaseRestClient
 
+logger = logging.getLogger(__name__)
+
 SUBSCRIPTION_COLUMNS = (
     "workspace_id,plan,status,gateway_customer_id,gateway_subscription_id,gateway_price_id,"
-    "current_period_start,current_period_end,cancel_at_period_end,updated_at"
+    "current_period_start,current_period_end,cancel_at_period_end,updated_at,"
+    "last_gateway_event_at"
 )
 USAGE_LEDGER_COLUMNS = "id,workspace_id,event_type,quantity,source_id,metadata,created_at"
 BILLING_ADJUSTMENT_COLUMNS = (
@@ -37,6 +41,9 @@ class SubscriptionRecord:
     current_period_end: datetime | None = None
     cancel_at_period_end: bool = False
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Creation time of the newest payment gateway event applied to the row
+    # (database audit DB-12): an older event delivered late is not applied.
+    last_gateway_event_at: datetime | None = None
 
 
 @dataclass
@@ -93,6 +100,7 @@ class InMemoryBillingRepository:
         self.subscriptions: dict[UUID, SubscriptionRecord] = {}
         self.usage_ledger: dict[UUID, UsageLedgerEntry] = {}
         self.gateway_events: dict[str, GatewayWebhookEventRecord] = {}
+        self._gateway_claims: set[str] = set()
         self.billing_adjustments: dict[str, BillingAdjustmentRecord] = {}
 
     def get_subscription(self, *, workspace_id: UUID) -> SubscriptionRecord:
@@ -114,8 +122,21 @@ class InMemoryBillingRepository:
         current_period_start: datetime | None = None,
         current_period_end: datetime | None = None,
         cancel_at_period_end: bool = False,
-    ) -> SubscriptionRecord:
+        last_gateway_event_at: datetime | None = None,
+    ) -> SubscriptionRecord | None:
+        """Create or update the workspace's subscription.
+
+        A write carrying ``last_gateway_event_at`` older than the event already
+        applied is skipped and returns ``None``, as the database trigger
+        subscriptions_skip_stale_gateway_event does (database audit DB-12).
+        """
         existing = self.get_subscription(workspace_id=workspace_id)
+        if (
+            last_gateway_event_at is not None
+            and existing.last_gateway_event_at is not None
+            and last_gateway_event_at < existing.last_gateway_event_at
+        ):
+            return None
         record = SubscriptionRecord(
             workspace_id=workspace_id,
             plan=plan,
@@ -126,6 +147,7 @@ class InMemoryBillingRepository:
             current_period_start=current_period_start or existing.current_period_start,
             current_period_end=current_period_end or existing.current_period_end,
             cancel_at_period_end=cancel_at_period_end,
+            last_gateway_event_at=last_gateway_event_at or existing.last_gateway_event_at,
         )
         self.subscriptions[workspace_id] = record
         return record
@@ -184,6 +206,21 @@ class InMemoryBillingRepository:
 
     def has_processed_gateway_event(self, event_id: str) -> bool:
         return event_id in self.gateway_events
+
+    def claim_gateway_event(self, *, event_id: str, event_type: str) -> str:
+        """'claimed', 'duplicate' or 'in_progress' (audit WJ-23)."""
+        if event_id in self.gateway_events:
+            return "duplicate"
+        if event_id in self._gateway_claims:
+            return "in_progress"
+        self._gateway_claims.add(event_id)
+        return "claimed"
+
+    def finish_gateway_event(self, *, event_id: str, event_type: str, succeeded: bool) -> bool:
+        self._gateway_claims.discard(event_id)
+        if succeeded:
+            self.record_gateway_event(event_id=event_id, event_type=event_type)
+        return True
 
     def record_gateway_event(
         self, *, event_id: str, event_type: str
@@ -294,7 +331,7 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             return super().get_subscription(workspace_id=workspace_id)
         return self._subscription_from_row(rows[0])
 
-    def upsert_subscription(self, **values: object) -> SubscriptionRecord:
+    def upsert_subscription(self, **values: object) -> SubscriptionRecord | None:
         response = self.client.request(
             "POST",
             "/subscriptions",
@@ -303,9 +340,9 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             json=self._json_safe(values),
         )
         self._raise_for_supabase(response)
-        return self._subscription_from_row(response.json()[0])
+        return self._upserted_subscription(response.json())
 
-    async def upsert_subscription_async(self, **values: object) -> SubscriptionRecord:
+    async def upsert_subscription_async(self, **values: object) -> SubscriptionRecord | None:
         response = await self.client.async_request(
             "POST",
             "/subscriptions",
@@ -314,7 +351,15 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             json=self._json_safe(values),
         )
         self._raise_for_supabase(response)
-        return self._subscription_from_row(response.json()[0])
+        return self._upserted_subscription(response.json())
+
+    @classmethod
+    def _upserted_subscription(cls, rows: object) -> SubscriptionRecord | None:
+        """The upserted row, or None when the database skipped a stale gateway
+        event (no row comes back; trigger subscriptions_skip_stale_gateway_event)."""
+        if isinstance(rows, list) and rows:
+            return cls._subscription_from_row(rows[0])
+        return None
 
     def count_usage(
         self,
@@ -328,17 +373,12 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             (period_start, period_end) if period_start and period_end else monthly_period()
         )
         response = self.client.request(
-            "GET",
-            "/usage_ledger",
-            params={
-                "workspace_id": f"eq.{workspace_id}",
-                "event_type": f"eq.{event_type.value}",
-                "created_at": [f"gte.{period_start.isoformat()}", f"lt.{period_end.isoformat()}"],
-                "select": "quantity",
-            },
+            "POST",
+            "/rpc/motionly_sum_usage_ledger",
+            json=_usage_sum_payload(workspace_id, event_type, period_start, period_end),
         )
         self._raise_for_supabase(response)
-        return sum(int(row["quantity"]) for row in response.json())
+        return _usage_sum(response.json())
 
     async def count_usage_async(
         self,
@@ -352,17 +392,12 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             (period_start, period_end) if period_start and period_end else monthly_period()
         )
         response = await self.client.async_request(
-            "GET",
-            "/usage_ledger",
-            params={
-                "workspace_id": f"eq.{workspace_id}",
-                "event_type": f"eq.{event_type.value}",
-                "created_at": [f"gte.{period_start.isoformat()}", f"lt.{period_end.isoformat()}"],
-                "select": "quantity",
-            },
+            "POST",
+            "/rpc/motionly_sum_usage_ledger",
+            json=_usage_sum_payload(workspace_id, event_type, period_start, period_end),
         )
         self._raise_for_supabase(response)
-        return sum(int(row["quantity"]) for row in response.json())
+        return _usage_sum(response.json())
 
     def record_usage(self, **values: object) -> UsageLedgerEntry:
         event_type_value = getattr(values["event_type"], "value", values["event_type"])
@@ -421,6 +456,49 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             "GET",
             "/gateway_webhook_events",
             params={"id": f"eq.{event_id}", "select": "id", "limit": "1"},
+        )
+        self._raise_for_supabase(response)
+        return bool(response.json())
+
+    def claim_gateway_event(self, *, event_id: str, event_type: str) -> str:
+        """Claim a webhook event before applying it (audit WJ-23).
+
+        'claimed' (apply it), 'duplicate' (already applied) or 'in_progress'
+        (another delivery is applying it right now).
+        """
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_claim_gateway_webhook_event",
+            json={"p_event_id": event_id, "p_event_type": event_type},
+        )
+        self._raise_for_supabase(response)
+        return _claim_result(response.json())
+
+    async def claim_gateway_event_async(self, *, event_id: str, event_type: str) -> str:
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_claim_gateway_webhook_event",
+            json={"p_event_id": event_id, "p_event_type": event_type},
+        )
+        self._raise_for_supabase(response)
+        return _claim_result(response.json())
+
+    def finish_gateway_event(self, *, event_id: str, event_type: str, succeeded: bool) -> bool:
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_finish_gateway_webhook_event",
+            json={"p_event_id": event_id, "p_succeeded": succeeded},
+        )
+        self._raise_for_supabase(response)
+        return bool(response.json())
+
+    async def finish_gateway_event_async(
+        self, *, event_id: str, event_type: str, succeeded: bool
+    ) -> bool:
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_finish_gateway_webhook_event",
+            json={"p_event_id": event_id, "p_succeeded": succeeded},
         )
         self._raise_for_supabase(response)
         return bool(response.json())
@@ -609,6 +687,9 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
             cancel_at_period_end=bool(row.get("cancel_at_period_end", False)),
             updated_at=SupabaseBillingRepository._parse_optional_datetime(row.get("updated_at"))
             or datetime.now(UTC),
+            last_gateway_event_at=SupabaseBillingRepository._parse_optional_datetime(
+                row.get("last_gateway_event_at")
+            ),
         )
 
     @staticmethod
@@ -665,7 +746,38 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
     def _raise_for_supabase(response: httpx.Response) -> None:
         if response.status_code < 400:
             return
-        raise ApiError(502, "supabase_request_failed", response.text)
+        # The PostgREST body names tables, constraints and values; log it for
+        # operators, never return it to the caller (database audit DB-19).
+        logger.warning(
+            "supabase_billing_request_failed",
+            extra={"status_code": response.status_code, "response": response.text[:1000]},
+        )
+        raise ApiError(502, "supabase_request_failed", "Billing data could not be saved.")
+
+
+def _usage_sum_payload(
+    workspace_id: UUID,
+    event_type: UsageEventType | str,
+    period_start: datetime,
+    period_end: datetime,
+) -> dict[str, str]:
+    return {
+        "p_workspace_id": str(workspace_id),
+        "p_event_type": str(getattr(event_type, "value", event_type)),
+        "p_period_start": period_start.isoformat(),
+        "p_period_end": period_end.isoformat(),
+    }
+
+
+def _usage_sum(value: object) -> int:
+    """motionly_sum_usage_ledger's result: a bare bigint, or wrapped by name."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        value = value.get("motionly_sum_usage_ledger")
+    if isinstance(value, bool) or value is None:
+        raise ApiError(502, "billing_persistence_failed", "Usage could not be read.")
+    return int(value)
 
 
 def _coerce_plan(value: object) -> BillingPlanKey:
@@ -684,3 +796,13 @@ def _coerce_status(value: object) -> SubscriptionStatus:
         return SubscriptionStatus(normalized)
     except ValueError:
         return SubscriptionStatus.NONE
+
+
+def _claim_result(value: object) -> str:
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        value = value.get("motionly_claim_gateway_webhook_event")
+    if value not in {"claimed", "duplicate", "in_progress"}:
+        raise ApiError(502, "billing_persistence_failed", "Webhook claim returned no state.")
+    return str(value)

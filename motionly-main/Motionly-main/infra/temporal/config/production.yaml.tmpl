@@ -23,6 +23,12 @@ persistence:
         maxConns: 20
         maxIdleConns: 20
         maxConnLifetime: 1h
+        # temporal-postgres accepts only TLS logins (database audit DB-21).
+        tls:
+          enabled: true
+          caFile: /etc/motionly-db-tls/ca/ca.crt
+          serverName: temporal-postgres
+          enableHostVerification: true
     postgres-visibility:
       sql:
         pluginName: postgres12
@@ -34,6 +40,11 @@ persistence:
         maxConns: 10
         maxIdleConns: 10
         maxConnLifetime: 1h
+        tls:
+          enabled: true
+          caFile: /etc/motionly-db-tls/ca/ca.crt
+          serverName: temporal-postgres
+          enableHostVerification: true
 
 global:
   membership:

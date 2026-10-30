@@ -318,7 +318,9 @@ def test_supabase_rest_client_records_request_metrics(monkeypatch: pytest.Monkey
     def fake_request(*_args, **_kwargs):
         return httpx.Response(200, json=[{"ok": True}])
 
-    monkeypatch.setattr("app.services.supabase.httpx.request", fake_request)
+    monkeypatch.setattr(
+        "app.services.supabase._sync_client", lambda _timeout: SimpleNamespace(request=fake_request)
+    )
     client = SupabaseRestClient(
         supabase_url="https://supabase.example.com",
         service_role_key="service-role",
@@ -356,7 +358,9 @@ async def test_supabase_rest_client_async_request_records_metrics(
             calls.append({"method": method, "url": url, "kwargs": kwargs, "timeout": self.timeout})
             return httpx.Response(200, json=[{"ok": True}])
 
-    monkeypatch.setattr("app.services.supabase.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        "app.services.supabase._async_client", lambda timeout: FakeAsyncClient(timeout=timeout)
+    )
     client = SupabaseRestClient(
         supabase_url="https://supabase.example.com",
         service_role_key="service-role",
@@ -425,7 +429,9 @@ def test_supabase_rest_client_retries_and_counts_errors(
     def fake_request(*_args, **_kwargs):
         return responses.pop(0)
 
-    monkeypatch.setattr("app.services.supabase.httpx.request", fake_request)
+    monkeypatch.setattr(
+        "app.services.supabase._sync_client", lambda _timeout: SimpleNamespace(request=fake_request)
+    )
     client = SupabaseRestClient(
         supabase_url="https://supabase.example.com",
         service_role_key="service-role",
@@ -456,7 +462,9 @@ def test_supabase_rest_client_does_not_retry_unsafe_post(
         calls += 1
         return httpx.Response(503, json={"message": "ambiguous failure"})
 
-    monkeypatch.setattr("app.services.supabase.httpx.request", fake_request)
+    monkeypatch.setattr(
+        "app.services.supabase._sync_client", lambda _timeout: SimpleNamespace(request=fake_request)
+    )
     client = SupabaseRestClient(
         supabase_url="https://supabase.example.com",
         service_role_key="service-role",
@@ -491,7 +499,9 @@ async def test_supabase_rest_client_async_does_not_retry_unsafe_post(
             calls += 1
             return httpx.Response(503, json={"message": "ambiguous failure"})
 
-    monkeypatch.setattr("app.services.supabase.httpx.AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(
+        "app.services.supabase._async_client", lambda timeout: FakeAsyncClient(timeout=timeout)
+    )
     client = SupabaseRestClient(
         supabase_url="https://supabase.example.com",
         service_role_key="service-role",

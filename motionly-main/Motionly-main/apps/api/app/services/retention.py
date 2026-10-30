@@ -1,3 +1,4 @@
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -12,6 +13,23 @@ from app.services.storage import StorageSigner
 logger = get_logger(__name__)
 
 SIGNED_UPLOAD_CLEANUP_GRACE_SECONDS = StorageSigner.SUPABASE_SIGNED_UPLOAD_TTL_SECONDS + 5 * 60
+
+# Deletion queue drains claim batches until the queue is empty or a bounded
+# budget is spent (audit WJ-14: one 100-row claim per drain capped throughput
+# far below the rate rows are queued).
+DRAIN_BATCH_SIZE = 100
+DRAIN_MAX_BATCHES = 50
+DRAIN_TIME_BUDGET_SECONDS = 600
+EXPORT_PAGE_SIZE = 200
+EXPORT_MAX_PAGES = 25
+REDACTION_BATCH_SIZE = 500
+REDACTION_MAX_BATCHES = 20
+# A 'running' retention row older than this belongs to a run that died.
+RETENTION_RUN_STALE_SECONDS = 6 * 3600
+
+
+class RetentionAlreadyRunning(Exception):
+    """Another retention run is live; this one must not start (audit WJ-11)."""
 
 
 class RetentionService:
@@ -30,25 +48,38 @@ class RetentionService:
         # A service instance owns its queue leases. A crashed instance cannot
         # acknowledge work after its bounded database lease is reclaimed.
         self._queue_lease_owner = f"retention:{uuid4()}"
+        self.failed_steps: list[str] = []
 
     def run_scheduled(self) -> dict[str, int]:
+        """Run retention once, recorded in ``retention_runs``.
+
+        At most one run is live at a time: a concurrent call (for example a
+        BullMQ retry after the worker's HTTP call timed out while this run kept
+        going) raises :class:`RetentionAlreadyRunning`. A run whose steps failed
+        is recorded as ``failed`` with the failed step names, never as
+        ``completed`` (audit WJ-11/WJ-14).
+        """
         if not self.rest_url or not self.settings.supabase_service_role_key:
             return self.run()
-        started = self._request(
-            "POST", "retention_runs", json={"status": "running", "deleted_counts": {}}
-        )
-        run_id = str(started[0]["id"])
+        run_id = self._begin_run()
+        if run_id is None:
+            raise RetentionAlreadyRunning()
         try:
             counts = self.run()
+            failed_steps = list(self.failed_steps)
             self._request(
                 "PATCH",
                 "retention_runs",
                 params={"id": f"eq.{run_id}"},
                 json={
-                    "status": "completed",
+                    "status": "failed" if failed_steps else "completed",
                     "completed_at": datetime.now(UTC).isoformat(),
                     "deleted_counts": counts,
-                    "error_message": None,
+                    "error_message": (
+                        ("steps failed: " + ", ".join(failed_steps))[:500]
+                        if failed_steps
+                        else None
+                    ),
                 },
             )
             return counts
@@ -65,7 +96,20 @@ class RetentionService:
             )
             raise
 
+    def _begin_run(self) -> str | None:
+        result = self._request(
+            "POST",
+            "rpc/motionly_begin_retention_run",
+            json={"p_stale_after_seconds": RETENTION_RUN_STALE_SECONDS},
+        )
+        if isinstance(result, list):
+            result = result[0] if result else None
+        if isinstance(result, dict):
+            result = result.get("motionly_begin_retention_run") or result.get("id")
+        return str(result) if result else None
+
     def run(self) -> dict[str, int]:
+        self.failed_steps = []
         counts = {
             "source_videos": 0,
             "generated_assets": 0,
@@ -127,16 +171,12 @@ class RetentionService:
                     older_than_days=self.settings.retention_export_days,
                 ),
             )
-            # Redact/expire raw provider payloads in transcripts older than 30 days
-            cutoff_30 = self._cutoff(30)
-            self._run_step(
-                "redact_transcripts",
-                lambda: self._request(
-                    "PATCH",
-                    "transcripts",
-                    params={"created_at": f"lt.{cutoff_30}"},
-                    json={"raw_payload": {}},
-                ),
+            # Redact raw provider payloads in transcripts older than 30 days. The
+            # RPC keeps derived audio intelligence (planning reads it) and skips
+            # already-redacted rows instead of rewriting every old transcript
+            # daily (audit WJ-15).
+            counts["transcripts"] = self._run_step(
+                "redact_transcripts", self._redact_transcript_payloads
             )
 
             counts["queued_storage_objects"] += self._run_step(
@@ -157,13 +197,14 @@ class RetentionService:
     def _run_step(self, name, step, *, default=0):
         """Run one cleanup step in isolation (B19).
 
-        A failure in one step is logged and swallowed so it cannot prevent the
-        remaining steps from running. The step's own typed/HTTP errors are
-        contained here; the scheduled run still records overall success.
+        A failure in one step is logged and isolated so it cannot prevent the
+        remaining steps from running. The step name is collected in
+        ``failed_steps`` so the scheduled run is recorded as failed.
         """
         try:
             return step()
         except Exception as exc:  # noqa: BLE001 - steps are independent by design
+            self.failed_steps.append(name)
             logger.warning(
                 "retention_step_failed",
                 extra={"step": name, "error": type(exc).__name__},
@@ -205,12 +246,24 @@ class RetentionService:
             before = self._cutoff_seconds(minimum_age_seconds)
         elif minimum_age_days is not None:
             before = self._cutoff(minimum_age_days)
+        processed = 0
+        deadline = time.monotonic() + DRAIN_TIME_BUDGET_SECONDS
+        for _batch in range(DRAIN_MAX_BATCHES):
+            rows = self._claim_storage_deletion_batch(source_table=source_table, before=before)
+            processed += self._process_storage_deletion_batch(rows)
+            if len(rows) < DRAIN_BATCH_SIZE or time.monotonic() >= deadline:
+                break
+        return processed
+
+    def _claim_storage_deletion_batch(
+        self, *, source_table: str | None, before: str | None
+    ) -> list[dict[str, object]]:
         rows = self._request(
             "POST",
             "rpc/motionly_claim_storage_deletion_queue",
             json={
                 "p_lease_owner": self._queue_lease_owner,
-                "p_limit": 100,
+                "p_limit": DRAIN_BATCH_SIZE,
                 "p_source_table": source_table,
                 "p_before": before,
                 "p_lease_seconds": 300,
@@ -222,6 +275,9 @@ class RetentionService:
                 "retention_claim_invalid",
                 "Retention queue claim returned an invalid response.",
             )
+        return rows
+
+    def _process_storage_deletion_batch(self, rows: list[dict[str, object]]) -> int:
         processed = 0
         for row in rows:
             lease_token = row.get("lease_token")
@@ -288,13 +344,65 @@ class RetentionService:
                 processed += 1
             except Exception as exc:
                 # A failed external delete, quota transition, or acknowledgement
-                # leaves its leased row in place for fenced retry. Continue with
-                # unrelated queue rows instead of abandoning the whole retention run.
+                # leaves its leased row in place for fenced retry. The claim RPC
+                # counts attempts and dead-letters a row that keeps failing
+                # (WJ-14); the error code is kept on the row for operators.
+                error_code = exc.code if isinstance(exc, ApiError) else type(exc).__name__
                 logger.warning(
                     "retention_storage_deletion_failed",
-                    extra={"queue_id": str(row.get("id")), "error": type(exc).__name__},
+                    extra={
+                        "queue_id": str(row.get("id")),
+                        "error": error_code,
+                        "attempt_count": row.get("attempt_count"),
+                    },
                 )
+                self._note_storage_deletion_failure(row, lease_token, error_code)
         return processed
+
+    def _note_storage_deletion_failure(
+        self, row: dict[str, object], lease_token: str, error_code: str
+    ) -> None:
+        try:
+            self._request(
+                "POST",
+                "rpc/motionly_note_storage_deletion_failure",
+                json={
+                    "p_queue_id": str(row["id"]),
+                    "p_lease_token": lease_token,
+                    "p_error_code": str(error_code)[:120],
+                },
+            )
+        except Exception:  # noqa: BLE001 - the note is diagnostic only
+            logger.warning("retention_failure_note_failed", extra={"queue_id": str(row.get("id"))})
+
+    def _redact_transcript_payloads(self) -> int:
+        cutoff = self._cutoff(30)
+        redacted = 0
+        for _batch in range(REDACTION_MAX_BATCHES):
+            result = self._request(
+                "POST",
+                "rpc/motionly_redact_transcript_raw_payloads",
+                json={"p_before": cutoff, "p_limit": REDACTION_BATCH_SIZE},
+            )
+            batch = self._scalar_int(result, "motionly_redact_transcript_raw_payloads")
+            redacted += batch
+            if batch < REDACTION_BATCH_SIZE:
+                break
+        return redacted
+
+    @staticmethod
+    def _scalar_int(result: object, function_name: str) -> int:
+        if isinstance(result, bool):
+            return 0
+        if isinstance(result, int):
+            return result
+        if isinstance(result, list) and result:
+            value = result[0]
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+            if isinstance(value, dict) and value.get(function_name) is not None:
+                return int(value[function_name])
+        return 0
 
     @staticmethod
     def _rpc_boolean(result: object, function_name: str) -> bool:
@@ -309,18 +417,47 @@ class RetentionService:
         return False
 
     def _delete_media_rows(self, *, table: str, older_than_days: int) -> int:
+        """Delete expired media rows and their objects, a page at a time.
+
+        Each row is isolated: a failed object or row delete is logged and left
+        for the next run instead of aborting the rest of the step (audit WJ-14).
+        Successful deletes leave the result set, so failures become the offset.
+        """
         cutoff = self._cutoff(older_than_days)
-        rows = self._request(
-            "GET",
-            table,
-            params={"created_at": f"lt.{cutoff}", "select": "id,storage_bucket,storage_path"},
-        )
-        for row in rows:
-            self.storage_signer.delete_object(
-                bucket=str(row["storage_bucket"]), path=str(row["storage_path"])
+        deleted = 0
+        failures = 0
+        for _page in range(EXPORT_MAX_PAGES):
+            rows = self._request(
+                "GET",
+                table,
+                params={
+                    "created_at": f"lt.{cutoff}",
+                    "select": "id,storage_bucket,storage_path",
+                    "order": "created_at.asc,id.asc",
+                    "limit": str(EXPORT_PAGE_SIZE),
+                    "offset": str(failures),
+                },
             )
-            self._request("DELETE", table, params={"id": f"eq.{row['id']}"})
-        return len(rows)
+            for row in rows:
+                try:
+                    self.storage_signer.delete_object(
+                        bucket=str(row["storage_bucket"]), path=str(row["storage_path"])
+                    )
+                    self._request("DELETE", table, params={"id": f"eq.{row['id']}"})
+                    deleted += 1
+                except Exception as exc:  # noqa: BLE001 - one row must not stop the rest
+                    failures += 1
+                    logger.warning(
+                        "retention_media_row_delete_failed",
+                        extra={"table": table, "row_id": str(row.get("id")),
+                               "error": type(exc).__name__},
+                    )
+            if len(rows) < EXPORT_PAGE_SIZE:
+                break
+        if failures:
+            # Keep the successful count, but record the run as not clean.
+            self.failed_steps.append(f"delete_{table}:partial")
+        return deleted
 
     def _delete_rows(
         self,

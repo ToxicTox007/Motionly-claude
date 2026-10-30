@@ -11,7 +11,6 @@ from app.repositories.scale import InMemoryScaleRepository
 from app.schemas.scale import BatchCreateRequest, ScaleResourceStatus
 from app.services.local_storage import LocalObjectStorage, SupabaseBackedObjectStorage
 from app.services.operations import (
-    COST_ATTRIBUTION_SUMMARY_COLUMNS,
     WORKER_HEARTBEAT_COLUMNS,
     MetricsRegistry,
     OperationsRepository,
@@ -144,7 +143,99 @@ def test_batch_worker_persists_item_progress(monkeypatch) -> None:
 
     assert result["status"] == "completed"
     assert result["completed"] == 2
-    assert scale.get(resource_id=batch.id, workspace_id=workspace_id).revision == 3
+    # One revision for the compare-and-set claim, one per finished item.
+    assert scale.get(resource_id=batch.id, workspace_id=workspace_id).revision == 4
+
+
+def _batch_request(monkeypatch, *, items_status: list[str], status=ScaleResourceStatus.QUEUED):
+    workspace_id, user_id = uuid4(), uuid4()
+    project_ids = [uuid4() for _ in items_status]
+    scale = InMemoryScaleRepository()
+    batch = scale.create(
+        workspace_id=workspace_id,
+        project_id=project_ids[0],
+        kind="batch",
+        name="Batch",
+        status=status,
+        payload={
+            **BatchCreateRequest(project_ids=project_ids).model_dump(mode="json"),
+            "creator_user_id": str(user_id),
+        },
+        result={
+            "items": [
+                {"project_id": str(project_id), "status": item_status}
+                for project_id, item_status in zip(project_ids, items_status, strict=True)
+            ]
+        },
+    )
+    planned: list[object] = []
+
+    async def fake_create_plan(*, project_id, **_kwargs):
+        planned.append(project_id)
+        if str(project_id) == str(project_ids[-1]) and "explode" in items_status:
+            raise RuntimeError("provider said: secret-internal-detail")
+        return SimpleNamespace(plan=SimpleNamespace(id=project_id))
+
+    monkeypatch.setattr("app.api.internal_batches.create_plan", fake_create_plan)
+    state = SimpleNamespace(
+        settings=SimpleNamespace(worker_api_token="worker-secret"),
+        scale_repository=scale,
+        plan_repository=object(),
+        edit_planner_provider=object(),
+        plan_queue=object(),
+    )
+
+    def run():
+        return asyncio.run(
+            run_batch(
+                workspace_id=workspace_id,
+                batch_id=batch.id,
+                request=SimpleNamespace(app=SimpleNamespace(state=state)),
+                x_motionly_worker_token="worker-secret",
+            )
+        )
+
+    return SimpleNamespace(run=run, planned=planned, project_ids=project_ids, batch=batch)
+
+
+def test_resumed_batch_does_not_replan_completed_projects(monkeypatch) -> None:
+    # Audit WJ-10: a retried batch re-ran paid planning for every project.
+    from datetime import UTC, datetime, timedelta
+
+    context = _batch_request(
+        monkeypatch,
+        items_status=["completed", "queued"],
+        status=ScaleResourceStatus.PROCESSING,
+    )
+    # The earlier run died: its record has not been touched for a while.
+    context.batch.updated_at = datetime.now(UTC) - timedelta(hours=1)
+    result = context.run()
+    assert result["status"] == "completed"
+    assert context.planned == [context.project_ids[1]]
+    assert context.run()["status"] == "completed"
+    assert context.planned == [context.project_ids[1]], "a finished batch is not re-run"
+
+
+def test_batch_retry_while_the_first_run_is_live_is_answered_not_repeated(monkeypatch) -> None:
+    context = _batch_request(
+        monkeypatch,
+        items_status=["queued", "queued"],
+        status=ScaleResourceStatus.PROCESSING,
+    )
+    result = context.run()
+    assert result["status"] == "already_running"
+    assert context.planned == []
+
+
+def test_batch_item_failures_store_a_code_not_raw_exception_text(monkeypatch) -> None:
+    context = _batch_request(monkeypatch, items_status=["queued", "explode"])
+    result = context.run()
+    assert result["status"] == "partial"
+    failed = [item for item in result["items"] if item["status"] == "failed"]
+    assert failed == [
+        {"project_id": str(context.project_ids[1]), "status": "failed", "error_code": "plan_failed"}
+    ]
+    assert "secret-internal-detail" not in str(result)
 
 
 def test_cost_summary_tracks_cost_per_approved_export() -> None:
@@ -245,7 +336,7 @@ def test_supabase_heartbeats_use_explicit_projection(monkeypatch) -> None:
     ]
 
 
-def test_supabase_cost_summary_uses_explicit_projection(monkeypatch) -> None:
+def test_supabase_cost_summary_uses_one_database_aggregate(monkeypatch) -> None:
     render_job_id = uuid4()
     calls = []
 
@@ -256,24 +347,18 @@ def test_supabase_cost_summary_uses_explicit_projection(monkeypatch) -> None:
             return None
 
         def json(self):
-            return [
-                {
-                    "workspace_id": str(uuid4()),
-                    "render_job_id": str(render_job_id),
-                    "export_id": str(uuid4()),
-                    "provider": "renderer",
-                    "category": "compute_gpu",
-                    "quantity": 2,
-                    "unit_cost_usd": 0.25,
-                    "approved_at": "2026-07-05T00:00:00+00:00",
-                }
-            ]
+            return {
+                "total_usd": 0.5,
+                "by_category": {"compute_gpu": 0.5},
+                "by_provider": {"renderer": 0.5},
+                "approved_exports": 1,
+            }
 
-    def fake_get(url, **kwargs):
+    def fake_post(url, **kwargs):
         calls.append((url, kwargs))
         return Response()
 
-    monkeypatch.setattr("app.services.operations.httpx.get", fake_get)
+    monkeypatch.setattr("app.services.operations.httpx.post", fake_post)
     operations = OperationsRepository(
         supabase_url="https://supabase.example.com",
         service_role_key="service-role",
@@ -281,17 +366,22 @@ def test_supabase_cost_summary_uses_explicit_projection(monkeypatch) -> None:
 
     summary = operations.cost_summary(render_job_id=render_job_id)
 
-    assert summary["total_usd"] == 0.5
+    assert summary == {
+        "currency": "usd",
+        "total_usd": 0.5,
+        "by_category": {"compute_gpu": 0.5},
+        "by_provider": {"renderer": 0.5},
+        "approved_exports": 1,
+        "cost_per_approved_export_usd": 0.5,
+    }
+    # One aggregate over every matching row (database audit DB-07): the row
+    # read it replaces stopped at 10,000 rows.
     assert calls == [
         (
-            "https://supabase.example.com/rest/v1/cost_attribution_events",
+            "https://supabase.example.com/rest/v1/rpc/motionly_cost_summary",
             {
                 "headers": operations.headers,
-                "params": {
-                    "select": COST_ATTRIBUTION_SUMMARY_COLUMNS,
-                    "limit": "10000",
-                    "render_job_id": f"eq.{render_job_id}",
-                },
+                "json": {"p_render_job_id": str(render_job_id)},
                 "timeout": 10,
             },
         )

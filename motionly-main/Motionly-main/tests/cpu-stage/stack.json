@@ -45,6 +45,8 @@
   },
   "one_shots": [
     "volume-permissions",
+    "db-tls",
+    "db-roles",
     "temporal-db-init",
     "temporal-schema",
     "temporal-namespace",

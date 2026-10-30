@@ -4,14 +4,32 @@
 
 ## Rehearsal (no production cutover)
 
-1. Provision an empty PostgreSQL 17 target with the same required extensions and roles. Confirm the source is PostgreSQL 15 and target is PostgreSQL 17:
+1. Provision an empty PostgreSQL 17 target with the same required extensions and roles. Confirm the source is PostgreSQL 15 and target is PostgreSQL 17. The scripts take named libpq services, never database URLs, so passwords stay out of process listings and shell history. Describe both databases in a `pg_service.conf` and their passwords in a `pgpass` file, both mode `0600`:
 
 ```sh
+umask 077
+mkdir -p "$HOME/.motionly"
+cat > "$HOME/.motionly/pg_service.conf" <<'EOF'
+[motionly_pg15_source]
+host=<pg15-host>
+port=5432
+dbname=postgres
+user=postgres
+
+[motionly_pg17_target]
+host=<pg17-host>
+port=5432
+dbname=postgres
+user=postgres
+EOF
+# pgpass lines: host:port:database:user:password
+export PGSERVICEFILE="$HOME/.motionly/pg_service.conf" PGPASSFILE="$HOME/.motionly/pgpass"
+
 MOTIONLY_POSTGRES17_UPGRADE_ACK=pg15-to-pg17 \
-  scripts/deploy/rehearse_postgres17_upgrade.sh "$PG15_SOURCE_URL" "$EMPTY_PG17_TARGET_URL"
+  scripts/deploy/rehearse_postgres17_upgrade.sh motionly_pg15_source motionly_pg17_target
 ```
 
-The script refuses other major versions and delegates to `scripts/verify_backup_restore.sh`, which refuses a non-empty restore target, fingerprints public-table data, and proves the restored target is writable. Save its report with the release evidence.
+The script refuses other major versions and delegates to `scripts/verify_backup_restore.sh`, which refuses a non-empty restore target, fingerprints public-table data, compares every API role's table and function privileges plus row-level security policies between source and target, and proves the restored target is writable. Save its report (`MOTIONLY_BACKUP_RESTORE_REPORT_PATH`) with the release evidence.
 
 2. Restore the rehearsal dump into a disposable target and run `supabase db reset`/`supabase test db` plus application repository contracts against PostgreSQL 17. Resolve every migration, extension, role, and query-plan difference before scheduling cutover.
 

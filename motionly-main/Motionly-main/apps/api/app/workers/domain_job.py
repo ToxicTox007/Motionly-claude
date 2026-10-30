@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 from app.services.queue import EnqueuedJob
-from app.workers.executor_protocol import open_protocol_channel
+from app.workers.executor_protocol import error_reply, open_protocol_channel
 
 
 def main() -> None:
@@ -22,14 +22,20 @@ def main() -> None:
 def _execute(payload: dict[str, object]) -> dict[str, object]:
     from app.main import app
     from app.services.job_engine import _execute_job
+    from app.services.tracing import current_trace_id
 
+    resource_id = payload.get("resource_id")
     job = EnqueuedJob(
         id=str(payload["job_id"]),
         kind=str(payload["kind"]),
         queue_name=str(payload["queue_name"]),
+        # BullMQ transport attempts already made: per-kind retry caps (the paid
+        # edit-planner limit) depend on it (audit WJ-12).
+        attempts=max(0, int(payload.get("attempts_made") or 0)),
         workspace_id=UUID(str(payload["workspace_id"])),
         project_id=UUID(str(payload["project_id"])),
-        resource_id=UUID(str(payload["resource_id"])),
+        # effects_config without an edit plan carries no resource id.
+        resource_id=UUID(str(resource_id)) if resource_id not in (None, "", "None") else None,
         workflow_run_id=(
             UUID(str(payload["workflow_run_id"])) if payload.get("workflow_run_id") else None
         ),
@@ -54,8 +60,19 @@ def _execute(payload: dict[str, object]) -> dict[str, object]:
             str(payload["next_run_state"]) if payload.get("next_run_state") else None
         ),
         render_engine=str(payload.get("render_engine") or "ffmpeg_basic"),
+        registry_fingerprint=(
+            str(payload["registry_fingerprint"]) if payload.get("registry_fingerprint") else None
+        ),
+        trace_id=str(payload["trace_id"]) if payload.get("trace_id") else None,
+        render_attempt_id=(
+            str(payload["render_attempt_id"]) if payload.get("render_attempt_id") else None
+        ),
     )
-    return _execute_job(job=job, request=SimpleNamespace(app=app))
+    token = current_trace_id.set(job.trace_id)
+    try:
+        return _execute_job(job=job, request=SimpleNamespace(app=app))
+    finally:
+        current_trace_id.reset(token)
 
 
 def _serve() -> None:
@@ -71,8 +88,7 @@ def _serve() -> None:
             result = _execute(dict(request.get("payload") or {}))
             response = {"id": request.get("id"), "result": result}
         except Exception as exc:
-            from app.core.logging import redact_string
-            response = {"id": request.get("id"), "error": redact_string(str(exc))}
+            response = error_reply(request.get("id"), exc)
         channel.send(response)
 
 

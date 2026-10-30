@@ -344,44 +344,54 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         transcript: TranscriptRecord,
         **values: object,
     ) -> TranscriptRecord:
-        words = values.pop("words", transcript.words)
+        # Words are rewritten only when the caller passes them; rewriting the
+        # record's (possibly stale) copy on every status change could replace
+        # newer words. The rewrite is one transaction (database audit DB-10).
+        replace_words = "words" in values
+        words = list(values.pop("words", transcript.words))
+        if replace_words:
+            self._replace_transcript_words(transcript, words)
         payload = self._json_safe({**values, "updated_at": datetime.now(UTC).isoformat()})
         response = self.client.request(
             "PATCH",
             "/transcripts",
-            params={"id": f"eq.{transcript.id}", "select": TRANSCRIPT_COLUMNS},
+            params={
+                "id": f"eq.{transcript.id}",
+                "workspace_id": f"eq.{transcript.workspace_id}",
+                "project_id": f"eq.{transcript.project_id}",
+                "select": TRANSCRIPT_COLUMNS,
+            },
             json=payload,
         )
         self._raise_for_supabase(response)
-        delete_response = self.client.request(
-            "DELETE",
-            "/transcript_words",
-            headers={"prefer": "return=minimal"},
-            params={"transcript_id": f"eq.{transcript.id}"},
-        )
-        self._raise_for_supabase(delete_response)
-        next_words = list(words)
-        if next_words:
-            insert_response = self.client.request(
-                "POST",
-                "/transcript_words",
-                headers={"prefer": "return=minimal"},
-                json=[
+        rows = response.json()
+        if not rows:
+            raise ApiError(404, "transcript_not_found", "Transcript was not found.")
+        return self._transcript_from_row(rows[0], words=words)
+
+    def _replace_transcript_words(
+        self, transcript: TranscriptRecord, words: list[TranscriptWord]
+    ) -> None:
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_replace_transcript_words",
+            json={
+                "p_workspace_id": str(transcript.workspace_id),
+                "p_project_id": str(transcript.project_id),
+                "p_transcript_id": str(transcript.id),
+                "p_words": [
                     {
-                        "workspace_id": str(transcript.workspace_id),
-                        "project_id": str(transcript.project_id),
-                        "transcript_id": str(transcript.id),
                         "word_index": word.index,
                         "text": word.text,
                         "start_ms": word.start_ms,
                         "end_ms": word.end_ms,
                         "confidence": word.confidence,
                     }
-                    for word in next_words
+                    for word in words
                 ],
-            )
-            self._raise_for_supabase(insert_response)
-        return self._transcript_from_row(response.json()[0], words=next_words)
+            },
+        )
+        self._raise_for_supabase(response)
 
     def latest_transcript(
         self,
@@ -644,7 +654,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         response = self.client.request(
             "PATCH",
             "/caption_tracks",
-            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
+            params=_track_row_params(track),
             json={
                 "preset": preset.value,
                 "style": style.model_dump(mode="json"),
@@ -661,14 +671,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         )
         self._raise_for_supabase(response)
         updated = self._track_from_row(response.json()[0], segments=segments)
-        delete_response = self.client.request(
-            "DELETE",
-            "/caption_segments",
-            headers={"prefer": "return=minimal"},
-            params={"caption_track_id": f"eq.{track.id}"},
-        )
-        self._raise_for_supabase(delete_response)
-        self._write_caption_segments(updated)
+        self._replace_caption_segments(updated)
         return updated
 
     async def update_caption_track_async(
@@ -686,7 +689,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         response = await self.client.async_request(
             "PATCH",
             "/caption_tracks",
-            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
+            params=_track_row_params(track),
             json={
                 "preset": preset.value,
                 "style": style.model_dump(mode="json"),
@@ -703,14 +706,7 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         )
         self._raise_for_supabase(response)
         updated = self._track_from_row(response.json()[0], segments=segments)
-        delete_response = await self.client.async_request(
-            "DELETE",
-            "/caption_segments",
-            headers={"prefer": "return=minimal"},
-            params={"caption_track_id": f"eq.{track.id}"},
-        )
-        self._raise_for_supabase(delete_response)
-        await self._write_caption_segments_async(updated)
+        await self._replace_caption_segments_async(updated)
         return updated
 
     def replace_caption_segments(
@@ -725,19 +721,12 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         response = self.client.request(
             "PATCH",
             "/caption_tracks",
-            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
+            params=_track_row_params(track),
             json={"updated_at": datetime.now(UTC).isoformat()},
         )
         self._raise_for_supabase(response)
         updated = self._track_from_row(response.json()[0], segments=next_segments)
-        delete_response = self.client.request(
-            "DELETE",
-            "/caption_segments",
-            headers={"prefer": "return=minimal"},
-            params={"caption_track_id": f"eq.{track.id}"},
-        )
-        self._raise_for_supabase(delete_response)
-        self._write_caption_segments(updated)
+        self._replace_caption_segments(updated)
         return updated
 
     async def replace_caption_segments_async(
@@ -752,19 +741,12 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
         response = await self.client.async_request(
             "PATCH",
             "/caption_tracks",
-            params={"id": f"eq.{track.id}", "select": CAPTION_TRACK_COLUMNS},
+            params=_track_row_params(track),
             json={"updated_at": datetime.now(UTC).isoformat()},
         )
         self._raise_for_supabase(response)
         updated = self._track_from_row(response.json()[0], segments=next_segments)
-        delete_response = await self.client.async_request(
-            "DELETE",
-            "/caption_segments",
-            headers={"prefer": "return=minimal"},
-            params={"caption_track_id": f"eq.{track.id}"},
-        )
-        self._raise_for_supabase(delete_response)
-        await self._write_caption_segments_async(updated)
+        await self._replace_caption_segments_async(updated)
         return updated
 
     def _words_for_transcript(
@@ -943,6 +925,23 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             for row in response.json()
         ]
 
+    def _replace_caption_segments(self, track: CaptionTrackRecord) -> None:
+        """Swap a track's segments in one transaction (database audit DB-10)."""
+        response = self.client.request(
+            "POST",
+            "/rpc/motionly_replace_caption_segments",
+            json=_segment_replacement_payload(track),
+        )
+        self._raise_for_supabase(response)
+
+    async def _replace_caption_segments_async(self, track: CaptionTrackRecord) -> None:
+        response = await self.client.async_request(
+            "POST",
+            "/rpc/motionly_replace_caption_segments",
+            json=_segment_replacement_payload(track),
+        )
+        self._raise_for_supabase(response)
+
     def _write_caption_segments(self, track: CaptionTrackRecord) -> None:
         if not track.segments:
             return
@@ -1084,6 +1083,36 @@ class SupabaseCaptionRepository(InMemoryCaptionRepository):
             },
         )
         raise ApiError(502, "supabase_request_failed", "Caption data could not be saved.")
+
+
+def _track_row_params(track: CaptionTrackRecord) -> dict[str, str]:
+    """Filters that pin a caption track write to its own row and tenant."""
+    return {
+        "id": f"eq.{track.id}",
+        "workspace_id": f"eq.{track.workspace_id}",
+        "project_id": f"eq.{track.project_id}",
+        "select": CAPTION_TRACK_COLUMNS,
+    }
+
+
+def _segment_replacement_payload(track: CaptionTrackRecord) -> dict[str, object]:
+    return {
+        "p_workspace_id": str(track.workspace_id),
+        "p_project_id": str(track.project_id),
+        "p_caption_track_id": str(track.id),
+        "p_segments": [
+            {
+                "segment_index": segment.index,
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "text": segment.text,
+                "words": [word.model_dump(mode="json") for word in segment.words],
+                "line_count": segment.line_count,
+                "highlight_words": segment.highlight_words,
+            }
+            for segment in track.segments
+        ],
+    }
 
 
 def _transcript_progress_pct(status: TranscriptStatus, *, has_words: bool) -> int:

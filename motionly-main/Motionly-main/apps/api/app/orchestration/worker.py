@@ -45,6 +45,7 @@ def create_worker(
         workflows=[MotionlyWorkflow],
         activities=[
             activities.enqueue_bullmq_step,
+            activities.fail_workflow_run,
             proposal_activities.ensure_workflow_proposal,
             render_activities.ensure_workflow_draft_render,
         ],

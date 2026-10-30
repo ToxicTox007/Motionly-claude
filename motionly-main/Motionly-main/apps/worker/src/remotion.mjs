@@ -15,7 +15,7 @@
  *   9. Clean up temp files
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { createServer } from "node:http";
@@ -88,14 +88,18 @@ async function persistProgressDirect(
   projectId,
   payload,
   client = supabaseClient(),
+  renderAttemptId = null,
 ) {
   const status = payload.status || "rendering";
-  const { data, error } = await client
+  let query = client
     .from("render_jobs")
     .update({ status, progress_pct: payload.progressPct })
     .eq("id", renderJobId)
     .eq("workspace_id", workspaceId)
-    .eq("project_id", projectId)
+    .eq("project_id", projectId);
+  // Only while this attempt still owns the render (database audit DB-11).
+  if (renderAttemptId) query = query.eq("attempt_id", renderAttemptId);
+  const { data, error } = await query
     .not("status", "in", "(canceled,failed,complete)")
     .select("id");
   if (error)
@@ -126,7 +130,7 @@ async function loadRenderJobStateDirect(
 ) {
   const { data, error } = await client
     .from("render_jobs")
-    .select("status,artifact_path")
+    .select("status,artifact_path,attempt_id")
     .eq("id", renderJobId)
     .eq("workspace_id", workspaceId)
     .eq("project_id", projectId)
@@ -141,7 +145,73 @@ async function loadRenderJobStateDirect(
       typeof data.artifact_path === "string" && data.artifact_path
         ? data.artifact_path
         : null,
+    attemptId:
+      typeof data.attempt_id === "string" && data.attempt_id
+        ? data.attempt_id
+        : null,
   };
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function attemptSuperseded() {
+  return new StructuredRenderError(
+    "render_attempt_superseded",
+    "Another attempt owns this render now; this attempt stops.",
+  );
+}
+
+/**
+ * Start this worker attempt on the render (database audit DB-11). The render
+ * moves to preparing and belongs to `renderAttemptId`; every later write of
+ * this attempt is conditional on still owning it.
+ */
+export async function claimRenderAttemptDirect(
+  renderJobId,
+  workspaceId,
+  projectId,
+  renderAttemptId,
+  client = supabaseClient(),
+) {
+  const { data, error } = await client.rpc("motionly_claim_render_attempt", {
+    p_workspace_id: workspaceId,
+    p_project_id: projectId,
+    p_render_job_id: renderJobId,
+    p_attempt_id: renderAttemptId,
+    p_progress_pct: 10,
+    p_message: "Running premium render preflight.",
+    p_event_type: "preflight_started",
+  });
+  if (error) {
+    const message = String(error.message || "");
+    if (message.includes("RENDER_CANCELED")) {
+      throw new StructuredRenderError(
+        "render_cancelled",
+        "Render was canceled by the user.",
+      );
+    }
+    if (message.includes("RENDER_ALREADY_COMPLETE")) {
+      throw new StructuredRenderError(
+        "render_completion_lost",
+        "Render was completed by another attempt.",
+      );
+    }
+    if (message.includes("RENDER_TERMINAL_STATE")) {
+      throw new StructuredRenderError(
+        "render_terminal_state",
+        "Render has already failed.",
+      );
+    }
+    const failure = new Error(`Failed to claim render attempt: ${message}`);
+    failure.code = error.code;
+    throw failure;
+  }
+  const claim = Array.isArray(data) ? data[0] : data;
+  if (!claim || claim.attempt_id !== renderAttemptId) {
+    throw new Error("Failed to claim render attempt: no attempt was recorded");
+  }
+  return claim;
 }
 
 async function loadRenderJobStatusDirect(
@@ -161,6 +231,7 @@ export function attemptStoragePaths({
   renderJobId,
   queueJobId,
   attemptsMade,
+  renderAttemptId = null,
 }) {
   if (
     typeof queueJobId !== "string" ||
@@ -177,14 +248,26 @@ export function attemptStoragePaths({
       "BullMQ attempt number is unavailable.",
     );
   }
+  if (renderAttemptId !== null && !UUID_PATTERN.test(String(renderAttemptId))) {
+    throw new StructuredRenderError(
+      "queue_attempt_identity_invalid",
+      "Render attempt id is invalid.",
+    );
+  }
   const encodedJobId = createHash("sha256")
     .update(queueJobId)
     .digest("base64url")
     .slice(0, 32);
-  const attemptId = `q-${encodedJobId}-a-${attemptsMade + 1}`;
+  // A stalled BullMQ redelivery keeps the job id and attempt number, so the
+  // per-run render attempt id keeps two live runs' files apart.
+  const runPart = renderAttemptId
+    ? `-r-${String(renderAttemptId).replaceAll("-", "").slice(0, 16)}`
+    : "";
+  const attemptId = `q-${encodedJobId}${runPart}-a-${attemptsMade + 1}`;
   const prefix = `workspaces/${workspaceId}/projects/${projectId}/exports/${renderJobId}/attempts/${attemptId}`;
   return {
     attemptId,
+    renderAttemptId: renderAttemptId || null,
     stagingPath: `${prefix}/staging.mp4`,
     finalPath: `${prefix}/final.mp4`,
   };
@@ -217,9 +300,17 @@ async function persistCompleteDirect(
         renderer_version: "remotion-timeline-v2",
       },
       p_benchmark_ms: details.benchmarkMs,
+      p_attempt_id: details.renderAttemptId || null,
     },
   );
   if (completionError) {
+    if (
+      String(completionError.message || "").includes(
+        "RENDER_ATTEMPT_SUPERSEDED",
+      )
+    ) {
+      throw attemptSuperseded();
+    }
     const error = new Error(
       `Failed to complete render: ${completionError.message}`,
     );
@@ -248,13 +339,15 @@ export async function assertRenderCompletableDirect(
   workspaceId,
   projectId,
   client = supabaseClient(),
+  renderAttemptId = null,
 ) {
-  const status = await loadRenderJobStatusDirect(
+  const state = await loadRenderJobStateDirect(
     renderJobId,
     workspaceId,
     projectId,
     client,
   );
+  const status = state.status;
   if (status === "canceled") {
     throw new StructuredRenderError(
       "render_cancelled",
@@ -272,6 +365,9 @@ export async function assertRenderCompletableDirect(
       "render_completion_lost",
       "Render was completed by another attempt.",
     );
+  }
+  if (renderAttemptId && state.attemptId !== renderAttemptId) {
+    throw attemptSuperseded();
   }
   return status;
 }
@@ -328,10 +424,17 @@ async function cleanupAttemptIfLost({
   const terminal = ["canceled", "failed", "complete"].includes(
     renderState.status,
   );
+  // Another run owns the render: this attempt's files (unique to the run
+  // when the path carries the render attempt id) were never published.
+  const supersededOwnFiles =
+    Boolean(attemptPaths.renderAttemptId) &&
+    renderState.attemptId !== attemptPaths.renderAttemptId;
   if (!terminal) {
     await cleanupAttemptArtifacts(client, artifactBucket, attemptPaths, {
-      removeFinal: false,
+      removeFinal: supersededOwnFiles,
     });
+    if (supersededOwnFiles && error && typeof error === "object")
+      error.attemptCleanupDone = true;
     return;
   }
 
@@ -362,6 +465,7 @@ export async function finalizeAttemptWithCas({
       workspaceId,
       projectId,
       client,
+      attemptPaths.renderAttemptId,
     );
     return await persistCompleteDirect(
       renderJobId,
@@ -371,6 +475,7 @@ export async function finalizeAttemptWithCas({
         ...completionDetails,
         artifactBucket,
         exportStoragePath: attemptPaths.finalPath,
+        renderAttemptId: attemptPaths.renderAttemptId,
       },
       client,
     );
@@ -393,12 +498,15 @@ export async function persistRenderFailureDirect(
   errorMessage,
   retrying,
   failureCode = "render_worker_failed",
+  renderAttemptId = null,
+  client = supabaseClient(),
 ) {
-  const client = supabaseClient();
+  // A superseded attempt reports nothing: the render belongs to another run.
+  if (failureCode === "render_attempt_superseded") return false;
   const terminalStatus =
     failureCode === "render_cancelled" ? "canceled" : "failed";
   const status = retrying ? "queued" : terminalStatus;
-  const { data, error } = await client
+  let query = client
     .from("render_jobs")
     .update({
       status,
@@ -408,7 +516,12 @@ export async function persistRenderFailureDirect(
     })
     .eq("id", job.resource_id)
     .eq("workspace_id", job.workspace_id)
-    .eq("project_id", job.project_id)
+    .eq("project_id", job.project_id);
+  // Only while the failing run still owns the render (database audit DB-11);
+  // requeueing it releases the attempt. A failure reported without a run
+  // (a job BullMQ gave up on after it stalled) is not fenced.
+  if (renderAttemptId) query = query.eq("attempt_id", renderAttemptId);
+  const { data, error } = await query
     .not("status", "in", "(canceled,failed,complete)")
     .select("id");
   if (error)
@@ -1450,18 +1563,21 @@ async function readRenderMeta(outputPath) {
  */
 export async function runRemotionJob(
   job,
-  { onProgress = null, queueIdentity = null } = {},
+  { onProgress = null, queueIdentity = null, renderAttemptId = null } = {},
 ) {
   const renderJobId = String(job.resource_id);
   const workspaceId = String(job.workspace_id);
   const projectId = String(job.project_id);
   const tenantScope = { workspaceId, projectId };
+  // The worker generates one attempt id per run; it fences every write below.
+  const runAttemptId = renderAttemptId || randomUUID();
   const attemptPaths = attemptStoragePaths({
     workspaceId,
     projectId,
     renderJobId,
     queueJobId: queueIdentity?.id,
     attemptsMade: queueIdentity?.attemptsMade,
+    renderAttemptId: runAttemptId,
   });
 
   const propsPath = `/tmp/motionly-props-${attemptPaths.attemptId}.json`;
@@ -1487,6 +1603,7 @@ export async function runRemotionJob(
       projectId,
       payload,
       client,
+      runAttemptId,
     );
     if (applied && onProgress) {
       await onProgress(payload);
@@ -1494,13 +1611,22 @@ export async function runRemotionJob(
   };
 
   try {
-    await progress(
-      10,
-      "Running premium render preflight.",
-      "preflight_started",
-      {},
-      "preparing",
+    await claimRenderAttemptDirect(
+      renderJobId,
+      workspaceId,
+      projectId,
+      runAttemptId,
+      client,
     );
+    if (onProgress) {
+      await onProgress({
+        progressPct: 10,
+        message: "Running premium render preflight.",
+        eventType: "preflight_started",
+        metadata: {},
+        status: "preparing",
+      });
+    }
     validateBrowserExecutable();
     await validateWritableTempDir(keyedWorkDir);
     // 1. Fetch the full render job manifest directly from the database.
@@ -1596,6 +1722,7 @@ export async function runRemotionJob(
       workspaceId,
       projectId,
       client,
+      runAttemptId,
     );
     const benchmarkMs = Date.now() - started;
 
@@ -1622,6 +1749,7 @@ export async function runRemotionJob(
         workspaceId,
         projectId,
         client,
+        runAttemptId,
       );
       await promoteAttemptArtifact(client, exportBucket, attemptPaths);
       await assertRenderCompletableDirect(
@@ -1629,6 +1757,7 @@ export async function runRemotionJob(
         workspaceId,
         projectId,
         client,
+        runAttemptId,
       );
 
       const result = await finalizeAttemptWithCas({

@@ -93,6 +93,63 @@ async def _repository_call(repository, async_name: str, sync_name: str, **kwargs
     return getattr(repository, sync_name)(**kwargs)
 
 
+async def _enqueue_render_or_fail(
+    repository,
+    job: RenderJobRecord,
+    *,
+    render_queue: RenderQueue,
+    project_id: UUID,
+    workspace_id: UUID,
+    priority: int,
+    render_engine: str,
+    compute_tier: str,
+):
+    """Queue a committed render job, or fail it so it never sits QUEUED forever.
+
+    The render row (and its billing slot) is written before the BullMQ enqueue.
+    If the enqueue fails (bridge timeout, Redis outage, backpressure), the row is
+    moved to FAILED, which also releases the slot and lets the user retry it,
+    instead of an orphaned QUEUED render that duplicate detection keeps
+    returning (audit WJ-13).
+    """
+    try:
+        return await run_blocking(
+            render_queue.enqueue_render,
+            render_job_id=job.id,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            priority=priority,
+            render_engine=render_engine,
+            compute_tier=compute_tier,
+        )
+    except Exception as exc:
+        code = exc.code if isinstance(exc, ApiError) else "queue_enqueue_failed"
+        try:
+            await _repository_call(
+                repository,
+                "transition_job_async",
+                "transition_job",
+                job=job,
+                status=RenderJobStatus.FAILED,
+                progress_pct=job.progress_pct,
+                message="Render could not be queued.",
+                event_type="failed",
+                error_code=code,
+                error_message="The render could not be queued. Retry it to try again.",
+                require_active=True,
+            )
+        except ApiError:
+            # A concurrent transition (cancel) already moved it out of QUEUED.
+            pass
+        if isinstance(exc, ApiError):
+            raise
+        raise ApiError(
+            503,
+            "render_queue_unavailable",
+            "The render could not be queued. Retry it to try again.",
+        ) from exc
+
+
 async def _events_for_job(repository, render_job_id: UUID, *, limit: int = 100):
     async_method = getattr(repository, "events_for_job_async", None)
     if async_method is not None:
@@ -1285,9 +1342,10 @@ async def _create_render_target(
     if not publish:
         return job
     # The BullMQ bridge is a blocking subprocess round-trip (up to its timeout).
-    queue_job = await run_blocking(
-        render_queue.enqueue_render,
-        render_job_id=job.id,
+    queue_job = await _enqueue_render_or_fail(
+        repository,
+        job,
+        render_queue=render_queue,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         priority=10 if billing_status.current_plan.entitlements.priority_queue else 0,
@@ -1755,9 +1813,10 @@ async def retry_render(
         render_job_id=render_job_id,
         workspace_id=actor.workspace_id,
     )
-    queue_job = await run_blocking(
-        render_queue.enqueue_render,
-        render_job_id=job.id,
+    queue_job = await _enqueue_render_or_fail(
+        repository,
+        job,
+        render_queue=render_queue,
         project_id=project_id,
         workspace_id=actor.workspace_id,
         render_engine=(job.render_engine or RenderEngine.FFMPEG_BASIC).value,

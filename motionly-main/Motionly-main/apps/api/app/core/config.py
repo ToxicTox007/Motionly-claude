@@ -7,6 +7,10 @@ from pydantic import AnyHttpUrl, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LOCAL_AUTH_BYPASS_ENVS = {"development", "local"}
+# Media workers run jobs; they never verify a user JWT, so they run without the
+# signing secret (database audit DB-04: holding it, a worker could mint a
+# service_role token). The API and orchestration services still require it.
+JWT_SECRET_OPTIONAL_PROCESS_ROLES = {"worker"}
 
 
 def env_flag_enabled(value: str | None) -> bool:
@@ -91,6 +95,10 @@ class Settings(BaseSettings):
     worker_heartbeat_max_age_seconds: int = Field(
         default=90, alias="WORKER_HEARTBEAT_MAX_AGE_SECONDS"
     )
+    # Comma-separated queues that must each have a live worker heartbeat; the
+    # workers diagnostic reports the ones without one as degraded (audit WJ-20).
+    # Empty: any live worker heartbeat is enough.
+    required_worker_queues: str = Field(default="", alias="REQUIRED_WORKER_QUEUES")
     metrics_bearer_token: str | None = Field(default=None, alias="METRICS_BEARER_TOKEN")
     ffmpeg_gpu_enabled: bool = Field(default=False, alias="FFMPEG_GPU_ENABLED")
     # gpu: GPU-dependent capabilities run on the GPU-stage workers.
@@ -723,7 +731,11 @@ class Settings(BaseSettings):
                 "Security violation: SKIP_API_AUTH can only be enabled when "
                 "APP_ENV is exactly 'development' or 'local'."
             )
-        if not self.supabase_jwt_secret and self.app_env not in LOCAL_AUTH_BYPASS_ENVS:
+        if (
+            not self.supabase_jwt_secret
+            and self.app_env not in LOCAL_AUTH_BYPASS_ENVS
+            and self.process_role.strip().lower() not in JWT_SECRET_OPTIONAL_PROCESS_ROLES
+        ):
             raise ValueError(
                 "Security violation: SUPABASE_JWT_SECRET is required outside local development."
             )

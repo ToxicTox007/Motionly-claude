@@ -70,6 +70,7 @@ async def metrics(request: Request, authorization: str | None = Header(default=N
         output += f'motionly_queue_queued{{queue="{queue}"}} {snapshot.queued}\n'
         output += f'motionly_queue_running{{queue="{queue}"}} {snapshot.running}\n'
         output += f'motionly_queue_dead_letter{{queue="{queue}"}} {snapshot.dead_letter}\n'
+        output += f'motionly_queue_failed{{queue="{queue}"}} {snapshot.failed}\n'
         output += (
             f'motionly_queue_oldest_seconds{{queue="{queue}"}} '
             f'{snapshot.oldest_queued_seconds or 0}\n'
@@ -102,6 +103,20 @@ async def metrics(request: Request, authorization: str | None = Header(default=N
             )
             heartbeats = []
         now = datetime.now(UTC)
+        # Live workers per queue, so an alert can fire when a queue has work
+        # and nobody consuming it (audit WJ-20).
+        max_age = float(
+            getattr(request.app.state.settings, "worker_heartbeat_max_age_seconds", 90) or 90
+        )
+        serving: dict[str, int] = {snapshot.queue_name: 0 for snapshot in snapshots}
+        for heartbeat in heartbeats:
+            if (now - heartbeat.last_seen_at).total_seconds() > max_age:
+                continue
+            for served in heartbeat.queues or []:
+                serving[served] = serving.get(served, 0) + 1
+        for served, count in sorted(serving.items()):
+            label = str(served).replace('"', "")
+            output += f'motionly_queue_live_workers{{queue="{label}"}} {count}\n'
         for heartbeat in heartbeats:
             worker_id = heartbeat.worker_id.replace('"', "")
             worker_role = heartbeat.worker_role.replace('"', "")

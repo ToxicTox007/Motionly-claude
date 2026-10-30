@@ -71,6 +71,12 @@
       "Default": 500,
       "MinValue": 100,
       "MaxValue": 16000
+    },
+    "AlarmEmail": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^[^@\\s]+@[^@\\s]+$",
+      "Description": "Optional address subscribed to the database alarms (backups, WAL archiving, availability, disk). Empty: alarms publish to the topic only."
     }
   },
   "Mappings": {
@@ -98,6 +104,18 @@
           "Ref": "GitHubOidcProviderArn"
         },
         ""
+      ]
+    },
+    "HasAlarmEmail": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "AlarmEmail"
+            },
+            ""
+          ]
+        }
       ]
     }
   },
@@ -447,6 +465,12 @@
               "AbortIncompleteMultipartUpload": {
                 "DaysAfterInitiation": 7
               }
+            },
+            {
+              "Id": "expire-database-backups",
+              "Status": "Enabled",
+              "Prefix": "database/",
+              "ExpirationInDays": 35
             }
           ]
         },
@@ -680,6 +704,21 @@
                       "Fn::Sub": "${BackupsBucket.Arn}/*"
                     }
                   ]
+                },
+                {
+                  "Sid": "PublishDatabaseMetrics",
+                  "Effect": "Allow",
+                  "Action": [
+                    "cloudwatch:PutMetricData"
+                  ],
+                  "Resource": [
+                    "*"
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "cloudwatch:namespace": "Motionly/Database"
+                    }
+                  }
                 }
               ]
             }
@@ -735,6 +774,12 @@
             "Key": "motionly:environment",
             "Value": {
               "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "motionly:snapshot",
+            "Value": {
+              "Fn::Sub": "${Environment}-daily"
             }
           }
         ]
@@ -892,6 +937,487 @@
             "Value": {
               "Ref": "Environment"
             }
+          }
+        ]
+      }
+    },
+    "SnapshotLifecycleRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "dlm.amazonaws.com"
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "motionly-data-volume-snapshots",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ManageDataVolumeSnapshots",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateSnapshot",
+                    "ec2:CreateSnapshots",
+                    "ec2:DeleteSnapshot",
+                    "ec2:DescribeInstances",
+                    "ec2:DescribeVolumes",
+                    "ec2:DescribeSnapshots"
+                  ],
+                  "Resource": [
+                    "*"
+                  ]
+                },
+                {
+                  "Sid": "TagSnapshots",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:CreateTags"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-snapshot-lifecycle"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "DataVolumeSnapshots": {
+      "Type": "AWS::DLM::LifecyclePolicy",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "motionly-${Environment} daily data volume snapshots"
+        },
+        "State": "ENABLED",
+        "ExecutionRoleArn": {
+          "Fn::GetAtt": [
+            "SnapshotLifecycleRole",
+            "Arn"
+          ]
+        },
+        "PolicyDetails": {
+          "ResourceTypes": [
+            "VOLUME"
+          ],
+          "TargetTags": [
+            {
+              "Key": "motionly:snapshot",
+              "Value": {
+                "Fn::Sub": "${Environment}-daily"
+              }
+            }
+          ],
+          "Schedules": [
+            {
+              "Name": "daily",
+              "CreateRule": {
+                "Interval": 24,
+                "IntervalUnit": "HOURS",
+                "Times": [
+                  "03:30"
+                ]
+              },
+              "RetainRule": {
+                "Count": 14
+              },
+              "CopyTags": true
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-data-snapshots"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "DatabaseAlarmTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "KmsMasterKeyId": "alias/aws/sns",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "motionly-${Environment}-database-alarms"
+            }
+          },
+          {
+            "Key": "motionly:environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ]
+      }
+    },
+    "DatabaseAlarmEmail": {
+      "Type": "AWS::SNS::Subscription",
+      "Condition": "HasAlarmEmail",
+      "Properties": {
+        "Protocol": "email",
+        "Endpoint": {
+          "Ref": "AlarmEmail"
+        },
+        "TopicArn": {
+          "Ref": "DatabaseAlarmTopic"
+        }
+      }
+    },
+    "DataVolumeUsageAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The data volume (PostgreSQL, media, backups) is more than 80% full.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "DataVolumeUsedPercent",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 80,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "PostgresDownAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "postgres has not answered for 10 minutes.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "DatabaseUp",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "postgres"
+          }
+        ],
+        "Statistic": "Minimum",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "PostgresBaseBackupAgeAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "No postgres base backup in the last 26 hours.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "BaseBackupAgeSeconds",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "postgres"
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 3600,
+        "EvaluationPeriods": 1,
+        "Threshold": 93600,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "PostgresBackupSyncAgeAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The postgres WAL archive has not reached S3 for 30 minutes.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "BackupSyncAgeSeconds",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "postgres"
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 1800,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "PostgresWalArchiveAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "postgres is failing to archive WAL; point-in-time recovery is at risk.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "WalArchiveFailing",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "postgres"
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 300,
+        "EvaluationPeriods": 3,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "TemporalPostgresDownAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "temporal-postgres has not answered for 10 minutes.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "DatabaseUp",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "temporal-postgres"
+          }
+        ],
+        "Statistic": "Minimum",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "LessThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "TemporalPostgresBaseBackupAgeAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "No temporal-postgres base backup in the last 26 hours.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "BaseBackupAgeSeconds",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "temporal-postgres"
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 3600,
+        "EvaluationPeriods": 1,
+        "Threshold": 93600,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "TemporalPostgresBackupSyncAgeAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "The temporal-postgres WAL archive has not reached S3 for 30 minutes.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "BackupSyncAgeSeconds",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "temporal-postgres"
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 300,
+        "EvaluationPeriods": 2,
+        "Threshold": 1800,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "breaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ]
+      }
+    },
+    "TemporalPostgresWalArchiveAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmDescription": "temporal-postgres is failing to archive WAL; point-in-time recovery is at risk.",
+        "Namespace": "Motionly/Database",
+        "MetricName": "WalArchiveFailing",
+        "Dimensions": [
+          {
+            "Name": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Name": "Service",
+            "Value": "temporal-postgres"
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 300,
+        "EvaluationPeriods": 3,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "DatabaseAlarmTopic"
           }
         ]
       }
@@ -1343,6 +1869,11 @@
     "BackupsBucketName": {
       "Value": {
         "Ref": "BackupsBucket"
+      }
+    },
+    "DatabaseAlarmTopicArn": {
+      "Value": {
+        "Ref": "DatabaseAlarmTopic"
       }
     },
     "GitHubDeployRoleArn": {

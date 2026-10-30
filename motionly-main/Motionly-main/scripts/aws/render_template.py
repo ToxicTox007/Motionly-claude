@@ -32,6 +32,8 @@ GPU_IMAGE = (
 CPU_IMAGE = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 SSM_CORE = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 GITHUB_OIDC = "token.actions.githubusercontent.com"
+DATABASE_METRIC_NAMESPACE = "Motionly/Database"
+SNAPSHOT_TAG = "motionly:snapshot"
 
 
 def _sub(text: str) -> dict:
@@ -105,6 +107,13 @@ def _parameters(contract: dict) -> dict:
         },
         "RootVolumeSizeGiB": {"Type": "Number", "Default": 100, "MinValue": 50, "MaxValue": 1000},
         "DataVolumeSizeGiB": {"Type": "Number", "Default": 500, "MinValue": 100, "MaxValue": 16000},
+        "AlarmEmail": {
+            "Type": "String",
+            "Default": "",
+            "AllowedPattern": r"^$|^[^@\s]+@[^@\s]+$",
+            "Description": "Optional address subscribed to the database alarms (backups, WAL "
+            "archiving, availability, disk). Empty: alarms publish to the topic only.",
+        },
     }
 
 
@@ -189,7 +198,9 @@ def _network() -> dict:
     }
 
 
-def _bucket(name: str, *, retain: bool, noncurrent_days: int) -> dict:
+def _bucket(
+    name: str, *, retain: bool, noncurrent_days: int, extra_rules: list[dict] | None = None
+) -> dict:
     resource = {
         "Type": "AWS::S3::Bucket",
         "Properties": {
@@ -216,7 +227,8 @@ def _bucket(name: str, *, retain: bool, noncurrent_days: int) -> dict:
                         "Status": "Enabled",
                         "NoncurrentVersionExpiration": {"NoncurrentDays": noncurrent_days},
                         "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7},
-                    }
+                    },
+                    *(extra_rules or []),
                 ]
             },
             "Tags": _tags(name),
@@ -257,7 +269,22 @@ def _storage() -> dict:
     resources = {
         "ReleasesBucket": _bucket("releases", retain=False, noncurrent_days=90),
         "MediaBucket": _bucket("media", retain=True, noncurrent_days=30),
-        "BackupsBucket": _bucket("backups", retain=True, noncurrent_days=35),
+        # Database backups (scripts/deploy/db_backup.sh writes database/<env>/<service>/):
+        # WAL-G base backups and the WAL archive, kept 35 days so a restore to any
+        # point in the last 30 days always has its base backup and WAL.
+        "BackupsBucket": _bucket(
+            "backups",
+            retain=True,
+            noncurrent_days=35,
+            extra_rules=[
+                {
+                    "Id": "expire-database-backups",
+                    "Status": "Enabled",
+                    "Prefix": "database/",
+                    "ExpirationInDays": 35,
+                }
+            ],
+        ),
     }
     for name in list(resources):
         resources[f"{name}Policy"] = _tls_only(name)
@@ -345,6 +372,19 @@ def _instance() -> dict:
                                     "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
                                     "Resource": bucket_arns["BackupsBucket"],
                                 },
+                                {
+                                    # scripts/deploy/db_backup.sh publishes backup
+                                    # and availability metrics the alarms watch.
+                                    "Sid": "PublishDatabaseMetrics",
+                                    "Effect": "Allow",
+                                    "Action": ["cloudwatch:PutMetricData"],
+                                    "Resource": ["*"],
+                                    "Condition": {
+                                        "StringEquals": {
+                                            "cloudwatch:namespace": DATABASE_METRIC_NAMESPACE
+                                        }
+                                    },
+                                },
                             ],
                         },
                     }
@@ -365,7 +405,11 @@ def _instance() -> dict:
                 "Size": {"Ref": "DataVolumeSizeGiB"},
                 "VolumeType": "gp3",
                 "Encrypted": True,
-                "Tags": _tags("data"),
+                # DataVolumeSnapshots (below) selects the volume by this tag.
+                "Tags": [
+                    *_tags("data"),
+                    {"Key": SNAPSHOT_TAG, "Value": _sub("${Environment}-daily")},
+                ],
             },
         },
         "LaunchTemplate": {
@@ -640,6 +684,192 @@ def _edge(contract: dict) -> dict:
     }
 
 
+def _alarm(
+    *,
+    description: str,
+    metric: str,
+    threshold: float,
+    comparison: str,
+    period: int,
+    periods: int,
+    missing: str,
+    service: str | None = None,
+) -> dict:
+    dimensions = [{"Name": "Environment", "Value": {"Ref": "Environment"}}]
+    if service:
+        dimensions.append({"Name": "Service", "Value": service})
+    return {
+        "Type": "AWS::CloudWatch::Alarm",
+        "Properties": {
+            "AlarmDescription": description,
+            "Namespace": DATABASE_METRIC_NAMESPACE,
+            "MetricName": metric,
+            "Dimensions": dimensions,
+            "Statistic": "Maximum" if comparison.startswith("Greater") else "Minimum",
+            "Period": period,
+            "EvaluationPeriods": periods,
+            "Threshold": threshold,
+            "ComparisonOperator": comparison,
+            "TreatMissingData": missing,
+            "AlarmActions": [{"Ref": "DatabaseAlarmTopic"}],
+            "OKActions": [{"Ref": "DatabaseAlarmTopic"}],
+        },
+    }
+
+
+def _database_operations() -> dict:
+    """Snapshots of the data volume and alarms on the backup agent's metrics.
+
+    scripts/deploy/db_backup.sh publishes the metrics (database audit DB-02,
+    DB-15). Alarms that depend on the agent reporting treat missing data as
+    breaching, so a stopped agent alarms too.
+    """
+    resources: dict = {
+        "SnapshotLifecycleRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "dlm.amazonaws.com"},
+                            "Action": ["sts:AssumeRole"],
+                        }
+                    ],
+                },
+                "Policies": [
+                    {
+                        # The actions Data Lifecycle Manager needs for an EBS
+                        # snapshot policy (create, tag, list, expire), nothing more.
+                        "PolicyName": "motionly-data-volume-snapshots",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Sid": "ManageDataVolumeSnapshots",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ec2:CreateSnapshot",
+                                        "ec2:CreateSnapshots",
+                                        "ec2:DeleteSnapshot",
+                                        "ec2:DescribeInstances",
+                                        "ec2:DescribeVolumes",
+                                        "ec2:DescribeSnapshots",
+                                    ],
+                                    "Resource": ["*"],
+                                },
+                                {
+                                    "Sid": "TagSnapshots",
+                                    "Effect": "Allow",
+                                    "Action": ["ec2:CreateTags"],
+                                    "Resource": [
+                                        _sub("arn:${AWS::Partition}:ec2:${AWS::Region}::snapshot/*")
+                                    ],
+                                },
+                            ],
+                        },
+                    }
+                ],
+                "Tags": _tags("snapshot-lifecycle"),
+            },
+        },
+        # A second, independent recovery layer: daily crash-consistent snapshots
+        # of the data volume (PostgreSQL recovers from them like from a crash).
+        "DataVolumeSnapshots": {
+            "Type": "AWS::DLM::LifecyclePolicy",
+            "Properties": {
+                "Description": _sub("motionly-${Environment} daily data volume snapshots"),
+                "State": "ENABLED",
+                "ExecutionRoleArn": {"Fn::GetAtt": ["SnapshotLifecycleRole", "Arn"]},
+                "PolicyDetails": {
+                    "ResourceTypes": ["VOLUME"],
+                    "TargetTags": [
+                        {"Key": SNAPSHOT_TAG, "Value": _sub("${Environment}-daily")}
+                    ],
+                    "Schedules": [
+                        {
+                            "Name": "daily",
+                            "CreateRule": {
+                                "Interval": 24,
+                                "IntervalUnit": "HOURS",
+                                "Times": ["03:30"],
+                            },
+                            "RetainRule": {"Count": 14},
+                            "CopyTags": True,
+                        }
+                    ],
+                },
+                "Tags": _tags("data-snapshots"),
+            },
+        },
+        "DatabaseAlarmTopic": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {"KmsMasterKeyId": "alias/aws/sns", "Tags": _tags("database-alarms")},
+        },
+        "DatabaseAlarmEmail": {
+            "Type": "AWS::SNS::Subscription",
+            "Condition": "HasAlarmEmail",
+            "Properties": {
+                "Protocol": "email",
+                "Endpoint": {"Ref": "AlarmEmail"},
+                "TopicArn": {"Ref": "DatabaseAlarmTopic"},
+            },
+        },
+        "DataVolumeUsageAlarm": _alarm(
+            description="The data volume (PostgreSQL, media, backups) is more than 80% full.",
+            metric="DataVolumeUsedPercent",
+            threshold=80,
+            comparison="GreaterThanThreshold",
+            period=300,
+            periods=2,
+            missing="breaching",
+        ),
+    }
+    for prefix, service in (("Postgres", "postgres"), ("TemporalPostgres", "temporal-postgres")):
+        resources[f"{prefix}DownAlarm"] = _alarm(
+            description=f"{service} has not answered for 10 minutes.",
+            metric="DatabaseUp",
+            threshold=1,
+            comparison="LessThanThreshold",
+            period=300,
+            periods=2,
+            missing="breaching",
+            service=service,
+        )
+        resources[f"{prefix}BaseBackupAgeAlarm"] = _alarm(
+            description=f"No {service} base backup in the last 26 hours.",
+            metric="BaseBackupAgeSeconds",
+            threshold=26 * 3600,
+            comparison="GreaterThanThreshold",
+            period=3600,
+            periods=1,
+            missing="breaching",
+            service=service,
+        )
+        resources[f"{prefix}BackupSyncAgeAlarm"] = _alarm(
+            description=f"The {service} WAL archive has not reached S3 for 30 minutes.",
+            metric="BackupSyncAgeSeconds",
+            threshold=1800,
+            comparison="GreaterThanThreshold",
+            period=300,
+            periods=2,
+            missing="breaching",
+            service=service,
+        )
+        resources[f"{prefix}WalArchiveAlarm"] = _alarm(
+            description=f"{service} is failing to archive WAL; point-in-time recovery is at risk.",
+            metric="WalArchiveFailing",
+            threshold=1,
+            comparison="GreaterThanOrEqualToThreshold",
+            period=300,
+            periods=3,
+            missing="notBreaching",
+            service=service,
+        )
+    return resources
+
+
 def render(contract: dict) -> dict:
     assert contract["schema_version"] == 1, "unsupported edge contract"
     assert contract["distribution"]["viewer_certificate"] == "cloudfront-default"
@@ -659,6 +889,7 @@ def render(contract: dict) -> dict:
         "Conditions": {
             "UseGpu": {"Fn::Equals": [{"Ref": "ComputeProfile"}, "gpu"]},
             "CreateGitHubOidcProvider": {"Fn::Equals": [{"Ref": "GitHubOidcProviderArn"}, ""]},
+            "HasAlarmEmail": {"Fn::Not": [{"Fn::Equals": [{"Ref": "AlarmEmail"}, ""]}]},
         },
         "Rules": {
             "MumbaiOnly": {
@@ -670,7 +901,14 @@ def render(contract: dict) -> dict:
                 ]
             }
         },
-        "Resources": {**_network(), **_storage(), **_instance(), **_deploy(), **_edge(contract)},
+        "Resources": {
+            **_network(),
+            **_storage(),
+            **_instance(),
+            **_database_operations(),
+            **_deploy(),
+            **_edge(contract),
+        },
         "Outputs": {
             "PublicOrigin": {
                 "Description": "PUBLIC_ORIGIN for the release (https://<distribution>.cloudfront.net).",
@@ -681,6 +919,7 @@ def render(contract: dict) -> dict:
             "ReleasesBucketName": {"Value": {"Ref": "ReleasesBucket"}},
             "MediaBucketName": {"Value": {"Ref": "MediaBucket"}},
             "BackupsBucketName": {"Value": {"Ref": "BackupsBucket"}},
+            "DatabaseAlarmTopicArn": {"Value": {"Ref": "DatabaseAlarmTopic"}},
             "GitHubDeployRoleArn": {"Value": {"Fn::GetAtt": ["GitHubDeployRole", "Arn"]}},
         },
     }
