@@ -28,7 +28,7 @@ if [ ! -e "$device" ]; then
   exit 1
 fi
 if ! blkid "$device" >/dev/null 2>&1; then
-  mkfs.xfs -L motionly-data "$device"
+  mkfs.xfs -L motionlydata "$device"
 fi
 mkdir -p "$DATA_MOUNT"
 uuid=$(blkid -s UUID -o value "$device")
