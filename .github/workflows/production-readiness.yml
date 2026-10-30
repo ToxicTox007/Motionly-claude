@@ -452,7 +452,7 @@ jobs:
       - name: Scan hash-locked Python dependencies
         uses: pypa/gh-action-pip-audit@v1.1.0
         with:
-          inputs: -r motionly-main/Motionly-main/apps/api/requirements.lock
+          inputs: motionly-main/Motionly-main/apps/api/requirements.lock
 
   phase-10-prelaunch:
     runs-on: ubuntu-latest

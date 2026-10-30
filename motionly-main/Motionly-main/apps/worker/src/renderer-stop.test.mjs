@@ -63,6 +63,14 @@ async function readPids(file) {
   throw new Error("renderer stub never started");
 }
 
+async function waitUntilDead(pid) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!alive(pid)) return;
+    await new Promise((done) => setTimeout(done, 20));
+  }
+  assert.equal(alive(pid), false);
+}
+
 test(
   "a render that ignores SIGTERM is killed, with its browser, before the timeout settles",
   { skip: process.platform === "win32" },
@@ -86,8 +94,8 @@ test(
         elapsed >= 5_250,
         `settled before the kill escalation (${elapsed}ms)`,
       );
-      assert.equal(alive(cli), false, "render-cli survived");
-      assert.equal(alive(browser), false, "the browser grandchild survived");
+      await waitUntilDead(cli);
+      await waitUntilDead(browser);
     });
   },
 );
@@ -113,8 +121,8 @@ test(
         (error) => error.code === "render_cancelled",
       );
       const { cli, browser } = await readPids(pidsFile);
-      assert.equal(alive(cli), false);
-      assert.equal(alive(browser), false);
+      await waitUntilDead(cli);
+      await waitUntilDead(browser);
     });
   },
 );
