@@ -8,7 +8,7 @@
     "lint": "node src/worker.mjs --check",
     "start": "node --env-file-if-exists=.env src/worker.mjs --loop",
     "typecheck": "node src/worker.mjs --check",
-    "test": "node --test src/*.test.mjs && node src/worker.mjs --check"
+    "test": "node --test --test-concurrency=1 src/*.test.mjs && node src/worker.mjs --check"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.106.2",
