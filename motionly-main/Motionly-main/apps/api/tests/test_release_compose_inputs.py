@@ -119,7 +119,7 @@ def test_release_compose_input_writer_uses_manifest_digests_and_0600_files(tmp_p
         check=False,
     )
     assert certificate.returncode == 0, certificate.stderr
-    assert "CN=motionly-api" in certificate.stdout
+    assert "CN=motionly-api" in certificate.stdout.replace(" ", "")
 
 
 def test_release_compose_input_writer_refuses_existing_secret_paths(tmp_path: Path) -> None:

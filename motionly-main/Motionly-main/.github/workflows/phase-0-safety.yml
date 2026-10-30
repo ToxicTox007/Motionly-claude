@@ -416,7 +416,7 @@ jobs:
           docker run --rm
           --volume "$PWD:/repo"
           zricethezav/gitleaks:v8.24.2
-          detect --source=/repo --no-git --redact --exit-code=1
+          detect --source=/repo --config=/repo/.gitleaks.toml --no-git --redact --exit-code=1
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}

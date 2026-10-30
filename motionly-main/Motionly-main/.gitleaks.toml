@@ -1,0 +1,14 @@
+title = "Motionly secret scan policy"
+
+[allowlist]
+description = "Test fixtures contain deliberately fake credential-shaped values; application and infrastructure files remain scanned."
+paths = [
+  '''(^|/)apps/api/tests/''',
+  '''(^|/)apps/web/tests/''',
+  '''(^|/)apps/worker/src/log-redaction\.test\.mjs$''',
+  '''(^|/)scripts/cdn-sim/edge\.test\.mjs$''',
+  '''(^|/)supabase/tests/''',
+]
+regexes = [
+  '''generate-proposal-v2''',
+]
