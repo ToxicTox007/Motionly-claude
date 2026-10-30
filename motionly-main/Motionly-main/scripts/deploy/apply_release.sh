@@ -349,8 +349,8 @@ write_release_inputs() {
   # Stock-video providers are application settings consumed by the API. Keep
   # them in protected release inputs and inject them only into Compose's API
   # environment; values never enter Git or command arguments.
-  fetch_secret_to_file pexels-api-key "$secrets_dir/pexels_api_key"
-  fetch_secret_to_file pixabay-api-key "$secrets_dir/pixabay_api_key"
+  fetch_secret_to_file pexels-api-key "$secrets_dir/pexels_api_key" optional
+  fetch_secret_to_file pixabay-api-key "$secrets_dir/pixabay_api_key" optional
   # Inference routes (plan Task 26): one declarative registry and one generic
   # secrets bundle replace the old per-vendor keys. The registry's
   # ``bundle:<key>`` refs read keys out of this JSON object; no vendor-named

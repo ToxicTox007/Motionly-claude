@@ -37,9 +37,27 @@
   "optional": [
     {
       "id": "live-provider-contracts",
-      "match": "Live provider contracts are disabled",
+      "match": "set MOTIONLY_LIVE_INFERENCE=1 for an authorised live run",
       "enable_env": "RUN_LIVE_PROVIDER_CONTRACTS",
       "reason": "Calls real remote provider accounts (planning, transcription and stock video); outside the CPU-stage proof."
+    },
+    {
+      "id": "cpu-vision-matte",
+      "match": "runs inside the cpu-vision image (MediaPipe + baked segmenter)",
+      "enable_env": "CPU_VISION_IMAGE",
+      "reason": "Needs the optional CPU-vision image with the baked MediaPipe segmenter."
+    },
+    {
+      "id": "cpu-vision-yamnet",
+      "match": "runs inside the cpu-vision image (MediaPipe + baked YAMNet model)",
+      "enable_env": "CPU_VISION_IMAGE",
+      "reason": "Needs the optional CPU-vision image with the baked YAMNet model."
+    },
+    {
+      "id": "cpu-vision-visual-pipeline",
+      "match": "runs inside the cpu-vision image (MediaPipe + baked BlazeFace model)",
+      "enable_env": "CPU_VISION_IMAGE",
+      "reason": "Needs the optional CPU-vision image with the baked BlazeFace model."
     },
     {
       "id": "redis-contracts",
