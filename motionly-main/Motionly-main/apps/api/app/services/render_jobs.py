@@ -412,7 +412,12 @@ def _run_render_preflight(
     _validate_render_props_manifest(job.manifest)
     _validate_music_rights(job.manifest, allow_fixture_media=allow_fixture_media)
     _validate_caption_payload(job.manifest, ass_path=ass_path)
-    _validate_media_assets(job.manifest, storage=storage, allow_fixture_media=allow_fixture_media)
+    _validate_media_assets(
+        job.manifest,
+        storage=storage,
+        allow_fixture_media=allow_fixture_media,
+        workspace_id=job.workspace_id,
+    )
     return {
         "storage": storage,
         "source_path": source_path,
@@ -596,6 +601,7 @@ def _validate_media_assets(
     *,
     storage: LocalObjectStorage,
     allow_fixture_media: bool,
+    workspace_id: object | None = None,
 ) -> None:
     render_props = manifest.get("render_props")
     if not isinstance(render_props, dict):
@@ -604,6 +610,7 @@ def _validate_media_assets(
         validate_render_media_manifest(
             render_props,
             allow_fixture=allow_fixture_media,
+            workspace_id=workspace_id,
             resolve_dns=True,
             require_dns=True,
         )

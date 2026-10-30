@@ -5,7 +5,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 import httpx
 
@@ -25,7 +25,7 @@ class LocalObjectStorage:
 
     def object_path(self, *, bucket: str, path: str) -> Path:
         safe_bucket = _safe_part(bucket)
-        decoded = unquote(path)
+        decoded = path
         candidate = (self.root / safe_bucket / decoded).resolve()
         bucket_root = (self.root / safe_bucket).resolve()
         if bucket_root != candidate and bucket_root not in candidate.parents:

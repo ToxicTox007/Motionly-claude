@@ -6,14 +6,16 @@ any object by guessing its path (B38). Every local link therefore carries an
 expiry (``exp``) and an HMAC signature (``sig``) issued by the storage signer; the
 route handlers refuse unsigned, tampered, or expired links with 403.
 
-The signature is an HMAC-SHA256 over ``"<method>:<bucket>:<path>:<exp>"`` so a
-download link can never be replayed as an upload link and vice versa. Comparison
-is constant time (``hmac.compare_digest`` via ``constant_time_token_matches``).
+The signature is an HMAC-SHA256 over a canonical JSON array containing the
+method, bucket, path and expiry. A download link can never be replayed as an
+upload link and vice versa. Comparison is constant time
+(``hmac.compare_digest`` via ``constant_time_token_matches``).
 """
 
 from __future__ import annotations
 
 import hmac
+import json
 import time
 from hashlib import sha256
 
@@ -29,7 +31,13 @@ class LocalStorageSignatureError(Exception):
 
 
 def _canonical_message(*, method: str, bucket: str, path: str, expires_at: int) -> bytes:
-    return f"{method.upper()}:{bucket}:{path}:{expires_at}".encode()
+    # JSON gives each signed field an unambiguous boundary. A colon-delimited
+    # message allowed values such as bucket/path to produce the same signature.
+    return json.dumps(
+        [method.upper(), bucket, path, expires_at],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 def compute_local_object_signature(

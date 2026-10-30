@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app.core.config import PRODUCTION_LIKE_ENVS, VALID_APP_ENVS
 from app.services.ai_features import gpu_worker_switches
 from app.services.inference_runtime import build_inference_runtime
 from app.services.inference_validation import InferenceStartupError
@@ -19,8 +20,15 @@ BILLING_MODES = ("disabled", "demo")
 
 
 def validate_production_settings(settings: object) -> None:
-    if settings.app_env != "production":
+    app_env = str(getattr(settings, "app_env", "")).strip().lower()
+    if app_env not in VALID_APP_ENVS:
+        raise RuntimeError(
+            "APP_ENV must be one of production, staging, cpu-stage, development, local, test"
+        )
+    if app_env not in PRODUCTION_LIKE_ENVS:
         return
+    if getattr(settings, "local_audit_mode", False):
+        raise RuntimeError("LOCAL_AUDIT_MODE is not allowed in production")
     if getattr(settings, "ml_execution_mode", "gpu") != "gpu":
         raise RuntimeError(
             "ML_EXECUTION_MODE=test_fixture is not allowed in production; "
@@ -110,7 +118,8 @@ def validate_production_settings(settings: object) -> None:
                     "Missing production Temporal proposal activity variables: "
                     + ", ".join(missing_internal_api)
                 )
-        return
+        if process_role in ORCHESTRATION_PROCESS_ROLES:
+            return
 
     visual_provider_key = settings.visual_intelligence_provider.strip().lower()
     audio_ml_provider_key = settings.audio_ml_provider.strip().lower()

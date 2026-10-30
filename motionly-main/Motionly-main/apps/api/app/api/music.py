@@ -1,6 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.dependencies import (
@@ -214,8 +215,14 @@ async def list_music_tracks(
     candidates: list[MusicTrackCandidate] = []
     for provider in providers:
         try:
-            candidates = provider.search(mood=search_mood, max_results=8)
-        except ApiError:
+            candidates = await run_blocking(
+                provider.search,
+                mood=search_mood,
+                max_results=8,
+            )
+        except (ApiError, httpx.HTTPError, ValueError, KeyError, TypeError):
+            # A provider outage or malformed response must not block the next
+            # provider or the request event loop.
             continue
         if candidates:
             break

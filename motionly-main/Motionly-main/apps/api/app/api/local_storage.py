@@ -13,9 +13,14 @@ from app.services.local_storage_signing import (
 router = APIRouter(prefix="/_local/storage", tags=["local storage"])
 
 
+LOCAL_STORAGE_ALLOWED_ENVS = frozenset({"development", "local", "test"})
+
+
 def _local_storage(request: Request) -> LocalObjectStorage:
     settings = request.app.state.settings
-    if settings.app_env == "production":
+    # Local disk is a development/test implementation detail. Never expose it
+    # merely because APP_ENV is a misspelled or staging-like value.
+    if str(settings.app_env).strip().lower() not in LOCAL_STORAGE_ALLOWED_ENVS:
         raise ApiError(404, "local_storage_unavailable", "Local storage is not available.")
     if (
         settings.supabase_url
@@ -53,8 +58,16 @@ def _require_signed_link(
 ) -> None:
     secret = _signing_secret(request)
     if not secret:
-        # No signing secret is configured (bare local dev with no JWT secret);
-        # there is no shared key to verify against, so links stay unsigned.
+        # Unsigned links are permitted only in explicitly local/test modes. The
+        # route itself is unavailable elsewhere, but keep this check fail-closed
+        # if it is called directly or the route gate changes later.
+        app_env = str(request.app.state.settings.app_env).strip().lower()
+        if app_env not in LOCAL_STORAGE_ALLOWED_ENVS:
+            raise ApiError(
+                404,
+                "local_storage_unavailable",
+                "Local storage is not available.",
+            )
         return
     try:
         verify_local_object_signature(
@@ -116,4 +129,11 @@ async def get_local_object(
         request, method="GET", bucket=bucket, object_path=object_path, exp=exp, sig=sig
     )
     path = _local_storage(request).ensure_object(bucket=bucket, path=object_path)
-    return FileResponse(path)
+    return FileResponse(
+        path,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+        },
+    )

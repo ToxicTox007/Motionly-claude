@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -32,6 +34,25 @@ async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
                 "request_id": request.state.request_id,
             }
         },
+    )
+
+
+async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = getattr(getattr(request, "state", None), "request_id", f"req_{uuid4().hex}")
+    logger.exception(
+        "api_unhandled_exception",
+        extra={"request_id": request_id, "method": request.method, "path": request.url.path},
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "internal_error",
+                "message": "The server could not complete the request.",
+                "request_id": request_id,
+            }
+        },
+        headers={"x-request-id": request_id},
     )
 
 

@@ -3,10 +3,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, model_validator
+from pydantic import AnyHttpUrl, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LOCAL_AUTH_BYPASS_ENVS = {"development", "local"}
+VALID_APP_ENVS = frozenset({"production", "staging", "cpu-stage", "development", "local", "test"})
+PRODUCTION_LIKE_ENVS = frozenset({"production", "staging"})
 # Media workers run jobs; they never verify a user JWT, so they run without the
 # signing secret (database audit DB-04: holding it, a worker could mint a
 # service_role token). The API and orchestration services still require it.
@@ -701,6 +703,12 @@ class Settings(BaseSettings):
         alias="LOCAL_AUDIT_REMOTE_CLEANUP_POLICY",
     )
 
+    @field_validator("app_env", mode="before")
+    @classmethod
+    def normalize_app_env(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        return normalized
+
     @property
     def gpu_stage(self) -> Literal["enabled", "not_enabled"]:
         """Whether GPU-dependent capabilities are real (GPU stage) or fixtures."""
@@ -710,6 +718,11 @@ class Settings(BaseSettings):
     def api_auth_bypass_enabled(self) -> bool:
         """Whether the explicitly configured local-only API auth bypass is active."""
         return self.skip_api_auth and self.app_env in LOCAL_AUTH_BYPASS_ENVS
+
+
+    @property
+    def is_production_like(self) -> bool:
+        return self.app_env in PRODUCTION_LIKE_ENVS
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
@@ -748,7 +761,11 @@ class Settings(BaseSettings):
                 "Security violation: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required "
                 "outside local development to verify workspace membership."
             )
-        if self.app_env == "production":
+        if self.app_env not in VALID_APP_ENVS:
+            raise ValueError(
+                "APP_ENV must be one of production, staging, cpu-stage, development, local, test"
+            )
+        if self.is_production_like:
             if self.force_local_media_storage:
                 raise ValueError(
                     "Security violation: FORCE_LOCAL_MEDIA_STORAGE cannot be enabled in "

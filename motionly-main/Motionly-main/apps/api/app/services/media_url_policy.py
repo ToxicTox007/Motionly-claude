@@ -179,6 +179,7 @@ def validate_outbound_media_url(
     allow_data_audio: bool = False,
     resolve_dns: bool = True,
     require_dns: bool = False,
+    workspace_id: object | None = None,
     resolver: Resolver | None = None,
 ) -> ValidatedMediaUrl:
     """Validate one render media reference without returning or logging secrets."""
@@ -190,7 +191,7 @@ def validate_outbound_media_url(
     if value.startswith("supabase://"):
         if not allow_supabase:
             raise MediaUrlPolicyError("Internal media references are not allowed here.")
-        _validate_supabase_reference(value)
+        _validate_supabase_reference(value, workspace_id=workspace_id)
         return ValidatedMediaUrl(value=value, kind="supabase")
 
     if value.startswith("fixture://"):
@@ -241,6 +242,7 @@ def validate_render_media_manifest(
     allow_fixture: bool = False,
     resolve_dns: bool = True,
     require_dns: bool = False,
+    workspace_id: object | None = None,
     resolver: Resolver | None = None,
 ) -> None:
     """Validate every media reference Remotion or FFmpeg can consume."""
@@ -262,6 +264,7 @@ def validate_render_media_manifest(
             allow_data_audio=allow_data_audio,
             resolve_dns=resolve_dns,
             require_dns=require_dns,
+            workspace_id=workspace_id,
             resolver=resolver,
         )
 
@@ -586,7 +589,7 @@ def _validate_public_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) 
         raise MediaUrlPolicyError("Media URL address is not publicly routable.")
 
 
-def _validate_supabase_reference(value: str) -> None:
+def _validate_supabase_reference(value: str, *, workspace_id: object | None = None) -> None:
     parsed = urlsplit(value)
     bucket = parsed.netloc
     path = unquote(parsed.path.lstrip("/"))
@@ -594,6 +597,12 @@ def _validate_supabase_reference(value: str) -> None:
         raise MediaUrlPolicyError("Internal media reference is invalid.")
     if not path or "\\" in path or any(part in {"", ".", ".."} for part in path.split("/")):
         raise MediaUrlPolicyError("Internal media reference is invalid.")
+    if (
+        workspace_id is not None
+        and path.startswith("workspaces/")
+        and not path.startswith(f"workspaces/{workspace_id}/")
+    ):
+        raise MediaUrlPolicyError("Internal media reference is not owned by this workspace.")
 
 
 def _validate_fixture_reference(value: str) -> None:

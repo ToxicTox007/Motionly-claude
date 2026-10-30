@@ -28,9 +28,8 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 ActorDep = Annotated[Actor, Depends(get_actor)]
 RenderRepositoryDep = Annotated[InMemoryRenderRepository, Depends(get_render_repository)]
 
-# ADMIN_WORKSPACE_IDS designates an operator workspace. Only the people who run
-# that workspace are platform admins; an ordinary member invited to it is not.
-ADMIN_WORKSPACE_ROLES = frozenset({"owner", "admin"})
+# Platform admins are explicit identities. Workspace membership alone is not a
+# platform authorization boundary.
 
 
 async def require_admin(
@@ -45,11 +44,6 @@ async def require_admin(
     if getattr(actor, "kind", "user") != "user":
         raise ApiError(403, "admin_access_denied", "Admin access is required.")
     if str(actor.user_id).lower() in settings.admin_user_id_list:
-        return actor
-    if (
-        str(actor.workspace_id).lower() in settings.admin_workspace_id_list
-        and actor.role in ADMIN_WORKSPACE_ROLES
-    ):
         return actor
     raise ApiError(403, "admin_access_denied", "Admin access is required.")
 

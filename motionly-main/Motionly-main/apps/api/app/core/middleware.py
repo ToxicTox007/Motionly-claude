@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import re
 from collections.abc import Awaitable, Callable
 from time import monotonic, perf_counter, time
 from uuid import uuid4
@@ -21,13 +22,25 @@ from app.services.tracing import current_trace_id
 logger = get_logger(__name__)
 
 
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_TRACEPARENT_RE = re.compile(r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
+
+
+def _safe_request_id(value: str | None) -> str:
+    return value if value and _REQUEST_ID_RE.fullmatch(value) else f"req_{uuid4().hex}"
+
+
+def _safe_trace_id(value: str | None) -> str:
+    return value[3:35] if value and _TRACEPARENT_RE.fullmatch(value) else uuid4().hex
+
+
 async def request_id_middleware(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    request_id = request.headers.get("x-request-id", f"req_{uuid4().hex}")
-    incoming_trace = request.headers.get("traceparent", "").split("-")
-    trace_id = incoming_trace[1] if len(incoming_trace) == 4 else uuid4().hex
+    request_id = _safe_request_id(request.headers.get("x-request-id"))
+    incoming_trace = request.headers.get("traceparent")
+    trace_id = _safe_trace_id(incoming_trace)
     span_id = uuid4().hex[:16]
     request.state.request_id = request_id
     request.state.trace_id = trace_id
@@ -149,7 +162,15 @@ class RedisRateLimiter:
     def __init__(self, redis_url: str) -> None:
         from redis.asyncio import Redis
 
-        self.redis = Redis.from_url(redis_url, decode_responses=True)
+        self.redis = Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=1.0,
+            socket_timeout=1.0,
+            health_check_interval=30,
+            retry_on_timeout=False,
+        )
+        self._fallback = InMemoryRateLimiter()
 
     async def allow(
         self, *, key: str, limit: int, window_seconds: int = 60
@@ -158,10 +179,21 @@ class RedisRateLimiter:
             return True, limit
         window = int(time()) // window_seconds
         redis_key = f"motionly:rate-limit:{window}:{key}"
-        async with self.redis.pipeline(transaction=True) as pipeline:
-            pipeline.incr(redis_key)
-            pipeline.expire(redis_key, window_seconds + 2)
-            count, _ = await pipeline.execute()
+        try:
+            async with self.redis.pipeline(transaction=True) as pipeline:
+                pipeline.incr(redis_key)
+                pipeline.expire(redis_key, window_seconds + 2)
+                count, _ = await pipeline.execute()
+        except Exception as exc:  # noqa: BLE001 - availability fallback
+            logger.error(
+                "redis_rate_limiter_unavailable",
+                extra={"error": type(exc).__name__},
+            )
+            return await self._fallback.allow(
+                key=key,
+                limit=limit,
+                window_seconds=window_seconds,
+            )
         count = int(count)
         return count <= limit, max(0, limit - count)
 

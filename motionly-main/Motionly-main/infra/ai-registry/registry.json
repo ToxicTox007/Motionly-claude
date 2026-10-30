@@ -57,11 +57,11 @@
       "config": {
         "region": "ap-south-1",
         "api": "data_automation",
-        "s3_bucket": "motionly-staging-bda-576971911060",
+        "s3_bucket": "motionly-production-bda-576971911060",
         "s3_prefix": "bda",
         "s3_region": "ap-south-1",
         "data_automation_profile_arn": "arn:aws:bedrock:ap-south-1:576971911060:data-automation-profile/apac.data-automation-v1",
-        "data_automation_project_arn": "arn:aws:bedrock:ap-south-1:576971911060:data-automation-project/a4b157e9b58c",
+        "data_automation_project_arn": "arn:aws:bedrock:ap-south-1:576971911060:data-automation-project/fed8f90b6de5",
         "data_automation_stage": "LIVE",
         "max_wait_s": 900,
         "poll_interval_s": 5,

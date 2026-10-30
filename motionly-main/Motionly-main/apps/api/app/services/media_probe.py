@@ -18,6 +18,8 @@ def probe_video(path: Path) -> VideoMetadata:
                 "ffprobe",
                 "-v",
                 "error",
+                "-protocol_whitelist",
+                "file,pipe",
                 "-print_format",
                 "json",
                 "-show_streams",
@@ -33,6 +35,7 @@ def probe_video(path: Path) -> VideoMetadata:
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
         raise MediaProbeError("Unable to inspect uploaded video.") from exc
 
+    _validate_container_header(path)
     payload = json.loads(result.stdout)
     streams = payload.get("streams", [])
     video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
@@ -84,6 +87,8 @@ def probe_duration_seconds(path: Path) -> float | None:
                 "ffprobe",
                 "-v",
                 "error",
+                "-protocol_whitelist",
+                "file,pipe",
                 "-print_format",
                 "json",
                 "-show_format",
@@ -150,3 +155,17 @@ def _rotation_degrees(video_stream: dict[str, object]) -> int | None:
         if isinstance(side_data, dict) and side_data.get("rotation") is not None:
             return int(side_data["rotation"]) % 360
     return None
+
+
+def _validate_container_header(path: Path) -> None:
+    """Reject playlist/text payloads before media tools inspect uploaded bytes."""
+    try:
+        with path.open("rb") as source:
+            header = source.read(16)
+    except OSError as exc:
+        raise MediaProbeError("Unable to inspect uploaded video.") from exc
+
+    is_iso_bmff = len(header) >= 8 and header[4:8] == b"ftyp"
+    is_webm = header.startswith(b"\x1a\x45\xdf\xa3")
+    if not (is_iso_bmff or is_webm):
+        raise MediaProbeError("Uploaded file is not a supported video container.")

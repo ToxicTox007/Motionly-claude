@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.billing import build_billing_status_async
@@ -933,13 +934,16 @@ async def search_broll_candidates(
     candidates = []
     for provider in providers:
         try:
-            candidates = provider.search(
+            candidates = await run_blocking(
+                provider.search,
                 query=search_query,
                 orientation=StockOrientation.PORTRAIT,
                 min_width=720,
                 min_height=1280,
             )
-        except ApiError:
+        except (ApiError, httpx.HTTPError, ValueError, KeyError, TypeError):
+            # Provider transport/schema failures are isolated so the next
+            # configured provider can satisfy the search.
             continue
         if candidates:
             break

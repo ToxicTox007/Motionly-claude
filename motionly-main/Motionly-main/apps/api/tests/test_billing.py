@@ -944,3 +944,20 @@ def test_a_failed_upgrade_checkout_does_not_mark_a_paid_plan_past_due() -> None:
 
 
 _ = json  # keep import referenced for readers scanning payload shapes
+
+
+def test_active_subscription_expires_after_its_paid_period() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.billing import effective_plan_key
+
+    now = datetime(2026, 10, 28, tzinfo=UTC)
+    subscription = SubscriptionRecord(
+        workspace_id=uuid4(),
+        plan=BillingPlanKey.AGENCY,
+        status=SubscriptionStatus.ACTIVE,
+        current_period_start=now - timedelta(days=31),
+        current_period_end=now - timedelta(days=1),
+    )
+
+    assert effective_plan_key(subscription, now=now) == BillingPlanKey.FREE

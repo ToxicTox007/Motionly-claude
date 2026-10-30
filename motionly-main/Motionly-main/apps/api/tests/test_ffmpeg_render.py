@@ -738,3 +738,10 @@ def test_uncancellable_ffmpeg_timeout_is_normalized_and_removes_partial_output(
 
     assert exc_info.value.code == "ffmpeg_render_timeout"
     assert not output_path.exists()
+
+
+def test_manual_drawtext_rejects_filtergraph_metacharacters() -> None:
+    safe = ffmpeg_render._ffmpeg_drawtext("hello';movie=/etc/passwd,[x]:%\\")
+
+    assert safe == "hello movie /etc/passwd x"
+    assert not any(character in safe for character in "\\'\":,;[]=%")

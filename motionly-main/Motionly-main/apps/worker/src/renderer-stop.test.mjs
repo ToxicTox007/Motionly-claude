@@ -37,14 +37,7 @@ async function withStubbornRenderer(callback) {
         "",
       ].join("\n"),
     );
-    const original = process.env.RENDERER_BASE_PATH;
-    process.env.RENDERER_BASE_PATH = root;
-    try {
-      return await callback({ root, pidsFile: pids });
-    } finally {
-      if (original === undefined) delete process.env.RENDERER_BASE_PATH;
-      else process.env.RENDERER_BASE_PATH = original;
-    }
+    return await callback({ root, pidsFile: pids });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -79,9 +72,10 @@ test(
       await assert.rejects(
         spawnRenderer(join(root, "props.json"), join(root, "out.mp4"), {
           ...ids,
-          timeoutMs: 300,
+          timeoutMs: 5_000,
           killGraceMs: 300,
           isCanceled: async () => false,
+          rendererBasePath: root,
         }),
         (error) => error.code === "render_timeout" && error.retryable === true,
       );
@@ -89,7 +83,7 @@ test(
       const { cli, browser } = await readPids(pidsFile);
       // Settled only after SIGKILL escalation, and nothing is left running.
       assert.ok(
-        elapsed >= 550,
+        elapsed >= 5_250,
         `settled before the kill escalation (${elapsed}ms)`,
       );
       assert.equal(alive(cli), false, "render-cli survived");
@@ -114,6 +108,7 @@ test(
             polls += 1;
             return polls >= 3;
           },
+          rendererBasePath: root,
         }),
         (error) => error.code === "render_cancelled",
       );

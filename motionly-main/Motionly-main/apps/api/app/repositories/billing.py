@@ -722,6 +722,10 @@ class SupabaseBillingRepository(InMemoryBillingRepository):
     def _json_safe(values: dict[str, object]) -> dict[str, object]:
         safe: dict[str, object] = {}
         for key, value in values.items():
+            if value is None:
+                # PostgREST merge-upserts must not erase an existing gateway
+                # identifier when an event legitimately has no customer field.
+                continue
             if isinstance(value, UUID):
                 safe[key] = str(value)
             elif isinstance(value, datetime):

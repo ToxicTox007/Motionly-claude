@@ -115,12 +115,13 @@ test("the spawned render CLI does not see the worker's secrets", async () => {
       ].join("\n"),
     );
     const outputPath = join(root, "env.json");
-    await withEnv({ ...SECRETS, RENDERER_BASE_PATH: root }, () =>
+    await withEnv({ ...SECRETS }, () =>
       spawnRenderer(join(root, "props.json"), outputPath, {
         renderJobId: "00000000-0000-4000-8000-000000000001",
         workspaceId: "00000000-0000-4000-8000-000000000002",
         projectId: "00000000-0000-4000-8000-000000000003",
         timeoutMs: 30_000,
+        rendererBasePath: root,
       }),
     );
     const childEnv = JSON.parse(await readFile(outputPath, "utf8"));

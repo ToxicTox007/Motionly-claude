@@ -45,9 +45,10 @@ class StructuredRenderError extends Error {
 }
 
 /** Renderer base directory. Defaults to the sibling 'renderer' package. */
-function rendererPath() {
+function rendererPath(basePath) {
   return resolve(
-    env("RENDERER_BASE_PATH", join(import.meta.dirname, "../../renderer")),
+    basePath ||
+      env("RENDERER_BASE_PATH", join(import.meta.dirname, "../../renderer")),
   );
 }
 
@@ -1362,10 +1363,11 @@ export function spawnRenderer(
         (status) => status === "canceled",
       ),
     cancelPollMs = 1000,
+    rendererBasePath,
   },
 ) {
   return new Promise((resolve, reject) => {
-    const rPath = rendererPath();
+    const rPath = rendererPath(rendererBasePath);
     const args = [
       "--import",
       "./ts-node-register.mjs",

@@ -452,21 +452,11 @@ def test_every_admin_route_requires_the_admin_authorization_dependency(monkeypat
         get_settings.cache_clear()
 
 
-@pytest.mark.parametrize(
-    ("role", "allowed"),
-    [("owner", True), ("admin", True), ("member", False)],
-)
-def test_admin_workspace_allowlist_admits_only_its_owners_and_admins(role, allowed) -> None:
+def test_operator_workspace_membership_is_not_platform_admin() -> None:
     _repository, _project_id, workspace_id, user_id = make_render_repository()
     request = make_admin_request(workspace_id)
-    actor = Actor(user_id=user_id, workspace_id=workspace_id, role=role)
+    actor = Actor(user_id=user_id, workspace_id=workspace_id, role="owner")
 
-    if allowed:
-        assert (
-            asyncio.run(require_admin(request=request, actor=actor, x_motionly_admin_token=None))
-            == actor
-        )
-        return
     with pytest.raises(ApiError) as exc_info:
         asyncio.run(require_admin(request=request, actor=actor, x_motionly_admin_token=None))
     assert exc_info.value.status_code == 403

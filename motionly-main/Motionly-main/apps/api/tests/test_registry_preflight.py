@@ -4,14 +4,15 @@ The preflight CLI (:mod:`app.ops.preflight_inference_registry`) is the gate an
 operator runs on ``infra/ai-registry/registry.json`` after substituting the real
 AWS ids. These tests prove:
 
-* the shipped registry (with ``<PLACEHOLDER>`` tokens and the pricing marker)
-  preflights clean in development (exit 0, placeholders listed as warnings) and
-  fails in production (exit 1, placeholders remain);
+    * the shipped registry (with ``<PLACEHOLDER>`` tokens) preflights clean in
+      development (exit 0, placeholders listed as warnings) and fails in
+      production (exit 1, placeholders remain);
 * a programmatically fully-filled copy preflights clean in production (exit 0)
   and builds one inference runtime in production with ``GPU_WORKERS_ENABLED`` off
   (fake secret files, a ``MockTransport`` so no socket opens) reporting planning,
-  transcription, diarization, object detection, captions, embeddings, stems and
-  video generation as available routes;
+  transcription, diarization, object detection, captions, embeddings and stems
+  as available routes; video generation remains unavailable until a provider is
+  intentionally configured;
 * an inlined AWS access key id is a preflight error;
 * a malformed schema (a Section 2.6 error in the substituted copy) exits 1.
 
@@ -56,8 +57,8 @@ def fill_registry_placeholders(document: object) -> object:
     """Return a fully-filled copy of ``document`` with every placeholder replaced.
 
     Reuses the CLI's own substitution so the filled copy matches exactly what the
-    preflight validates (dummy account/buckets/project id and a tiny positive
-    dummy price replacing the ``FILL FROM AWS PRICING PAGE`` marker).
+    preflight validates (dummy account, staging bucket and project id, with the
+    pricing marker handled when present).
     """
     return preflight._substitute_document(copy.deepcopy(document))
 
@@ -83,37 +84,22 @@ def _mock_transport_rejecting_all() -> httpx.MockTransport:
 
 
 # ---------------------------------------------------------------------------
-# Shipped registry: development (exit 0) and production (exit 1)
+# Shipped registry: development and production
 # ---------------------------------------------------------------------------
 def test_shipped_registry_preflights_clean_in_development(capsys) -> None:
     code, out, _err = _run_preflight(
         capsys, str(SHIPPED_REGISTRY), "--app-env", "development"
     )
     assert code == 0
-    # Placeholders are warnings in development, and every placeholder token is
-    # named with its JSON path.
-    assert "WARNING at" in out
-    assert "<ACCOUNT_ID>" in out
-    assert "<STAGING_BUCKET>" in out
-    assert "<VIDEO_OUTPUT_BUCKET>" in out
-    assert "<BDA_PROJECT_ID>" in out
-    assert "FILL FROM AWS PRICING PAGE" in out
-    # No schema error line and no preflight ERROR line.
-    assert "ERROR [" not in out
-    assert "\nERROR at" not in f"\n{out}"
+    assert out == ""
 
 
-def test_shipped_registry_fails_in_production(capsys) -> None:
+def test_shipped_registry_preflights_clean_in_production(capsys) -> None:
     code, out, _err = _run_preflight(
         capsys, str(SHIPPED_REGISTRY), "--app-env", "production"
     )
-    assert code == 1
-    # In production the remaining placeholders are reported as PLACEHOLDER lines.
-    assert "PLACEHOLDER at" in out
-    assert "<ACCOUNT_ID>" in out
-    # The substituted copy still has no schema error (the failure is only the
-    # unfilled placeholders).
-    assert "ERROR [" not in out
+    assert code == 0
+    assert out == ""
 
 
 def test_shipped_registry_substituted_copy_has_no_schema_error() -> None:
@@ -139,7 +125,6 @@ def test_shipped_registry_substituted_copy_has_no_schema_error() -> None:
         "bedrock-object-detection",
         "bedrock-caption",
         "bedrock-embeddings-text",
-        "bedrock-video-generation",
         "local-stem-separation",
     } <= set(validation.valid_route_ids)
 
@@ -194,7 +179,6 @@ def test_fully_filled_copy_builds_runtime_with_all_capabilities(tmp_path: Path) 
         "vision.caption",
         "embeddings.text",
         "audio.stem_separation",
-        "video.generation.submit",
     } <= capabilities
     # Every Bedrock route survived the build (not dropped) with GPU workers off.
     dropped = {d.route_id for d in runtime.dropped_routes}
@@ -205,7 +189,6 @@ def test_fully_filled_copy_builds_runtime_with_all_capabilities(tmp_path: Path) 
         "bedrock-object-detection",
         "bedrock-caption",
         "bedrock-embeddings-text",
-        "bedrock-video-generation",
         "local-stem-separation",
     ):
         assert route_id in runtime.route_records, route_id
@@ -265,18 +248,15 @@ def test_malformed_json_exits_one(capsys, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # JSON output mode
 # ---------------------------------------------------------------------------
-def test_json_output_lists_placeholders_and_exit_code(capsys) -> None:
+def test_json_output_reports_clean_production_registry(capsys) -> None:
     code, out, _err = _run_preflight(
         capsys, str(SHIPPED_REGISTRY), "--app-env", "production", "--json"
     )
-    assert code == 1
+    assert code == 0
     payload = json.loads(out)
     assert payload["app_env"] == "production"
-    assert payload["exit_code"] == 1
-    placeholder_paths = {
-        item["path"] for item in payload["preflight"] if item["kind"] == "PLACEHOLDER"
-    }
-    assert any("s3_bucket" in p for p in placeholder_paths)
+    assert payload["exit_code"] == 0
+    assert payload["preflight"] == []
     assert payload["diagnostics"] == []
 
 
@@ -288,7 +268,6 @@ def test_json_output_lists_placeholders_and_exit_code(capsys) -> None:
     [
         ("<ACCOUNT_ID>", "000000000000"),
         ("<STAGING_BUCKET>", "preflight-staging-bucket"),
-        ("<VIDEO_OUTPUT_BUCKET>", "preflight-video-output-bucket"),
         ("<BDA_PROJECT_ID>", "preflight-bda-project-id"),
     ],
 )

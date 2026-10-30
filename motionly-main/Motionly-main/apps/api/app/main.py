@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 
 from fastapi import FastAPI
@@ -25,7 +27,12 @@ from app.api.clips import router as clips_router
 from app.api.creative_variants import router as creative_variants_router
 from app.api.editorial_learning import router as editorial_learning_router
 from app.api.effects import router as effects_router
-from app.api.errors import ApiError, api_error_handler, request_validation_error_handler
+from app.api.errors import (
+    ApiError,
+    api_error_handler,
+    request_validation_error_handler,
+    unhandled_error_handler,
+)
 from app.api.export_shares import router as export_shares_router
 from app.api.feedback import router as feedback_router
 from app.api.health import router as health_router
@@ -291,10 +298,26 @@ def create_app() -> FastAPI:
     _validate_production_settings(settings)
     configure_logging(settings.log_level)
 
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        try:
+            yield
+        finally:
+            rate_limiter = getattr(application.state, "rate_limiter", None)
+            redis_client = getattr(rate_limiter, "redis", None)
+            if redis_client is not None:
+                await redis_client.aclose()
+            queue_registry = getattr(application.state, "queue_registry", None)
+            close = getattr(queue_registry, "close", None)
+            if callable(close):
+                await asyncio.to_thread(close)
+
     app = FastAPI(
         title="Motionly API",
         version="0.1.0",
-        docs_url="/docs" if settings.app_env != "production" else None,
+        lifespan=lifespan,
+        docs_url="/docs" if not settings.is_production_like else None,
+        openapi_url=None if settings.is_production_like else "/openapi.json",
         redoc_url=None,
     )
     app.state.settings = settings
@@ -676,7 +699,7 @@ def create_app() -> FastAPI:
             job_attempts=settings.job_attempts,
             bridge_timeout_seconds=settings.bullmq_bridge_timeout_seconds,
         )
-    elif settings.app_env == "production":
+    elif settings.is_production_like:
         raise RuntimeError("REDIS_URL is required in production for BullMQ queueing")
     else:
         app.state.queue_registry = QueueRegistry()
@@ -701,7 +724,7 @@ def create_app() -> FastAPI:
     use_fixture_stems = (
         settings.process_role == "api"
         or stem_provider_key == "fixture"
-        or (settings.app_env != "production" and settings.allow_fixture_providers)
+        or (not settings.is_production_like and settings.allow_fixture_providers)
     )
     if use_fixture_stems:
         app.state.stem_separator = FixtureStemSeparator()
@@ -768,7 +791,7 @@ def create_app() -> FastAPI:
             model=transcription_model,
             model_revision=transcription_revision,
         )
-    elif settings.app_env == "production":
+    elif settings.is_production_like:
         raise RuntimeError("Production transcription requires a configured model gateway route")
     elif settings.local_audit_mode:
         raise RuntimeError(
@@ -825,7 +848,7 @@ def create_app() -> FastAPI:
             provider_name="gateway",
             gateway=app.state.model_gateway,
         )
-    elif settings.app_env == "production":
+    elif settings.is_production_like:
         raise RuntimeError("Production planning requires a configured model gateway route")
     elif settings.local_audit_mode:
         raise RuntimeError(
@@ -950,8 +973,8 @@ def create_app() -> FastAPI:
     app.state.effects_queue = EffectsQueue(app.state.queue_registry)
     app.state.regeneration_queue = RegenerationQueue(app.state.queue_registry)
 
-    app.middleware("http")(request_id_middleware)
     app.middleware("http")(rate_limit_middleware)
+    app.add_exception_handler(Exception, unhandled_error_handler)
     app.add_exception_handler(ApiError, api_error_handler)
     app.add_exception_handler(RequestValidationError, request_validation_error_handler)
     app.add_exception_handler(RevisionConflictError, revision_conflict_error_handler)
@@ -967,6 +990,9 @@ def create_app() -> FastAPI:
             "x-request-id",
         ],
     )
+    # Registration order makes security headers outermost and request IDs wrap
+    # rate limiting, so 429s are logged and correlated like normal responses.
+    app.middleware("http")(request_id_middleware)
     app.middleware("http")(security_headers_middleware)
     app.include_router(health_router)
     app.include_router(capabilities_router)

@@ -642,14 +642,21 @@ def _manual_element_filters(
 
 
 def _ffmpeg_drawtext(value: str) -> str:
-    return (
-        value[:300]
-        .replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace(":", "\\:")
-        .replace("%", "\\%")
-        .replace("\n", " ")
-    )
+    """Return text safe for the FFmpeg filtergraph grammar.
+
+    Manual element text is user-controlled. Rather than trying to maintain a
+    second escaping grammar inside a quoted filter option, remove characters
+    that can terminate the value or introduce another filtergraph expression.
+    This preserves ordinary captions while making filter injection impossible.
+    """
+    unsafe = set("\\'\":,;[]=%")
+    safe: list[str] = []
+    for character in value[:300]:
+        if character in unsafe or not character.isprintable():
+            safe.append(" ")
+        else:
+            safe.append(character)
+    return "".join(safe).replace("  ", " ").strip()
 
 
 def _dict(value: object) -> dict[str, object]:

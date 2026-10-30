@@ -370,7 +370,7 @@ async def _probe_temporal(settings) -> DependencyHealth:
 
     target = str(getattr(settings, "temporal_address", "") or "").strip()
     if not target:
-        if settings.app_env != "production":
+        if not settings.is_production_like:
             return DependencyHealth(status="ok", message="Temporal is optional outside production.")
         return DependencyHealth(status="down", message="Temporal is not configured.")
     try:
@@ -394,7 +394,7 @@ async def _probe_temporal(settings) -> DependencyHealth:
 
 async def _probe_redis(settings) -> DependencyHealth:
     if not settings.redis_url:
-        if settings.app_env != "production":
+        if not settings.is_production_like:
             return DependencyHealth(status="ok", message="Local in-memory queue mode.")
         return DependencyHealth(status="down", message="Redis is not configured.")
     from redis.asyncio import Redis
@@ -408,7 +408,7 @@ async def _probe_redis(settings) -> DependencyHealth:
 
 
 async def _probe_supabase_ready(settings) -> DependencyHealth:
-    if settings.app_env != "production" and (
+    if not settings.is_production_like and (
         not settings.supabase_url or not settings.supabase_service_role_key
     ):
         return DependencyHealth(status="ok", message="Local in-memory repository mode.")
@@ -420,7 +420,7 @@ async def _probe_supabase_ready(settings) -> DependencyHealth:
 
 async def _probe_storage(settings) -> DependencyHealth:
     if not settings.supabase_url or not settings.supabase_service_role_key:
-        if settings.app_env != "production":
+        if not settings.is_production_like:
             root = Path(settings.media_work_dir)
             root.mkdir(parents=True, exist_ok=True)
             probe = root / f".ready-{uuid4().hex}"

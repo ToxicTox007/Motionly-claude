@@ -100,6 +100,7 @@ def plan_for_subscription_status(
     status: SubscriptionStatus,
     past_due_grace_ends_at: datetime | None = None,
     now: datetime | None = None,
+    subscription: object | None = None,
 ) -> BillingPlanKey:
     """The plan whose entitlements apply. Prefer :func:`effective_plan_key`.
 
@@ -110,7 +111,14 @@ def plan_for_subscription_status(
     if plan == BillingPlanKey.FREE:
         return BillingPlanKey.FREE
     if status in ACTIVE_SUBSCRIPTION_STATUSES:
-        return plan
+        period_end = (
+            _aware(getattr(subscription, "current_period_end", None))
+            if subscription is not None
+            else None
+        )
+        if period_end is None or (now or datetime.now(UTC)) < period_end:
+            return plan
+        return BillingPlanKey.FREE
     if status == SubscriptionStatus.PAST_DUE and past_due_grace_ends_at is not None:
         if (now or datetime.now(UTC)) < past_due_grace_ends_at:
             return plan
@@ -128,6 +136,7 @@ def effective_plan_key(subscription: object, *, now: datetime | None = None) -> 
         status=subscription.status,
         past_due_grace_ends_at=past_due_grace_ends_at(subscription),
         now=now,
+        subscription=subscription,
     )
 
 
@@ -249,10 +258,11 @@ def quota_plan_and_period(
     """The plan quotas apply to, and the billing period usage is counted in."""
     subscription = billing_repository.get_subscription(workspace_id=workspace_id)
     plan_key = effective_plan_key(subscription)
-    start = subscription.current_period_start
-    end = subscription.current_period_end
-    if not start or not end:
-        start, end = monthly_period()
+    start = _aware(subscription.current_period_start)
+    end = _aware(subscription.current_period_end)
+    current = datetime.now(UTC)
+    if not start or not end or not (start <= current < end):
+        start, end = monthly_period(current)
     return plan_key, start, end
 
 
