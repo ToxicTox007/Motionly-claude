@@ -15,7 +15,7 @@ dependencies = [
   "pydantic-settings>=2.7.0",
   "python-json-logger>=3.2.1",
   "redis>=5.2.1,<7.0",
-  "temporalio==1.31.0",
+  "temporalio==1.35.0",
   "uvicorn[standard]>=0.34.0"
 ]
 
@@ -24,9 +24,9 @@ audio-ml = [
   "pyannote.audio>=3.3.2,<4.0",
   "tensorflow>=2.18.0,<2.19",
   "tensorflow-hub>=0.16.1",
-  "torch>=2.5.0,<2.6",
-  "torchaudio>=2.5.0,<2.6",
-  "transformers>=4.48.0,<5.0",
+  "torch>=2.6.0,<2.7",
+  "torchaudio>=2.6.0,<2.7",
+  "transformers>=5.10.0,<6.0",
 ]
 # Task 27 music catalog analysis (duration, tempo, beat positions, energy).
 # librosa pulls numba/llvmlite, which is too heavy for the API request-path
@@ -42,8 +42,8 @@ music-analysis = [
 ]
 demucs = [
   "demucs>=4.0.1",
-  "torch>=2.5.0,<2.6",
-  "torchaudio>=2.5.0,<2.6",
+  "torch>=2.6.0,<2.7",
+  "torchaudio>=2.6.0,<2.7",
 ]
 visual-ml = [
   "mediapipe>=0.10.18",
@@ -53,10 +53,10 @@ visual-ml = [
   "scipy>=1.17.1,<1.18",
   "scikit-learn>=1.9.0,<1.10",
   "opencv-python-headless>=4.10.0.84",
-  "Pillow>=11.0.0",
+  "Pillow>=13.0.0",
   "ultralytics>=8.3.0",
-  "torch>=2.5.0,<2.6",
-  "transformers>=4.48.0,<5.0",
+  "torch>=2.6.0,<2.7",
+  "transformers>=5.10.0,<6.0",
 ]
 # GPU-free worker image (Dockerfile.python API_EXTRAS=cpu-vision): CPU MediaPipe
 # matting/face detection, OpenCV scene/motion analysis, Pillow colour sampling
@@ -67,7 +67,7 @@ cpu-vision = [
   "mediapipe>=0.10.18",
   "numpy>=1.26.4,<2.0",
   "opencv-python-headless>=4.10.0.84",
-  "Pillow>=11.0.0",
+  "Pillow>=13.0.0",
 ]
 dev = [
   "pytest>=8.3.4",

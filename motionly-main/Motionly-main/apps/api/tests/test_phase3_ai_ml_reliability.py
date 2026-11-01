@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -396,3 +397,26 @@ def _seed_upload(context: SimpleNamespace) -> UploadRecord:
         content=b"fake mp4",
     )
     return upload
+
+
+def test_clip_features_accepts_transformers_4_tensors_and_5_model_outputs() -> None:
+    from app.services.ml_failures import clip_features
+
+    tensor = object()
+    # Transformers 4: get_image_features/get_text_features return the tensor.
+    assert clip_features(tensor) is tensor
+    # Transformers 5: they return BaseModelOutputWithPooling; the projected
+    # embedding is its pooler_output.
+    projected = object()
+    assert clip_features(SimpleNamespace(pooler_output=projected, last_hidden_state=1)) is projected
+
+
+def test_clip_callers_normalise_the_extracted_features() -> None:
+    root = Path(__file__).resolve().parents[1] / "app" / "services"
+    visual = (root / "visual_intelligence.py").read_text("utf-8")
+    stock = (root / "stock_video.py").read_text("utf-8")
+    assert "clip_features(model.get_image_features(**inputs))" in visual
+    assert "clip_features(model.get_text_features(**inputs))" in stock
+    assert "clip_features(model.get_image_features(**inputs))" in stock
+    # Transformers 5 takes dtype=; torch_dtype is only a deprecated alias.
+    assert "torch_dtype=" not in visual

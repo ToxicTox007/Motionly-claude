@@ -21,7 +21,12 @@ from app.schemas.visual import (
     VisualManifestStatus,
 )
 from app.services.local_storage import create_object_storage
-from app.services.ml_failures import CudaOomFailure, clear_cuda_cache, is_cuda_oom_error
+from app.services.ml_failures import (
+    CudaOomFailure,
+    clear_cuda_cache,
+    clip_features,
+    is_cuda_oom_error,
+)
 from app.services.worker_media import materialize_upload_source
 
 logger = logging.getLogger(__name__)
@@ -301,7 +306,7 @@ class LocalMLVisualIntelligenceProvider:
         blip_model = Blip2ForConditionalGeneration.from_pretrained(
             self.blip_model_name,
             revision=self.blip_revision,
-            torch_dtype=dtype,
+            dtype=dtype,
         ).to(device)
         yolo_model = YOLO(self.yolo_model_name)
         face_detector = mp.solutions.face_detection.FaceDetection(
@@ -573,7 +578,7 @@ def _resize_frame_for_analysis(*, cv2, frame, max_dimension: int = 640):
 def _clip_embedding(*, torch, device, processor, model, image) -> list[float]:
     inputs = processor(images=image, return_tensors="pt").to(device)
     with torch.no_grad():
-        embedding = model.get_image_features(**inputs)
+        embedding = clip_features(model.get_image_features(**inputs))
     embedding = embedding / embedding.norm(dim=-1, keepdim=True)
     return [round(float(value), 6) for value in embedding[0].detach().cpu().tolist()]
 

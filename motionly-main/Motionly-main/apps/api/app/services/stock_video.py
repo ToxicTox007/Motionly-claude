@@ -23,6 +23,7 @@ from app.schemas.broll import (
 )
 from app.schemas.plans import BrollRequest, EditPlan
 from app.services.media_url_policy import MediaUrlPolicyError, safe_http_stream
+from app.services.ml_failures import clip_features
 from app.services.storage import StorageSigner
 
 EMBEDDING_DOWNLOAD_TIMEOUT_SECONDS = 6.0
@@ -438,7 +439,7 @@ class CompatibleClipEmbeddingProvider:
         model = models["model"]
         inputs = processor(text=[text], return_tensors="pt", padding=True).to(device)
         with torch.no_grad():
-            embedding = model.get_text_features(**inputs)
+            embedding = clip_features(model.get_text_features(**inputs))
         embedding = embedding / embedding.norm(dim=-1, keepdim=True)
         return [round(float(value), 6) for value in embedding[0].detach().cpu().tolist()]
 
@@ -462,7 +463,7 @@ class CompatibleClipEmbeddingProvider:
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
         inputs = processor(images=image, return_tensors="pt").to(device)
         with torch.no_grad():
-            embedding = model.get_image_features(**inputs)
+            embedding = clip_features(model.get_image_features(**inputs))
         embedding = embedding / embedding.norm(dim=-1, keepdim=True)
         return [round(float(value), 6) for value in embedding[0].detach().cpu().tolist()]
 

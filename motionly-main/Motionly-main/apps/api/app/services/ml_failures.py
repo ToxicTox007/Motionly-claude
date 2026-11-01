@@ -46,3 +46,15 @@ def clear_cuda_cache(torch_module: object | None = None) -> bool:
         logger.warning("cuda_cache_cleanup_failed", exc_info=False)
     gc.collect()
     return False
+
+
+def clip_features(output: object) -> object:
+    """The projected embedding tensor from CLIP ``get_image_features`` /
+    ``get_text_features``.
+
+    Transformers 4 returns the tensor itself; Transformers 5 returns a
+    ``BaseModelOutputWithPooling`` whose ``pooler_output`` holds the same
+    projected embedding. Accept both so the callers normalise a tensor.
+    """
+    pooled = getattr(output, "pooler_output", None)
+    return output if pooled is None else pooled
