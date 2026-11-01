@@ -49,7 +49,7 @@ async function createProject(stack, workspaceId, ownerId) {
     data: {
       workspace_id: workspaceId,
       created_by: ownerId,
-      name: `Collab ${randomBytes(4).toString("hex")}`,
+      title: `Collab ${randomBytes(4).toString("hex")}`,
       status: "draft",
     },
   });
