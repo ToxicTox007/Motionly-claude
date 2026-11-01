@@ -40,6 +40,8 @@ test("a finished export is played, downloaded, shared, watched, and revoked", as
       timeout: 5_000,
     });
   }).toPass({ timeout: 240_000, intervals: [10_000] });
+  // The render controls live in the editor's Export tab.
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   await page.getByRole("button", { name: /^Start Render$/ }).click();
   await expect(page.getByText(/Export is ready to download/i)).toBeVisible({
     timeout: 240_000,

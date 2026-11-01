@@ -111,6 +111,8 @@ test("the uploaded footage reaches the editor, renders, and downloads", async ({
   await expect(approveAll).toBeEnabled({ timeout: 120_000 });
   await approveAll.click();
 
+  // The render controls live in the editor's Export tab.
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   await page.getByRole("button", { name: /Start Render/i }).click();
   await expect(page.getByLabel("Download latest export")).toBeVisible({
     timeout: 200_000,
@@ -151,6 +153,8 @@ test("a background-removal render uses the labelled test matte", async ({
   await expect(badge).toHaveText(/Test/);
 
   // The render with the test matte completes.
+  // The render controls live in the editor's Export tab.
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   await page.getByRole("button", { name: /Start Render/i }).click();
   await expect(page.getByLabel("Download latest export")).toBeVisible({
     timeout: 200_000,

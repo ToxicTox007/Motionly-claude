@@ -141,6 +141,8 @@ test("Audio tab: pick a track, preview it, render, and download", async ({
   await expect(previewPlayer).toHaveAttribute("src", /^data:audio\/wav/);
 
   // 6. Render the export using the chosen track (real CPU pipeline).
+  // The render controls live in the editor's Export tab.
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   await page.getByRole("button", { name: /^Start Render$/ }).click();
   await expect(page.getByText(/Export is ready to download/i)).toBeVisible({
     timeout: 240_000,
