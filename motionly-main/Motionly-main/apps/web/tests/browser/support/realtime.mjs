@@ -83,7 +83,9 @@ export function joinPrivateTopic(
     const channel = client.channel(topic, {
       config: {
         private: true,
-        presence: { key: key ?? meta.user ?? "anonymous" },
+        // supabase-js enables presence on the server only for a channel with
+        // a presence listener or `enabled: true`; a key alone tracks nothing.
+        presence: { key: key ?? meta.user ?? "anonymous", enabled: true },
       },
     });
 

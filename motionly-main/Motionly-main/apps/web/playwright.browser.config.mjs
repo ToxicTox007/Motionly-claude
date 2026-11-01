@@ -5,9 +5,26 @@
 // The edge certificate comes from the stack's per-run test CA, which browsers
 // do not know, so certificate errors are ignored here; the stack checker
 // verifies the chain against that CA.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 const results = "../../test-results/browser";
+// Node-side clients in the specs (supabase-js Realtime sockets, API calls)
+// reach the edge too, so the test runner and its workers trust the stack's
+// per-run edge CA the way the stack checker and k6 do. Workers inherit this
+// environment from the runner, which reads NODE_EXTRA_CA_CERTS at startup.
+const stackStatePath = new URL(
+  "../../test-results/cpu-stage/state.json",
+  import.meta.url,
+);
+if (!process.env.NODE_EXTRA_CA_CERTS && existsSync(stackStatePath)) {
+  const { secrets_root: secretsRoot } = JSON.parse(
+    readFileSync(stackStatePath, "utf8"),
+  );
+  const edgeCa = secretsRoot && join(secretsRoot, "secrets", "edge_ca_cert");
+  if (edgeCa && existsSync(edgeCa)) process.env.NODE_EXTRA_CA_CERTS = edgeCa;
+}
 const chromiumArgs = { launchOptions: { args: ["--no-sandbox"] } };
 // Specs that only make sense in some setups are not run elsewhere (rather
 // than skipped: the skip audit allows no undeclared skips). Tab order needs a

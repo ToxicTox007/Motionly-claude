@@ -56,7 +56,9 @@ test("an agency owner creates a key shown once and can copy it", async ({
   await expect(page.getByRole("button", { name: /Copied/ })).toBeVisible();
 
   // The list shows the key by prefix/last-4 only, never the secret again.
-  await expect(page.getByRole("cell", { name: "CI pipeline" })).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "CI pipeline", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(value)).toHaveCount(1); // only the one-time reveal
 
   await gates.checkAccessibility(page);
@@ -114,10 +116,9 @@ test("a key creates a project, uploads, then revocation returns 401", async ({
     {
       headers: keyHeaders,
       data: {
-        file_name: "e2e.mp4",
-        content_type: "video/mp4",
-        total_size: 1024,
-        part_size: 1024,
+        filename: "e2e.mp4",
+        mime_type: "video/mp4",
+        file_size_bytes: 1024,
       },
     },
   );

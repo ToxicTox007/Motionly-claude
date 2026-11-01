@@ -13,6 +13,7 @@
 // the Auth admin API via support/workspace.mjs — never guarded behind
 // `if (visible)`.
 import { expect, signIn, test } from "./support/fixtures.mjs";
+import { accessTokenFor } from "./support/realtime.mjs";
 import {
   addWorkspaceUser,
   listBillingAdjustments,
@@ -63,7 +64,11 @@ test("owner upgrades via the gateway and the plan unlocks after the webhook", as
     .first();
   await agencyCard.getByRole("button", { name: /Upgrade/i }).click();
 
-  // On the gateway checkout page, pay with a successful UPI VPA.
+  // On the gateway checkout page, pay with a successful UPI VPA. The billing
+  // page carries the same notice twice, so wait for checkout before checking it.
+  await expect(
+    page.getByRole("heading", { name: /Complete your demo payment/i }),
+  ).toBeVisible();
   await expect(page.getByText(DEMO_NOTICE)).toBeVisible();
   await page.getByLabel(/UPI ID/i).fill("success@upi");
   await page.getByRole("button", { name: /Pay by UPI/i }).click();
@@ -140,13 +145,18 @@ test("a failed renewal shows past due and a retry restores the plan", async ({
   await signIn(page, user, "/billing");
   await gotoBilling(page);
 
-  // The page surfaces the past-due state and an owner-only retry control.
-  await expect(
-    page.getByRole("heading", { name: /Payment past due/i }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: /Retry payment/i }).click();
+  // The page surfaces the past-due state as an alert with an owner-only retry
+  // control.
+  const pastDue = page
+    .getByRole("alert")
+    .filter({ hasText: /Payment past due/i });
+  await expect(pastDue).toBeVisible();
+  await pastDue.getByRole("button", { name: /Retry payment/i }).click();
 
   // Retry hands the owner a fresh gateway order; pay it successfully.
+  await expect(
+    page.getByRole("heading", { name: /Complete your demo payment/i }),
+  ).toBeVisible();
   await expect(page.getByText(DEMO_NOTICE)).toBeVisible();
   await page.getByLabel(/UPI ID/i).fill("success@upi");
   await page.getByRole("button", { name: /Pay by UPI/i }).click();
@@ -277,8 +287,15 @@ test("a workspace owner cannot issue refunds, and a recorded refund shows in his
   // is set at container start), so the admin path itself is covered by the API
   // end-to-end test against the real mock gateway; here we assert the owner is
   // refused and nothing is written.
+  // The API authenticates with the owner's bearer token, as the web app does;
+  // without it the request is refused as signed out (401) before the admin
+  // check this test is about.
+  const ownerToken = await accessTokenFor(stack, user);
   const refused = await page.request.post("/api/billing/refunds", {
-    headers: { "x-motionly-workspace-id": workspaceId },
+    headers: {
+      authorization: `Bearer ${ownerToken}`,
+      "x-motionly-workspace-id": workspaceId,
+    },
     data: { workspace_id: workspaceId, amount_paise: 49900, reason: "Spec" },
   });
   expect(refused.status(), await refused.text()).toBe(403);
