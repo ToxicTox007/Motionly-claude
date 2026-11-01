@@ -250,7 +250,16 @@ fetch_release() {
   # Check compressed bytes and canonical extracted-file inventory before tar extraction.
   validate_release_bundle "$scratch_dir" || abandon "bundle verification failed"
   mkdir -m 700 "$scratch_dir/bundle" || abandon "could not create the bundle directory"
-  tar -xzf "$scratch_dir/release-bundle.tar.gz" -C "$scratch_dir/bundle" || abandon "bundle extraction failed"
+  # Apply the file modes recorded in the verified bundle whatever user runs the
+  # agent: without --preserve-permissions, a non-root agent's umask 077 makes
+  # every file 0600 and the non-root containers (postgres uid 101) cannot read
+  # their bind mounts. The archive holds files only, so the directories tar
+  # creates are opened to 0755; the 0700 release directory still keeps other
+  # host users out.
+  tar --no-same-owner --preserve-permissions -xzf "$scratch_dir/release-bundle.tar.gz" -C "$scratch_dir/bundle" \
+    || abandon "bundle extraction failed"
+  find "$scratch_dir/bundle" -mindepth 1 -type d -exec chmod 0755 {} + \
+    || abandon "could not set bundle directory permissions"
   [[ -f "$scratch_dir/bundle/infra/docker-compose.gpu.yml" ]] \
     || abandon "release bundle lacks production Compose configuration"
   mv "$scratch_dir" "$release_dir" || abandon "release directory already exists; refusing to replace it"

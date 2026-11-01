@@ -536,6 +536,11 @@ services:
       ERL_AFLAGS: "-proto_dist inet_tcp"
       DNS_NODES: "''"
       RLIMIT_NOFILE: "100000"
+    # run.sh raises the soft open-files limit to RLIMIT_NOFILE and exits if the
+    # hard limit is lower. Docker hosts commonly default to a 65536 hard limit
+    # (GitHub runners, Amazon Linux 2023), so set both limits explicitly.
+    ulimits:
+      nofile: { soft: 100000, hard: 100000 }
     secrets:
       [
         postgres_password,
