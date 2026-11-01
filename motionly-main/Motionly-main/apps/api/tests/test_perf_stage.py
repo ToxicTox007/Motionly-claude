@@ -99,3 +99,38 @@ def test_the_smoke_seeds_and_runs_k6_against_the_verified_edge(perf_stage) -> No
     # The edge CA is trusted before the seeding requests, then handed to k6.
     assert smoke.index("stack.trust_edge_ca(state)") < smoke.index("_seed_perf_workload(")
     assert 'ca_cert=str(stack.secret_path(state, "edge_ca_cert"))' in smoke
+
+
+def test_the_metrics_scrape_gets_its_own_token(perf_stage) -> None:
+    env = perf_stage.build_k6_env("https://edge.test/api", metrics_token="m", **_ids())
+    assert env["METRICS_BEARER_TOKEN"] == "m"
+    assert "METRICS_BEARER_TOKEN" not in perf_stage.build_k6_env("https://edge.test/api", **_ids())
+
+
+def test_the_k6_workload_calls_routes_the_api_serves() -> None:
+    script = (ROOT / "scripts" / "perf" / "k6-api-workflows.js").read_text("utf-8")
+    # Render status lives under the project; there is no top-level /renders/{id}.
+    assert "${baseUrl}/projects/${projectId}/renders/${renderId}" in script
+    assert "${baseUrl}/renders/" not in script
+    # Each upload iteration uses its own session and aborts it, instead of
+    # confirming parts of the seeded (already completed) upload.
+    assert "uploadId || session.session_id" not in script
+    assert "${uploads}/${session.session_id}/abort" in script
+    # /metrics is scraped with the metrics token, not the user's session.
+    assert "authorization: `Bearer ${metricsToken}`" in script
+
+
+def test_the_seeder_builds_a_real_render_through_the_pipeline() -> None:
+    source = (ROOT / "scripts" / "verify" / "perf_stage.py").read_text("utf-8")
+    seed = source.split("def _seed_perf_workload", 1)[1].split("\ndef ", 1)[0]
+    order = [
+        '"title": "Perf smoke"',
+        "uploads}/init",
+        "_put_part(",
+        "/complete",
+        "the first-draft transcript",
+        "/plans",
+        "/renders",
+    ]
+    positions = [seed.index(marker) for marker in order]
+    assert positions == sorted(positions)

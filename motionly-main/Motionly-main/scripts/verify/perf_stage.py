@@ -25,10 +25,14 @@ the live smoke needs a running stack and runs only in the perf CI job.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
+import time
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +65,7 @@ def build_k6_env(
     render_id: str,
     revision: str,
     admin_token: str = "",
+    metrics_token: str = "",
     summary_output: str = str(K6_SUMMARY),
     ca_cert: str = "",
 ) -> dict[str, str]:
@@ -84,6 +89,8 @@ def build_k6_env(
     }
     if admin_token:
         env["ADMIN_API_TOKEN"] = admin_token
+    if metrics_token:
+        env["METRICS_BEARER_TOKEN"] = metrics_token
     if ca_cert:
         env["SSL_CERT_FILE"] = ca_cert
     return env
@@ -95,11 +102,42 @@ def _run(args: list[str], *, env: dict[str, str] | None = None) -> None:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(args[:4])} ...")
 
 
+def _source_video() -> bytes:
+    """A 3 s H.264/AAC clip (the browser suite's source video, made the same way)."""
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "perf-source.mp4"
+        _run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=size=360x640:rate=24:duration=3",
+                "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=3",
+                "-shortest", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", str(path),
+            ]
+        )
+        return path.read_bytes()
+
+
+def _put_part(stack, url: str, data: bytes, headers: dict[str, str]) -> str | None:
+    """PUT one part to its signed storage URL through the edge, as the browser does."""
+    request = urllib.request.Request(url, method="PUT", data=data, headers=headers)
+    with stack._opener(follow_redirects=False).open(request, timeout=30) as response:
+        if not 200 <= response.status < 300:
+            raise RuntimeError(f"storage refused the upload part ({response.status})")
+        return response.headers.get("etag")
+
+
+def _expect(status: int, body: object, accepted: tuple[int, ...], what: str) -> dict:
+    if status not in accepted or not isinstance(body, dict):
+        raise RuntimeError(f"{what} returned {status}: {body}")
+    return body
+
+
 def _seed_perf_workload(stack, state: dict) -> dict:
-    """Provision a confirmed user, workspace, project, upload session and render
-    on the running CPU stage, returning the ids the strict k6 smoke needs. Uses
-    cpu_stage_stack's origin and admin helpers; kept here so the perf stage owns
-    its own seeding. Runs only against a live stack (the perf CI job)."""
+    """Provision the ids the strict k6 smoke needs through the real pipeline:
+    a confirmed user and workspace, a project, a completed upload of a real
+    clip (which starts the first-draft workflow), its ready transcript, an
+    edit plan and a render. Runs only against a live stack (the perf CI job)."""
     origin = stack.STACK["public_origin"]
     env = stack._stack_env(state)
     anon = env["SUPABASE_ANON_KEY"]
@@ -107,7 +145,7 @@ def _seed_perf_workload(stack, state: dict) -> dict:
         "apikey": env["SUPABASE_SERVICE_ROLE_KEY"],
         "authorization": f"Bearer {env['SUPABASE_SERVICE_ROLE_KEY']}",
     }
-    email = f"perf-smoke-{os.getpid()}-{int(__import__('time').time())}@motionly.test"
+    email = f"perf-smoke-{os.getpid()}-{int(time.time())}@motionly.test"
     password = f"Perf-Smoke-{os.urandom(12).hex()}-Aa1!"
     status, user = stack._http_json(
         "POST",
@@ -115,17 +153,14 @@ def _seed_perf_workload(stack, state: dict) -> dict:
         headers=service,
         body={"email": email, "password": password, "email_confirm": True},
     )
-    if status != 200 or not isinstance(user, dict):
-        raise RuntimeError(f"creating a confirmed user returned {status}: {user}")
+    _expect(status, user, (200,), "creating a confirmed user")
     status, session = stack._http_json(
         "POST",
         f"{origin}/supabase/auth/v1/token?grant_type=password",
         headers={"apikey": anon},
         body={"email": email, "password": password},
     )
-    if status != 200 or not isinstance(session, dict):
-        raise RuntimeError(f"password sign-in returned {status}: {session}")
-    bearer = session["access_token"]
+    bearer = _expect(status, session, (200,), "password sign-in")["access_token"]
     status, memberships = stack._http_json(
         "GET",
         f"{origin}/supabase/rest/v1/workspace_members?select=workspace_id",
@@ -138,37 +173,80 @@ def _seed_perf_workload(stack, state: dict) -> dict:
     status, project = stack._http_json(
         "POST", f"{origin}/api/projects", headers=api, body={"title": "Perf smoke"}
     )
-    if status not in (200, 201) or not isinstance(project, dict):
-        raise RuntimeError(f"creating a project returned {status}: {project}")
-    project_id = project["id"]
+    project_id = _expect(status, project, (200, 201), "creating a project")["id"]
+    uploads = f"{origin}/api/projects/{project_id}/uploads/multipart"
+
+    video = _source_video()
     status, upload = stack._http_json(
         "POST",
-        f"{origin}/api/projects/{project_id}/uploads/multipart/init",
+        f"{uploads}/init",
         headers=api,
-        body={"filename": "perf.mp4", "mime_type": "video/mp4", "file_size_bytes": 1048576},
+        body={"filename": "perf.mp4", "mime_type": "video/mp4", "file_size_bytes": len(video)},
     )
-    if status not in (200, 201) or not isinstance(upload, dict):
-        raise RuntimeError(f"initialising an upload returned {status}: {upload}")
-    upload_id = upload.get("session_id") or upload.get("id")
+    upload = _expect(status, upload, (200, 201), "initialising an upload")
+    session_id = upload["session_id"]
+    part_size = int(upload["part_size_bytes"])
+    for part in upload["part_urls"]:
+        number = int(part["part_number"])
+        chunk = video[(number - 1) * part_size : number * part_size]
+        url = part["upload_url"]
+        url = f"{origin}{url}" if url.startswith("/") else url
+        etag = _put_part(stack, url, chunk, dict(part.get("upload_headers") or {}))
+        status, confirmed = stack._http_json(
+            "POST",
+            f"{uploads}/{session_id}/parts/{number}/complete",
+            headers=api,
+            body={"etag": etag} if etag else {},
+        )
+        _expect(status, confirmed, (200,), f"confirming upload part {number}")
+    status, completed = stack._http_json(
+        "POST",
+        f"{uploads}/{session_id}/complete",
+        headers=api,
+        body={"sha256_hash": hashlib.sha256(video).hexdigest()},
+    )
+    _expect(status, completed, (200,), "completing the upload")
+
+    def transcript_ready() -> bool:
+        status, transcript = stack._http_json(
+            "GET", f"{origin}/api/projects/{project_id}/transcript", headers=api
+        )
+        if status == 200 and isinstance(transcript, dict):
+            if transcript.get("status") in ("failed", "captions_unavailable"):
+                raise RuntimeError(f"the first-draft transcript failed: {transcript}")
+            return transcript.get("status") == "ready"
+        return False
+
+    stack.wait_for("the first-draft transcript", transcript_ready, timeout=300, interval=5)
     status, plan = stack._http_json(
         "POST",
         f"{origin}/api/projects/{project_id}/plans",
         headers=api,
         body={"prompt": "perf smoke"},
     )
-    if status not in (200, 201, 202) or not isinstance(plan, dict):
-        raise RuntimeError(f"creating a plan returned {status}: {plan}")
-    render_id = plan.get("render_id") or plan.get("id")
-    if not (upload_id and render_id):
-        raise RuntimeError("the stack did not return an upload session id and a render id")
+    plan = _expect(status, plan, (200, 201, 202), "creating a plan")
+    plan_id = (plan.get("plan") or {}).get("id")
+    render_body = {"include_captions": False, "include_broll": False}
+    if plan_id:
+        render_body["edit_plan_id"] = plan_id
+    status, render = stack._http_json(
+        "POST", f"{origin}/api/projects/{project_id}/renders", headers=api, body=render_body
+    )
+    render_id = _expect(status, render, (200, 202), "creating a render")["job_id"]
     return {
         "base_url": f"{origin}/api",
         "bearer_token": bearer,
         "workspace_id": workspace_id,
         "project_id": project_id,
-        "upload_id": str(upload_id),
+        "upload_id": str(session_id),
         "render_id": str(render_id),
+        "admin_token": _stack_secret(stack, state, "admin_api_token"),
+        "metrics_token": _stack_secret(stack, state, "metrics_bearer_token"),
     }
+
+
+def _stack_secret(stack, state: dict, name: str) -> str:
+    return stack.secret_path(state, name).read_text("utf-8").strip()
 
 
 def cmd_smoke(args: argparse.Namespace) -> int:
@@ -187,6 +265,7 @@ def cmd_smoke(args: argparse.Namespace) -> int:
         upload_id=seeded["upload_id"],
         render_id=seeded["render_id"],
         admin_token=seeded.get("admin_token", ""),
+        metrics_token=seeded.get("metrics_token", ""),
         revision=revision,
         ca_cert=str(stack.secret_path(state, "edge_ca_cert")),
     )

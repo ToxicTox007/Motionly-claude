@@ -6,6 +6,11 @@ const baseUrl = (__ENV.API_BASE_URL || "http://localhost:8000").replace(
   "",
 );
 const adminToken = __ENV.ADMIN_API_TOKEN || "";
+const metricsToken = __ENV.METRICS_BEARER_TOKEN || "";
+// Signed storage URLs may be origin-relative; the API is served under /api.
+const origin = baseUrl.replace(/\/api$/, "");
+// One part of this size per upload-flow iteration.
+const uploadPartBytes = Number(__ENV.K6_UPLOAD_PART_BYTES || 65536);
 const bearerToken = __ENV.API_BEARER_TOKEN || "";
 const workspaceId = __ENV.WORKSPACE_ID || "";
 const projectId = __ENV.PROJECT_ID || "";
@@ -23,17 +28,21 @@ if (
   );
 }
 
+// The API rate-limits each user per path (RATE_LIMIT_PER_MINUTE, 120 by
+// default) and this smoke signs in one user, so each scenario stays near one
+// request per second per path: a 429 is the product's limit working, not a
+// latency result. The SLO contract's minimum samples are still met.
 export const options = {
   scenarios: {
     project_reads: {
       executor: "constant-vus",
-      vus: Number(__ENV.K6_PROJECT_VUS || 5),
+      vus: Number(__ENV.K6_PROJECT_VUS || 1),
       duration: __ENV.K6_PROJECT_DURATION || "1m",
       exec: "projectReads",
     },
     upload_flow: {
       executor: "constant-arrival-rate",
-      rate: Number(__ENV.K6_UPLOAD_RATE || 2),
+      rate: Number(__ENV.K6_UPLOAD_RATE || 1),
       timeUnit: "1s",
       duration: __ENV.K6_UPLOAD_DURATION || "1m",
       preAllocatedVUs: Number(__ENV.K6_UPLOAD_VUS || 10),
@@ -41,13 +50,13 @@ export const options = {
     },
     plan_and_render_status: {
       executor: "constant-vus",
-      vus: Number(__ENV.K6_PLAN_VUS || 3),
+      vus: Number(__ENV.K6_PLAN_VUS || 1),
       duration: __ENV.K6_PLAN_DURATION || "1m",
       exec: "planAndRenderStatus",
     },
     metrics_and_admin: {
       executor: "constant-vus",
-      vus: Number(__ENV.K6_OPS_VUS || 2),
+      vus: Number(__ENV.K6_OPS_VUS || 1),
       duration: __ENV.K6_OPS_DURATION || "1m",
       exec: "metricsAndAdmin",
     },
@@ -82,37 +91,47 @@ export function projectReads() {
 }
 
 export function uploadFlow() {
-  group("resumable upload init, part, and complete", () => {
+  group("resumable upload init, part, and abort", () => {
     // Task 17: every media type uploads through the resumable multipart path.
-    // The legacy one-shot upload init and complete endpoints are gone.
+    // Each iteration opens its own session, sends one part to signed storage
+    // and confirms it, then aborts the session, so the load never starts the
+    // first-draft pipeline for hundreds of placeholder uploads.
     const target = projectId || "00000000-0000-4000-8000-000000000001";
+    const uploads = `${baseUrl}/projects/${target}/uploads/multipart`;
     const init = http.post(
-      `${baseUrl}/projects/${target}/uploads/multipart/init`,
+      `${uploads}/init`,
       JSON.stringify({
         filename: `k6-${__VU}-${__ITER}.mp4`,
         mime_type: "video/mp4",
-        file_size_bytes: 1048576,
+        file_size_bytes: uploadPartBytes,
       }),
       requestOptions("uploads"),
     );
     assertResponse(init, "upload multipart init", [200, 201]);
     const session = safeJson(init);
-    const sessionId = uploadId || session.session_id;
-    const firstPart = (session.part_urls || [])[0];
-    if (sessionId && firstPart) {
-      const confirm = http.post(
-        `${baseUrl}/projects/${target}/uploads/multipart/${sessionId}/parts/${firstPart.part_number}/complete`,
-        JSON.stringify({}),
-        requestOptions("uploads"),
-      );
-      assertResponse(confirm, "upload part confirm", [200]);
-      const complete = http.post(
-        `${baseUrl}/projects/${target}/uploads/multipart/${sessionId}/complete`,
-        JSON.stringify({}),
-        requestOptions("uploads"),
-      );
-      assertResponse(complete, "upload multipart complete", [200]);
-    }
+    const part = (session.part_urls || [])[0];
+    if (!session.session_id || !part) return;
+    const url = part.upload_url.startsWith("/")
+      ? `${origin}${part.upload_url}`
+      : part.upload_url;
+    const stored = http.put(url, new ArrayBuffer(uploadPartBytes), {
+      headers: part.upload_headers || {},
+      tags: { surface: "uploads", phase: strictSlo ? "strict" : "guarded" },
+    });
+    assertResponse(stored, "upload part to storage", [200, 201]);
+    const etag = stored.headers.Etag || stored.headers.ETag || null;
+    const confirm = http.post(
+      `${uploads}/${session.session_id}/parts/${part.part_number}/complete`,
+      JSON.stringify(etag ? { etag } : {}),
+      requestOptions("uploads"),
+    );
+    assertResponse(confirm, "upload part confirm", [200]);
+    const abort = http.post(
+      `${uploads}/${session.session_id}/abort`,
+      JSON.stringify({}),
+      requestOptions("uploads"),
+    );
+    assertResponse(abort, "upload multipart abort", [200]);
   });
   sleep(1);
 }
@@ -129,7 +148,7 @@ export function planAndRenderStatus() {
     }
     if (renderId) {
       const render = http.get(
-        `${baseUrl}/renders/${renderId}`,
+        `${baseUrl}/projects/${projectId}/renders/${renderId}`,
         requestOptions("render_status"),
       );
       assertResponse(render, "render status", [200]);
@@ -140,7 +159,11 @@ export function planAndRenderStatus() {
 
 export function metricsAndAdmin() {
   group("metrics scrape and admin queue overview", () => {
-    const metrics = http.get(`${baseUrl}/metrics`, requestOptions("ops"));
+    // /metrics takes the scrape token, not a user session.
+    const metrics = http.get(`${baseUrl}/metrics`, {
+      headers: metricsToken ? { authorization: `Bearer ${metricsToken}` } : {},
+      tags: { surface: "ops", phase: strictSlo ? "strict" : "guarded" },
+    });
     assertResponse(metrics, "metrics scrape", [200]);
     const admin = http.get(
       `${baseUrl}/admin/queues?limit=50`,
