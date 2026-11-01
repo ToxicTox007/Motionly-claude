@@ -42,6 +42,12 @@
       "reason": "Calls real remote provider accounts (planning, transcription and stock video); outside the CPU-stage proof."
     },
     {
+      "id": "live-stock-video-contracts",
+      "match": "Live provider contracts are disabled",
+      "enable_env": "LIVE_PROVIDER_CONTRACTS",
+      "reason": "Calls the real Pexels and Pixabay APIs (tests/test_provider_contracts.py); needs LIVE_PROVIDER_CONTRACTS=true plus the external-verification approval values. Recorded-response contracts cover the CPU stage."
+    },
+    {
       "id": "cpu-vision-matte",
       "match": "runs inside the cpu-vision image (MediaPipe + baked segmenter)",
       "enable_env": "CPU_VISION_IMAGE",

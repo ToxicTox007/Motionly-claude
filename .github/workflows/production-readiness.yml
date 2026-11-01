@@ -503,6 +503,10 @@ jobs:
           supabase start --exclude edge-runtime,imgproxy,logflare,mailpit,postgres-meta,realtime,storage-api,studio,supavisor,vector
           supabase db reset --local
           eval "$(supabase status -o env)"
+          # The local image's realtime functions SET log_min_messages, a
+          # superuser-only parameter, so the restoring postgres role needs SET
+          # on it to recreate them (granted by the local superuser).
+          psql "${DB_URL/\/\/postgres:/\/\/supabase_admin:}" --command "grant set on parameter log_min_messages to postgres;"
           psql "$DB_URL" --command "drop database if exists motionly_restore;"
           psql "$DB_URL" --command "create database motionly_restore;"
           psql "$DB_URL" --set ON_ERROR_STOP=1 --file scripts/backup_restore_seed.sql
