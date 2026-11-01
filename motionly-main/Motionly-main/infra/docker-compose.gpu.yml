@@ -90,8 +90,18 @@ x-orchestration-healthcheck: &orchestration-healthcheck
   start_period: 60s
 
 x-media-volumes: &media-volumes
-  - motionly-media:/var/data/motionly
-  - motionly-model-cache:/var/cache/motionly
+  # nocopy: Docker copies an image's files into an empty named volume as each
+  # container is created, and parallel creates race on that copy ("failed to
+  # mkdir .../render-tmp: file exists"). The images only pre-create empty
+  # directories there; volume-permissions creates them instead.
+  - type: volume
+    source: motionly-media
+    target: /var/data/motionly
+    volume: { nocopy: true }
+  - type: volume
+    source: motionly-model-cache
+    target: /var/cache/motionly
+    volume: { nocopy: true }
   # Declarative inference registry, mounted read-only (plan Task 26). The route
   # secrets come from the ai_secrets_bundle secret, never from this directory.
   - ${AI_REGISTRY_DIR:-./ai-registry}:/opt/motionly/ai-registry:ro
@@ -112,6 +122,9 @@ services:
       - -ec
       - |
         mkdir -p /var/data/motionly /var/cache/motionly
+        # The directories the worker images expect (their mounts use nocopy).
+        mkdir -p /var/data/motionly/storage /var/data/motionly/render-tmp \
+          /var/cache/motionly/huggingface /var/cache/motionly/torch
         chown -R 10001:10001 /var/data/motionly /var/cache/motionly
         # WAL archives and base backups (database audit DB-02) belong to the
         # postgres user of the supabase/postgres image (uid 101, gid 102).
