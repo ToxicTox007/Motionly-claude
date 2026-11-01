@@ -175,10 +175,20 @@ def validate_production_settings(settings: object) -> None:
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for licensed music catalog"
         )
-    if stock_video_provider_key in {"pexels", "pexels_pixabay"} and not settings.pexels_api_key:
-        raise RuntimeError("PEXELS_API_KEY is required when STOCK_VIDEO_PROVIDER includes pexels")
-    if stock_video_provider_key in {"pixabay", "pexels_pixabay"} and not settings.pixabay_api_key:
-        raise RuntimeError("PIXABAY_API_KEY is required when STOCK_VIDEO_PROVIDER includes pixabay")
+    # B-roll stock search runs in the API and on the stock_search queue (the
+    # planning worker); only those processes receive and need the stock keys.
+    if _serves_stock_search(settings):
+        if stock_video_provider_key in {"pexels", "pexels_pixabay"} and not settings.pexels_api_key:
+            raise RuntimeError(
+                "PEXELS_API_KEY is required when STOCK_VIDEO_PROVIDER includes pexels"
+            )
+        if (
+            stock_video_provider_key in {"pixabay", "pexels_pixabay"}
+            and not settings.pixabay_api_key
+        ):
+            raise RuntimeError(
+                "PIXABAY_API_KEY is required when STOCK_VIDEO_PROVIDER includes pixabay"
+            )
 
     if settings.process_role != "api":
         required_worker = {
@@ -262,6 +272,17 @@ def _validate_vision_providers(settings: object) -> None:
 
 def _is_sha256(value: object) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{64}", str(value or "").strip().lower()))
+
+
+STOCK_SEARCH_QUEUE = "stock_search"
+
+
+def _serves_stock_search(settings: object) -> bool:
+    """True for the API and for a worker whose WORKER_QUEUES include stock_search."""
+    if str(getattr(settings, "process_role", "api") or "api").strip().lower() == "api":
+        return True
+    queues = str(getattr(settings, "worker_queues", "") or "")
+    return STOCK_SEARCH_QUEUE in {queue.strip().lower() for queue in queues.split(",")}
 
 
 def _validate_gpu_free_deployment(settings: object) -> None:

@@ -73,8 +73,7 @@ def _production_settings(*, process_role: str = "api", **updates):
         # with a matching secret bundle. The legacy vendor validation around the
         # construction call is Task 7's to rewrite.
         "ai_registry_file": str(
-            ROOT
-            / "apps/api/tests/fixtures/inference_registry/production_remote.json"
+            ROOT / "apps/api/tests/fixtures/inference_registry/production_remote.json"
         ),
         "ai_secrets_bundle_file": str(
             ROOT / "apps/api/tests/fixtures/inference_registry/bundle.json"
@@ -829,3 +828,56 @@ def test_production_temporal_worker_requires_proposal_activity_transport(
 def test_production_api_and_media_worker_do_not_require_temporal_settings() -> None:
     _validate_production_settings(_production_settings(process_role="api"))
     _validate_production_settings(_production_settings(process_role="worker"))
+
+
+@pytest.mark.parametrize(
+    "queues",
+    ["provider_calls", "upload_preprocess,render", "audio_demucs", "render_remotion"],
+)
+def test_a_worker_without_stock_search_starts_without_stock_keys(queues: str) -> None:
+    # Compose gives the stock keys only to the API and the planning worker. The
+    # check used to run in every worker, so the first staging apply failed with
+    # five workers restarting on "PEXELS_API_KEY is required".
+    _validate_production_settings(
+        _production_settings(
+            process_role="worker",
+            worker_queues=queues,
+            pexels_api_key=None,
+            pixabay_api_key=None,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    [("pexels_api_key", "PEXELS_API_KEY"), ("pixabay_api_key", "PIXABAY_API_KEY")],
+)
+def test_the_api_and_the_stock_search_worker_still_require_stock_keys(
+    missing: str, message: str
+) -> None:
+    for overrides in (
+        {"process_role": "api"},
+        {
+            "process_role": "worker",
+            "worker_queues": "planning, stock_search,stock_asset_enrichment",
+        },
+    ):
+        with pytest.raises(RuntimeError, match=message):
+            _validate_production_settings(_production_settings(**overrides, **{missing: None}))
+
+
+def test_production_compose_gives_the_stock_keys_to_every_stock_search_service() -> None:
+    import yaml
+
+    services = yaml.safe_load(
+        (ROOT / "infra" / "docker-compose.gpu.yml").read_text(encoding="utf-8")
+    )["services"]
+    for name, service in services.items():
+        environment = service.get("environment") or {}
+        queues = str(environment.get("WORKER_QUEUES", ""))
+        if name == "api" or "stock_search" in queues.split(","):
+            assert environment.get("PEXELS_API_KEY") == "${PEXELS_API_KEY:-}", name
+            assert environment.get("PIXABAY_API_KEY") == "${PIXABAY_API_KEY:-}", name
+        else:
+            assert "PEXELS_API_KEY" not in environment, name
+            assert "PIXABAY_API_KEY" not in environment, name

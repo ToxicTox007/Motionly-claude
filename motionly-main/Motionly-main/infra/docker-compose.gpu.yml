@@ -1045,6 +1045,12 @@ services:
       <<: *media-environment
       WORKER_QUEUES: planning,stock_search,stock_asset_enrichment,audio,intelligence,maintenance
       WORKER_CONCURRENCY: "3"
+      # B-roll generation (the stock_search queue) searches the stock video
+      # providers, so this worker, like the API, needs their keys; no other
+      # worker receives them.
+      STOCK_VIDEO_PROVIDER: ${STOCK_VIDEO_PROVIDER:-pexels_pixabay}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
     restart: unless-stopped
     # Matches WORKER_SHUTDOWN_TIMEOUT_MS (14 min) plus margin: SIGTERM lets
     # active jobs finish instead of being SIGKILLed after 10 s (audit WJ-07).

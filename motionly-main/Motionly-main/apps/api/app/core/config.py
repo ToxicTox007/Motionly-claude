@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     app_env: str = Field(default="production", alias="APP_ENV")
     skip_api_auth: bool = Field(default=False, alias="SKIP_API_AUTH")
     process_role: str = Field(default="api", alias="PROCESS_ROLE")
+    # The BullMQ queues a media worker container serves (comma-separated). Its
+    # Python processes share the container's environment, so startup checks
+    # can require a provider key only where a queue that uses it runs.
+    worker_queues: str = Field(default="", alias="WORKER_QUEUES")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     api_cors_origins: str = Field(default="", alias="API_CORS_ORIGINS")
     api_public_base_url: AnyHttpUrl = Field(
