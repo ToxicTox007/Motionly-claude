@@ -20,15 +20,18 @@ import type {
 export { outputMsToSourceMs } from "@motionly/shared";
 
 // ── Track accent colours (Tailwind utility strings) ──────────────────────────
+// Clip labels are white 12px text, so each fill is opaque and dark enough for
+// WCAG AA (4.5:1): the 700 shades are 5.0:1 (amber) to 7.1:1 (violet). The
+// earlier translucent 500 shades let the light track show through (~2:1).
 const TRACK_COLORS: Record<string, string> = {
-  video: "bg-teal-500/80",
-  broll: "bg-amber-500/80",
-  caption: "bg-violet-500/80",
-  music: "bg-rose-500/80",
-  zoom: "bg-sky-500/80",
-  transition: "bg-cyan-500/80",
-  overlay: "bg-fuchsia-500/80",
-  sfx: "bg-orange-500/80",
+  video: "bg-teal-700",
+  broll: "bg-amber-700",
+  caption: "bg-violet-700",
+  music: "bg-rose-700",
+  zoom: "bg-sky-700",
+  transition: "bg-cyan-700",
+  overlay: "bg-fuchsia-700",
+  sfx: "bg-orange-700",
 };
 
 export interface BuildTimelineInput {
@@ -73,7 +76,7 @@ export function buildTimelineState({
       startMs: 0,
       endMs: totalDurationMs,
       label: "Raw footage",
-      colorClass: "bg-teal-800/50",
+      colorClass: "bg-teal-800",
       disabled: false,
       sourceRef: { kind: "cut", index: 0 },
     });

@@ -1306,7 +1306,9 @@ export function TimelinePanel({
                   trackKind: track.kind,
                   totalDurationMs,
                 }}
-                role="list"
+                // A group, not a list: its clips are buttons, and a list may
+                // only hold list items (axe aria-required-children).
+                role="group"
                 aria-label={`${track.label} timeline track`}
                 className={cn(
                   "relative border-b border-hairline",
@@ -1473,7 +1475,8 @@ function trackIconName(kind: string): PixelIconName {
 
 function trackToneClass(kind: string) {
   if (kind === "captions") return "bg-accent text-accent-foreground";
-  if (kind === "broll") return "bg-info text-ink";
+  // primary-foreground on info is 4.7:1; ink was 4.0:1, below WCAG AA.
+  if (kind === "broll") return "bg-info text-primary-foreground";
   if (kind === "audio" || kind === "music") return "bg-success text-ink";
   return "bg-primary text-primary-foreground";
 }

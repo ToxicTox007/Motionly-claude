@@ -146,7 +146,10 @@ export function ProcessingProjectScreen({
                   key={stage.key}
                   className={cn(
                     "flex items-start gap-3 rounded-neu-md p-2 transition-shadow duration-200",
-                    active ? "bg-surface shadow-neu-inset-sm" : "opacity-60",
+                    // Upcoming and finished stages are quieter through their
+                    // text colour (muted-foreground is 5.9:1 on the surface);
+                    // dimming the whole row with opacity fell to 3.8:1.
+                    active && "bg-surface shadow-neu-inset-sm",
                   )}
                 >
                   <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-surface text-2xs font-bold text-foreground shadow-neu-raised-sm">
@@ -156,7 +159,7 @@ export function ProcessingProjectScreen({
                     <p
                       className={cn(
                         "text-xs font-semibold",
-                        active ? "text-primary" : "text-foreground",
+                        active ? "text-primary" : "text-muted-foreground",
                       )}
                     >
                       {stage.label}

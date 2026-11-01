@@ -335,7 +335,7 @@ export const ClipBlock = React.memo(
           onPointerDown={(event) => startTrim("left", event)}
         />
         <span className="min-w-0 flex-1 truncate">{clip.label}</span>
-        <span className="hidden shrink-0 rounded-full bg-ink/40 px-1.5 font-mono text-2xs tabular-nums sm:inline">
+        <span className="hidden shrink-0 rounded-full bg-ink/70 px-1.5 font-mono text-2xs tabular-nums sm:inline">
           {formatMs(widthMs)}
         </span>
         <TrimHandle

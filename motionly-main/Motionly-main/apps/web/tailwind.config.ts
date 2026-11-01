@@ -11,7 +11,13 @@ const inset = (d: number) =>
 
 const config: Config = {
   darkMode: ["selector", '[data-theme="dark"]'],
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  // lib/ builds class names too (lib/timeline.ts colours the timeline clips);
+  // without it those classes were never generated and clips had no fill.
+  content: [
+    "./app/**/*.{ts,tsx}",
+    "./components/**/*.{ts,tsx}",
+    "./lib/**/*.{ts,tsx,mjs}",
+  ],
   theme: {
     extend: {
       colors: {
