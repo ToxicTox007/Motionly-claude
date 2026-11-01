@@ -58,8 +58,11 @@ COPY apps/worker/package.json ./apps/worker/
 COPY apps/renderer/package.json ./apps/renderer/
 
 # Install pnpm and all workspace dependencies. TMPDIR must exist before pnpm runs.
+# npm is removed once pnpm is installed: pnpm runs without it, and npm bundles
+# undici, which the supply-chain image scan flags.
 RUN mkdir -p /tmp/motionly && \
     npm install -g pnpm@9.15.4 --quiet && \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx && \
     pnpm install --frozen-lockfile --prefer-offline --prod=false
 
 # Copy source after deps (avoids reinstalling when only source changes)

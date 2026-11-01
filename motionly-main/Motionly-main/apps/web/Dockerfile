@@ -12,7 +12,9 @@ RUN pnpm --filter @motionly/shared build && pnpm --filter @motionly/web build
 # uses, traced by `next build` from the monorepo root), the static assets and
 # public/. No workspace sources, dev dependencies or package manager.
 FROM node:24-bookworm-slim@sha256:2dd9a4f758e173b65fee15388f7706af6fb01ef50cf7a2c0538711d67a6981ae
-RUN npm install --global npm@12.2.1 --ignore-scripts --no-audit --no-fund
+# The runtime runs node only: remove the base image's npm (it bundles undici,
+# which the supply-chain image scan flags).
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 WORKDIR /app
 # server.js listens on HOSTNAME, which Docker sets to the container id; listen
 # on every interface (the health check uses 127.0.0.1).

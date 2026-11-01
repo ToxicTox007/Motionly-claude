@@ -29,8 +29,12 @@ COPY apps/api/worker-bridge/package-lock.json ./apps/api/worker-bridge/package-l
 COPY apps/worker/src/queue-bridge.mjs ./apps/api/worker-bridge/queue-bridge.mjs
 COPY apps/worker/src/queue-common.mjs ./apps/api/worker-bridge/queue-common.mjs
 
+# npm only installs the locked Node packages at build time. Remove it so the image
+# ships no package manager (npm bundles its own HTTP client, undici, which the
+# supply-chain image scan flags and nothing here runs).
 RUN cd apps/api/worker-bridge \
     && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && cd /app \
     && pip install --no-cache-dir --require-hashes -r requirements.lock \
     && useradd --create-home --uid 10001 motionly \

@@ -39,7 +39,11 @@ COPY apps/worker/package.json ./apps/worker/package.json
 COPY apps/worker/package-lock.json ./apps/worker/package-lock.json
 COPY apps/worker/src ./apps/worker/src
 
+# npm only installs the locked Node packages at build time. Remove it so the image
+# ships no package manager (npm bundles its own HTTP client, undici, which the
+# supply-chain image scan flags and nothing here runs).
 RUN cd apps/worker && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
     && pip install --no-cache-dir --require-hashes -r /app/requirements-ml.lock
 
 RUN useradd --create-home --uid 10001 motionly \
