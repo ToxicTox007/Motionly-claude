@@ -48,8 +48,35 @@ export function advisoryAxeViolations(violations, path) {
     }));
 }
 
-export function blockingConsoleMessage({ type, text }, allowed = []) {
+// API reads whose 404 is the documented "nothing yet" answer, not a failure:
+// the editor's optional panels (lib/editor-panel-loader.ts, missingIsEmpty),
+// transcript polling (hooks/useTranscriptPolling.ts), and the public share
+// resolver, which answers every unknown, revoked or expired token with the
+// same neutral 404 (enumeration safety). Browsers log any 404 fetch as a
+// console error; on any other URL a 404 still fails the test.
+const EXPECTED_NOT_FOUND_PATHS = [
+  /^\/api\/projects\/[^/]+\/transcript$/,
+  /^\/api\/projects\/[^/]+\/music\/selection$/,
+  /^\/api\/projects\/[^/]+\/effects$/,
+  /^\/api\/projects\/[^/]+\/visual\/status$/,
+  /^\/api\/public\/exports\/resolve$/,
+];
+const RESOURCE_NOT_FOUND = /^Failed to load resource: .*\bstatus of 404\b/;
+
+function expectedNotFound(text, url) {
+  if (!RESOURCE_NOT_FOUND.test(text)) return false;
+  let path;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return false;
+  }
+  return EXPECTED_NOT_FOUND_PATHS.some((pattern) => pattern.test(path));
+}
+
+export function blockingConsoleMessage({ type, text, url = "" }, allowed = []) {
   if (type !== "error") return false;
+  if (expectedNotFound(text, url)) return false;
   return !allowed.some((pattern) => pattern.test(text));
 }
 

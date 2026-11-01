@@ -44,8 +44,11 @@ export const test = base.extend({
     { scope: "worker" },
   ],
 
-  // A confirmed account that exists only for this test.
-  user: async ({ stack }, use, testInfo) => {
+  // A confirmed account that exists only for this test. It is deleted after
+  // the quality gates have read the test's pages: deleting it removes the
+  // workspace's projects under a page that is still open and polling, and
+  // the 404s that causes are the harness's doing, not the app's.
+  user: async ({ stack, gates }, use, testInfo) => {
     const email = `browser-${testInfo.workerIndex}-${randomBytes(6).toString("hex")}@motionly.test`;
     const password = `Browser-${randomBytes(12).toString("hex")}-Aa1!`;
     const response = await stack.admin.post("/supabase/auth/v1/admin/users", {
@@ -55,10 +58,12 @@ export const test = base.extend({
     const created = await response.json();
     await use({ id: created.id, email, password });
     // Deleting the account also deletes its workspaces and projects.
-    const deleted = await stack.admin.delete(
-      `/supabase/auth/v1/admin/users/${created.id}`,
-    );
-    expect(deleted.status(), await deleted.text()).toBe(200);
+    gates.afterChecks(async () => {
+      const deleted = await stack.admin.delete(
+        `/supabase/auth/v1/admin/users/${created.id}`,
+      );
+      expect(deleted.status(), await deleted.text()).toBe(200);
+    });
   },
 
   gates: [
@@ -86,7 +91,11 @@ export const test = base.extend({
           if (frame === page.mainFrame()) navigationTimes.push(Date.now());
         });
         page.on("console", (message) => {
-          const entry = { type: message.type(), text: message.text() };
+          const entry = {
+            type: message.type(),
+            text: message.text(),
+            url: message.location().url,
+          };
           if (blockingConsoleMessage(entry, allowedConsole)) {
             const location = message.location();
             const at = Date.now();
@@ -198,78 +207,100 @@ export const test = base.extend({
       };
       const details = [];
       const advisories = [];
+      // Cleanups that must not run while the gates still watch the pages
+      // (the user fixture's account deletion).
+      const afterChecks = [];
 
       await use({
         checkAccessibility,
         /** Console errors a test expects, e.g. the browser logging an intended 404. */
         allowConsoleError: (pattern) => allowedConsole.push(pattern),
+        /** Runs `cleanup` once the gates have checked this test's pages. */
+        afterChecks: (cleanup) => afterChecks.push(cleanup),
       });
 
-      // Every test also checks the page it ends on.
-      for (const page of context.pages()) {
-        if (
-          !page.isClosed() &&
-          page.url().startsWith("https://") &&
-          !scanned.has(page.url())
-        ) {
-          await checkAccessibility(page);
+      try {
+        await checkTheTest();
+      } finally {
+        // Cleanups always run; the first failure is reported, gates first.
+        let cleanupError = null;
+        for (const cleanup of afterChecks.reverse()) {
+          try {
+            await cleanup();
+          } catch (error) {
+            cleanupError ??= error;
+          }
         }
+        if (cleanupError) throw cleanupError;
       }
-      await testInfo.attach("navigation-timings", {
-        body: JSON.stringify(navigationTimings),
-        contentType: "application/json",
-      });
-      if (advisories.length > 0) {
-        await testInfo.attach("accessibility-advisories", {
-          body: JSON.stringify(advisories, null, 2),
+
+      async function checkTheTest() {
+        // Every test also checks the page it ends on.
+        for (const page of context.pages()) {
+          if (
+            !page.isClosed() &&
+            page.url().startsWith("https://") &&
+            !scanned.has(page.url())
+          ) {
+            await checkAccessibility(page);
+          }
+        }
+        await testInfo.attach("navigation-timings", {
+          body: JSON.stringify(navigationTimings),
           contentType: "application/json",
         });
-      }
-      await Promise.all(pendingConsole);
-      abortedRequests.push(
-        ...cancelledByNavigation([...unfinished.values()], navigationTimes),
-      );
-      // Errors are app failures unless they are how the browser reported a
-      // fetch it cancelled itself (gates.mjs cancelledFetchNoise).
-      for (const candidate of candidateNoise) {
-        if (
-          !cancelledFetchNoise(
-            candidate.text,
-            candidate.at,
-            abortedRequests,
-            navigationTimes,
-          )
-        ) {
-          problems[candidate.kind].push(candidate.line);
+        if (advisories.length > 0) {
+          await testInfo.attach("accessibility-advisories", {
+            body: JSON.stringify(advisories, null, 2),
+            contentType: "application/json",
+          });
         }
-      }
-      const report = formatProblems(problems);
-      if (report) {
-        writeFileSync(
-          testInfo.outputPath("quality-gates.json"),
-          JSON.stringify(
-            {
-              navigationTimes,
-              candidateNoise: candidateNoise.map(({ kind, text, at }) => ({
-                kind,
-                text: text.slice(0, 120),
-                at,
-              })),
-              project: testInfo.project.name,
-              test: testInfo.title,
-              problems,
-              accessibility: details,
-            },
-            null,
-            2,
-          ),
+        await Promise.all(pendingConsole);
+        abortedRequests.push(
+          ...cancelledByNavigation([...unfinished.values()], navigationTimes),
         );
-        await testInfo.attach("quality-gates", {
-          body: report,
-          contentType: "text/plain",
-        });
+        // Errors are app failures unless they are how the browser reported a
+        // fetch it cancelled itself (gates.mjs cancelledFetchNoise).
+        for (const candidate of candidateNoise) {
+          if (
+            !cancelledFetchNoise(
+              candidate.text,
+              candidate.at,
+              abortedRequests,
+              navigationTimes,
+            )
+          ) {
+            problems[candidate.kind].push(candidate.line);
+          }
+        }
+        const report = formatProblems(problems);
+        if (report) {
+          writeFileSync(
+            testInfo.outputPath("quality-gates.json"),
+            JSON.stringify(
+              {
+                navigationTimes,
+                candidateNoise: candidateNoise.map(({ kind, text, at }) => ({
+                  kind,
+                  text: text.slice(0, 120),
+                  at,
+                })),
+                project: testInfo.project.name,
+                test: testInfo.title,
+                problems,
+                accessibility: details,
+              },
+              null,
+              2,
+            ),
+          );
+          await testInfo.attach("quality-gates", {
+            body: report,
+            contentType: "text/plain",
+          });
+        }
+        expect(report, "quality gates").toBe("");
       }
-      expect(report, "quality gates").toBe("");
     },
     { auto: true },
   ],

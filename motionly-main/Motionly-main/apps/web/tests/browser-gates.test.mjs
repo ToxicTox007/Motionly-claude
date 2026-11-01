@@ -114,6 +114,51 @@ test("console errors block; other console levels and allowed messages do not", (
   );
 });
 
+test("a 404 is expected only from reads that document it as 'nothing yet'", () => {
+  const notFound =
+    "Failed to load resource: the server responded with a status of 404 (Not Found)";
+  const origin = "https://127.0.0.1:18443";
+  for (const path of [
+    "/api/projects/p1/transcript",
+    "/api/projects/p1/music/selection",
+    "/api/projects/p1/effects",
+    "/api/projects/p1/visual/status",
+    "/api/public/exports/resolve",
+  ]) {
+    assert.equal(
+      blockingConsoleMessage({
+        type: "error",
+        text: notFound,
+        url: `${origin}${path}`,
+      }),
+      false,
+      path,
+    );
+  }
+  for (const url of [
+    `${origin}/api/projects/p1/captions`,
+    `${origin}/api/projects/p1/transcript/extra`,
+    `${origin}/api/model-options?project_id=p1`,
+    `${origin}/no-such-page`,
+    "",
+  ]) {
+    assert.equal(
+      blockingConsoleMessage({ type: "error", text: notFound, url }),
+      true,
+      url,
+    );
+  }
+  // A failure other than 404 on an optional read still blocks.
+  assert.equal(
+    blockingConsoleMessage({
+      type: "error",
+      text: "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+      url: `${origin}/api/projects/p1/transcript`,
+    }),
+    true,
+  );
+});
+
 test("failed requests block unless the browser aborted them during navigation", () => {
   assert.equal(
     blockingRequestFailure({
