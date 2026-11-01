@@ -615,7 +615,9 @@ def check_web_runtime(origin: str, env: dict[str, str]) -> dict:
         expected = {
             "publicOrigin": origin,
             "supabaseAnonKey": env["SUPABASE_ANON_KEY"],
-            "billingEnabled": False,
+            # The CPU stage demos checkout through the mock gateway, so the
+            # web app offers it like the API does (docker-compose.cpu-stage.yml).
+            "billingEnabled": True,
         }
         if public != expected:
             raise StackError(f"unexpected public configuration: {public}")
