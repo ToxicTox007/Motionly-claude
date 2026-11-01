@@ -182,6 +182,12 @@ def test_deploys_go_to_the_environment_the_channel_names() -> None:
         for step in route["steps"]
     )
     assert "github.event.workflow_run.conclusion == 'success'" in route["if"]
+    # The classifier runs from the default branch with a read-only token: the
+    # tag under classification never supplies the code that routes it.
+    assert route["permissions"] == {"contents": "read"}
+    checkout = next(step for step in route["steps"] if "actions/checkout" in step.get("uses", ""))
+    assert "ref" not in checkout.get("with", {})
+    assert checkout["with"]["persist-credentials"] is False
     for name in ("publish-and-preflight", "apply"):
         assert "route" in jobs[name]["needs"]
         assert jobs[name]["environment"] == "${{ needs.route.outputs.environment }}"
