@@ -547,7 +547,6 @@ export function LookTab({
 
   return (
     <div className="space-y-4">
-      <h2 className="sr-only">Look</h2>
       <div className="rounded-neu-lg bg-surface p-5 space-y-4 shadow-neu-raised sm:p-6">
         <PanelSection title="Color" defaultOpen>
           <div className="space-y-2">

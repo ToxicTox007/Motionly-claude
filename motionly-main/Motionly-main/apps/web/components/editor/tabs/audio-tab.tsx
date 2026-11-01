@@ -289,7 +289,6 @@ export function AudioTab({
 
   return (
     <div className="space-y-4">
-      <h2 className="sr-only">Audio</h2>
       <div className="rounded-neu-lg bg-surface p-5 space-y-4 shadow-neu-raised sm:p-6">
         <PanelSection title="Basic" defaultOpen>
           <div className="flex items-center gap-3.5 rounded-neu-md bg-surface p-3.5 shadow-neu-raised-sm">

@@ -182,7 +182,6 @@ export function BrollTab({
 
   return (
     <div className="space-y-4">
-      <h2 className="sr-only">B-Roll</h2>
       <div className="rounded-neu-lg bg-surface p-5 space-y-4 shadow-neu-raised sm:p-6">
         <PanelSection title="Basic" defaultOpen>
           <Slider
