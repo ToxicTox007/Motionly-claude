@@ -62,9 +62,13 @@ def build_k6_env(
     revision: str,
     admin_token: str = "",
     summary_output: str = str(K6_SUMMARY),
+    ca_cert: str = "",
 ) -> dict[str, str]:
     """The environment for a strict CPU-stage k6 smoke. Pure, so it is unit
-    tested. K6_STRICT_SLO=1 makes every non-2xx abort the run."""
+    tested. K6_STRICT_SLO=1 makes every non-2xx abort the run. ``ca_cert`` is
+    the stack's per-run edge test CA: k6 (Go) reads its trusted roots from
+    SSL_CERT_FILE, so the smoke verifies the CDN simulator's certificate
+    instead of skipping TLS verification."""
     if not (bearer_token and workspace_id and project_id and upload_id and render_id):
         raise ValueError("strict k6 needs a bearer token, workspace, project, upload and render")
     env = {
@@ -80,6 +84,8 @@ def build_k6_env(
     }
     if admin_token:
         env["ADMIN_API_TOKEN"] = admin_token
+    if ca_cert:
+        env["SSL_CERT_FILE"] = ca_cert
     return env
 
 
@@ -168,6 +174,9 @@ def _seed_perf_workload(stack, state: dict) -> dict:
 def cmd_smoke(args: argparse.Namespace) -> int:
     stack = _load(ROOT / "scripts" / "verify" / "cpu_stage_stack.py", "motionly_cpu_stage_stack")
     state = stack.load_state()
+    # The edge serves the run's own test CA certificate; verify against it
+    # (the seeding requests here and k6 below), never skip verification.
+    stack.trust_edge_ca(state)
     seeded = _seed_perf_workload(stack, state)
     revision = args.revision or os.environ.get("DEPLOYMENT_REVISION", "cpu-stage")
     k6_env = build_k6_env(
@@ -179,6 +188,7 @@ def cmd_smoke(args: argparse.Namespace) -> int:
         render_id=seeded["render_id"],
         admin_token=seeded.get("admin_token", ""),
         revision=revision,
+        ca_cert=str(stack.secret_path(state, "edge_ca_cert")),
     )
     K6_SUMMARY.parent.mkdir(parents=True, exist_ok=True)
     _run(["k6", "run", str(K6_SCRIPT)], env={**os.environ, **k6_env})

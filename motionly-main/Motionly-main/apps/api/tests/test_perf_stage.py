@@ -79,3 +79,23 @@ def test_budget_subcommand_delegates_to_the_budget_checker(perf_stage, monkeypat
     monkeypatch.setattr(perf_stage, "_load", lambda *a, **k: fake)
     assert perf_stage.main(["budget"]) == 0
     assert called["argv"] == []
+
+
+def test_k6_trusts_the_stack_test_ca_instead_of_skipping_tls_checks(perf_stage) -> None:
+    # k6 (Go) reads extra trusted roots from SSL_CERT_FILE; the CDN simulator's
+    # certificate comes from the run's own test CA.
+    env = perf_stage.build_k6_env("https://edge.test/api", ca_cert="/run/edge_ca_cert", **_ids())
+    assert env["SSL_CERT_FILE"] == "/run/edge_ca_cert"
+    assert "SSL_CERT_FILE" not in perf_stage.build_k6_env("https://edge.test/api", **_ids())
+    script = (ROOT / "scripts" / "perf" / "k6-api-workflows.js").read_text("utf-8")
+    assert "insecureSkipTLSVerify" not in script
+    orchestrator = (ROOT / "scripts" / "verify" / "perf_stage.py").read_text("utf-8")
+    assert "insecureSkipTLSVerify" not in orchestrator
+
+
+def test_the_smoke_seeds_and_runs_k6_against_the_verified_edge(perf_stage) -> None:
+    source = (ROOT / "scripts" / "verify" / "perf_stage.py").read_text("utf-8")
+    smoke = source.split("def cmd_smoke", 1)[1].split("\ndef ", 1)[0]
+    # The edge CA is trusted before the seeding requests, then handed to k6.
+    assert smoke.index("stack.trust_edge_ca(state)") < smoke.index("_seed_perf_workload(")
+    assert 'ca_cert=str(stack.secret_path(state, "edge_ca_cert"))' in smoke
