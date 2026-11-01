@@ -7,6 +7,7 @@ import math
 import re
 import threading
 import time
+import wave
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -2385,7 +2386,12 @@ def estimate_input_units(request: ModelRequest) -> int:
     if isinstance(request, AudioRequest):
         return max(1, request.audio_path.stat().st_size // 32)
     if isinstance(request, TranscriptionRequest):
-        return max(1, request.audio_path.stat().st_size // 32)
+        # Transcription is metered in seconds of audio: the Bedrock Data
+        # Automation usage report is ceil(duration seconds) and the route hard
+        # caps are seconds (docs/aws/cost-guardrails.md). Counting file bytes
+        # / 32 (about milliseconds of 16 kHz audio) made a 3 s clip reserve
+        # ~3000 units against an 1800-unit daily cap, so every call was refused.
+        return audio_duration_units(request.audio_path)
     if isinstance(request, EmbeddingsRequest):
         return max(1, sum(len(item.encode("utf-8")) for item in request.inputs))
     if isinstance(request, GenerationRequest):
@@ -2442,6 +2448,26 @@ def diarization_billable_seconds(
 def stem_duration_units(duration_s: float) -> int:
     """Whole seconds of audio, rounded up (the per-second pricing unit)."""
     return max(1, math.ceil(duration_s))
+
+
+# Bytes per second of the mono 16-bit 16 kHz WAV that transcription stages
+# (audio_extraction.extract_mono_wav); the fallback when the header is unreadable.
+_TRANSCRIPTION_WAV_BYTES_PER_SECOND = 16_000 * 2
+
+
+def audio_duration_units(path: Path) -> int:
+    """Whole seconds of audio in ``path``, rounded up, never below 1."""
+    try:
+        with wave.open(str(path), "rb") as audio:
+            frames = audio.getnframes()
+            rate = audio.getframerate()
+        if rate > 0:
+            return max(1, math.ceil(frames / rate))
+    except (wave.Error, EOFError, OSError, RuntimeError, ValueError):
+        # Not a readable PCM WAV (wave raises bare RuntimeError on some
+        # malformed headers): fall back to the size of 16 kHz mono PCM.
+        pass
+    return max(1, math.ceil(path.stat().st_size / _TRANSCRIPTION_WAV_BYTES_PER_SECOND))
 
 
 def request_max_output_units(request: ModelRequest) -> int:

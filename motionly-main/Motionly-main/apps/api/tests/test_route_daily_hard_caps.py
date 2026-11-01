@@ -114,17 +114,15 @@ def test_daily_scope_buckets_by_utc_date_and_is_disjoint_from_monthly() -> None:
 
 def test_daily_scope_units_and_requests_do_not_share_a_scope() -> None:
     now = datetime(2026, 3, 9, tzinfo=UTC)
-    assert route_daily_hard_cap_scope(
-        "r", unit="requests", now=now
-    ) != route_daily_hard_cap_scope("r", unit="units", now=now)
+    assert route_daily_hard_cap_scope("r", unit="requests", now=now) != route_daily_hard_cap_scope(
+        "r", unit="units", now=now
+    )
 
 
 def test_daily_scope_rolls_over_at_utc_midnight() -> None:
     before = datetime(2026, 3, 9, 23, 59, 59, tzinfo=UTC)
     after = datetime(2026, 3, 10, 0, 0, 1, tzinfo=UTC)
-    assert route_daily_hard_cap_scope("r", now=before) != route_daily_hard_cap_scope(
-        "r", now=after
-    )
+    assert route_daily_hard_cap_scope("r", now=before) != route_daily_hard_cap_scope("r", now=after)
 
 
 # --- registry parse + to_model_route ---------------------------------------
@@ -196,9 +194,7 @@ def test_daily_cap_resets_on_next_utc_day(monkeypatch: pytest.MonkeyPatch) -> No
     assert gateway.invoke(_planning_request()).metadata.route_id == "solo"
     with pytest.raises(ModelProvidersExhausted) as exc_info:
         gateway.invoke(_planning_request())
-    assert exc_info.value.failures == (
-        {"route_id": "solo", "code": "route_hard_cap_exhausted"},
-    )
+    assert exc_info.value.failures == ({"route_id": "solo", "code": "route_hard_cap_exhausted"},)
 
     # Advance to the next UTC day: the daily scope changes, so the cap resets.
     _Clock.value = datetime(2026, 3, 10, 0, 0, 1, tzinfo=UTC)
@@ -216,9 +212,7 @@ def test_priced_route_with_caps_is_now_enforced() -> None:
     assert gateway.invoke(_planning_request()).metadata.route_id == "priced"
     with pytest.raises(ModelProvidersExhausted) as exc_info:
         gateway.invoke(_planning_request())
-    assert exc_info.value.failures == (
-        {"route_id": "priced", "code": "route_hard_cap_exhausted"},
-    )
+    assert exc_info.value.failures == ({"route_id": "priced", "code": "route_hard_cap_exhausted"},)
     assert adapter.calls == ["priced"]
 
 
@@ -230,9 +224,7 @@ def test_priced_monthly_cap_is_now_enforced() -> None:
     assert gateway.invoke(_planning_request()).metadata.route_id == "priced"
     with pytest.raises(ModelProvidersExhausted) as exc_info:
         gateway.invoke(_planning_request())
-    assert exc_info.value.failures == (
-        {"route_id": "priced", "code": "route_hard_cap_exhausted"},
-    )
+    assert exc_info.value.failures == ({"route_id": "priced", "code": "route_hard_cap_exhausted"},)
 
 
 def test_route_without_any_cap_is_unaffected() -> None:
@@ -354,3 +346,68 @@ def test_poll_like_release_does_not_consume_daily_cap_on_non_billable_failure() 
     # Second call on the SAME day still has its daily budget: cap not consumed.
     assert gateway.invoke(_planning_request()).metadata.route_id == "solo"
     assert adapter.calls == ["solo", "solo"]
+
+
+def _write_mono_wav(path, seconds: float, rate: int = 16_000) -> None:
+    import wave
+
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(rate)
+        audio.writeframes(b"\x00\x00" * int(seconds * rate))
+
+
+@pytest.mark.parametrize(("seconds", "units"), [(3.0, 3), (2.2, 3), (0.1, 1), (600.0, 600)])
+def test_transcription_is_metered_in_seconds_of_audio(tmp_path, seconds, units) -> None:
+    from app.services.model_gateway import TranscriptionRequest, estimate_input_units
+
+    audio = tmp_path / "speech.wav"
+    _write_mono_wav(audio, seconds)
+    assert estimate_input_units(TranscriptionRequest(audio_path=audio)) == units
+
+
+def test_a_short_clip_fits_the_shipped_transcription_day_cap(tmp_path) -> None:
+    # Staging's first upload failed with route_hard_cap_exhausted: the estimate
+    # counted bytes / 32, so a 3 s clip reserved ~3000 units against the
+    # 1800-second daily cap of bedrock-transcription and no call ever ran.
+    from app.services.model_gateway import (
+        TranscriptionOutput,
+        TranscriptionRequest,
+    )
+
+    class _Transcriber:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def invoke(self, *, route: ModelRoute, request: object) -> AdapterResult:
+            del route, request
+            self.calls += 1
+            return AdapterResult(
+                output=TranscriptionOutput(
+                    text="hello", language="en", confidence=None, words=(), raw_response={}
+                ),
+                usage=ModelUsage(input_units=3),
+            )
+
+    audio = tmp_path / "speech.wav"
+    _write_mono_wav(audio, 3.0)
+    route = ModelRoute(
+        route_id="bedrock-transcription",
+        capability=ModelCapability.TRANSCRIPTION,
+        adapter="fake",
+        provider="bedrock",
+        model="bda-audio",
+        model_revision="bda-audio-apac-2026-10-01",
+        pricing_status="unknown",
+        hard_cap_max_units=18_000,
+        hard_cap_max_units_per_day=1_800,
+    )
+    adapter = _Transcriber()
+    ledger = InMemoryBudgetLedger()
+    gateway = ModelGateway(adapters={"fake": adapter}, routes=[route], budget_ledger=ledger)
+
+    result = gateway.invoke(TranscriptionRequest(audio_path=audio, language="en"))
+    assert result.metadata.route_id == "bedrock-transcription"
+    assert adapter.calls == 1
+    assert ledger.usage(route_daily_hard_cap_scope("bedrock-transcription", unit="units")) <= 3
