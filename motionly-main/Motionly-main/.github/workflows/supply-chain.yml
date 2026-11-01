@@ -139,6 +139,9 @@ jobs:
         with:
           image: ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
           artifact-name: sbom-${{ matrix.component }}
+          # The next step uploads this SBOM under the same name; a second upload
+          # of one artifact name fails the job (409 Conflict).
+          upload-artifact: false
           output-file: sbom-${{ matrix.component }}.spdx.json
       - name: Upload component SBOM
         uses: actions/upload-artifact@v4
