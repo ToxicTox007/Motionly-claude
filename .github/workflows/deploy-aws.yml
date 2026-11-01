@@ -2,7 +2,7 @@ name: Deploy signed release to AWS
 
 # After the supply chain signs a release tag, publish the release to the S3
 # releases bucket and have the instance preflight it, then apply it once the
-# production environment approves (infra/aws, docs/ops/compose-vm-deployment.md).
+# staging environment allows (infra/aws, docs/ops/compose-vm-deployment.md).
 # GitHub never holds AWS keys or application secrets: it assumes the stack's
 # GitHubDeployRole through OIDC, and the instance reads secrets from SSM itself.
 
@@ -32,8 +32,10 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
-    # The deploy role trusts exactly this repository environment.
-    environment: production
+    # The deploy role trusts exactly this repository environment. This root
+    # copy deploys the motionly-staging stack (GitHubDeployEnvironment=staging);
+    # the nested monorepo copy keeps the production contract.
+    environment: staging
     env:
       RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
       RELEASE_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
@@ -80,7 +82,7 @@ jobs:
     name: Apply the release on the instance
     needs: [publish-and-preflight]
     runs-on: ubuntu-latest
-    environment: production
+    environment: staging
     env:
       RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
       INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
