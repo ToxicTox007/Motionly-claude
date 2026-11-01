@@ -32,6 +32,8 @@ JWT_SECRET = "release-integration-jwt-secret-0123456789"
 SECRET_FILE_MODE = 0o444
 POSTGRES_PASSWORD = "release-integration-postgres-password"
 REDIS_PASSWORD = "release-integration-redis-password"
+# Test API keys outlive any run (Supabase's own generated keys last 10 years).
+API_KEY_LIFETIME_SECONDS = 10 * 365 * 24 * 3600
 
 
 def _base64url(value: bytes) -> str:
@@ -39,10 +41,20 @@ def _base64url(value: bytes) -> str:
 
 
 def _jwt(role: str, secret: str = JWT_SECRET) -> str:
+    # Like Supabase's generated API keys: issued now and long-lived. Realtime
+    # refuses a token without iat/exp as malformed, so every private-channel
+    # join in the CPU stage failed before RLS was even consulted.
+    issued_at = int(datetime.now(UTC).timestamp())
     header = _base64url(b'{"alg":"HS256","typ":"JWT"}')
     payload = _base64url(
         json.dumps(
-            {"aud": "authenticated", "role": role, "sub": "00000000-0000-4000-8000-000000000001"},
+            {
+                "aud": "authenticated",
+                "role": role,
+                "sub": "00000000-0000-4000-8000-000000000001",
+                "iat": issued_at,
+                "exp": issued_at + API_KEY_LIFETIME_SECONDS,
+            },
             separators=(",", ":"),
         ).encode("utf-8")
     )

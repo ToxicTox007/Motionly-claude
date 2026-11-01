@@ -9,12 +9,14 @@ verdict, which fails a run on any restart, OOM kill or failed one-shot.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import re
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -260,6 +262,20 @@ def test_cpu_stage_writer_creates_private_random_inputs_without_live_provider_ke
     assert stat.S_IMODE(secrets_a.stat().st_mode) == 0o700
     for name in ("ai_secrets_bundle",):
         assert (secrets_a / name).read_text(encoding="utf-8") == "", name
+    # Realtime rejects API keys without iat/exp as malformed JWTs (private
+    # channel joins failed with "transport failure"), so every key carries both.
+    keys = {
+        "SUPABASE_ANON_KEY": first["SUPABASE_ANON_KEY"],
+        "supabase_service_role_key": (secrets_a / "supabase_service_role_key").read_text().strip(),
+        "supabase_worker_key": (secrets_a / "supabase_worker_key").read_text().strip(),
+        "mock_gateway_db_key": (secrets_a / "mock_gateway_db_key").read_text().strip(),
+    }
+    now = time.time()
+    for name, token in keys.items():
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        assert claims["iat"] <= now + 5, name
+        assert claims["exp"] > now + 365 * 24 * 3600, name
     assert (secrets_a / "postgres_password").read_text().strip() == first["POSTGRES_PASSWORD"]
     # Read-only for every container user (Compose mounts file secrets with the
     # host mode); the 0700 directory keeps other host users out.
@@ -393,3 +409,23 @@ def test_resource_budget_awaits_decision_d2_and_lists_measured_services() -> Non
     stack = json.loads(STACK.read_text(encoding="utf-8"))
     started = _started(_merged(), budget["size"])
     assert set(budget["services"]) == set(started) - set(stack["one_shots"])
+
+
+@pytest.mark.parametrize("size", ["slim", "full"])
+def test_the_web_app_offers_the_checkout_the_api_runs(size: str) -> None:
+    # The billing page shows upgrade, cancel and retry only when the web app
+    # has BILLING_ENABLED; the API had it and the web app did not, so every
+    # billing browser test found no controls.
+    started = _started(_merged(), size)
+    assert started["api"]["environment"]["BILLING_ENABLED"] == "true"
+    assert started["web"]["environment"]["BILLING_ENABLED"] == "true"
+    assert started["web"]["environment"]["BILLING_MODE"] == "demo"
+
+
+def test_the_demo_gateway_talks_to_postgrest_at_its_root() -> None:
+    # PostgREST serves tables at /; /rest/v1 is the Kong gateway's prefix.
+    # With the prefix every gateway write was a 404 and /pay/new answered 500.
+    gateway = _merged()["payment-gateway"]["environment"]
+    url = gateway["MOCK_GATEWAY_POSTGREST_URL"]
+    assert url.startswith("http://supabase-rest:")
+    assert "/rest/v1" not in url

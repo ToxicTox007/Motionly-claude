@@ -147,6 +147,9 @@ services:
       # A plain-HTTP loopback origin is valid only outside production.
       APP_ENV: cpu-stage
       BILLING_MODE: demo
+      # The API runs checkout through the demo gateway here (BILLING_ENABLED
+      # above), so the billing page must offer upgrade, cancel and retry too.
+      BILLING_ENABLED: "true"
     mem_limit: 512m
 
   ingress:
@@ -234,7 +237,8 @@ services:
       # Accept/Content-Profile: mock_gateway headers the store sets. The JWT is
       # mounted only here. Idempotency keys + webhook event ids survive restarts
       # via their UNIQUE constraints.
-      MOCK_GATEWAY_POSTGREST_URL: http://supabase-rest:3000/rest/v1
+      # PostgREST serves tables at its root; /rest/v1 is Kong's route prefix.
+      MOCK_GATEWAY_POSTGREST_URL: http://supabase-rest:3000
       MOCK_GATEWAY_DB_JWT_FILE: /run/secrets/mock_gateway_db_key
       MOCK_GATEWAY_DB_SCHEMA: mock_gateway
       # Deliver webhooks to the API over the private app network. Inside Docker
