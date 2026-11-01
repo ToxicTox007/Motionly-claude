@@ -322,7 +322,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "temporal operator cluster health --address 127.0.0.1:7233 --tls --tls-ca-path /run/secrets/temporal_ca_cert --tls-cert-path /run/secrets/temporal_diagnostics_cert --tls-key-path /run/secrets/temporal_diagnostics_key --tls-server-name temporal",
+          "motionly-temporal-server health --address 127.0.0.1:7233 --tls-ca-path /run/secrets/temporal_ca_cert --tls-cert-path /run/secrets/temporal_diagnostics_cert --tls-key-path /run/secrets/temporal_diagnostics_key --tls-server-name temporal",
         ]
       interval: 10s
       timeout: 5s

@@ -53,8 +53,11 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "health" {
+		return checkHealth(args[1:])
+	}
 	if len(args) == 0 || args[0] != "start" {
-		return errors.New("only the start command is supported")
+		return errors.New("only the start and health commands are supported")
 	}
 	flags := flag.NewFlagSet("start", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
