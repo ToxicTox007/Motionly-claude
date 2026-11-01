@@ -219,11 +219,11 @@
         },
         {
           "name": "remotion encoded output (Chromium + ffmpeg)",
-          "run": "docker run --rm --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium motionly-renderer-verify:local sh -lc 'cd /app/apps/renderer && pnpm test:encoded'"
+          "run": "docker run --rm --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium motionly-renderer-verify:local sh -lc 'cd /app/apps/renderer && node --run test:encoded'"
         },
         {
           "name": "remotion frame goldens",
-          "run": "docker run --rm --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium motionly-renderer-verify:local sh -lc 'cd /app/apps/renderer && pnpm test:golden'"
+          "run": "docker run --rm --env BROWSER_EXECUTABLE_PATH=/usr/bin/chromium motionly-renderer-verify:local sh -lc 'cd /app/apps/renderer && node --run test:golden'"
         },
         {
           "name": "skip audit",

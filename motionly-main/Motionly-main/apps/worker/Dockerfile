@@ -81,6 +81,20 @@ RUN if [ "${SKIP_PREBUNDLE}" != "true" ]; then \
         node --import ./ts-node-register.mjs src/prebundle.ts; \
     fi
 
+# ── Ship runtime code only ────────────────────────────────────────────────────
+# The workspace root's development tools (Supabase CLI, Knip, Prettier,
+# Turborepo, the pg test client) are installed with the workspace but never run
+# here, and pnpm and its package store are only needed to install. Remove them
+# all: the supply-chain image scan flags the Supabase CLI binaries, pnpm and the
+# store's copies. CI runs the renderer's package scripts with `node --run`.
+RUN store="$(pnpm store path)" \
+    && rm -rf "$store" /usr/local/lib/node_modules/pnpm /usr/local/bin/pnpm /usr/local/bin/pnpx \
+    && for tool in knip pg prettier supabase turbo; do \
+         rm -rf "node_modules/$tool" "node_modules/.bin/$tool" "node_modules/.pnpm/$tool@"*; \
+       done \
+    && rm -rf node_modules/.pnpm/@supabase+cli-* node_modules/.pnpm/turbo-* \
+    && node -e 'require.resolve("@remotion/renderer", {paths: ["apps/renderer"]})'
+
 # ── Runtime ───────────────────────────────────────────────────────────────────
 WORKDIR /app/apps/worker
 

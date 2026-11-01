@@ -132,5 +132,6 @@ def test_renderer_feature_matrix_is_backed_by_golden_and_encoded_gates() -> None
     for golden_scenario in ("effects", "captions", "transition", "framing"):
         assert golden_scenario in golden
     assert "duration_ms: sourceEndMs - sourceStartMs" in encoded
-    assert "pnpm test:encoded" in workflow
-    assert "pnpm test:golden" in workflow
+    # The renderer image ships no package manager; node runs the package scripts.
+    assert "node --run test:encoded" in workflow
+    assert "node --run test:golden" in workflow
