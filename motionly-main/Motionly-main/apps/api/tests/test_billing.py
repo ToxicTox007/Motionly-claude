@@ -14,6 +14,7 @@ and feeds its signed webhooks into the API billing receiver:
 import asyncio
 import json
 import time
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -45,6 +46,11 @@ from app.schemas.billing import (
     SubscriptionStatus,
     UsageEventType,
 )
+
+# Gateway events are dated now: a paid plan runs for the billing month its
+# payment was made in (monthly_period), so a fixed date would expire the
+# plans these tests expect once that month ends.
+EVENT_CREATED_AT = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 WEBHOOK_SECRET = "test-webhook-secret"
 
@@ -206,7 +212,7 @@ def _captured_order_envelope(*, event_id: str, workspace_id, plan="agency") -> W
         {
             "id": event_id,
             "event": "payment.captured",
-            "created_at": "2026-10-19T00:00:00Z",
+            "created_at": EVENT_CREATED_AT,
             "order": {
                 "id": "order_abc",
                 "status": "captured",
@@ -214,7 +220,7 @@ def _captured_order_envelope(*, event_id: str, workspace_id, plan="agency") -> W
                 "currency": "INR",
                 "method": "upi",
                 "notes": {"workspace_id": str(workspace_id), "plan": plan},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
         }
     )
@@ -320,7 +326,7 @@ def test_charge_failed_marks_past_due_then_charged_restores_plan() -> None:
         {
             "id": "evt_fail",
             "event": "subscription.charge_failed",
-            "created_at": "2026-10-19T00:00:00Z",
+            "created_at": EVENT_CREATED_AT,
             "subscription": {
                 "id": "sub_1",
                 "status": "past_due",
@@ -329,7 +335,7 @@ def test_charge_failed_marks_past_due_then_charged_restores_plan() -> None:
                 "total_cycles": 12,
                 "completed_cycles": 1,
                 "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
         }
     )
@@ -340,7 +346,7 @@ def test_charge_failed_marks_past_due_then_charged_restores_plan() -> None:
         {
             "id": "evt_charged",
             "event": "subscription.charged",
-            "created_at": "2026-10-19T00:00:00Z",
+            "created_at": EVENT_CREATED_AT,
             "subscription": {
                 "id": "sub_1",
                 "status": "active",
@@ -349,7 +355,7 @@ def test_charge_failed_marks_past_due_then_charged_restores_plan() -> None:
                 "total_cycles": 12,
                 "completed_cycles": 2,
                 "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
             "order": {
                 "id": "order_renew",
@@ -357,7 +363,7 @@ def test_charge_failed_marks_past_due_then_charged_restores_plan() -> None:
                 "amount_paise": 199900,
                 "currency": "INR",
                 "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
         }
     )
@@ -380,7 +386,7 @@ def test_cancelled_webhook_downgrades_to_free() -> None:
         {
             "id": "evt_cancel",
             "event": "subscription.cancelled",
-            "created_at": "2026-10-19T00:00:00Z",
+            "created_at": EVENT_CREATED_AT,
             "subscription": {
                 "id": "sub_c",
                 "status": "cancelled",
@@ -389,7 +395,7 @@ def test_cancelled_webhook_downgrades_to_free() -> None:
                 "total_cycles": 12,
                 "completed_cycles": 3,
                 "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
         }
     )
@@ -406,7 +412,7 @@ def test_refund_webhook_records_negative_adjustment() -> None:
         {
             "id": "evt_refund",
             "event": "payment.refunded",
-            "created_at": "2026-10-19T00:00:00Z",
+            "created_at": EVENT_CREATED_AT,
             "order": {
                 "id": "order_r",
                 "status": "refunded",
@@ -414,13 +420,13 @@ def test_refund_webhook_records_negative_adjustment() -> None:
                 "amount_refunded_paise": 199900,
                 "currency": "INR",
                 "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
             "refund": {
                 "id": "rfnd_1",
                 "order_id": "order_r",
                 "amount_paise": 199900,
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
         }
     )
@@ -471,9 +477,7 @@ def _run_end_to_end(*, card_number=None, upi_action="approve", plan="agency"):
 
     async def scenario():
         transport = httpx.ASGITransport(app=gateway_app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://gateway"
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://gateway") as client:
             headers = {"Authorization": "Bearer test-merchant-key"}
             created = await client.post(
                 "/v1/orders",
@@ -515,9 +519,7 @@ def _run_end_to_end(*, card_number=None, upi_action="approve", plan="agency"):
                 x_mock_gateway_event=str(envelope.event),
                 x_mock_gateway_event_id=envelope.id,
                 x_mock_gateway_timestamp=str(int(time.time())),
-                x_mock_gateway_signature=compute_signature(
-                    WEBHOOK_SECRET, int(time.time()), body
-                ),
+                x_mock_gateway_signature=compute_signature(WEBHOOK_SECRET, int(time.time()), body),
             )
 
     asyncio.run(scenario())
@@ -584,14 +586,14 @@ def test_apply_gateway_event_requires_workspace() -> None:
         {
             "id": "evt_no_ws",
             "event": "payment.captured",
-            "created_at": "2026-10-19T00:00:00Z",
+            "created_at": EVENT_CREATED_AT,
             "order": {
                 "id": "o",
                 "status": "captured",
                 "amount_paise": 199900,
                 "currency": "INR",
                 "notes": {},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
         }
     )
@@ -924,14 +926,14 @@ def test_a_failed_upgrade_checkout_does_not_mark_a_paid_plan_past_due() -> None:
         {
             "id": "evt_upgrade_failed",
             "event": "payment.failed",
-            "created_at": "2026-10-19T00:00:00Z",
+            "created_at": EVENT_CREATED_AT,
             "order": {
                 "id": "order_upgrade",
                 "status": "failed",
                 "amount_paise": 199900,
                 "currency": "INR",
                 "notes": {"workspace_id": str(workspace_id), "plan": "agency"},
-                "created_at": "2026-10-19T00:00:00Z",
+                "created_at": EVENT_CREATED_AT,
             },
         }
     )
@@ -940,7 +942,6 @@ def test_a_failed_upgrade_checkout_does_not_mark_a_paid_plan_past_due() -> None:
     assert status.subscription.status == SubscriptionStatus.ACTIVE
     assert status.subscription.payment_issue is False
     assert status.current_plan.key == BillingPlanKey.PRO
-
 
 
 _ = json  # keep import referenced for readers scanning payload shapes

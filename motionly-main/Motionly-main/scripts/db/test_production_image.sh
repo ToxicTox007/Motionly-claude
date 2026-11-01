@@ -230,7 +230,10 @@ joined -d --name "$prefix-storage" --env-file "$work/storage.env" \
   -v "$root/infra/db/start-storage.sh:/opt/motionly-db/start-storage.sh:ro" \
   --entrypoint /bin/sh "$storage_image" /opt/motionly-db/start-storage.sh >/dev/null
 echo "realtime: $realtime_image"
-joined -d --name "$prefix-realtime" --env-file "$work/realtime.env" "$realtime_image" >/dev/null
+# Same open-files limits as the Compose service: run.sh raises the soft limit
+# to RLIMIT_NOFILE, which a 65536 default hard limit refuses.
+joined -d --name "$prefix-realtime" --env-file "$work/realtime.env" \
+  --ulimit nofile=100000:100000 "$realtime_image" >/dev/null
 
 fail_with_logs() {
   docker logs --tail 40 "$prefix-$1" >&2 || true
