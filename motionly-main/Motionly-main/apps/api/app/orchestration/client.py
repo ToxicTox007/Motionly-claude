@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from temporalio.client import Client, TLSConfig
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from app.orchestration.contracts import (
@@ -137,17 +138,23 @@ class TemporalOrchestrationClient:
         if input.temporal_workflow_id != workflow_id:
             raise ValueError("Temporal workflow ID must match the canonical run")
         assert_identifier_only_history(input)
-        handle = await self.client.start_workflow(
-            MotionlyWorkflow.run,
-            input,
-            id=workflow_id,
-            task_queue=self.task_queue,
-            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
-            execution_timeout=timedelta(days=30),
-            task_timeout=timedelta(seconds=20),
-            request_id=f"start:{input.workflow_run_id}",
-        )
+        # Starts are idempotent by workflow ID: a duplicate start of a running
+        # workflow returns it (USE_EXISTING), and a retried start of one that has
+        # already closed resolves to that run instead of failing (temporalio
+        # 1.35 no longer takes a caller-chosen request_id for this).
+        try:
+            handle = await self.client.start_workflow(
+                MotionlyWorkflow.run,
+                input,
+                id=workflow_id,
+                task_queue=self.task_queue,
+                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                execution_timeout=timedelta(days=30),
+                task_timeout=timedelta(seconds=20),
+            )
+        except WorkflowAlreadyStartedError:
+            handle = self.client.get_workflow_handle(workflow_id)
         run_id = handle.result_run_id or handle.run_id
         if not run_id:
             description = await handle.describe()

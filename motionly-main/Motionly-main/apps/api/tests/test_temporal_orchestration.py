@@ -1900,3 +1900,81 @@ def test_temporal_client_cancel_is_idempotent_on_not_found() -> None:
     assert asyncio.run(
         absent.cancel_workflow(workflow_id="motionly:run:gone", reason="project_deleted")
     ) is False
+
+
+WF_ONE = f"motionly:test:{uuid4()}"
+WF_TWO = f"motionly:test:{uuid4()}"
+
+
+def _client_start_input(workflow_id: str) -> WorkflowStartInput:
+    return WorkflowStartInput(
+        workflow_run_id=str(uuid4()),
+        temporal_workflow_id=workflow_id,
+        workspace_id=str(uuid4()),
+        project_id=str(uuid4()),
+        workflow_type="first_draft",
+        workflow_version="first-draft-v2",
+        request_hash=HASH,
+        steps=[
+            WorkflowStepSpec(
+                step_key="analyze-source-v1",
+                step_kind="analyze_source",
+                job_kind="visual_analysis",
+                queue_name="visual_analysis",
+                input_hash=HASH,
+                next_run_state="proposal_ready",
+                resource_id=str(uuid4()),
+            )
+        ],
+    )
+
+
+class _SdkHandle:
+    def __init__(self, workflow_id: str, run_id: str | None) -> None:
+        self.id = workflow_id
+        self.run_id = run_id
+        self.result_run_id = run_id
+
+    async def describe(self):
+        return SimpleNamespace(run_id="closed-run")
+
+
+class _SdkClient:
+    """The temporalio Client surface TemporalOrchestrationClient.start_workflow uses."""
+
+    def __init__(self, *, already_started: bool) -> None:
+        self.already_started = already_started
+        self.start_kwargs: dict[str, object] = {}
+
+    async def start_workflow(self, _workflow, _input, **kwargs):
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+
+        self.start_kwargs = kwargs
+        if self.already_started:
+            raise WorkflowAlreadyStartedError(kwargs["id"], "MotionlyWorkflow")
+        return _SdkHandle(kwargs["id"], "new-run")
+
+    def get_workflow_handle(self, workflow_id: str):
+        return _SdkHandle(workflow_id, None)
+
+
+def test_start_is_idempotent_by_workflow_id_without_a_request_id() -> None:
+    # temporalio 1.35 refuses a caller-chosen request_id; the workflow ID with
+    # USE_EXISTING / REJECT_DUPLICATE carries the idempotency instead.
+    sdk = _SdkClient(already_started=False)
+    client = TemporalOrchestrationClient(sdk, task_queue="q")
+    started = asyncio.run(
+        client.start_workflow(workflow_id=WF_ONE, input=_client_start_input(WF_ONE))
+    )
+    assert started.run_id == "new-run"
+    assert "request_id" not in sdk.start_kwargs
+    assert sdk.start_kwargs["id"] == WF_ONE
+
+
+def test_a_retried_start_of_a_closed_workflow_returns_its_run() -> None:
+    sdk = _SdkClient(already_started=True)
+    client = TemporalOrchestrationClient(sdk, task_queue="q")
+    started = asyncio.run(
+        client.start_workflow(workflow_id=WF_TWO, input=_client_start_input(WF_TWO))
+    )
+    assert (started.workflow_id, started.run_id) == (WF_TWO, "closed-run")
