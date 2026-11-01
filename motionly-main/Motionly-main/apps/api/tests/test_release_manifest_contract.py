@@ -213,3 +213,20 @@ def test_the_bundle_carries_every_bind_mount_source_of_the_production_topology()
 
     assert "infra/supabase-kong.yml" in expected
     assert expected <= carried, sorted(expected - carried)
+
+
+def test_the_host_validator_parses_on_the_hosts_python() -> None:
+    # The release agent runs generate-release-manifest with the instance's
+    # python3: 3.9 on Amazon Linux 2023. datetime.UTC (3.11+) made every
+    # staging preflight fail with an ImportError before any check ran.
+    import ast
+
+    source = (ROOT / "scripts" / "release" / "generate_release_manifest.py").read_text("utf-8")
+    ast.parse(source, feature_version=(3, 9))
+    imported = {
+        alias.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.module == "datetime"
+        for alias in node.names
+    }
+    assert "UTC" not in imported

@@ -9,7 +9,7 @@ import json
 import re
 import sys
 import tarfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
@@ -314,7 +314,9 @@ def main() -> int:
         raise ValueError("--revision, --output, --bundle, and --bundle-layout are required")
     if not args.bundle.is_file() or args.bundle.name != BUNDLE_NAME:
         raise ValueError(f"--bundle must be an existing {BUNDLE_NAME}")
-    created_at = args.created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    # The release agent runs this file on the host's python3 (3.9 on Amazon
+    # Linux 2023), which has no datetime.UTC (3.11+).
+    created_at = args.created_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     manifest = build_manifest(
         revision=args.revision,
         created_at=created_at,
