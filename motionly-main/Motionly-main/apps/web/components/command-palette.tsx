@@ -76,10 +76,12 @@ export type PaletteCommand = {
   shortcut?: string;
 };
 
+// Only the registering functions: they never change, so registering commands
+// does not change this context and re-run every registering effect (which
+// unregistered and registered again, forever, and starved navigations).
 type RegistryContextValue = {
   register: (source: string, commands: PaletteCommand[]) => void;
   unregister: (source: string) => void;
-  commands: PaletteCommand[];
 };
 
 type PaletteContextValue = {
@@ -151,8 +153,8 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   }, [toggle]);
 
   const registryValue = useMemo<RegistryContextValue>(
-    () => ({ register, unregister, commands }),
-    [register, unregister, commands],
+    () => ({ register, unregister }),
+    [register, unregister],
   );
   const paletteValue = useMemo<PaletteContextValue>(
     () => ({ open, close, isOpen }),
