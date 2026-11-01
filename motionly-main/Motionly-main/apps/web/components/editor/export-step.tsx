@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Label, Select, Slider } from "./ui";
 import {
   AlertTriangle,
@@ -190,7 +189,6 @@ export function ExportStep({
   );
   const [loading, setLoading] = useState(false);
   const [jobs, setJobs] = useState(initialJobs);
-  const router = useRouter();
   const [exports, setExports] = useState(initialExports);
   const [message, setMessage] = useState<string | null>(null);
   const availableResolutions = useMemo(
@@ -712,12 +710,7 @@ export function ExportStep({
     );
     const payload = await response.json();
     signal?.throwIfAborted();
-    if (response.ok) {
-      setExports(payload.exports ?? []);
-      // The rest of the editor (the Exports panel's player and share links)
-      // reads the page's export list, so reload it with the new version.
-      router.refresh();
-    }
+    if (response.ok) setExports(payload.exports ?? []);
   }
 
   async function downloadExport(exportId: string) {
