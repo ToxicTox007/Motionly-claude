@@ -6,7 +6,10 @@ name: Production readiness
 # scripts/verify/workflow_parity.py fails when the two drift apart.
 # Supply chain calls this workflow (workflow_call) and its image builds wait
 # for it, so no release image is built, signed or deployed unless every job
-# here passes. The staging canary runs only on a manual dispatch.
+# here passes. The one exception is the staging channel (an exact
+# vX.Y.Z-staging.N tag, scripts/release/release_channel.py): there the browser
+# suite and k6 smoke job still runs and reports, but is advisory. The staging
+# canary runs only on a manual dispatch.
 
 on:
   workflow_call:
@@ -16,6 +19,19 @@ on:
         required: false
         type: boolean
         default: false
+      browser_perf_advisory:
+        description: >-
+          Staging channel only (scripts/release/release_channel.py). The browser
+          suite and k6 smoke still run and report, but their failure does not
+          fail this workflow. The job also checks the ref itself, so this has
+          no effect unless the ref is a vX.Y.Z-staging.N tag.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      browser_perf_result:
+        description: success or failure of the browser suite and k6 smoke job
+        value: ${{ jobs.cpu-stage-browser.outputs.result }}
   workflow_dispatch:
     inputs:
       run_staging_canary:
@@ -342,6 +358,15 @@ jobs:
     name: Browser suite against the CPU stage
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Blocking for every ref except the staging channel: an exact
+    # vX.Y.Z-staging.N tag whose caller (supply-chain.yml) asked for advisory
+    # mode after scripts/release/release_channel.py classified the ref. The ref
+    # test here repeats the classifier's, so a production tag stays blocking
+    # even if a caller passed the input. The job still runs, uploads its
+    # results and writes its summary either way.
+    continue-on-error: ${{ inputs.browser_perf_advisory == true && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-staging.') }}
+    outputs:
+      result: ${{ steps.result.outputs.result }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -375,6 +400,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y k6
       - name: Stack from empty volumes, browser suite, perf smoke and budgets, verdict, tear down
+        id: verify
         env:
           MOTIONLY_PYTHON: python
           CPU_STAGE_SIZE: slim
@@ -386,6 +412,20 @@ jobs:
           name: cpu-stage-browser-${{ github.sha }}
           path: motionly-main/Motionly-main/test-results/
           if-no-files-found: warn
+      - name: Summarise the browser suite and k6 smoke
+        id: result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          ADVISORY: ${{ inputs.browser_perf_advisory == true && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-staging.') }}
+        run: |
+          channel=production
+          [ "$ADVISORY" = true ] && channel=staging
+          python scripts/verify/stage_summary.py --title "Browser suite and k6 smoke" --channel "$channel" >> "$GITHUB_STEP_SUMMARY"
+          echo "result=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$JOB_STATUS" != success ]; then
+            echo "::error title=Browser suite or k6 smoke failed::The browser suite or k6 smoke failed ($channel channel; see the job summary and the cpu-stage-browser artifact)."
+          fi
 
   containers:
     runs-on: ubuntu-latest

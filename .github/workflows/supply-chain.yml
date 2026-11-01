@@ -27,14 +27,65 @@ env:
   IMAGE_PREFIX: ghcr.io/toxictox007/motionly-claude
 
 jobs:
+  # Staging or production (scripts/release/release_channel.py). Only an exact
+  # vX.Y.Z-staging.N tag is staging; every other ref keeps all gates blocking.
+  release-channel:
+    name: Classify the release channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.classify.outputs.channel }}
+      browser_perf_advisory: ${{ steps.classify.outputs.browser_perf_advisory }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Classify the ref
+        id: classify
+        env:
+          REF: ${{ github.ref }}
+        run: python3 scripts/release/release_channel.py --ref "$REF" --github-output "$GITHUB_OUTPUT"
+
   # The full production-readiness gate (lint, typecheck, unit, browser, perf,
   # database, media, containers, scans). Image builds wait for it, so nothing
-  # is built, signed or deployed unless it passes.
+  # is built, signed or deployed unless it passes. On the staging channel the
+  # browser suite and k6 smoke job is advisory: it runs and reports, and the
+  # readiness-report job below surfaces its result.
   readiness:
     name: Production readiness
+    needs: [release-channel]
     uses: ./.github/workflows/production-readiness.yml
+    with:
+      browser_perf_advisory: ${{ needs.release-channel.outputs.browser_perf_advisory == 'true' }}
     permissions:
       contents: read
+
+  readiness-report:
+    name: Report the browser suite and k6 smoke result
+    needs: [release-channel, readiness]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report the result on the run page
+        env:
+          CHANNEL: ${{ needs.release-channel.outputs.channel }}
+          READINESS: ${{ needs.readiness.result }}
+          BROWSER_PERF: ${{ needs.readiness.outputs.browser_perf_result }}
+        working-directory: .
+        run: |
+          {
+            echo "## Release gate"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Release channel | ${CHANNEL:-unknown} |"
+            echo "| Production readiness workflow | ${READINESS:-unknown} |"
+            echo "| Browser suite and k6 smoke | ${BROWSER_PERF:-not reported} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$BROWSER_PERF" != success ]; then
+            if [ "$CHANNEL" = staging ]; then
+              echo "::error title=Staging release with failing browser or k6 checks::The browser suite or k6 smoke result is '${BROWSER_PERF:-not reported}'. The staging channel does not block on it; production tags do."
+            else
+              echo "::error title=Browser suite or k6 smoke failed::Result '${BROWSER_PERF:-not reported}'; this blocks the release."
+            fi
+          fi
 
   locked-dependencies:
     name: Verify locked dependencies

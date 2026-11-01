@@ -2,7 +2,11 @@ name: Deploy signed release to AWS
 
 # After the supply chain signs a release tag, publish the release to the S3
 # releases bucket and have the instance preflight it, then apply it once the
-# staging environment allows (infra/aws, docs/ops/compose-vm-deployment.md).
+# target environment allows (infra/aws, docs/ops/compose-vm-deployment.md).
+# scripts/release/release_channel.py picks the target: an exact
+# vX.Y.Z-staging.N tag deploys in the staging environment (the motionly-staging
+# stack's GitHubDeployRole trusts only that environment); every other v* tag
+# keeps the production contract and deploys in the production environment.
 # GitHub never holds AWS keys or application secrets: it assumes the stack's
 # GitHubDeployRole through OIDC, and the instance reads secrets from SSM itself.
 
@@ -25,17 +29,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-and-preflight:
-    name: Publish the signed release and preflight it on the instance
+  route:
+    name: Choose the deploy environment for this release tag
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
-    # The deploy role trusts exactly this repository environment. This root
-    # copy deploys the motionly-staging stack (GitHubDeployEnvironment=staging);
-    # the nested monorepo copy keeps the production contract.
-    environment: staging
+    outputs:
+      environment: ${{ steps.classify.outputs.deploy_environment }}
+      channel: ${{ steps.classify.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Classify the release tag
+        id: classify
+        env:
+          TAG: ${{ github.event.workflow_run.head_branch }}
+        run: python3 scripts/release/release_channel.py --ref "refs/tags/$TAG" --github-output "$GITHUB_OUTPUT"
+
+  publish-and-preflight:
+    name: Publish the signed release and preflight it on the instance
+    needs: [route]
+    runs-on: ubuntu-latest
+    # The deploy role trusts exactly this repository environment: staging for
+    # a vX.Y.Z-staging.N tag, production for every other release tag.
+    environment: ${{ needs.route.outputs.environment }}
     env:
       RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
       RELEASE_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
@@ -80,9 +100,9 @@ jobs:
 
   apply:
     name: Apply the release on the instance
-    needs: [publish-and-preflight]
+    needs: [route, publish-and-preflight]
     runs-on: ubuntu-latest
-    environment: staging
+    environment: ${{ needs.route.outputs.environment }}
     env:
       RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
       INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
