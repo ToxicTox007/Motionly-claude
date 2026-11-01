@@ -136,7 +136,7 @@ def _seed_perf_workload(stack, state: dict) -> dict:
     workspace_id = memberships[0]["workspace_id"]
     api = {"authorization": f"Bearer {bearer}", "x-motionly-workspace-id": workspace_id}
     status, project = stack._http_json(
-        "POST", f"{origin}/api/projects", headers=api, body={"name": "Perf smoke"}
+        "POST", f"{origin}/api/projects", headers=api, body={"title": "Perf smoke"}
     )
     if status not in (200, 201) or not isinstance(project, dict):
         raise RuntimeError(f"creating a project returned {status}: {project}")
