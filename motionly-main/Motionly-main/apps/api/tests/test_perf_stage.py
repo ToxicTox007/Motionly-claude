@@ -134,3 +134,13 @@ def test_the_seeder_builds_a_real_render_through_the_pipeline() -> None:
     ]
     positions = [seed.index(marker) for marker in order]
     assert positions == sorted(positions)
+
+
+def test_every_counted_surface_has_a_threshold_so_k6_reports_its_count() -> None:
+    # k6 computes a tagged sub-metric such as http_reqs{surface:projects} only
+    # when a threshold names it. Without these the summary counted 0 samples on
+    # every surface and the SLO gate failed with insufficient_samples.
+    script = (ROOT / "scripts" / "perf" / "k6-api-workflows.js").read_text("utf-8")
+    for surface in ("projects", "uploads", "plans", "render_status", "ops"):
+        assert f'count("{surface}")' in script, surface
+        assert f'"http_reqs{{surface:{surface}}}": ["count>=0"]' in script, surface

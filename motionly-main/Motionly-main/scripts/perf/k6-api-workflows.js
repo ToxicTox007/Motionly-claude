@@ -68,6 +68,14 @@ export const options = {
     "http_req_duration{surface:plans}": ["p(95)<2000"],
     "http_req_duration{surface:render_status}": ["p(95)<750"],
     "http_req_duration{surface:ops}": ["p(95)<1500"],
+    // k6 reports a tagged sub-metric only when a threshold names it, so these
+    // non-gating thresholds make the per-surface request counts exist; the
+    // SLO contract (scripts/perf/assert-slo.mjs) enforces the minimums.
+    "http_reqs{surface:projects}": ["count>=0"],
+    "http_reqs{surface:uploads}": ["count>=0"],
+    "http_reqs{surface:plans}": ["count>=0"],
+    "http_reqs{surface:render_status}": ["count>=0"],
+    "http_reqs{surface:ops}": ["count>=0"],
     ...(strictSlo ? { "checks{mode:strict}": ["rate>0.99"] } : {}),
   },
 };
