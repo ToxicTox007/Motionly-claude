@@ -115,7 +115,7 @@ def test_the_k6_workload_calls_routes_the_api_serves() -> None:
     # Each upload iteration uses its own session and aborts it, instead of
     # confirming parts of the seeded (already completed) upload.
     assert "uploadId || session.session_id" not in script
-    assert "${uploads}/${session.session_id}/abort" in script
+    assert "${project}/uploads/multipart/${session.session_id}/abort" in script
     # /metrics is scraped with the metrics token, not the user's session.
     assert "authorization: `Bearer ${metricsToken}`" in script
 

@@ -97,9 +97,9 @@ export function uploadFlow() {
     // and confirms it, then aborts the session, so the load never starts the
     // first-draft pipeline for hundreds of placeholder uploads.
     const target = projectId || "00000000-0000-4000-8000-000000000001";
-    const uploads = `${baseUrl}/projects/${target}/uploads/multipart`;
+    const project = `${baseUrl}/projects/${target}`;
     const init = http.post(
-      `${uploads}/init`,
+      `${project}/uploads/multipart/init`,
       JSON.stringify({
         filename: `k6-${__VU}-${__ITER}.mp4`,
         mime_type: "video/mp4",
@@ -121,13 +121,13 @@ export function uploadFlow() {
     assertResponse(stored, "upload part to storage", [200, 201]);
     const etag = stored.headers.Etag || stored.headers.ETag || null;
     const confirm = http.post(
-      `${uploads}/${session.session_id}/parts/${part.part_number}/complete`,
+      `${project}/uploads/multipart/${session.session_id}/parts/${part.part_number}/complete`,
       JSON.stringify(etag ? { etag } : {}),
       requestOptions("uploads"),
     );
     assertResponse(confirm, "upload part confirm", [200]);
     const abort = http.post(
-      `${uploads}/${session.session_id}/abort`,
+      `${project}/uploads/multipart/${session.session_id}/abort`,
       JSON.stringify({}),
       requestOptions("uploads"),
     );
